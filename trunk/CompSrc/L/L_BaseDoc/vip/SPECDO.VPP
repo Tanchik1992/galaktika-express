@@ -1,0 +1,475 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Функции для vschet.vip, vschetb.vip, consig.vip, consigb.vip
+//******************************************************************************
+
+#include DEIfuns.var
+#include DOfuns.var
+#include SpecDO.var
+
+Procedure SpecDO_Buy;
+{
+  if not CanEditInClosePeriod(true)
+    if CanEditInClosePeriod(FALSE)
+      {
+        ProtectRecord(#BaseDoc, FALSE);
+        ProtectRecord(#StepDoc, FALSE);
+        ProtectRecord(#SpStep , FALSE);
+      }
+    else
+      Exit;
+
+  oSpecDO.DOBuy(StepDoc.NRec, SpStep.NRec);
+  GetTotalSkid(FALSE);
+  RescanPanel(#SpStep);
+}
+
+//******************************************************************************
+
+Procedure SpecDO_Sell;
+{
+  if not CanEditInClosePeriod(true)
+    if CanEditInClosePeriod(FALSE)
+      {
+        ProtectRecord(#BaseDoc, FALSE);
+        ProtectRecord(#StepDoc, FALSE);
+        ProtectRecord(#SpStep , FALSE);
+      }
+    else
+      Exit;
+
+  oSpecDO.DOSell(StepDoc.NRec, SpStep.NRec);
+  GetTotalSkid(FALSE);
+  RescanPanel(#SpStep);
+}
+
+//******************************************************************************
+
+Procedure SpecDO_Edit;
+var
+    cPartyMC
+  , cSpStep
+  , cGrNal_N
+                   : comp;
+
+    PriceMC
+  , KolMC
+  , KolSklMC
+  , NdsMC
+  , SummaMC
+  , SumValMC
+  , ProcUbMC
+  , VlSkidMC
+                   : double;
+
+    PrSkidMC
+  , MTax
+  , nnn
+  , status
+  , TypeFld
+  , Napr
+  , prmc
+                   : word;
+
+    s              : string;
+{
+  if not EditDOPosEnabled(true, true)
+    Exit;
+
+  if not UpdateTable
+    Exit;
+
+  if (    (BaseDoc.VidDoc <> 101)       // закупка
+     AND  (BaseDoc.VidDoc <> 102)       // прием на консигнацию
+     AND  (BaseDoc.VidDoc <> 111)       // предоплата закупок
+     AND  (BaseDoc.VidDoc <> 211)       // предоплата продаж
+     AND  (BaseDoc.VidDoc <> 1410)      // Наряд-акт. УЛХ
+     )
+    if ( Message('Перед заполнением полей необходимо снять резервирование по позициям. Продолжить?', YesNo) = No)
+      Exit;
+
+  TypeFld := 3;
+  Napr    := 0;
+
+  if ( RunDialog('GetSpecDOEdit', TypeFLd, Napr) <> cmCancel )
+    {
+      if ( RecordExists KatSopr where (( StepDoc.NRec == KatSopr.cStepDoc )) = tsOk )
+        {
+          if (Message( 'По данному ДО был сформирован сопроводительный документ. Продолжить заполнение?'
+                     , YesNo) = No )
+            Exit;
+        }
+
+      cSpStep  := SpStep.NRec;
+      cPartyMC := SpStep.cParty;
+      PriceMC  := SpStep.Price;
+      ProcUbMC := SpStep.ProcUb;
+      KolMC    := SpStep.Kol;
+      KolSklMC := SpStep.KolSkl;
+      PrSkidMC := SpStep.PrSkid;
+      VlSkidMC := SpStep.VlSkid;
+      NdsMC    := SpStep.Nds;
+      SummaMC  := SpStep.Summa;
+      SumValMC := SpStep.SumVal;
+      prmc     := SpStep.prMC;
+      MTax     := SpStep.ManualTax;
+
+      cGrNal_N := GetNalGr;
+
+      case Napr of
+        0: status := GetFirst SpStep;
+        1: status := GetNext SpStep;
+        2: status := GetPrev SpStep;
+      end; // case Napr
+
+      While ( status = tsOk ) Do
+        {
+
+          if ( ( SpStep.prMC = prmc) AND (SpStep.NRec <> cSpStep) )
+            {
+              if ( (TypeFld AND 1) = 1 )           // количество
+                {
+                  SpStep.Kol    := KolMC;
+                  SpStep.KolSkl := KolSklMC;
+                }
+
+              if ( (TypeFld AND 2) = 2 )           // цена
+                SpStep.Price := PriceMC;
+
+              if ( (TypeFld AND 4) = 4 )           // партия
+                SpStep.cParty := cPartyMC;
+
+              if ( (TypeFld AND 8) = 8 )           // скидка
+                {
+                  SpStep.PrSkid := PrSkidMC;
+                  SpStep.VlSkid := VlSkidMC;
+                }
+
+              if ( (TypeFld AND 16) = 16 )           // налоги
+                {
+                  SpStep.Nds       := NdsMC;
+                  SpStep.ManualTax := MTax;
+                  SpStep.cGrNal    := cGrNal_N;
+                }
+
+              if ( (TypeFld AND 32) = 32 )         // % убыли
+                {
+                  SpStep.ProcUb := ProcUbMC;
+                  SpStep.Kol    := SpStep.KolSkl * (1 - ProcUbMC / 100);
+                }
+
+              if ( Update current SpStep <> tsOk )
+                Message( 'Не прошел Update в SpStep! Обратитесь к администратору системы.'
+                       , Warning+OkButton);
+
+              //пересчет ДЕИ
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, word(1), 0, SpStep.KolSkl, longint(0), BaseDoc.VidDoc);
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, word(2), 0, SpStep.Kol,    longint(0), BaseDoc.VidDoc);
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, word(3), 0, SpStep.KolOpl, longint(0), BaseDoc.VidDoc);
+
+              if ( (TypeFld AND 16) = 16 )         // налоги
+                {
+                  delete SpDocNal where ((  SpStep.NRec == SpDocNal.cSpDoc
+                                        AND naltype     == SpDocNal.TipDoc
+                                        ));
+
+                  _LOOP SpDocNal noVisual where ((  cSpStep == SpDocNal.cSpDoc
+                                                AND naltype == SpDocNal.TipDoc
+                                                ))
+                    {
+                      SpDocNal.NRec   := 0;
+                      SpDocNal.cSpDoc := SpStep.NRec;
+
+                      if ( Insert current SpDocNal <> tsOk )
+                        Message( 'Не прошел Insert в SpDocNal! Обратитесь к администратору системы.'
+                               , Warning + OkButton);
+                    }
+                }
+            }
+
+          if ( Napr = 2 )
+            status := GetPrev SpStep
+          else
+            status := GetNext SpStep;
+
+        }
+
+      GetTotalSkid(FALSE);
+      RescanPanel(#SpStep);
+    }
+}
+
+
+//******************************************************************************
+
+Procedure SpecDO_DublPos;
+{
+  var
+    Sp_NRec
+  , Sp_COTPED
+  , Sp_CMCUSL
+  , Sp_CPARTY
+  , Sp_CPRICELIST
+  , Sp_CALTED
+  , Sp_COTPEDGRM
+                   : comp;
+
+  var
+    Sp_KOL
+  , Sp_KOLSKL
+  , Sp_KOLOPL
+  , Sp_PROCUB
+  , Sp_PRICE
+  , Sp_SUMMA
+  , Sp_SUMVAL
+  , Sp_GARANT
+  , Sp_VLSKID
+  , Sp_NDS
+  , Sp_Netto
+  , Sp_mTara
+  , Sp_STOTOV
+  , Sp_SUMAVT
+  , Sp_KOLGRM
+                   : double;
+
+  var
+    Sp_PRMC
+  , Sp_SOPUSL
+  , Sp_PRSKID
+  , Sp_PRUSNKL
+  , Sp_MANUALTAX
+  , i
+  , NumPos
+                   : word;
+
+  var
+    Sp_NVAGON
+  , Sp_NKVIT
+                   : string;
+
+  var
+    Nal_CGRNAL
+                   : comp;
+
+  var
+    Sp_UKS
+                   : comp;
+  var
+    Sp_UKS_Zatr
+                   : comp;
+
+
+  NumPos := 0;
+
+  if not CanEditInClosePeriod(true)
+    if CanEditInClosePeriod(FALSE)
+      {
+        ProtectRecord(#BaseDoc, FALSE);
+        ProtectRecord(#StepDoc, FALSE);
+        ProtectRecord(#SpStep , FALSE);
+      }
+    else
+      Exit;
+
+  if ( RunDialog('DlgDublPos', NumPos) <> cmCancel )
+    {
+      Sp_NRec       := SpStep.NRec;
+      Sp_COTPED     := SpStep.COTPED;
+      Sp_CMCUSL     := SpStep.CMCUSL;
+      Sp_KOL        := SpStep.KOL;
+      Sp_KOLSKL     := SpStep.KOLSKL;
+      Sp_KOLOPL     := SpStep.KOLOPL;
+      Sp_PROCUB     := SpStep.PROCUB;
+      Sp_CPARTY     := SpStep.CPARTY;
+      Sp_PRMC       := SpStep.prMC;
+      Sp_PRICE      := SpStep.PRICE;
+      Sp_SUMMA      := SpStep.SUMMA;
+      Sp_SUMVAL     := SpStep.SUMVAL;
+      Sp_GARANT     := SpStep.GARANT;
+      Sp_SOPUSL     := SpStep.SOPUSL;
+      Sp_STOTOV     := SpStep.STOTOV;
+      Sp_PRSKID     := SpStep.PRSKID;
+      Sp_VLSKID     := SpStep.VLSKID;
+      Sp_NDS        := SpStep.NDS;
+      Sp_CPRICELIST := SpStep.CPRICELIST;
+      Sp_NVAGON     := SpStep.NVAGON;
+      Sp_NKVIT      := SpStep.NKVIT;        // "номер ж/д квитанции"
+      Sp_SUMAVT     := SpStep.SUMAVT;       // "сумма ж/д тарифа"
+      Sp_KOLGRM     := SpStep.KOLGRM;       // "количество грузовых мест"
+      Sp_COTPEDGRM  := SpStep.COTPEDGRM;    // "отпускная ед для кол-ва грузовых мест"
+      Sp_PRUSNKL    := SpStep.PRUSNKL;
+      Sp_MANUALTAX  := SpStep.MANUALTAX;
+      Sp_CALTED     := SpStep.CALTED;
+      Sp_Netto      := SpStep.Netto;
+      Sp_mTara      := SpStep.mTara;
+      Nal_CGRNAL    := GetNalGr;
+      Sp_UKS        := SpStep.cUKS;
+
+      StartNewVisual( vtIndicatorVisual
+                    , vfTimer + vfBreak + vfConfirm
+                    , 'Создание '+string(NumPos)+' копий позиции'
+                    , NumPos);
+
+      For( i := 1; i <= NumPos; i := i + 1 )
+        {
+          if ( NOT NextVisual )
+            Break;
+
+          ClearBuffer(#SpStep);
+
+          SpStep.NRec       := 0;
+          SpStep.cStepDoc   := StepDoc.NRec;
+          SpStep.dDoc       := BaseDoc.dDoc;
+          SpStep.cVal       := StepDoc.cVal;
+          SpStep.COTPED     := Sp_COTPED;
+          SpStep.CMCUSL     := Sp_CMCUSL;
+          SpStep.KOL        := Sp_KOL;
+          SpStep.KOLSKL     := Sp_KOLSKL;
+          SpStep.KOLOPL     := Sp_KOLOPL;
+          SpStep.PROCUB     := Sp_PROCUB;
+          SpStep.CPARTY     := Sp_CPARTY;
+          SpStep.prMC       := Sp_PRMC;
+          SpStep.PRICE      := Sp_PRICE;
+          SpStep.SUMMA      := Sp_SUMMA;
+          SpStep.SUMVAL     := Sp_SUMVAL;
+          SpStep.GARANT     := Sp_GARANT;
+          SpStep.SOPUSL     := Sp_SOPUSL;
+          SpStep.STOTOV     := Sp_STOTOV;
+          SpStep.PRSKID     := Sp_PRSKID;
+          SpStep.VLSKID     := Sp_VLSKID;
+          SpStep.NDS        := Sp_NDS;
+          SpStep.CPRICELIST := Sp_CPRICELIST;
+          SpStep.NVAGON     := Sp_NVAGON;
+          SpStep.NKVIT      := Sp_NKVIT;        // "номер ж/д квитанции"
+          SpStep.SUMAVT     := Sp_SUMAVT;       // "сумма ж/д тарифа"
+          SpStep.KOLGRM     := Sp_KOLGRM;       // "количество грузовых мест"
+          SpStep.COTPEDGRM  := Sp_COTPEDGRM;    // "отпускная ед для кол-ва грузовых мест"
+          SpStep.PRUSNKL    := Sp_PRUSNKL;
+          SpStep.MANUALTAX  := Sp_MANUALTAX;
+          SpStep.CALTED     := Sp_CALTED;
+          SpStep.Netto      := Sp_Netto;
+          SpStep.mTara      := Sp_mTara;
+          SpStep.Npp        := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+
+          SpStep.cGrNal     := Nal_CGRNAL;
+
+          SpStep.cUKS       := Sp_UKS;
+
+          if ( Insert current SpStep <> tsOk )
+            {
+              Message('Не прошел Insert в SpStep! Обратитесь к администратору системы.', Warning+OkButton);
+              Break;
+            }
+          else
+            // вставка тары
+            if ((BaseDoc.Direct = 1) AND boGetTune('Tara.AutoPaste')) OR
+               ((BaseDoc.Direct = 2) AND boGetTune('Tara.AutoPaste_Buy'))
+            {
+              oDOTara.InsertTara(SpStep.cOtpEd, SpStep.NRec, SpStep.cStepDoc, SpStep.KolSkl, SpStep.cParty);
+              oDOTara.ChangeNppStepDoc(SpStep.cStepDoc);
+            }
+
+          oMTRFun.CopySpecMTR(coSpStep, Sp_NRec, coSpStep, SpStep.NRec);
+
+            //копируем ДЕИ
+          if ( SpStep.prMC = 1 )
+            {
+              oDEIfuns.CopyDEISpStep2(Sp_NRec, 1, Sp_KolSkl, SpStep.NRec, 1, SpStep.KolSkl, BaseDoc.VidDoc);
+              oDEIfuns.CopyDEISpStep2(Sp_NRec, 2, Sp_Kol, SpStep.NRec,    2, SpStep.Kol, BaseDoc.VidDoc);
+              oDEIfuns.CopyDEISpStep2(Sp_NRec, 3, Sp_KolOpl, SpStep.NRec, 3, SpStep.KolOpl, BaseDoc.VidDoc);
+            }
+
+          _LOOP SpDocNal noVisual where ((  Sp_NRec == SpDocNal.cSpDoc
+                                        AND naltype == SpDocNal.TipDoc
+                                        ))
+            {
+              SpDocNal.NRec   := 0;
+              SpDocNal.cSpDoc := SpStep.NRec;
+
+              if ( Insert current SpDocNal <> tsOk )
+                Message( 'Не прошел Insert в SpDocNal! Обратитесь к администратору системы.'
+                       , Warning + OkButton);
+            }
+
+        }
+
+      StopVisual('', 0);
+
+      GetTotalSkid(FALSE);
+      RescanPanel(#SpStep);
+    }
+}
+
+//----------------------------------------------------------------
+// Процедуры группового изменения получателей налогов в ДО  (SHAF)
+//----------------------------------------------------------------
+
+Procedure NewOrgNalog(cRec: comp; cTipDoc: word; cRecKO: comp);
+{
+
+  _LOOP SpDocNal where ((  cRec    == SpDocNal.cDoc
+                       AND cTipDoc == SpDocNal.TipDoc
+                       ))
+    if ( cRecKO <> SpDocNal.cOrg )
+      if ( GetFirst FastFirstRow SpStep where (( SpDocNal.cSpDoc == SpStep.NRec )) = tsOk )
+        if ( (SpStep.prMC = 1) OR (SpStep.prMC = 2) )
+          {
+            set SpDocNal.cOrg := cRecKO;
+
+            if ( Update current SpDocNal <> tsOk )
+              Break;
+
+            SpStep.ManualTax := 0; // налоги расчетные
+            Update Current SpStep;
+          }
+};
+
+#ifdef __vschet__
+
+
+//******************************************************************************
+
+Procedure ReplOrgNalog;
+Var
+ NRecKO
+         : comp;
+
+ wTipDoc
+         : word;
+{
+  if ( GetFirst FastFirstRow Pick3 where (( word(15) == Pick3.wList )) <> tsOk )
+    Exit;
+
+  NRecKO := 0;
+
+  if ( RunInterface(GetKatOr, NRecKO, comp(0), FALSE, comp(0), comp(0)) = cmDefault )
+    {
+      ResetBounds(#SpDocNal);
+      StartNewVisual( vtRotateVisual
+                    , vfTimer + vfBreak + vfConfirm
+                    , 'Выполняется изменение получателя налогов...'
+                    , 1
+                    );
+
+      _LOOP Pick3 where (( word(15) == Pick3.wList ))
+        if ( NOT NextVisual )
+          Break;
+        else
+          if ( GetFirst FastFirstRow BaseDoc where (( Pick3.cRec == BaseDoc.NRec )) = tsOk )
+            {
+              wTipDoc := 1000 + BaseDoc.VidDoc;
+
+              if ( BaseDoc.VhodNal <> 1 )                  //налоги не входят в цену
+                {
+                  NewOrgNalog(Pick3.cRec, wTipDoc, NRecKO);
+                  GetTotalSkid(FALSE);
+                }
+            }
+
+      StopVisual('', 0);
+      SetBounds(#SpDocNal);
+    }
+};
+
+#end

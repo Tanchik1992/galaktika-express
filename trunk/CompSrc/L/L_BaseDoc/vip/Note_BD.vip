@@ -1,0 +1,577 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - документы-основания
+// Пакетное изменение статусов ДО с заданным сроком задолженности
+//******************************************************************************
+#include dolg_bd.vih
+#include statlog.vih
+#include ofpmacro.vpp
+
+//******************************************************************************
+
+#doc
+Пакетное изменение статусов ДО
+#end
+Interface NoteDO_DKZ 'Пакетное изменение статусов ДО с заданным сроком задолженности' DoAccept, EscClose, Cyan;
+  Show at (, , 85, );
+
+Table Struct DKZ_BD
+(
+  NRec        : comp
+, wPick       : word
+, VidDoc      : word
+, cBaseDoc    : comp
+, Direct      : word
+, S_DolgOtgr  : double
+, S_DolgOpl   : double
+, AgeDKZ      : longint
+, cVal        : comp
+)
+With INDEX
+(
+  DKZ_BD01 = NRec(Unique)
+);
+
+//******************************************************************************
+
+Create view vCalcDKZ
+Var
+//------------------------------------------------------------------------------
+  nAgeDKZ
+                : longint;
+//------------------------------------------------------------------------------
+  wCalcAgeDKZ
+, pTipDoc
+, _wVidDoc
+, wTipDoc
+                : word;
+//------------------------------------------------------------------------------
+  cNoteOld
+, cNoteNew
+                : comp;
+//------------------------------------------------------------------------------
+  dCalcDKZ
+                : Date;
+//------------------------------------------------------------------------------
+  sSimbValNDE
+                : string;
+//------------------------------------------------------------------------------
+  sComment
+                : string;
+//------------------------------------------------------------------------------
+  NRecDKZ
+                : comp;    // порядковый уникальный номер в выгрузке
+//------------------------------------------------------------------------------
+#ifdef __StatLogObj__
+  oStatlog      : StatlogObj;
+#else
+  oStatlog      : vipStatlog;
+#end
+//------------------------------------------------------------------------------
+
+As select
+  if(DKZ_BD.wPick = 1, '√', ' ')
+    (FieldName = Picked)
+//------------------------------------------------------------------------------
+, if (DKZ_BD.VidDoc = 101, 'ДО на закупку',
+    if (DKZ_BD.VidDoc = 201, 'ДО на продажу',
+      if (DKZ_BD.VidDoc = 1410, 'Наряд-акт (УЛХ)',
+        if (DKZ_BD.VidDoc = 1420, 'Счет лесопользователя',
+  ''))))
+    (FieldName = NameDOtxt)
+//------------------------------------------------------------------------------
+, if( DKZ_BD.cVal = 0, sSimbValNDE, KlVal.SimVolV)
+    (FieldName = SimbolV)
+//------------------------------------------------------------------------------
+, DKZ_BD.*
+
+From
+  DKZ_BD
+, BaseDoc
+, StepDoc
+, KatNotes KatNotes1
+, KatNotes KatNotes2
+, KlVal
+, KatOrg
+, Iski
+, SpIsk
+, DocSver
+, AktSver
+, SoprHoz
+where
+((
+     cNoteOld           == KatNotes1.NRec
+AND  cNoteNew           == KatNotes2.NRec
+
+AND  _wVidDoc           == BaseDoc.VidDoc
+AND  KatNotes1.Status   == BaseDoc.Status
+AND  BaseDoc.NRec       == StepDoc.cBaseDoc
+
+AND  DKZ_BD.cVal        == KlVal.NRec
+))
+//------------------------------------------------------------------------------
+Bounds tmpDKZ_BD =
+          DKZ_BD.cBaseDoc == BaseDoc.NRec
+//------------------------------------------------------------------------------
+Bounds byKatOrg =
+             BaseDoc.cOrg == KatOrg.NRec
+//------------------------------------------------------------------------------
+Bounds byIski   =
+             SpIsk.cIsk == Iski.NRec
+//------------------------------------------------------------------------------
+;
+
+//******************************************************************************
+Parameters
+  pTipDoc       // 1 - ДО на продажу; 2 - ДО на закупку
+;
+//******************************************************************************
+
+var  iDolgBD  : CalcDolgBD;
+#include msgform.vpp
+
+//******************************************************************************
+
+Procedure ReadParam;
+{
+  var Datechanged: boolean;
+
+  if (not ReadMyDsk(nAgeDKZ, 'NewNoteDoc_Age', Datechanged))
+    nAgeDKZ := 30;
+
+  if (not ReadMyDsk(wCalcAgeDKZ, 'NewNoteDoc_CalcAge', Datechanged))
+    wCalcAgeDKZ := 0;
+
+  if (not ReadMyDsk(dCalcDKZ, 'NewNoteDoc_DateCalc', Datechanged))
+    dCalcDKZ := Cur_Date;
+
+  if (not ReadMyDsk(cNoteOld, 'NewNoteDoc_NoteOld', Datechanged))
+    cNoteOld := comp(0);
+
+  if (not ReadMyDsk(cNoteNew, 'NewNoteDoc_NoteNew', Datechanged))
+    cNoteNew := comp(0);
+};
+
+//******************************************************************************
+
+Procedure SaveParam;
+{
+  SaveMyDsk(nAgeDKZ, 'NewNoteDoc_Age');
+  SaveMyDsk(wCalcAgeDKZ, 'NewNoteDoc_CalcAge');
+  SaveMyDsk(dCalcDKZ, 'NewNoteDoc_DateCalc');
+  SaveMyDsk(cNoteOld, 'NewNoteDoc_NoteOld');
+  SaveMyDsk(cNoteNew, 'NewNoteDoc_NoteNew');
+}
+
+//******************************************************************************
+
+Function CreateTblDKZ: boolean;
+var
+//----------------
+  tmpAgeDKZ
+        : longint;
+//----------------
+  SumOtgr
+, SumDolgOtgr
+, AllSumPlat
+, PrihPlat
+, RashPlat
+, DolgPlat
+        : double;
+//----------------
+{
+  CreateTblDKZ := FALSE;
+
+  MTClear(#DKZ_BD, mfNormal);    // вместо deleteall
+
+  NRecDKZ := 1;
+
+  PushBounds(tbbyIski);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+                 'Формирование списка ДО, по которым имеется задолженность',
+                 RecordsInTable(tnBaseDoc));
+
+  _LOOP BaseDoc
+    {
+      if (not NextVisual)
+        Break;
+
+      if ( BaseDoc.cNote <> cNoteOld )
+        continue;
+
+      // вычисляем возраст задолженности, если она будет
+      tmpAgeDKZ := longint(dCalcDKZ)-longint(BaseDoc.dDoc);
+
+      if ( tmpAgeDKZ < nAgeDKZ)
+        continue;
+
+      //------------ решение суда --------------
+      if ((wCalcAgeDKZ AND 2) > 0)
+        {
+          _LOOP SpIsk where ((BaseDoc.NRec == SpIsk.cBaseDoc))
+            if ((Iski.StatusCourt = 1) AND             // исполняемое реш.суда
+                (Iski.dCourt <= dCalcDKZ))
+              if (SpIsk.BD_OKCourt <> 0)
+               {
+                 tmpAgeDKZ := 0
+                 Break
+               }
+
+          if ( tmpAgeDKZ < nAgeDKZ)
+            continue;
+        }
+
+      //------------ акты сверки ---------------
+      if ((wCalcAgeDKZ AND 1) > 0)
+        {
+          if (GetFirst SoprHoz where ((word(0)      == SoprHoz.TiDkBase AND
+                                       StepDoc.NRec == SoprHoz.cStepDoc)) = tsOk)
+            _LOOP DocSver
+              if (GetFirst FastFirstRow AktSver
+                           where (( DocSver.cAktSver == AktSver.NRec )) = tsOk)
+                if ((word(2) = AktSver.Status)   AND
+                     (dCalcDKZ >= AktSver.dDoc))
+                  {
+                    tmpAgeDKZ := longint(dCalcDKZ)- longint(AktSver.dDoc)
+                    Break
+                  }
+
+          if ( tmpAgeDKZ < nAgeDKZ)
+            continue;
+        }
+
+      iDolgBD.GetSumOtgr_DO(BaseDoc.NRec,
+                            dCalcDKZ,
+                            SumOtgr,               // сумма отгрузок по ДО
+                            SumDolgOtgr            // сумма отгрузок по ДО
+                           );
+
+      iDolgBD.GetSumOpl_DO(BaseDoc.NRec,
+                           dCalcDKZ,    // дата расчета
+                           AllSumPlat,  // сумма всех платежей по ДО
+                           PrihPlat,
+                           RashPlat,
+                           DolgPlat);
+
+      if ((SumDolgOtgr > 0.001) OR (DolgPlat > 0.001))
+        {
+          ClearBuffer(#DKZ_BD);
+          DKZ_BD.NRec        := NRecDKZ;
+          DKZ_BD.VidDoc      := BaseDoc.VidDoc;
+          DKZ_BD.cBaseDoc    := BaseDoc.NRec;
+          DKZ_BD.Direct      := BaseDoc.Direct;
+          DKZ_BD.S_DolgOtgr  := SumDolgOtgr;
+          DKZ_BD.S_DolgOpl   := DolgPlat;
+          DKZ_BD.AgeDKZ      := longint(dCalcDKZ)-longint(BaseDoc.dDoc);
+          DKZ_BD.cVal        := BaseDoc.cVal;
+          if (insert current DKZ_BD = tsOk)
+            NRecDKZ := NRecDKZ+1;
+        }
+    }
+
+  StopVisual('', 0);
+  PopBounds(tbbyIski);
+
+  if (GetFirst DKZ_BD = tsOk)
+    CreateTblDKZ := TRUE;
+};
+
+//******************************************************************************
+
+Window winParam 'Параметры расчета задолженностей по ДО' (, hcdog_param_dozadol, sci1Esc) doAccept, EscClose, Gray;
+  Show at (, , 53, 14);
+
+Screen scrParam (, hcdog_param_dozadol, sci1Esc);
+  Show at (, , , );
+
+Fields
+  nAgeDKZ ('Возраст задолженности (в днях)', , sci1Esc): NoProtect;
+  wCalcAgeDKZ ('Расчет возраста задолженности с учетом актов сверки и/или исполняемых решений суда'): NoProtect;
+  dCalcDKZ ('Дата расчета задолженности (включительно)', , sci13Esc): [, 'DD/MM/YYYY'], NoProtect;
+  wTipDoc ('Тип документа-основания', , sci13Esc): [List 1 'продажа', 'закупка'], Protect;
+  KatNotes1.Name ('Статус документов, которые должны быть рассмотрены', , sci13Esc): Protect;
+  KatNotes2.Name ('Статус, в который должны быть переведены документы', , sci13Esc): Protect;
+
+Buttons
+   cmValue1, Default, , 'Сформировать список ДО', , sci1Esc;
+   cmCancel, , , 'Отмена', , sci1Esc;
+<<
+ `Возраст задолженности:` .@@@@@@@@ (дней и более)
+
+   [.] учитывать акты сверки            `
+   [.] учитывать исполняемые решения суда`
+
+ `Дата расчета ` .@@@@@@@@@@
+
+ `Тип документа-основания  ` .@@@@@@@@@@@@@@@@@@@@@
+ `Текущий статус документов` .@@@@@@@@@@@@@@@@@@@@@
+ `Новый статус документов`   .@@@@@@@@@@@@@@@@@@@@@
+
+    <. ~П~родолжить .>           <.   ~О~тмена   .>
+>>
+end;
+
+HandleEvent
+
+cmValue1:
+  {
+    SaveParam;
+
+    case wTipDoc of
+      1: _wVidDoc := word(201)
+      2: _wVidDoc := word(101)
+    end
+
+    CreateTblDKZ;
+
+    PutCommand(cmDefault);
+  }
+
+End
+End; // Window
+
+//******************************************************************************
+
+Screen scrDKZ_BD (, hcdog_okno_vbordok, sci1Esc);
+  Show at (, , , 5);
+
+Fields
+  dCalcDKZ ('Дата расчета задолженности (включительно)'): [, 'DD/MM/YYYY'], Skip;
+  wTipDoc ('Тип документа-основания'): [List 1 'продажа', 'закупка'], Skip;
+  KatNotes1.Name ('Статус документов, по которым выполнялся расчет ДКЗ'): Skip;
+  KatNotes2.Name ('Статус, в который должны быть переведены документы', , sci13Esc): Protect;
+  sComment ('Комментарий к изменению статуса'): NoProtect;
+
+Buttons
+   cmValue2, Default, , 'Изменить статус у выбранных документов', , sci1Esc;
+<<
+ `Дата расчета ` .@@@@@@@@@@ `Тип ДО` .@@@@@@@@@@@@@@@@
+ `Текущий статус документов` .@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Новый статус документов`   .@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Комментарий`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     <. Изменить статус .>
+
+>>
+end;
+
+//******************************************************************************
+
+Browse brDKZ_BD ('', hcdog_okno_vbordok , sci1InsPM);
+  Show at (, 6, , );
+  Table DKZ_BD;
+
+Fields
+  { Font = { Color = if ( Picked = '√', ColorMark, 0 ) }};
+//------------------------------------------------------------------------------
+  Picked        #3'√'
+                : [1], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.NoDoc #3'Номер'
+                : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.dDoc  #3'Дата'
+                : [10, 'DD/MM/YYYY'], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name   #3'Контрагент'
+                : [15], Protect;
+//------------------------------------------------------------------------------
+  S_DolgOtgr    #3'Задолженность'#13#3'по отгрузке'
+                : [18, 2], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  S_DolgOpl     #3'Задолженность'#13#3'по оплате'
+                : [18, 2], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SimbolV       #3'Валюта'
+                : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  AgeDKZ        #3'Возраст'#13#3'задолж.'#13#3'(в днях)'
+                : [8], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+end;
+
+
+//******************************************************************************
+
+Panel pnDKZ_BD;
+  Table DKZ_BD;
+
+HandleEvent
+
+cmMarkUnMark:
+  {
+    set DKZ_BD.wPick := DKZ_BD.wPick xor 1;
+    update current DKZ_BD;
+    #ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+    #else
+    if (GetNext DKZ_BD = tsOk)
+      CallToNeighbours(cmPosDown, #DKZ_BD);
+
+    RescanPanel(tnDKZ_BD);
+    #end
+  }
+
+cmSelectall:
+  {
+    PushPos(tnDKZ_BD);
+
+    _LOOP DKZ_BD
+      {
+        DKZ_BD.wPick := 1;
+        update current DKZ_BD;
+      }
+
+    PopPos(tnDKZ_BD);
+    RescanPanel(tnDKZ_BD);
+    RereadRecord;
+  }
+
+cmUnSelectall:
+  {
+    PushPos(tnDKZ_BD);
+
+    _LOOP DKZ_BD
+      {
+        DKZ_BD.wPick := 0;
+        update current DKZ_BD;
+      }
+
+    PopPos(tnDKZ_BD);
+    RescanPanel(tnDKZ_BD);
+    RereadRecord;
+  }
+
+end
+end
+
+//******************************************************************************
+
+HandleEvent
+cmInit:
+  {
+    if (not boGetTune('Doc.Status.Do'))
+      if (Message('В настройке запрещено изменять статус документов-оснований!'#13+
+                  GetTuneName('Doc.Status.Do') + ''#13#13 +
+                  'Продолжить?', Warning+YesNo) = cmNo)
+        Abort;
+
+    #ifdef __StatLogObj__
+    #mGetVipRefA(oStatlog,'vipStatLog')
+    #end
+
+    sSimbValNDE := sGetTune('NDE.SimvRub');
+    ReadParam;
+
+    wTipDoc := pTipDoc;
+
+    MTClear(#DKZ_BD, mfNormal);    // вместо deleteall
+
+    if (RunWindowModal(winParam) <> cmDefault)
+      Abort
+    else
+      {
+        ResetBounds(tnBaseDoc);
+        PushBounds(tbtmpDKZ_BD);
+        PushBounds(tbbyKatOrg);
+        if (GetFirst DKZ_BD <> tsOk)
+          {
+            Message('Согласно параметров расчета нет ДО, по которым имеется задолженность');
+            Abort;
+          }
+
+        SelectPanel(tnDKZ_BD);
+      }
+  }
+
+cmDelOnProtect:
+  case CurField of
+  //--------------
+    #KatNotes1.Name: set cNoteOld := comp(0);
+  //--------------
+    #KatNotes2.Name: set cNoteNew := comp(0);
+  //--------------
+    else Abort;
+  //--------------
+  end;
+
+cmPick:
+  case CurField of
+  //--------------
+    #KatNotes1.Name:
+      if (RunInterface('GetSomKatNotes',
+                         word(40),
+                         word(0),
+                         word(0),
+                         boolean(FALSE), cNoteOld) <> cmCancel)
+        set cNoteOld := cNoteOld;
+  //--------------
+    #KatNotes2.Name:
+      if (RunInterface('GetSomKatNotes',
+                         word(40),
+                         word(0),
+                         word(0),
+                         boolean(FALSE), cNoteNew) <> cmCancel)
+        set cNoteNew := cNoteNew;
+  //--------------
+  end;
+
+cmValue2:
+   if ((cNoteNew = comp(0)) or (cNoteOld = cNoteNew))
+     {
+       Message('Выберите новый статус', Warning);
+       Stop;
+     }
+   else
+     {
+       SaveParam;
+
+       if (not boGetTune('Doc.Status.Do'))
+         {
+           Message('В настройке Вам не разрешено изменять статус документов-оснований !', Warning+CancelButton);
+           Stop;
+         }
+       else
+         {
+           var _StatOld: word;
+           var _NoteOld: comp;
+           PushPos(tnDKZ_BD);
+
+           MsgFormInit;
+
+           _MsgInForm := TRUE;
+
+           MSGForm('Изменения статусов в ДО на '+if(wTipDoc = 1, 'продажу', 'закупку')+
+                   ' с "'+KatNotes1.Name+'"'+' на "'+KatNotes2.Name+
+                   '", для которых возраст задолженности более '+string(nAgeDKZ)+' дней ', Information);
+
+           _LOOP DKZ_BD
+             if (DKZ_BD.wPick = word(1))
+               {
+                 _StatOld := BaseDoc.Status;
+                 _NoteOld := BaseDoc.cNote;
+                 BaseDoc.cNote  := cNoteNew;
+                 BaseDoc.Status := KatNotes2.Status;
+
+                 if (update current BaseDoc = tsOk)
+                   if (oStatLog.StatLog_InsNewStat( word(40),            // тип документа
+                                           BaseDoc.NRec,        // NRec документа
+                                           _StatOld,            // старый статус
+                                           _NoteOld,            // NRec старого статуса
+                                           BaseDoc.Status,      // новый статус
+                                           BaseDoc.cNote,       // NRec нового статуса
+                                           sComment             // комментарий в историю
+                                         ) = tsOk)
+
+                     MSGForm('ДО №'+BaseDoc.NoDoc+' от '+DateToStr(BaseDoc.dDoc, 'DD/MM/YYYY') , Information);
+               }
+
+           PopPos(tnDKZ_BD);
+           MSGFormEnd;
+           CloseInterface(cmDefault); //PutCommand(cmDefault);
+         }
+     }
+end;   // HandleEvent
+
+End.
+
+//******************************************************************************

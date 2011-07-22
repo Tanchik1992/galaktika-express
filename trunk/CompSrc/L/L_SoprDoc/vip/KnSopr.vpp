@@ -1,0 +1,183 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Реализация функционала Корректирующей накладной
+//******************************************************************************
+
+
+#ifndef _KNSOPR_VPP
+#define _KNSOPR_VPP
+
+#include SDfuns.var
+
+// используются сокращения:
+// PN - ПН - приходная накладная
+// SN - СН - сторнирующая накладная
+// KN - КН - корректирующая накладная
+// BS - БС - бухгалтерская справка
+
+procedure TuneEditSopr;
+{
+  var PN_KatSopr   : comp;
+  var i,si         : word;
+
+  if (KatSopr.wADoc=adSoprDocSN)                              // это сторнирующая накладная (такое редко бывает, если вобще бывает)
+    {
+      PN_KatSopr := KatSopr.cADoc;
+      if (GetFirst KatSopr where ((PN_KatSopr == KatSopr.cADoc and
+                                  adSoprDocKN == KatSopr.wADoc)) <> tsOk) // перепозиционируемся на корректирующую
+        {
+          Message('Не удалось найти корректирующую накладную. '+  // т.к. по бизнес алгоритму такого не может быть
+                    'Это означает, что произошла внутренняя ошибка в системе. '+
+                    'Сейчас будет осуществлена попытка найти исходную приходную накладную.');
+          if (GetFirst KatSopr
+              where ((PN_KatSopr == KatSopr.nRec)) <> tsOk)
+            {
+              Message('Не удалось найти исходную приходную накладную. Это означает что произошла внутренняя ошибка в системе.'); // т.к. по бизнес алгоритму такого не может быть
+              exit;
+            }
+        }
+      RereadRecord;
+      RedrawPanel(tnKatSopr);
+    } // if
+
+  if (LastDocType <> KatSopr.wADoc)
+    if (isEditSoprVisible)
+      {            // окно редактирования на экране
+        if ((KatSopr.wADoc=adSoprDocKN))
+          {                                // это корректирующая накладная
+            PushBounds(tbOldValues);
+            PushBounds(tbOldValuesUsl);
+            PushBounds(tbPNNumber);
+            PopBounds (tbKNNumber);
+            TitlePart := ' корректирующей';
+            // поля в основной панели накладной
+            ShowButton(scrHeader, cmSearchForKN, True);
+            ShowButton(scrHeader, cmInsertEditKN, False);
+            // поля в панели спецификаций
+            SetFieldState(#OldKolFact, sfVisible);
+            SetFieldState(#OldPrv, sfVisible);
+            SetFieldState(#OldSumPrice, sfVisible);
+            SetFieldState(#OldKolUsl, sfVisible);
+            SetFieldState(#OldPriceUsl, sfVisible);
+
+          #ifdef _RPrice_
+          if (isRoznPrice)
+          {
+            var i: word;
+
+            for (i := 1; i <= KolRoznPrice; inc(i))
+              case i of
+                1: SetFieldState(#RPrice2.Price1, sfVisible);
+                2: SetFieldState(#RPrice2.Price2, sfVisible);
+                3: SetFieldState(#RPrice2.Price3, sfVisible);
+                4: SetFieldState(#RPrice2.Price4, sfVisible);
+                5: SetFieldState(#RPrice2.Price5, sfVisible);
+              end;
+          }
+          #end
+
+            ReReadRecord;       // если этого не сделать вываливается всякая гадость
+            // RedrawPanel(#SpSopr);
+          }
+        else
+          {                                                          // это обычная приходная накладная
+            PopBounds (tbOldValues);
+            PopBounds (tbOldValuesUsl);
+            PopBounds (tbPNNumber);
+            PushBounds(tbKNNumber);
+            TitlePart := '';
+            // поля в основной панели накладной
+            ShowButton(scrHeader, cmSearchForKN, False);
+            ShowButton(scrHeader, cmInsertEditKN, True);
+            // поля в панели спецификаций
+            ClearFieldState(#OldKolFact, sfVisible);
+            ClearFieldState(#OldPrv, sfVisible);
+            ClearFieldState(#OldSumPrice, sfVisible);
+            ClearFieldState(#OldKolUsl, sfVisible);
+            ClearFieldState(#OldPriceUsl, sfVisible);
+
+          #ifdef _RPrice_
+            if (isRoznPrice)
+            {
+              ClearFieldState(#RPrice2.Price1, sfVisible);
+              ClearFieldState(#RPrice2.Price2, sfVisible);
+              ClearFieldState(#RPrice2.Price3, sfVisible);
+              ClearFieldState(#RPrice2.Price4, sfVisible);
+              ClearFieldState(#RPrice2.Price5, sfVisible);
+            }
+          #end
+
+            if (isValid(#KatSopr))
+              ReReadRecord;    // если этого не сделать вываливается всякая гадость (или наоборот :))
+          }
+
+        SetWindowTitle(EditSopr, 'Редактирование' + TitlePart + ' накладной на получение МЦ');
+      }
+  LastDocType:=KatSopr.wADoc;
+
+} // procedure TuneEditSopr
+
+// для заданной приходной накладной ищет соответствующую ей корректирующую и запускает ее на редактирование
+Procedure SearchKN(PN_KatSopr: comp);
+{
+  // спозиционируемся на КН и запустим на редактирование
+  if (GetFirst KatSopr
+      where ((PN_KatSopr == KatSopr.cADoc and adSoprDocKN == KatSopr.wADoc)) = tsOk)
+    {
+      TuneEditSopr;
+      PutCommand(cmEditSopr);
+    }
+  else
+    Message('Корректирующая накладная не создана.');
+
+} // procedure SearchKN
+
+// для корректирующей ищет приходную накладную и запускает ее на редактирование
+Procedure SearchPN(PN_KatSopr: comp);
+{
+  // спозиционируемся на ПН и запустим на редактирование
+  if (GetFirst KatSopr
+      where ((PN_KatSopr == KatSopr.nRec)) = tsOk)
+    {
+      TuneEditSopr;
+      RedrawPanel(tnKatSopr);
+      PutCommand(cmEditSopr);
+    }
+  else
+    Message('Приходная накладная не найдена.');
+
+} // procedure SearchForKN
+
+// создает (если необходимо) KN и запускает процесс ее редактирования
+// в качестве приходной накладной по которой все это делается берется текущая накланая KatSopr
+Procedure InsertEditKN;
+var PN_KatSopr : comp;
+{
+  PN_KatSopr := KatSopr.nRec;
+
+  // Проверяется существует ли уже соответствующая КН для выбранной ПН.
+  // Если нет, создаем КН
+  if (GetFirst KatSopr
+      where ((PN_KatSopr == KatSopr.cADoc and adSoprDocKN == KatSopr.wADoc)) <> tsOk )
+    if (Message('Создать корректирующую накладную?', Confirmation + YesNo) <> cmYes)
+      exit;
+    else
+      {
+        StartNewVisual(vtRotateVisual,vfTimer,'Создание корректирующей накладной...',0);
+        PushPos(tnKatSopr);    // на всякий случай, если произойдет ошибка
+
+        RunInterface(CreateKN, PN_KatSopr);  // согласились созадавать КН
+
+        Update_Current_KatSopr;
+
+        PopPos(tnKatSopr);
+        StopVisual('',0);
+      }
+
+  // запустим КН на редактирование
+  SearchKN(PN_KatSopr);
+}; // InsertEditKN
+
+
+#end //_KNSOPR_VPP

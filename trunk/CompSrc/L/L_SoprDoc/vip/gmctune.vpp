@@ -1,0 +1,309 @@
+
+#ifndef _gmctune_vpp
+#define _gmctune_vpp
+//Выбор из каталога, тек.остатков или прайс-листа по F3 или Сtrl+F3
+Function PickByTune (wPick: word): boolean;
+var
+  bPickKatMC: boolean;
+{
+  PickByTune := TRUE;
+
+  case KatSopr.VidSopr of
+    201..203, 210, 211, 229, 1421:
+      bPickKatMC := wGetTune('Pick.SelKatMc') = 0
+    else
+      bPickKatMC := TRUE;
+  end;
+
+  if (SpSopr.cSpStep <> 0)
+    if ( KatSopr.VidSopr = 101 ) or ( KatSopr.VidSopr = 108 ) or ( KatSopr.Vidsopr = 201 )
+      if ((SpSopr.PrMc  = 1) and (wGetTune('Doc.RasNeotgMC')  = 1)) or
+         ((SpSopr.PrMc <> 1) and (wGetTune('Doc.RasNeotgUsl') = 1))
+        wPick := 3;
+
+  case wPick of
+    0: // из каталога
+    {
+      if (bPickKatMC)
+        GetMCUSLKat
+      else
+      {
+        message('Выбор из каталога МЦ/Услуг недоступен');
+        PickByTune := false;
+      }
+    }
+
+    1: // из прайс-листа
+    {
+      GetMCUSLPrl;
+    }
+
+    2: // из текущих остатков
+    {
+#ifndef peresort
+      if (SpSopr.PrMC = 1)
+#end
+      {
+        #INCLUDE gteks.vpp
+      }
+    }
+
+#ifdef _OPER_NAKL_VIH
+    3: // из спецификации вышестоящего документа
+    {
+      // Выбор из спецификации ДО
+      if (KatSopr.cStepDoc <> 0)
+      { // выбор из резерва
+       #ifdef _SOPRDOC_VIP
+        if (boGetTune('Doc.InsFromReserv') AND SpSopr.PrMc = 1)
+          InsPosFromReserv
+        else
+       #end
+          GetMCUslSopr;
+      }
+      else
+      { // выбор из спецификации договора/соглашения/кал.плана
+        if (KatSopr.cCalPlan    <> 0) OR
+           (KatSopr.cAppDogovor <> 0) OR
+           (KatSopr.cDogovor    <> 0)
+              InsertPosDog
+        else
+        { // выбора из каталога МЦ/услуг
+          if (bPickKatMC)
+            GetMCUSLKat
+          else
+          {
+            message('Выбор из каталога МЦ/Услуг недоступен');
+            PickByTune := false;
+          }
+        }
+      }
+    }
+    4: // из текущих остатков2
+#else
+    3: // из текущих остатков2
+#end
+      {
+        var _ccPodr, _ccMOL : comp;
+        var ResPick, PrNom : word;
+        var MarkerPick, IndexNo : longint;
+        var koefp : double;
+        // проверка настройки для автоматической вставки тары
+        var bInsTara: boolean;
+        bInsTara := FALSE;
+
+        PrNom := SpSopr.PrMC;
+
+        if (KatSopr.VidSopr = 611)
+          {
+            _ccPodr := KatSopr.cPodrTo;
+            _ccMOL  := KatSopr.cMolTo;
+          }
+        else
+          {
+            _ccPodr := KatSopr.cPodrFrom;
+            _ccMOL  := KatSopr.cMOLFrom;
+          }
+
+        if RunInterface('L_MCU::GetTekSaldoParty2',_ccPodr,_ccMOL) = cmDefault
+          {
+            if isValid(#SpSopr)
+              DoDeleteCurrentSpSopr;
+
+            InitMCInfo(KatSopr.dSopr);
+!            MarkerPick  := InitMarker('MarkerTekSaldo2', 8, 100, 10);
+
+            _loop PickRep where (( 100 == PickRep.wlist)) ordered by index Pick02
+            {
+              if GetFirst TekSaldo where (( PickRep.cRec == TekSaldo.nRec)) <> tsOk
+                Continue;
+
+              if (_ccPodr <> TekSaldo.cPodr) or (_ccMOL  <> TekSaldo.cMOL)
+                Continue;
+
+              SpSoprDefault;
+
+              if GetFirst TekSaldo where (( PickRep.cRec == TekSaldo.nRec)) <> tsOk
+                Continue;
+
+              koefp := 1;
+              SpSopr.cOtpEd := 0;
+
+#ifdef SOPINMOV_VIP
+              if wGetTune('Pick.cOtpedForPick') = 0
+#endif
+              if ( (KatSopr.VidSopr <> 611) and (KatSopr.VidSopr <> 612) )
+                {
+                  SpSopr.cOtpEd := fEdIzm.GetAktOtpEdNrec(TekSaldo.cMC, PrNom);
+                  koefp         := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+                }
+
+              if koefp = 0 koefp := 1;
+
+              SpSopr.cMcUsl  := TekSaldo.cMC;
+
+              SpSopr.cVal := StepMCInfo(TekSaldo.cMC, SpSopr.cVal,
+                             if (TekSaldo.cPodr    = 0, comp(-1), TekSaldo.cPodr),
+                             if (TekSaldo.cMOL     = 0, comp(-1), TekSaldo.cMOL),
+                             if (TekSaldo.cParty   = 0, comp(-1), TekSaldo.cParty));
+
+              SpSopr.Price   := AveragePrice * koefp;
+              SpSopr.VPrice  := AverageVPrice * koefp;
+              SpSopr.Kol     := PickRep.PickKol / koefp;
+              fEdIzm.CheckKolDiskret(SpSopr.Kol,SpSopr.cOtpEd,true,true);
+              SpSopr.KolFact := SpSopr.Kol;
+              SpSopr.cParty  := TekSaldo.cParty;
+              SpSopr.KolOpl  := SpSopr.Kol;
+              SpSopr.ProcUb  := 0;
+
+              if (KatSopr.TipSopr = 2)
+               if (PrNom = 1)
+                if ( GetFirst KatMC Where (( TekSaldo.cMC == KatMC.NRec )) = tsOk )
+                 {
+                   SpSopr.ProcUb := oSDfuns.GetNormUbFromKatalog(SpSopr.VidSopr, 0, KatMC.NormUb);
+                   SpSopr.KolOpl := SpSopr.KolOpl * (1 - SpSopr.ProcUb / 100);
+                   SpSopr.Netto  := KatMC.Massa;
+                   SpSopr.mTara  := KatMC.mTara;
+                 }
+
+              set SpSopr.rPrice  := SpSopr.price;
+              set SpSopr.rVPrice := SpSopr.vPrice;
+              set SpSopr.Price   := FRoundRubOrd(1, SpSopr.rPrice * SpSopr.kolFact)/SpSopr.kolFact;
+              set SpSopr.VPrice  := FRoundValOrd(1, SpSopr.rVPrice * SpSopr.kolFact)/SpSopr.kolFact;
+
+              if (Insert current SpSopr <> tsOk) {};
+
+              // вставка тары
+              if (oSoprTara.CheckTaraAutoPaste(KatSopr.VidSopr))
+                if (GetFirst fastfirstrow SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+                {
+                  oSoprTara.InsertTara (SpSopr.cOtpEd, SpSopr.NRec, SpSopr.cSopr, SpSopr.KolFact, comp(0));
+                  bInsTara := TRUE;
+                }
+
+#ifndef peresort
+              if (SpSopr.PrMC = 1)
+#end
+               {
+                 oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 1, 0, SpSopr.Kolfact, 0);
+                 oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 2, 0, SpSopr.Kol,     0);
+                 oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 3, 0, SpSopr.KolOpl,  0);
+               }
+              if getfirst SaldoObj where (( PickRep.cUserDeskRep == SaldoObj.NRec)) = tsOk
+                {
+                  oMTRFun.SaveKitKauForKit(SaldoObj.cKitKau);
+                  oMTRFun.InsSpecMTR(coSpSopr, SpSopr.nRec);
+                }
+
+              KatSopr.Summa  := KatSopr.Summa + SpSopr.Price * SpSopr.KolOpl;
+              KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+
+              Update current KatSopr;
+              RereadRecord;
+              KatSopr.Summa      := FSRoundRub(KatSopr.Summa);
+              set KatSopr.SumVal := FSRoundVal(KatSopr.SumVal);
+
+              // пересчет номеров (группировка тары в спецификации)
+              if (bInsTara)
+                oSoprTara.ChangeNppSopr (KatSopr.NRec);
+
+              RereadRecord(#SpSopr);
+            } // Loop
+
+!            DoneMarker(MarkerPick, 'MarkerTekSaldo2');
+            DoneMCInfo;
+          }
+      }
+  end;
+}
+
+//Выбор спецификации из каталога, тек.остатков или прайс-листа
+Function Pick_F3_CtrlF3(aCommand: word): boolean;
+var
+  wTune: word;
+{
+  Pick_F3_CtrlF3 := FALSE;
+
+  case KatSopr.VidSopr of
+    201..203, 210, 229, 1421:
+    {
+      case KatSopr.VidSopr of
+        201..203:
+      wTune := if(aCommand = cmPick, wGetTune('Pick.F3'), wGetTune('Pick.CtrlF3'));
+        1421:
+          wTune := if(aCommand = cmPick, wGetTune('Doc.Wood.Nakl.F3'), wGetTune('Doc.Wood.Nakl.CtrlF3'));
+        210, 229:
+          wTune := if(aCommand = cmPick, wGetTune('Pick.F3_UKS'), wGetTune('Pick.CtrlF3_UKS'));
+      end;
+
+      if (not PickByTune(wTune))
+        Exit;
+
+     #ifdef _SOPRDOC_VIP
+      if (SpSopr.cMcUsl <> 0)
+      {
+        // пересчитать суммы (особенно актуально при множественном выборе)
+        CheckSumma(true);
+
+        if (KatSopr.cCellVal <> 0) or (trim(KatSopr.nVagon) <> '')
+          EditSpSoprUzbek (2);
+      }
+     #end
+    }
+    101..103, 108:
+    {
+      wTune := if(aCommand = cmRestoreDoc, wGetTune('Pick.BuyCtrlF3'), wGetTune('Pick.BuyF3'));
+
+      if (not PickByTune(wTune))
+        Exit;
+
+     #ifdef _SOPRDOCB_VIP
+      if (SpSopr.cMcUsl <> 0)
+      {
+        // пересчитать суммы (особенно актуально при множественном выборе)
+        CheckSumma(true);
+
+        if (KatSopr.cCellVal <> 0) or (trim(KatSopr.nVagon) <> '')
+          EditSpSoprUzbek (2);
+      }
+     #end
+    }
+    1411:
+    {
+      wTune := if(aCommand = cmRestoreDoc, wGetTune('Doc.Wood.Journ.CtrlF3'), wGetTune('Doc.Wood.Journ.F3'));
+
+      if (not PickByTune(wTune))
+        Exit;
+
+     #ifdef _SOPRDOCB_VIP
+      if (SpSopr.cMcUsl <> 0)
+      {
+        // пересчитать суммы (особенно актуально при множественном выборе)
+        CheckSumma(true);
+
+        if (KatSopr.cCellVal <> 0) or (trim(KatSopr.nVagon) <> '')
+          EditSpSoprUzbek (2);
+      }
+     #end
+    }
+
+    600..606, 611, 612, 204, 630, 632:
+    {
+      wTune := if(aCommand = cmRestoreDoc, wGetTune('Pick.CtrlF3_SoprMove'), wGetTune('Pick.F3_SoprMove'));
+
+      if (not PickByTune(wTune))
+        Exit;
+    }
+    else
+    {
+      wTune := if(aCommand = cmRestoreDoc, wGetTune('Pick.CtrlF3'), wGetTune('Pick.F3'));
+
+      if (not PickByTune(wTune))
+        Exit;
+    }
+  end;
+
+  Pick_F3_CtrlF3 := TRUE;
+}
+
+#end //_gmctune_vpp

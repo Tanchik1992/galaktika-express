@@ -1,0 +1,615 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+// Выбор МЦ/Услуги по документу-основанию
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор МЦ/Услуги по документу-основанию
+
+Параметры:
+  pStepDoc - ссылка на позицию ДО
+  wPrMC    - признак МЦ/услуги
+#end
+
+//******************************************************************************
+#include oEdIzm.vih
+#include RasNeotg.vih
+
+//******************************************************************************
+Interface GetMCSopr 'Выбор по документу' doAccept, EscClose, Cyan;
+  Show at (, 4, 110, 21);
+
+#include oEdIzm.var
+#include RasNeotg.var
+
+//******************************************************************************
+Table struct TmpMcSopr "Таблица в памяти"
+(
+  npp       : word
+, cSpStep   : comp
+, cOwner    : comp
+, cMcUsl    : comp
+, cOtpEd    : comp
+, Name      : string[80]
+, Kod       : string[30]
+, KolSkl    : double     // кол-во по ДО
+, Price     : double
+, KolD      : double     // доступное кол-во
+, PickKol   : double     // выбранное кол-во
+, PartyName : string[80]
+, OtpEdName : string[80]
+)
+with Index
+(
+  TmpMcSopr01 = Name
+, TmpMcSopr02 = Kod
+, TmpMcSopr03 = KolSkl
+, TmpMcSopr04 = Price
+, TmpMcSopr05 = PartyName
+, TmpMcSopr06 = KolD
+, TmpMcSopr07 = cOwner
+, TmpMcSopr08 = PickKol
+, TmpMcSopr09 = cMcUsl
+, TmpMcSopr10 = cOtpEd
+, TmpMcSopr11 = OtpedName
+, TmpMcSopr12 = npp
+)
+;
+//******************************************************************************
+
+Create view
+Var
+  pStepDoc  : comp;
+  wPrMC     : word;
+  Curse     : double;
+  isCheckKol: boolean; // контроль доступного кол-ва
+  bFilt     : boolean;
+  sTitle    : string;
+  isPickTara: boolean;
+  wGrTara   : word;
+  wParam1   : word;
+
+As select
+  *
+
+From
+  SpStep
+, Pick
+, BaseDoc
+, SpOtpEd
+, SpOtpEd SpOtpEd2
+, TmpMcSopr
+, TmpMcSopr TmpMcSopr2
+, TmpMcSopr TmpMcSopr3
+
+Where
+((
+       pStepDoc          ==  StepDoc.NRec
+  AND  StepDoc.cBaseDoc  ==  BaseDoc.NRec
+  AND  BaseDoc.cNalog    ==  KatNalog.NRec
+  AND  SpStep.NRec       ==  SpSopr.cSpStep
+
+  AND  TmpMcSopr.cSpStep ==  SpStep.nRec
+))
+
+Order Temp01 by TmpMcSopr.Name
+Order Temp02 by TmpMcSopr.Kod
+Order Temp03 by TmpMcSopr.KolSkl
+Order Temp04 by TmpMcSopr.Price
+Order Temp05 by TmpMcSopr.PartyName
+Order Temp06 by TmpMcSopr.OtpEdName
+Order Temp07 by TmpMcSopr.npp
+
+Bounds ByDostup    =  double(0) << TmpMcSopr.KolD
+
+Bounds ByGrTara00  =  TmpMcSopr.cSpStep  ==  TmpMcSopr2.cOwner
+Bounds ByGrTara01  =  TmpMcSopr.cOtpEd   ==  SpOtpEd.cOtpEd  AND
+                      TmpMcSopr2.cMcUsl  ==  SpOtpEd.cMcTara
+
+Bounds ByGrTara10  =  SpOtpEd.cMcTara    ==  TmpMcSopr2.cMcUsl
+Bounds ByGrTara11  =  TmpMcSopr.cOtpEd   ==  SpOtpEd.cOtpEd
+;
+
+Parameters
+  pStepDoc,
+  wPrMC
+;
+
+//******************************************************************************
+// расчет доступного кол-ва
+Function KolSoprBefore(pSpStep: comp; KolSpStep: double): double;
+var
+  tKol: double;
+{
+  tKol := oRasNeotg.RecalcNeotgr(pSpStep, comp(0));
+
+  if (tKol > KolSpStep)
+    tKol := KolSpStep;
+
+  KolSoprBefore := tKol;
+}
+
+//******************************************************************************
+// заполнение таблицы в памяти
+Procedure InsRecInTmp;
+var
+  wPr: word;
+  Flag: boolean;
+  aStepDoc: comp;
+{
+  wPr      := wPrMC;
+  Flag     := isCheckKol;
+  aStepDoc := pStepDoc;
+
+  mtClear(#TmpMcSopr, mfNormal);
+
+  insert visual 'Инициализация временной таблицы...'
+    into TmpMcSopr
+      (
+        npp
+      , cSpStep
+      , cOwner
+      , cOtpEd
+      , cMcUsl
+      , Name
+      , Kod
+      , KolSkl
+      , Price
+      , PartyName
+      , OtpEdName
+      , KolD
+      )
+      select
+        SpStep.npp
+      , SpStep.nRec
+      , SpStep.cOwner
+      , SpStep.cOtpEd
+      , SpStep.cMcUsl
+      , if(SpStep.PrMC = 1, KatMC.Name  , KatUsl.Name)
+      , if(SpStep.PrMC = 1, KatMC.BarKod, KatUsl.Kod)
+      , SpStep.KolSkl
+      , SpStep.Price
+      , KatParty.Name
+      , KatOtpEd.Name
+      , if(Flag, SpStep.KolSkl - KolSoprBefore(SpStep.NRec, SpStep.KolSkl), 0)
+      from
+        SpStep
+      , KatMC
+      , KatUsl
+      , KatParty
+      , KatOtpEd
+      where
+      ((
+          aStepDoc      == SpStep.cStepDoc
+      AND wPr           == SpStep.PrMC
+      AND SpStep.cMCUSL == KatMC.NRec
+      AND SpStep.cMCUSL == KatUSL.NRec
+      AND SpStep.cParty == KatParty.NRec
+      AND SpStep.cOtpEd == KatOtpEd.NRec
+      ));
+}
+
+//******************************************************************************
+// Заполнение выбора
+Procedure MakePickTable555;
+{
+  _LOOP TmpMcSopr
+    if (TmpMcSopr.PickKol > 0)
+    {
+      ClearBuffer(#Pick);
+
+      Pick.PickKol := TmpMcSopr.PickKol;
+      Pick.wList   := 555;
+      Pick.cRec    := TmpMcSopr.cSpStep;
+      Pick.NRec    := 0;
+
+      Insert Current Pick;
+    }
+    else
+      delete Pick where (( word(555) == Pick.wList AND TmpMcSopr.cSpStep == Pick.cRec ));
+}
+
+//******************************************************************************
+// Добавить тару
+Procedure PickTara(aKol, aOldKol: double);
+var
+  tKoef: double;
+{
+  if (NOT isPickTara)
+    Exit;
+
+  _LOOP TmpMcSopr2
+  {
+    tKoef := 1;
+
+    if (GetFirst SpOtpEd2 where (( TmpMcSopr.cOtpEd == SpOtpEd2.cOtpEd )) = tsOk)
+      tKoef := SpOtpEd2.Koef;
+
+    if (wGrTara = 0)
+      TmpMcSopr2.PickKol := aKol / tKoef
+    else
+      TmpMcSopr2.PickKol := TmpMcSopr2.PickKol + (aKol - aOldKol) / tKoef;
+
+    if ((wParam1 AND 1) = 1)
+      fEdIzm.CheckKolDiskret(TmpMcSopr2.PickKol, TmpMcSopr2.cOtpEd, TRUE, FALSE);
+
+    if (isCheckKol)
+      if (TmpMcSopr2.PickKol > TmpMcSopr2.KolD)
+        TmpMcSopr2.PickKol := TmpMcSopr2.KolD;
+
+    if (TmpMcSopr2.PickKol < 0)
+      TmpMcSopr2.PickKol := 0;
+
+    Update Current TmpMcSopr2;
+  }
+}
+
+
+//******************************************************************************
+Browse brGetMCSopr ('Выбор позиции из документа-основания', hcAllVPick, sci1EnIns);
+  Show at (,,,15);
+  Table TmpMcSopr;
+Fields
+  {Font = {Color = if (TmpMcSopr.PickKol > 0, ColorMark, 0)}};
+
+  if (TmpMcSopr.PickKol > 0, '√', '')
+                      #3'√'                      : [ 1], Skip, NoAutoSize, Centered;
+  TmpMcSopr.npp       #3'Номер'#13#3'п/п'        : [3],  Skip, Protect, NoAutoSize;
+  TmpMcSopr.PickKol   #3'Выбрано'                : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], NoProtect, NoAutoSize;
+  TmpMcSopr.KolD      #3'Доступно'               : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'],   Protect, NoAutoSize;
+  TmpMcSopr.OtpEdName #3'Единица'#13#3'измерения': [10], Protect;
+  TmpMcSopr.Name      #3'Наименование позиции ДО': [38], Protect;
+  TmpMcSopr.Kod       #3'Код'                    : [14], Protect, NoAutoSize;
+  TmpMcSopr.KolSkl    #3'Количество'#13#3'по ДО' : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect, NoAutoSize;
+  TmpMcSopr.Price     #3'Цена'#13#3'по ДО'       : [17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], Protect, NoAutoSize;
+  TmpMcSopr.PartyName #3'Партия'                 : [15], Protect;
+end;
+
+Screen scrGetMCSopr ('Дополнительные параметры', hcAllVPick, sci1EnIns);
+  Show at (,16,,);
+Fields
+  wParam1 ('Округление в случае дискретности тары'): NoProtect;
+<<
+  [.] округлять тару при выборе`
+>>
+end;
+//******************************************************************************
+
+HandleEvent
+
+cmMarkUnMark:
+{
+  if (NOT isValid(#TmpMcSopr))
+    EXIT;
+
+  SelectField(#TmpMcSopr.PickKol);
+
+  if (TmpMcSopr.PickKol > 0)
+    set TmpMcSopr.PickKol := 0
+  else
+    set TmpMcSopr.PickKol := if (isCheckKol, TmpMcSopr.KolD, TmpMcSopr.KolSkl);
+
+  Update Current TmpMcSopr;
+
+  PickTara(TmpMcSopr.PickKol, Double(OldFieldValue));
+
+  RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+
+   ReReadRecord(#TmpMcSopr);
+}
+
+
+cmSelectall:
+{
+  PushPos(#TmpMcSopr);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Отмечаю позиции', 1);
+
+  _LOOP TmpMcSopr
+    if (NOT NextVisual)
+      Break
+    else
+      if (TmpMcSopr.PickKol = 0)
+      {
+        TmpMcSopr.PickKol := if (isCheckKol, TmpMcSopr.KolD, TmpMcSopr.KolSkl);
+        Update Current TmpMcSopr;
+
+        PickTara(TmpMcSopr.PickKol, Double(OldFieldValue));
+      }
+
+  StopVisual('', 0);
+
+  PopPos(#TmpMcSopr);
+
+  ReReadRecord(#TmpMcSopr);
+}
+
+
+cmUnSelectall:
+{
+  PushPos(#TmpMcSopr);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Отмена выбора', 1);
+
+  _LOOP TmpMcSopr
+  {
+    TmpMcSopr.PickKol := 0;
+    Update Current TmpMcSopr;
+
+    PickTara(TmpMcSopr.PickKol, Double(OldFieldValue));
+  }
+
+  StopVisual('', 0);
+
+  PopPos(#TmpMcSopr);
+
+  ReReadRecord(#TmpMcSopr);
+}
+
+cmCheckField:
+  case CurField of
+    #TmpMcSopr.PickKol:
+    {
+      if (isCheckKol)
+        if (TmpMcSopr.PickKol > TmpMcSopr.KolD)
+          TmpMcSopr.PickKol := TmpMcSopr.KolD;
+
+      Update Current TmpMcSopr;
+
+      PickTara(TmpMcSopr.PickKol, Double(OldFieldValue));
+    }
+  end;
+
+
+cmDefault:
+{
+  if (NOT isValid(#TmpMcSopr))
+  {
+    Message('Не выбрано ни одной позиции!', Information);
+    Stop;
+    EXIT;
+  }
+
+  if (TmpMcSopr.PickKol = 0)
+    if ( GetFirst TmpMcSopr3 where (( 0 << TmpMcSopr3.PickKol )) <> tsOk )
+    {
+      TmpMcSopr.PickKol := if (isCheckKol, TmpMcSopr.KolD, TmpMcSopr.KolSkl);
+      Update Current TmpMcSopr;
+
+      PickTara(TmpMcSopr.PickKol, Double(OldFieldValue));
+    }
+
+  MakePickTable555;
+
+  if ( RecordExists Pick where (( word(555) == Pick.wList )) <> tsOk )
+  {
+    Message('Не выбрано ни одной позиции!', Information);
+    Stop;
+  }
+}
+
+cmInit:
+{
+  isCheckKol := if (wPrMC = 1, boGetTune('Doc.MakeKol'), boGetTune('Doc.CtrUslAktDo'));
+
+  if (NOT ReadMyDSK(wParam1, 'GetMCSopr_wParam1', FALSE))
+    wParam1 := 0;
+
+  if (GetFirst BaseDoc <> tsOk)
+  {
+    Message('Не найден документ-основание');
+    Exit;
+  }
+
+  case BaseDoc.Direct of
+    0: isPickTara := boGetTune('Tara.AutoPaste_Skl');
+    1: isPickTara := boGetTune('Tara.AutoPaste');
+    2: isPickTara := boGetTune('Tara.AutoPaste_Buy');
+    else
+       isPickTara := FALSE;
+  end;
+
+  wGrTara := wGetTune('Tara.GrTara');
+
+  if (wGrTara = 0)
+  {
+    PushBounds(tbByGrTara00);
+    PushBounds(tbByGrTara01);
+  }
+  else
+  {
+    PushBounds(tbByGrTara10);
+    PushBounds(tbByGrTara11);
+  }
+
+  if (isCheckKol)
+    SetFieldState  (#TmpMcSopr.KolD, sfVisible)
+  else
+    ClearFieldState(#TmpMcSopr.KolD, sfVisible);
+
+  InsRecInTmp;
+
+  if ( GetFirst TmpMcSopr <> tsOk )
+  {
+    if (BaseDoc.VidDoc <> 550)
+      Message('В выбранном документе-основании нет ' + if (wPrMC = 1, 'МЦ', 'услуг'), CancelButton);
+
+    Abort;
+  }
+  else
+  {
+    var SortField : word;
+    if ( ReadMyDsk (SortField, '_TmpVozvratSetOrder_', FALSE) )
+      case SortField of
+        1: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.Name, -1);
+          SetOrder(tiTemp01);
+        }
+
+        2: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.Kod, -1);
+          SetOrder(tiTemp02);
+        }
+
+        3: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.KolSkl, -1);
+          SetOrder(tiTemp03);
+        }
+
+        4: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.Price, -1);
+          SetOrder(tiTemp04);
+        }
+
+        5: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.PartyName, -1);
+          SetOrder(tiTemp05);
+        }
+        6: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.OtpEdName, -1);
+          SetOrder(tiTemp06);
+        }
+        7: {
+          SetColumnSorting(brGetMCSopr, #TmpMcSopr.npp, -1);
+          SetOrder(tiTemp07);
+        }
+      end;
+
+    sTitle := 'Выбор ' + if(wPrMC = 1, 'матценностей', 'услуг')
+            + ' по ДО ' + f_sNumDate(PrintNumber(BaseDoc.Descr, BaseDoc.NoDoc), BaseDoc.dDoc);
+  }
+
+  SetTitle(sTitle);
+
+  if ( NOT ReadMyDsk (bFilt, '_FiltrByDostup_', FALSE) )
+    bFilt := FALSE;
+
+  if (bFilt)
+    {
+      AddBounds(tbByDostup);
+      ReReadRecord(#TmpMcSopr);
+
+      SetTitle(sTitle + ' = Установлен фильтр по доступным =');
+  }
+}
+
+cmDone:
+{
+  if BoundActive(tbByDostup)
+    SaveMyDSK(TRUE, '_FiltrByDostup_');
+  else
+    SaveMyDSK(FALSE, '_FiltrByDostup_');
+
+  SaveMyDSK(wParam1, 'GetMCSopr_wParam1');
+}
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuFilt'));
+
+
+cmColumnClicked :
+{
+  case GetColumnSorting(brGetMCSopr, Target) of
+    0:
+    {
+      Case Target of
+        #TmpMcSopr.Name:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp01);
+          SaveMyDSK(word(1), '_TmpVozvratSetOrder_');
+        }
+
+        #TmpMcSopr.Kod:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp02);
+          SaveMyDSK(word(2), '_TmpVozvratSetOrder_');
+        }
+
+        #TmpMcSopr.KolSkl:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp03);
+          SaveMyDSK(word(3), '_TmpVozvratSetOrder_');
+        }
+
+        #TmpMcSopr.Price:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp04);
+          SaveMyDSK(word(4), '_TmpVozvratSetOrder_');
+        }
+
+        #TmpMcSopr.PartyName:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp05);
+          SaveMyDSK(word(5), '_TmpVozvratSetOrder_');
+        }
+
+        #TmpMcSopr.OtpEdName:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp06);
+          SaveMyDSK(word(6), '_TmpVozvratSetOrder_');
+        }
+
+        #TmpMcSopr.npp:
+        {
+          SetColumnSorting(brGetMCSopr, Target, -1);
+          SetOrder(tiTemp07);
+          SaveMyDSK(word(7), '_TmpVozvratSetOrder_');
+        }
+      else
+        Exit;
+      end;
+
+      SetTableBackOrderIn (tnTmpMcSopr, FALSE);
+    }
+
+    -1:
+    {
+      SetColumnSorting(brGetMCSopr, Target, 1);
+      SetTableBackOrderIn (tnTmpMcSopr, TRUE);
+    }
+
+    1:
+    {
+      SetColumnSorting(brGetMCSopr, Target, -1);
+      SetTableBackOrderIn (tnTmpMcSopr, FALSE);
+    }
+
+  end;
+  RescanPanel(#TmpMcSopr);
+}
+
+
+cmFilterSave:
+  {
+    if NOT BoundActive(tbByDostup)
+      {
+        AddBounds(tbByDostup);
+        SetTitle(sTitle + ' = Установлен фильтр по доступным =');
+      }
+    else
+      {
+        SubBounds(tbByDostup);
+        SetTitle(sTitle);
+      }
+
+    ReReadRecord(#TmpMcSopr);
+  }
+
+end; // HandleEvent
+End. // Interface
+
+#doc
+Локальное меню главного окна интерфейса (для вариантов представления) <link Interface L_SOPRDOC::GetMCSopr>L_SOPRDOC::GetMCSopr - Выбор МЦ/Услуги по документу-основанию</link>
+#end
+mnuFilt Menu
+{
+- 'Установить/Снять фильтр', cmFilterSave, 'Установка и снятие фильтра по доступности', hci_zakup_filtr_dostup, 'Alt+B', kbAltB, sci1Esc;
+}

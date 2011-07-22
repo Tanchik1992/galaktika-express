@@ -1,0 +1,772 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║ Назначение    : 1. Функция TekBoxEmptyCorrection для корр. TekBox.Empty   ║
+ ║                 2. Формирование и печать парной накладной                 ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+//В ячейки/стеллажи помещаетя по 1 шт. МЦ только для того чтобы обозначать связь
+//ячейки с МЦ. Работу вести при системной настройке "Автоматическое формирование
+//ордеров -НЕТ". При этом ни в ячейки ни из них МЦ не будут реально перемещаться.
+//При печати парных накладных будет использоваться только связь МЦ с ячейкой,
+//а план списания формироваться не будет (исходя из настройки) и количества
+//не контролируется (количество берется строго из исходной накладной).
+//Списание/оприходование ведется только по складским остаткам.
+//При изменении содержимого ячеек (поступление новых аттикулов), изменение
+//привязки производится прямым редактированием ячейки
+
+#include NBuilder.vih
+#include oEdIzm.vih
+
+#include getnagr.vih
+
+table struct TmpSpec
+(
+  Num    : comp    "",
+  cMC    : comp    "",
+  cOtpEd : comp    "",
+  Kol    : double  ""
+)
+with index
+( TmpSpec01 = Num,
+  TmpSpec02 = cMC + cOtpEd
+);
+
+
+
+table struct SrcNakl
+(
+  Num    : comp    "",
+  cMC    : comp    "",
+  cParty : comp    "",
+  cOtpEd : comp    "",
+  Kol    : double  ""
+)
+with index
+( SrcNakl01 = Num,
+  SrcNakl02 = cMC + cParty + cOtpEd
+);
+
+
+table struct DoubleTTN "информация по накладной на отпуск"
+(
+  Num      : comp   "counter",
+  cSopr    : comp   "KatSopr nRec",
+  prPackRoss: word  "0 - пачки, 1 - россыпь",
+  prMC     : word   "1-без нагрузки",
+  cMC      : comp   "МЦ",
+  cOtpEd   : comp   "отпускная е",
+  cDopOtpEd: comp   "отпускная е конверта",
+  cBox     : comp   "ячека или стеллаж",
+  BoxName  : string[12] "наименование ячейки",
+  Article  : string[230] "наименование МЦ",
+  Kol      : double "кол-во",
+  wCorrect : word   "0 - cBox<>0; 1 - cBox=0"
+)
+with index
+(
+  DoubleTTN01 = cSopr + prPackRoss + wCorrect + BoxName + prMC + Article // для сортировки по наименованию ячеек
+);
+
+
+table struct TmpSaldoBox ""
+( cSaldoBox    : comp   "",
+  tekBoxVolume : double "",
+  katBoxwType  : word   "",
+  cBox         : comp   "",
+  saldoBoxKol  : double ""
+)
+with index
+( TmpSaldoBox01 = katBoxwType + tekBoxVolume(desc)
+);
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Формирование и печать парной накладной
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+Interface NaklBuilder;
+var
+     KatSoprNrec : comp;
+     _Num : comp;
+     create_file : boolean;
+     cMC_class : comp;
+     //class_code : word;
+     class_name : string[80];
+
+#include oEdIzm.var
+
+create view MainView
+from
+  KatMC
+ ,KatBox
+ ,SaldoBox
+ ,TekBox
+ ,KatSopr
+ ,SpSopr
+ ,SpSopr   SpSopr2
+ ,KatMOL
+ ,KatMC    KatMCDop
+ ,KatMC    ClassMC
+ ,SpOrder
+ ,KoefPodr
+ ,KoefPodr KoefPodr2
+ ,DoubleTTN
+ ,SrcNakl
+ ,SrcNakl  SrcNakl2
+ ,TmpSaldoBox
+ ,KatOtpEd
+ ,SpOtpEd
+ ,SpOtpEd  SpOtpEd2
+ ,ExClassVal
+ ,ExClassSeg
+ ,ExClassName
+ ,InBoxP   SpisPlan
+ ,Pick
+ ,TTNDoc
+ ,Shipment
+ ,MarAvt
+ ,MarPunkt MarPunktR
+ ,TmpSpec
+ ,KatPodr
+ ,KatOrg
+ ,Dogovor
+ ,KatPayment
+ ,Persons
+
+where
+((
+   KatSoprNrec        ==  KatSopr.nRec     and
+
+   KatSopr.nRec       ==  SpSopr.cSopr     and
+   word(1)            ==  SpSopr.prMC      and
+
+   SrcNakl.cMC        ==  KatMC.nRec       and
+   SrcNakl.cParty     ==  KatParty.nRec    and
+
+   SrcNakl.cOtpEd     ==  SpOtpEd.cOtpEd   and
+
+   coKatSopr          ==  TTNDoc.wTable    and
+   KatSopr.NRec       ==  TTNDoc.cDoc      and
+   TTNDoc.cPunktR     ==  MarPunktR.nRec   and
+   TTNDoc.cShipment   ==  Shipment.nRec    and
+
+   DoubleTTN.cDopOtpEd ==  SpOtpEd2.cOtpEd and
+   SpOtpEd2.cMCTara    ==  KatMCDop.nRec   and
+
+   //выборка внешнего артикула
+   word(coKatMC)          ==  ExClassName.wTable   and
+//   wGetTune('Rep.out.cAbstractName')  ==  ExClassName.ClassCode and
+   class_name             ==  ExClassName.Name     and
+
+   ExClassName.ClassCode  ==  ExClassVal.ClassCode and
+   word(coKatMC)          ==  ExClassVal.wTable    and
+   cMC_class              ==  ExClassVal.cRec      and
+
+   ExClassVal.cClassSeg   ==  ExClassSeg.nRec // Name будет содержать наименование МЦ
+))
+
+;
+
+
+// для правильного отражения параметра Empty согласно параметрам ячейки
+// до вызова д.б. корректно проведены операции с SaldoBox !!!
+// SaldoBox должен быть заupdateн !!!!!
+function TekBoxEmptyCorrection(_cBox : comp) : word;
+var w : double;
+var n, rasp_vol : double;
+begin
+  TekBoxEmptyCorrection := 0;
+  if (GetFirst KatBox where ((_cBox == KatBox.nRec)) <> tsOK) exit;
+
+  w := 0; rasp_vol := 0; n := 0;
+  _LOOP SaldoBox where ((_cBox     == SaldoBox.cBox and
+                         double(0) << SaldoBox.Kol ))
+  { n := n + SaldoBox.Kol;
+    rasp_vol := rasp_vol + SaldoBox.Volume;
+    if KatBox.UseWeight
+    if (GetFirst KatMC where ((SaldoBox.cMC == KatMC.nRec)) = tsOK)
+      w := w + SaldoBox.Kol * KatMC.Massa;
+  }
+
+  if (n < 1E-6) exit;
+  TekBoxEmptyCorrection := 1;
+  if KatBox.UseWeight
+    if ((abs(KatBox.Weight - w) < 1E-6) or (KatBox.Weight < w))
+    { TekBoxEmptyCorrection := 2; exit; }
+
+  if KatBox.UseVolume
+    if ((abs(KatBox.Volume - rasp_vol) < 1E-6) or (KatBox.Volume < rasp_vol))
+    { TekBoxEmptyCorrection := 2; exit; }
+
+  if (KatBox.SingleMC and KatBox.UseCount)
+    if ((abs(KatBox.Count - n) < 1E-6) or (KatBox.Count < n))
+    { TekBoxEmptyCorrection := 2; exit; }
+end;
+
+
+
+file CurrFile, NFile;
+
+form FrmDouble('dblTTN','TTNdouble') with novisual;
+
+#include fsround.vpp
+
+procedure InsertDoubleTTN(cMC_, cKatBox_, cOtpEd_: comp;
+                          prPackRoss_: word; KatBoxName_, KatMCName_: string;
+                          freeBoxKol_: double);
+begin
+  ClearBuffer(#DoubleTTN);
+  DoubleTTN.Num     := _Num;
+  DoubleTTN.cSopr   := KatSopr.nRec;
+  DoubleTTN.prPackRoss := prPackRoss_;
+  if(GetFirst SpOtpEd = tsOk)and(SpOtpEd.cMCTara <> 0)
+    DoubleTTN.prMC    := 0
+  else
+    DoubleTTN.prMC    := 1; // 1-без нагрузки
+  DoubleTTN.cMC     := cMC_;
+  DoubleTTN.cOtpEd  := cOtpEd_;
+  DoubleTTN.cDopOtpEd := if(DoubleTTN.PrMC=0, SrcNakl.cOtpEd, 0);
+  DoubleTTN.cBox    := cKatBox_;
+  DoubleTTN.BoxName := SubStr(KatBoxName_, 1, 12);
+  DoubleTTN.Article := SubStr(KatMCName_, 1, 230);
+  DoubleTTN.Kol     := freeBoxKol_;
+  DoubleTTN.wCorrect := if(cKatBox_ <> 0, 0, 1);
+  if (insert current DoubleTTN = tsOK) _Num := _Num + 1;
+end;
+
+
+//пытается спланировать списание _Kol единиц из ячеек по складу
+//строит план списания из ячеек хранения
+//Если PrepareDoc = 1, то параллельно заполняется таблица DoubleTTN
+function TryInsertIntoPlan (_cPodr, _cMC, _cParty, _cOtpEd: comp;
+                            _kol : double; prepareDoc : boolean) : double;
+
+var kol_inpack: double;
+    raspredKol: double;
+    wasFoundcBox: comp;
+    do_pack: boolean;
+    tmpkol: double;
+
+begin
+  TryInsertIntoPlan := 0;
+  if (_kol < 1E-6) exit;
+
+  if (GetFirst KoefPodr where ((_cPodr  == KoefPodr.cPodr and
+                                _cMC    == KoefPodr.cMC   and
+                                _cOtpEd == KoefPodr.cEd   )) = tsOk)
+    kol_inpack := KoefPodr.Koef
+  else
+    { TryInsertIntoPlan := -4; exit }
+
+
+  raspredKol := 0;
+  do_pack := (kol_inpack > 1E-6) and (_kol + 1E-6 > kol_inpack);
+  do
+  {
+    wasFoundcBox := 0;
+    if (wGetTune('Oper.AutoSpisType') > 0) // списываем с max объема
+    {
+      if ( GetFirst TmpSaldoBox
+           where ((if(do_pack, 1, 0) == TmpSaldoBox.katBoxwType))
+           ordered by index TmpSaldoBox01 = tsOk)
+        wasFoundcBox  := TmpSaldoBox.cBox;
+    }
+    else // начиная с меньшего объема
+    {
+      if ( GetLast TmpSaldoBox
+           where ((if(do_pack, 1, 0) == TmpSaldoBox.katBoxwType))
+           ordered by index TmpSaldoBox01= tsOk)
+        wasFoundcBox  := TmpSaldoBox.cBox;
+    } // else wGetTune
+
+    if (wasFoundcBox = 0) //не найдено ячеек, содержащих МЦ
+    if do_pack //смотрели пачки
+    { do_pack := false; continue }
+    else //прошли две итерации (1-пачки, 2-россыпь)
+    { TryInsertIntoPlan := -2; break } //пропускаем не найденную ячейку
+
+    // для печати парной накладной на отпуск:
+    if (GetFirst KatBox where ((wasFoundcBox == KatBox.nRec)) <> tsOk)
+    { TryInsertIntoPlan:= -5; exit }
+
+    if do_pack   tmpkol := Trunc(_kol / kol_inpack) * kol_inpack
+    else         tmpkol := _kol - raspredKol;
+
+    if prepareDoc and (tmpkol > 1E-6)
+    { if (_cParty <> 0)
+      if (GetFirst KatParty where ((_cParty == KatParty.nRec))<>tsOk)
+        KatParty.Name:='';
+
+      InsertDoubleTTN(_cMC, KatBox.nRec, _cOtpEd,
+                      if(do_pack, 0, 1), KatBox.Name, KatMC.Name +
+                      if(KatParty.Name<>'',' ('+KatParty.Name+')', ''),
+                      tmpkol );
+    }
+
+    raspredKol := raspredKol + tmpkol;
+
+    if (not do_pack) break
+    else do_pack := false;
+  }
+  while (raspredKol < _kol);
+
+  TryInsertIntoPlan := raspredKol;
+end;
+
+
+
+//заполняет таблицу DoubleTTN и формирует план списания из ячеек
+function MakeSpisPlan (_cSopr : comp) : integer;
+var err : boolean;
+    cc : comp;
+    resKol : double;
+begin
+  MakeSpisPlan := -1;
+
+  KatSoprNRec := _cSopr;
+
+  if (GetFirst KatSopr <> tsOK)
+  { message ('Не найдена накладная для печати.'#13 +
+             'Операция отменена.',Information);
+    exit;
+  }
+
+  err := false;
+
+  if (delete all DoubleTTN <> tsOK) {}
+  if (delete all SrcNakl <> tsOK) {}
+
+  // загрузка спецификации накладной во временную таблицу
+  // одновременно происходит свертка одноименных позиций
+  _num := 1;
+  _LOOP SpSopr
+  { if (GetFirst SrcNakl where ((SpSopr.cMCUsl == SrcNakl.cMC    and
+                                 SpSopr.cParty == SrcNakl.cParty and
+                                 SpSopr.cOtpEd == SrcNakl.cOtpEd ))=tsOk)
+    { SrcNakl.Kol:= SrcNakl.Kol + SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+      update current SrcNakl;
+    }
+    else
+    { SrcNakl.Num    := _num;
+      SrcNakl.cMC    := SpSopr.cMCUsl;
+      SrcNakl.cParty := SpSopr.cParty;
+      SrcNakl.cOtpEd := SpSopr.cOtpEd;
+      SrcNakl.Kol    := SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+      insert current SrcNakl;
+     _num := _num + 1;
+    }
+  }
+
+
+//вставка нагрузки в свернутую спецификацию накладной (по настройке)
+
+  var pGetNagr : getNagrObj1;
+  if boGetTune('Tara.AutoPasteParn')//автопополнение нагрузкой
+  if GetVipRef(pGetNagr, 'GetNagr')
+  {
+    cc := 1;
+    delete all TmpSpec;
+
+    _LOOP SrcNakl
+    if pGetNagr.get_Nagruzka_For_One_Mc (SrcNakl.cOtpEd, SrcNakl.Kol)
+    {
+      _LOOP Nagruzka
+      {
+        if (GetFirst TmpSpec where((Nagruzka.cMC_nagruzka == TmpSpec.cMC and
+                                  Nagruzka.otped_nagruzka == TmpSpec.cOtpEd))=tsOK)
+        {
+          TmpSpec.Kol := TmpSpec.Kol + Nagruzka.kolNagr;
+          update current TmpSpec;
+        }
+        else
+        {
+          TmpSpec.Num    := cc; cc := cc + 1;
+          TmpSpec.cMC    := Nagruzka.cMC_nagruzka;
+          TmpSpec.cOtpEd := Nagruzka.otped_nagruzka;
+          TmpSpec.Kol    := Nagruzka.kolNagr;
+          insert current TmpSpec;
+        }
+      }
+    } // _LOOP & if
+
+    _LOOP TmpSpec // забивка в спецификацию нагрузки
+    {
+      if (GetFirst SrcNakl where ((TmpSpec.cMC == SrcNakl.cMC))=tsOk)
+      {
+        SrcNakl.Kol:= SrcNakl.Kol + TmpSpec.Kol;
+        update current SrcNakl;
+      }
+      else
+      {
+        SrcNakl.Num    := _num;
+        SrcNakl.cMC    := TmpSpec.cMC;
+        SrcNakl.cParty := 0;
+        SrcNakl.cOtpEd := TmpSpec.cOtpEd;
+        SrcNakl.Kol    := TmpSpec.Kol;
+        insert current SrcNakl;
+       _num := _num + 1;
+      }
+    } //_LOOP TempSpec
+
+    // освобождаем чутка памяти, дальше может пригодиться
+    delete all Nagruzka;
+    delete all TmpSpec;
+  } // if getvipref
+
+
+  //-----------------------------------------------------------------------
+  _num := 1;
+  _LOOP SrcNakl
+  {
+    delete all TmpSaldoBox;
+    //по всем сальдо ячеек на этом складе для этой МЦ
+    _LOOP SaldoBox where (( KatSopr.cPodrFrom == SaldoBox.cPodr and
+                            SrcNakl.cMC       == SaldoBox.cMC   and
+                            1E-6              << SaldoBox.Kol ))
+    { if (SrcNakl.cParty <> SaldoBox.cParty) continue;
+
+      if (GetFirst TekBox where ((SaldoBox.cBox == TekBox.cBox))<>tsOk)continue;
+      if (GetFirst KatBox where ((SaldoBox.cBox == KatBox.nRec))<>tsOk)continue;
+
+      TmpSaldoBox.cSaldoBox   := SaldoBox.nRec;
+      TmpSaldoBox.cBox        := SaldoBox.cBox;
+      TmpSaldoBox.saldoBoxKol := SaldoBox.Kol;
+      TmpSaldoBox.tekBoxVolume:= TekBox.Volume;
+      TmpSaldoBox.katBoxwType := KatBox.wType;
+      insert current TmpSaldoBox;
+    }//_LOOP SaldoBox
+
+    resKol:= TryInsertIntoPlan(KatSopr.cPodrFrom, SrcNakl.cMC,
+                               SrcNakl.cParty, SrcNakl.cOtpEd, SrcNakl.Kol, true);
+
+    if (resKol = -5)
+      { message ('Некорректность в структуре ячеек.'#13+
+                 'Матценность: ' + KatMC.Name + ''#13+'Операция отменена!', Warning);
+        err := true; break;
+      }
+    if (resKol = -4)
+      { message ('Не задано количество МЦ в пачках для текущего склада.'#13+
+                 'Матценность: ' + KatMC.Name + ''#13+'Операция отменена!', Warning);
+        err := true; break;
+      }
+    if (resKol = -2) //т.е. =0 - не было ничего распределено
+      { message ('Не найдено в ячейках хранения МЦ, указанных в спецификации.'#13+
+                 'Матценность: ' + KatMC.Name + ''#13+'Операция отменена!', Warning);
+        err := true; break;
+      }
+
+    if (resKol >= 0) and (resKol <> SrcNakl.Kol) //не все было распределено
+      { if (GetFirst KatParty <> tsOk) KatParty.Name := '';
+        InsertDoubleTTN(SrcNakl.cMC, 0, SrcNakl.cOtpEd, 1,'', KatMC.Name +
+                        if(KatParty.Name <> '', ' ('+KatParty.name+')', ''),
+                        SrcNakl.Kol - resKol);
+      }
+  }//_LOOP SpSopr
+
+  if err MakeSpisPlan := 0 else MakeSpisPlan := 1;
+end;
+
+
+// Готовит заголовок парной накладной на отпуск
+procedure MakeHeader (pack, is_double : boolean);
+var IsSopinmov : boolean;
+begin
+  IsSopinmov := (KatSopr.VidSopr = 600);
+
+  FrmDouble.Write(is_double);
+  FrmDouble.Write(if(pack, 0, 1)); //пачками
+  FrmDouble.Write(KatSopr.NSopr + if(KatSopr.dSopr<>date(0,0,0),' от ' +
+                  DateToStr(KatSopr.dSopr,'DD.MM.YYYY г.'),'') );
+
+  KatMOL.Name := '';
+  if IsSopinmov
+  if (GetFirst KatMOL where ((KatSopr.cMOLFrom == KatMOL.nRec))=tsOk){}
+
+  if (GetFirst KatPodr where ((KatSopr.cPodrFrom == KatPodr.nRec)) = tsOk)
+    FrmDouble.Write(KatPodr.Name +
+                    if(KatMOL.Name<>'',' ('+KatMOL.Name+')',''));
+  else
+    FrmDouble.SkipFormat(1);
+
+  if IsSopinmov
+  {
+    KatMOL.Name := '';
+    if (GetFirst KatMOL where ((KatSopr.cMOLTo == KatMOL.nRec))=tsOk){}
+    if (GetFirst KatPodr where ((KatSopr.cPodrTo == KatPodr.nRec)) = tsOk)
+      FrmDouble.Write(KatPodr.Name +
+                      if(KatMOL.Name<>'',' ('+KatMOL.Name+')',''))
+    else
+      FrmDouble.SkipFormat(1);
+  }
+  else
+  {
+    if ((KatSopr.cGruzTo <> 0) and
+        (GetFirst KatOrg where ((KatSopr.cGruzTo == KatOrg.nRec)) = tsOk) )
+      FrmDouble.Write(KatOrg.Name)
+    else
+      FrmDouble.SkipFormat(1);
+  }
+
+  if IsSopinmov FrmDouble.SkipFormat(1)
+  else
+  if (GetFirst Dogovor where((KatSopr.cDogovor == Dogovor.nRec)) = tsOk)
+    FrmDouble.Write(Dogovor.NoDoc+IF(Dogovor.dDoc<>date(0,0,0),' от '+DateToStr(Dogovor.dDoc,'DD.MM.YYYY г.'),'') );
+  else
+    FrmDouble.SkipFormat(1);
+
+  FrmDouble.Write(Cur_Time);
+  FrmDouble.Write(KatSopr.Name);
+
+  if IsSopinmov FrmDouble.SkipFormat(1)
+  else          FrmDouble.Write(Shipment.Name);
+  //FrmDouble.SkipFormat(1); // способ отгрузки будет заполняться вручную
+
+  if IsSopinmov FrmDouble.SkipFormat(1)
+  else
+  if (GetFirst KatPayment where((KatSopr.cPayment==KatPayment.nRec))=tsOK)
+    FrmDouble.write(KatPayment.Name); // форма расчета
+  else
+    FrmDouble.SkipFormat(1);
+
+  if IsSopinmov FrmDouble.SkipFormat(1)
+  else
+  if ((KatSopr.cPerson <> 0) and
+      (GetFirst Persons where ((KatSopr.cPerson == Persons.nRec)) = tsOK))
+    FrmDouble.write(Persons.FIO);
+  else
+    FrmDouble.SkipFormat(1);
+
+  if IsSopinmov FrmDouble.SkipFormat(1)
+  else          FrmDouble.Write(MarPunktR.npAddr);
+end;
+
+
+// д.б. вызвана перед формированием парных накладных
+procedure Init;
+begin
+  create_file := true;
+end;
+
+// д.б. вызвана по окончании процесса формирования накладных (если трэба)
+procedure Done;
+begin
+  ProcessText (FrmDouble.GetOutFileName+'.out', vfDefault or vfNewTitle or vfMacroSize,'Накладные на отпуск');
+end;
+
+
+
+// бомбит создаваемые файлы с накладными (их можа быть много) в один файл и
+// расставляет по окончании каждой отдельной накладной символ
+// перехода на новую страницу. (РУЛОННАЯ ПЕЧАТЬ НЕВОЗМОЖНА!!!)
+procedure CopyCurrent;
+var bb : char;
+begin
+  if create_file
+   { if not NFile.OpenFile(FrmDouble.GetOutFileName+'.out',stCreate)
+       { message('Ошибка создания файла отчета.'); exit; }
+   }
+  else
+   { if not NFile.OpenFile(FrmDouble.GetOutFileName+'.out',stOpen)
+       { message('Ошибка открытия файла отчета.'); exit; }
+   }
+  create_file := false;
+
+  if not CurrFile.OpenFile(FrmDouble.GetOutFileName,stOpenRead)
+    { message('Ошибка открытия промежуточного файла отчета.'); exit; }
+
+  if (NFile.GetSize > 0)
+  {
+    NFile.Seek(NFile.GetSize - 1);
+    NFile.Write(chr(12));//новая страница
+    NFile.Write(chr(13));
+    NFile.Write(chr(10));
+  }
+
+  while (not CurrFile.Eof) do
+  { CurrFile.Read(bb);
+    NFile.Write(bb);
+  }
+
+  NFile.Close;
+  CurrFile.Close;
+end;
+
+
+// формирует файл парной накладной для всех спецификаций накладной
+procedure MakeDoubleTTN (_cSopr : comp);
+var pack_need, ross_need : boolean;
+    NDS : double;
+    LastNum : word;
+    KolOtkr, KolKonv : double;
+    str : string;
+begin
+  KatSoprNRec := _cSopr;
+  if (GetFirst KatSopr <> tsOK) exit;
+
+  class_name := 'Наименование МЦ';
+
+  pack_need := (GetFirst DoubleTTN where ((KatSopr.nRec == DoubleTTN.cSopr and
+                                           word(0)      == DoubleTTN.prpackRoss)) = tsOK);
+  ross_need := (GetFirst DoubleTTN where ((KatSopr.nRec == DoubleTTN.cSopr and
+                                           word(1)      == DoubleTTN.prpackRoss)) = tsOK);
+
+  NDS := KatSopr.sNalogs;
+
+  if pack_need // формирование документа для комплектации пачками
+  {
+    kolOtkr := 0; kolKonv := 0;
+
+    MakeHeader(true, pack_need and ross_need);
+
+    if (GetLast DoubleTTN where (( KatSopr.nRec == DoubleTTN.cSopr and
+                                   word(0)      == DoubleTTN.prPackRoss ))
+                          ordered by index DoubleTTN01 = tsOK)
+      lastNum := DoubleTTN.Num;
+    else
+      lastNum := 0;
+
+    _LOOP DoubleTTN where (( KatSopr.nRec == DoubleTTN.cSopr and
+                             word(0)      == DoubleTTN.prPackRoss ))
+                    ordered by index DoubleTTN01
+    {
+      if (GetFirst KatMC where ((DoubleTTN.cMC == KatMC.nRec)) <> tsOK) continue;
+
+      FrmDouble.Write(DoubleTTN.BoxName); //стеллаж
+      FrmDouble.Write(DoubleTTN.Article); //артикул
+      FrmDouble.Write(DoubleTTN.Kol);
+
+      set cMC_class := KatMC.nRec;
+      if (GetFirst ExClassName = tsOK)
+        FrmDouble.Write(SubStr(ExClassSeg.Name, 1, 36))
+      else
+        FrmDouble.Write('');
+
+      if (GetFirst KoefPodr where ((KatSopr.cPodrFrom == KoefPodr.cPodr and
+                                    DoubleTTN.cMC     == KoefPodr.cMC   and
+                                    DoubleTTN.cOtpEd  == KoefPodr.cEd)) = tsOK)
+        FrmDouble.Write(if(KoefPodr.Koef > 1E-6, Trunc(DoubleTTN.Kol / KoefPodr.Koef), 0)); // кол-во пачек
+      else
+        FrmDouble.SkipFormat(1);
+
+      if (DoubleTTN.cDopOtpEd <> 0) // открытка
+      {
+        str := '';
+        _LOOP SpOtpEd2
+        {
+          if not IsValid(#KatMCDop) continue;
+          if (str <> '') str := str + ',';
+          set cMC_class := KatMCDop.nRec;
+          if (GetFirst ExClassName = tsOK) str := str + ExClassSeg.Name;
+        }
+        FrmDouble.Write(SubStr(str, 1, 36));
+        KolOtkr := KolOtkr + DoubleTTN.Kol;
+      }
+      else // конверт
+      { FrmDouble.SkipFormat(1);
+        KolKonv := KolKonv + DoubleTTN.Kol;
+      }
+
+      if (DoubleTTN.Num = LastNum) FrmDouble.write(true); // посл. строка док-та
+      else                         FrmDouble.write(false);
+
+      FrmDouble.write(KolOtkr); // кол-во открыток общее
+      FrmDouble.write(KolKonv); // кол-во конвертов общее
+
+    } // LOOP DoubleTTN
+
+    FrmDouble.PutEvent(feBreak);
+
+    if (KatSopr.VidSopr = 600)
+      FrmDouble.Write('')
+    else
+      FrmDouble.Write(DoubleToString(0, KatSopr.Summa) +
+                    + ' в т.ч. налоги = '+Trim(string(NDS,12,2))+' руб.' );
+
+    FrmDouble.PutEvent(feBreak);
+    FrmDouble.PrepareOutFile;
+    CopyCurrent;
+  } // if pack_need
+
+
+  if ross_need // формирование документа для комплектации россыпью
+  {
+    kolOtkr := 0; kolKonv := 0;
+
+    MakeHeader(false, pack_need and ross_need);
+
+    if (GetLast DoubleTTN where (( KatSopr.nRec == DoubleTTN.cSopr and
+                                   word(1)      == DoubleTTN.prpackRoss ))
+                          ordered by index DoubleTTN01 = tsOK)
+      LastNum := DoubleTTN.Num;
+    else
+      LastNum := 0;
+
+    _LOOP DoubleTTN where (( KatSopr.nRec == DoubleTTN.cSopr and
+                             word(1)      == DoubleTTN.prpackRoss ))
+                    ordered by index DoubleTTN01
+    {
+      if (GetFirst KatMC where ((DoubleTTN.cMC == KatMC.nRec)) <> tsOK) continue;
+
+      FrmDouble.Write(DoubleTTN.BoxName); //стеллаж
+      FrmDouble.Write(DoubleTTN.Article); //артикул
+      FrmDouble.Write(DoubleTTN.Kol);
+
+      set cMC_class := KatMC.nRec;
+      if (GetFirst ExClassSeg = tsOK)
+        FrmDouble.Write(SubStr(ExClassSeg.Name, 1, 42))
+      else
+        FrmDouble.Write('');
+
+      FrmDouble.SkipFormat(1); // кол-во пачек
+      if (DoubleTTN.cDopOtpEd <> 0) // открытка
+      {
+        str := '';
+        _LOOP SpOtpEd2
+        {
+          if not IsValid(#KatMCDop) continue;
+          if (str <> '') str := str + ',';
+          set cMC_class := KatMCDop.nRec;
+          if (GetFirst ExClassName = tsOK) str := str + ExClassSeg.Name;
+        }
+        FrmDouble.Write(SubStr(str, 1, 42));
+        KolOtkr := KolOtkr + DoubleTTN.Kol;
+      }
+      else // конверт
+      {
+        FrmDouble.SkipFormat(1);
+        KolKonv := KolKonv + DoubleTTN.Kol;
+      }
+
+      if (DoubleTTN.Num = LastNum) FrmDouble.write(true); // посл. строка док-та
+      else                         FrmDouble.write(false);
+
+      FrmDouble.write(KolOtkr); // кол-во открыток общее
+      FrmDouble.write(KolKonv); // кол-во конвертов общее
+
+    } // LOOP DoubleTTN
+
+    FrmDouble.PutEvent(feBreak);
+
+    if (KatSopr.VidSopr = 600)
+      FrmDouble.Write('')
+    else
+      FrmDouble.Write(DoubleToString(0, KatSopr.Summa) +
+                    + ' в т.ч. налоги = '+Trim(string(NDS,12,2))+' руб.' );
+
+    FrmDouble.PutEvent(feBreak);
+    FrmDouble.PrepareOutFile;
+    CopyCurrent;
+  } // if ross_need
+
+  //FrmDouble.PutEvent(feBreak);
+  //FrmDouble.ShowFile;
+end;
+
+end.

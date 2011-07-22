@@ -1,0 +1,463 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 5.00 - логистика
+// Выбор и редактирование категорий документов
+//******************************************************************************
+
+#include oVPr.vih   //Public-функции вариантов представления каталогов
+
+#doc
+Интерфейс выбора и редактирования категорий документов
+#end
+Interface GetStatD 'Выберите категорию документа' escclose, doaccept, cyan;
+  Show at (5, 4, 75, 20);
+
+Table Struct TmpStatDoc
+(
+  NRec : comp,
+  Name : string,
+  Kod  : string[20],
+  lKod : word
+)
+
+With Index
+(
+  TmpStatDoc01 = NRec (Unique, Surrogate, Journal),
+  TmpStatDoc02 = Kod  (Unique),
+  TmpStatDoc03 = LKod + Kod,
+  TmpStatDoc04 = Name(Unique)
+);
+
+Create view
+Var
+  c1              : comp;
+
+  tek1
+, tek2            : string[20];
+
+  teklen          : byte;
+
+  temps           : string;
+
+  WasReset
+, NeedBack        : boolean;
+
+  VPr_TipModifRec : word;  //0-нет активных вариантов;1-есть варианты
+
+As select
+  if ((TmpStatDoc2.NRec > 0) AND (NOT WasReset), '', '')
+    (FieldName = islevel)
+
+, StatDoc.*
+, TmpStatDoc.*
+
+From
+  StatDoc
+, TmpStatDoc               (TmpStatDoc02)
+, TmpStatDoc KatH_Sort     (TmpStatDoc02)
+, TmpStatDoc TmpStatDoc2   (TmpStatDoc02)
+
+Where
+((
+//    StatDoc.Nrec                           == TmpStatDoc.Nrec
+
+    TmpStatDoc.Kod                    <<  TmpStatDoc2.Kod
+AND padch(TmpStatDoc.Kod, ''#255, 20) >>= TmpStatDoc2.Kod
+))
+
+
+
+Bounds ByLenKod  =
+       teklen  ==                   TmpStatDoc.lKod
+   AND ((padch(tek1, ''#0, 20)   <= TmpStatDoc.Kod)
+   AND (padch(tek1, ''#255, 20)   >  TmpStatDoc.Kod))
+;
+
+Parameters
+  c1         // NRec категории документа
+;
+
+Form frmStatDoc ('Kategory.out', 'Kategory') With NoVisual;
+
+#include oVPr.var //Public-функции вариантов представления каталогов (var fVPrKat : ObjVPrKat;)
+#include TreeKodStr.vpp //функции для постоения иерархии по строковым кодам
+
+//******************************************************************************
+
+Browse brStatDoc1 ('', , sci147EnEsc);
+  Table TmpStatDoc
+Fields
+  TmpStatDoc.Kod #3'Код'('Выберите категорию и нажмите ВВОД. ^Enter/^BkSpace - хождение по уровням'
+                   , hcOkatalIKateg, sci147EnEsc)                              : [10], Protect;
+  TmpStatDoc.Name     #3'Наименование'('Выберите категорию и нажмите ВВОД. ^Enter/^BkSpace - хождение по уровням'
+                             , hcOkatalIKateg, sci147EnEsc)                    : [53], Protect;
+  islevel        #3'!'                                                         : [ 1], Skip;
+end;
+
+
+Panel  panTmpStatDoc
+  Table TmpStatDoc
+Tree brStatDoc2 ('', , sci147EnEscTree);
+  Table TmpStatDoc
+Fields
+  TmpStatDoc.Kod #3'Код'('Выберите категорию и нажмите ВВОД. ^Enter/^BkSpace - хождение по уровням'
+                   , hcOkatalIKateg, sci147EnEscTree)                          : [10], Protect;
+  TmpStatDoc.Name     #3'Наименование'('Выберите категорию и нажмите ВВОД. ^Enter/^BkSpace - хождение по уровням'
+                   , hcOkatalIKateg, sci147EnEscTree)                          : [53], Protect;
+  islevel        #3'!'                                                         : [ 1], Skip;
+end;
+
+HandleEvent
+cmTreeTop       : TrStr_SetFilter(0,teklen,tek1,0);
+cmTreeUp        : TrStr_SetFilter(TmpStatDoc.NRec,teklen,tek1,0);
+cmTreeDown      : TrStr_SetFilter(TmpStatDoc.NRec,teklen,tek1,1);
+cmTreeNodeType  : if (TrStr_SetFilter(TmpStatDoc.NRec,byte(0),'',1) = 0) TreeSetNodeType(brStatDoc2, 2);
+cmTreeNeedOwner : TreeJumpToRecord (brStatDoc2,TrStr_SetFilter(TmpStatDoc.NRec,byte(0),'',0));
+end;
+end;
+
+//******************************************************************************
+
+Procedure PrintMyDoc;
+{
+  var sProb : string;
+
+  sProb := PadCh(sProb,'.',200);
+
+  if (UpdateTable)
+    {
+      if (WasReset)
+        {
+          PushPos(#TmpStatDoc);
+
+          _LOOP TmpStatDoc
+            {
+              frmStatDoc.write(TmpStatDoc.Kod);
+              frmStatDoc.write(TmpStatDoc.Name);
+            }
+
+          PopPos(#TmpStatDoc);
+        }
+      else
+        {
+          TreePushPos(brStatDoc2);
+          TreeGetFirst(brStatDoc2);
+
+          do
+            {
+              frmStatDoc.write(TmpStatDoc.Kod);
+              frmStatDoc.write(Substr(sProb, 1, teklen) + TmpStatDoc.Name);
+            }
+
+          While TreeGetNextEx(brStatDoc2);
+
+          TreePopPos(brStatDoc2);
+
+        }
+      frmStatDoc.PutEvent(feBreak);
+
+      frmStatDoc.PutEvent(feBreak);
+
+      ReScanPanel(#TmpStatDoc);
+
+      if (NOT frmStatDoc.error)
+        frmStatDoc.showFile('Список категорий документов (Kategory.out)');
+      else
+        {
+          frmStatDoc.abortForm;
+          RereadRecord;
+        }
+    }
+  else
+    Message('Перед печатью заполните документ', Information+CancelButton);
+}
+
+//******************************************************************************
+
+Procedure SetFormatBr;
+{
+  if (WasReset)
+    SetFormat(brStatDoc1)
+  else
+    SetFormat(brStatDoc2);
+}
+
+//******************************************************************************
+
+Procedure SetFirstState;
+{
+  if (WasReset)
+    {
+      TrStr_SetFilter(TmpStatDoc.NRec, teklen, tek1, 0);
+      WasReset := FALSE;
+      PushBounds(tbByLenKod);
+      SetFormatBr;
+      TreeJumpToRecord (brStatDoc2, TmpStatDoc.NRec);
+      RereadRecord;
+    }
+}
+
+//******************************************************************************
+
+Procedure ShowAll;
+{
+  if (NOT WasReset)
+    {
+      WasReset := TRUE;
+      PopBounds(tbByLenKod);
+      SetFormatBr;
+      RereadRecord;
+      RescanPanel(#TmpStatDoc);
+
+      if boGetTune('User.ModifTune')
+        SetTune('Pick.GrMcIer', FALSE);
+    }
+  else
+    {
+      SetFirstState;
+
+      if boGetTune('User.ModifTune')
+        SetTune('Pick.GrMcIer', TRUE);
+    }
+}
+
+//******************************************************************************
+
+Window Win1 'Редактирование категории документа' escclose;
+  Show at (5, 4, 75, 20);
+
+Panel p1;
+  Table TmpStatDoc;
+
+Browse brStatDoc;
+
+Fields
+  TmpStatDoc.Kod  #3'Код' ('Исправьте или внесите нужную категорию и нажмите ESC', hcOkatalIKateg, sci178Esc)        : [10];
+  TmpStatDoc.Name #3'Наименование'('Исправьте или внесите нужную категорию и нажмите ESC', hcOkatalIKateg, sci178Esc): [55];
+end;
+
+HandleEvent
+
+cmSetDefault:
+  SelectField(#TmpStatDoc.Kod);
+
+cmCheckRecord:
+  if (trim(TmpStatDoc.Name) = '')
+    {
+      Message('Не задано наименование категории документа'#13#13#3
+            + 'Задайте или удалите запись'#13, CancelButton+Warning);
+      SelectField(#TmpStatDoc.Name);
+      Abort;
+    }
+  else
+    if (trim(TmpStatDoc.Kod) = '')
+      {
+        Message('Не задан код категории документа'#13#13#3
+              + 'Задайте или удалите запись'#13, CancelButton+Warning);
+        SelectField(#TmpStatDoc.Kod);
+        Abort;
+      }
+    else
+      {
+        TmpStatDoc.Kod  := trim(TmpStatDoc.Kod);
+        TmpStatDoc.lKod := Length(TmpStatDoc.Kod);
+      }
+
+cmInsertRecord:
+  {
+    insert current TmpStatDoc;
+
+    StatDoc.NRec      := TmpStatDoc.NRec;
+    StatDoc.Name      := TmpStatDoc.Name;
+    StatDoc.StatCode  := TmpStatDoc.Kod;
+    StatDoc.lStatCode := TmpStatDoc.lKod;
+
+    if (insert current StatDoc = tsOk)
+      { }
+  }
+
+cmUpdateRecord:
+  {
+    Update current TmpStatDoc;
+
+    if (GetFirst StatDoc where ((TmpStatDoc.NRec == StatDoc.NRec)) = tsOk)
+      {
+        StatDoc.Name      := TmpStatDoc.Name;
+        StatDoc.StatCode  := TmpStatDoc.Kod;
+        StatDoc.lStatCode := TmpStatDoc.lKod;
+
+        if (update current StatDoc = tsOk)
+          { }
+      }
+  }
+
+cmDeleteRecord:
+  if (Message('Удалить эту категорию?', YesNo) = cmYes)
+    if (Message('Удаление может нарушить Вашу базу данных. '
+              + 'Отменим удаление?', YesNo) = cmNo)
+      {
+        if (GetFirst StatDoc where ((TmpStatDoc.NRec == StatDoc.NRec)) = tsOk)
+          delete current StatDoc
+
+        delete current TmpStatDoc;
+      }
+    else
+      Abort;
+  else
+    Abort;
+
+end; // HandleEvent
+end; // Panel
+
+HandleEvent
+
+cmDone:
+  if (NOT UpdateTable)
+    Abort;
+  else
+    if (IsValid(#TmpStatDoc))
+      if (NeedBack)
+        ShowAll;
+
+cmPrintDoc:
+  PrintMyDoc;
+
+cmHotKeys:
+#ifdef ComponentVersion
+    PutHotCommand(RunDynMenu('L_BASEDOC::mnuGetStatD;SEPARATOR;C_COMMON::Print_HotKeys'));
+#else
+    PutHotCommand(RunDynMenu('mnuGetStatD;SEPARATOR;Print_HotKeys'));
+#end
+
+end; // HandleEvent Window
+end; // Window
+
+//******************************************************************************
+
+#include corrstdc.vpp
+
+HandleEvent
+
+cmInit:
+  {
+    if (IsValid(#StatDoc))
+      if (StatDoc.lStatCode <> Length(StatDoc.StatCode))
+        CheckCorrStatDoc;
+
+    _LOOP StatDoc
+      {
+        TmpStatDoc.NRec := StatDoc.NRec;
+        TmpStatDoc.Name := StatDoc.Name;
+        TmpStatDoc.Kod  := StatDoc.StatCode;
+        TmpStatDoc.lKod := StatDoc.lStatCode;
+
+        if (insert current TmpStatDoc = tsOk)
+          { }
+      }
+
+    var IerarchyNeeded: boolean;
+
+    VPr_TipModifRec    := 0;
+
+    if (NullVipRef(fVPrKat))
+      LoadVipInterface(fVPrKat);
+
+    if (fVPrKat.Kat_isActivLevel(2))
+      VPr_TipModifRec  := 1;
+
+    IerarchyNeeded := FALSE;
+    WasReset       := TRUE;
+
+    if boGetTune('Pick.GrMcIer')
+      IerarchyNeeded := TRUE;
+
+    if ( GetFirst TmpStatDoc where ((c1 == TmpStatDoc.NRec)) <> tsOk )
+      if ( GetFirst TmpStatDoc <> tsOk )
+        if (Message('Каталог категорий пуст.'#13#13#3
+                  + 'Заполните его сейчас...', OkButton) = cmCancel)
+          {
+            Abort;
+            Exit;
+          }
+         else
+           PutCommand(cmEdit);
+
+    if c1=0
+     {
+       var nRc:comp;
+
+       ReadMyDsk(nRc, 'StatDoc_NRec1', TRUE);
+
+       if (GetFirst TmpStatDoc where ((nRc == TmpStatDoc.NRec)) <> tsOk)
+         { }
+     }
+
+    if (IerarchyNeeded)
+      SetFirstState;
+  }
+
+cmDone:
+  {
+    if (NOT NullVipRef(fVPrKat))
+      FreeVipInterface(fVPrKat);
+  }
+
+cmDefault:
+  if (UpdateTable)
+    c1 := TmpStatDoc.NRec;
+
+cmAccording: //Alt-S Переключение <иерархия/плоский вид>
+  {
+    ShowAll;
+    //SetFormatBr;
+  }
+
+cmPrintDoc:
+  PrintMyDoc;
+
+cmHotKeys:
+#ifdef ComponentVersion
+  PutHotCommand(RunDynMenu('L_BASEDOC::mnuGetStatD;SEPARATOR;C_COMMON::Print_HotKeys'));
+#else
+  PutHotCommand(RunDynMenu('mnuGetStatD;SEPARATOR;Print_HotKeys'));
+#end
+
+cmEdit:
+  {
+    NeedBack := FALSE;
+
+    if (NOT WasReset)
+      {
+        ShowAll;
+        NeedBack := TRUE;
+      }
+
+    RunWindow(Win1);
+  }
+
+cmInsert:
+  {
+    NeedBack := FALSE;
+
+    if (NOT WasReset)
+      {
+        ShowAll;
+        NeedBack := TRUE;
+      }
+
+    Abort;
+    PutCommand(cmInsert);
+    RunWindow(Win1);
+  }
+
+cmAddNewRec:
+  PutCommand(cmInsert);
+
+end; // HandleEvent
+End. // Interface
+
+mnuGetStatD Menu
+{
+- '~П~ереключить режим просмотра',cmAccording,'Переключение режима просмотра между таблицей и деревом',,'Alt-S',kbAltS,sci1Esc;
+-----------;
+}

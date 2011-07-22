@@ -1,0 +1,198 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Функции формирования описателя иерархии договоров и соглашений
+//********************************************************************************
+
+Create view vIer
+Var
+  CurDog: comp;
+
+Select
+  *
+From
+  Dogovor
+, Dogovor OwnerDog
+, Dogovor AppDog
+, IerDog
+Where
+((
+    Dogovor.nRec == AppDog.cDogovor
+AND CurDog       == OwnerDog.nRec
+));
+
+Form frmReport('IerDog.OUT', 'ERRR') With NoVisual;
+
+Procedure CreateIerDog;
+var
+  Res   : word;
+
+  Ind
+, Marker: longint;
+{
+  Marker := InitMarker('$$$IERDOG$$$', 8, 1000, 100);
+
+  StartNewVisual(vtIndicatorVisual,
+                 vfTimer,
+                 'Формирование описателя иерархии договоров...',
+                 RecordsInTable(vIer.tnDogovor));
+
+  vIer._loop Dogovor
+    {
+      ClearMarker(Marker);
+
+      NextVisual;
+
+      if ( vIer.RecordExists AppDog = tsOK )
+        Res := 0
+      else
+        Res := 1;
+
+      vIer.CurDog := vIer.Dogovor.nRec;
+
+      While ( vIer.GetFirst FastFirstRow OwnerDog = tsOK ) do
+        {
+          if SearchMarker(Marker, vIer.CurDog, Ind)
+            {
+              frmReport.write('Обнаружена циклическая ссылка. См. '
+                            + if(vIer.OwnerDog.cDogovor = 0, 'Договор', 'Соглашение')
+                            + '(nRec=' + string(vIer.OwnerDog.nRec)
+                            + ') №' + vIer.OwnerDog.NoDoc + DateToStr(vIer.OwnerDog.dDoc, ' от DD/MM/YYYY')
+                             );
+              Break;
+            }
+
+          InsertMarker(Marker, vIer.CurDog);
+
+          if ( vIer.GetFirst IerDog where (( vIer.OwnerDog.nRec == IerDog.cUpRec AND
+                                             vIer.Dogovor.nRec  == IerDog.cRec )) = tsOK )
+            {
+              if ( vIer.IerDog.IsLeaf <> Res )
+                vIer.update current IerDog set IerDog.IsLeaf := Res;
+            }
+          else
+            vIer.insert IerDog
+              set IerDog.cRec   := vIer.Dogovor.nRec,
+                  IerDog.cUpRec := vIer.OwnerDog.nRec,
+                  IerDog.IsLeaf := Res;
+
+          vIer.CurDog := vIer.OwnerDog.cDogovor;
+        }
+    }
+
+  StopVisual('', 0);
+
+  DoneMarker(Marker, '');
+
+  var Cnt: longint; Cnt := 0;
+  vIer._loop Dogovor where (( comp(0) == Dogovor.cDogovor ))
+    Cnt := Cnt + 1;
+
+  StartNewVisual(vtIndicatorVisual,
+                 vfTimer,
+                 'Обновление ссылок в описателе иерархии...',
+                 Cnt);
+
+  vIer._loop Dogovor where (( comp(0) == Dogovor.cDogovor ))
+    {
+      NextVisual;
+
+      var c: comp; c := vIer.Dogovor.nRec;
+
+      vIer.update IerDog where (( c == IerDog.cUpRec ))
+        set IerDog.cDogovor := c;
+    }
+
+  StopVisual('', 0);
+
+  if (not frmReport.Error)
+    if frmReport.Contain
+      {
+        frmReport.ShowFile('Протокол формирования описателя иерархии договоров');
+        Exit;
+      }
+
+  frmReport.AbortForm;
+}
+
+Procedure CreateIerDogOnDoc(_UpDoc, _Doc: comp);
+var c: comp;
+{
+  c := _Doc;
+
+  if ( _UpDoc <> 0 )
+    {
+      insert into IerDog
+        (
+          cRec
+        , cUpRec
+        , IsLeaf
+        , cDogovor
+        )
+      select
+        _Doc
+        , IerDog1.cUpRec
+        , word(1)
+        , IerDog1.cDogovor
+      from
+        IerDog IerDog1
+      where
+      ((
+        _UpDoc == IerDog1.cRec
+      ));
+
+      vIer.update IerDog where (( _UpDoc == IerDog.cRec ))
+        set IerDog.IsLeaf := 0;
+
+      if ( vIer.GetFirst FastFirstRow IerDog where (( _UpDoc == IerDog.cRec )) = tsOK )
+        c := vIer.IerDog.cDogovor;
+    }
+
+  vIer.insert IerDog
+    set IerDog.cRec     := _Doc,
+        IerDog.cUpRec   := _Doc,
+        IerDog.cDogovor := c,
+        IerDog.IsLeaf   := 1;
+}
+
+Procedure DeleteIerDogOnDoc(_UpDoc, _Doc: comp);
+{
+  vIer.delete IerDog where (( _Doc == IerDog.cRec ));
+
+  vIer.delete IerDog where (( _Doc == IerDog.cUpRec ));
+
+  if ( vIer.GetFirst FastFirstRow IerDog
+            where (( _UpDoc == IerDog.cUpRec AND ( _UpDoc <> vIer.IerDog.cRec ) )) <> tsOK )
+    vIer.update IerDog where (( _UpDoc == IerDog.cRec ))
+      set IerDog.IsLeaf := 1;
+}
+
+Procedure DoCancelDoc(_Doc: comp; strComment: string[80]);
+var
+  Status_Old: word;
+
+  Note_Old
+, Note_New  : comp;
+{
+
+  vIer._loop IerDog where (( _Doc == IerDog.cUpRec AND vIer.IerDog.cRec == Dogovor.nRec ))
+    if ( vIer.Dogovor.Status <> 3 )
+      {
+        Status_Old := vIer.Dogovor.Status;
+        Note_Old   := vIer.Dogovor.cNote;
+
+        Note_New := oNotes.GetFirstNote(vIer.Dogovor.TiDk, word(3));
+
+        vIer.update current Dogovor
+          set Dogovor.cNote  := Note_New,
+              Dogovor.Status := word(3);
+
+        oStatlog.StatLog_InsNewStat(vIer.Dogovor.TiDk,
+                                    vIer.Dogovor.nRec,
+                                    Status_Old,
+                                    Note_Old,
+                                    vIer.Dogovor.Status,
+                                    vIer.Dogovor.cNote,
+                                    strComment);
+      }
+}

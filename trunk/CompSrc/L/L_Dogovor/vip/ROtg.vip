@@ -1,0 +1,901 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - договоры
+// Формирование распоряжения на отгрузку
+//******************************************************************************
+
+#include docs2obj.vih
+#include spdocs.vih
+#include notes.vih
+#include statlog.vih
+#include ofpmacro.vpp
+#include oDEI.vih
+#include SchFactFunctions.vih
+#include DOfuns.vih
+#include UKSfuns.vih
+
+//******************************************************************************
+
+#doc
+Распоряжения на отгрузку
+#end
+Interface ROtg 'Распоряжения на отгрузку' EscClose, Cyan;
+  Show at (, , 75, 31);
+
+#include DOfuns.var
+#include UKSfuns.var
+#include SpDocs.var
+
+Create view
+Var
+//------------------------------------------------------------------------------
+  Node
+, parNRec
+, varAltIns                     // NRec заменяемого документа
+, isclose
+                : comp;
+//------------------------------------------------------------------------------
+  Format_Main                   // 0 - trOtgOrderMain, 1 - brOtgOrderMain
+, DscVisible                    // Видимость дескрипторов
+, InsertType
+, VidReport     : word;         //0 - отчет в бизнес-тексте, 1 - отчет в формате FastReport
+//------------------------------------------------------------------------------
+  DscName
+                : string[20];   // Поле для подцепки по декриптору
+//------------------------------------------------------------------------------
+  DesGroup
+                : string[4];    // Поле подцепки по группе дескрипторов
+//------------------------------------------------------------------------------
+  BegDate
+, EndDate
+                : Date;         // Диапазон фильтров
+//------------------------------------------------------------------------------
+  isFilter
+                : boolean;      // Признак устаноки фильтров
+//------------------------------------------------------------------------------
+  MyTree
+                : longint;
+//------------------------------------------------------------------------------
+  OldKolfactDEI
+                : double;
+//------------------------------------------------------------------------------
+  oStatlog      : vipStatlog;
+  oNotes        : iNotes;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if ( OtgOrder.cOwner = 0, '', f_sNumDate(OtgOrderUp.NoDoc, OtgOrderUp.dDoc))
+    ( FieldName = OtgOrderUpName )
+//------------------------------------------------------------------------------
+, if ( SpDocs.PrMC = 1, 'МЦ', if ( SpDocs.PrMC = 2, 'Усл', '!некорр!'))
+    ( FieldName = SpDocsPrMC )
+//------------------------------------------------------------------------------
+, if ( SpDocs.PrMC = 1, GroupMC.Name, GroupUsl.Name )
+    ( FieldName = SpDocsGrName )
+//------------------------------------------------------------------------------
+, if ( SpDocs.PrMC = 1, KatMC.Name, KatUsl.Name )
+    ( FieldName = SpDocsObjName )
+//------------------------------------------------------------------------------
+, if ( NZakaz.Prior = 0, 'нормальный',
+   if ( NZakaz.Prior = 1, 'высокий',
+    if ( NZakaz.Prior = 2, 'низкий',
+                           '!некорр!')))
+    ( FieldName = NZakazPrior )
+//------------------------------------------------------------------------------
+, OtgOrder.*
+
+From
+  OtgOrder
+, OtgOrder OtgOrderUp
+, OtgOrder OtgOrderSyn
+, SpOtgOrd
+, SpOtgOrd SpOtgOrdSyn
+, SpNZRasp
+, SpNZRasp SpNZRaspSyn
+, NZakaz
+, NZakaz NZakazSyn
+, SpDocs
+, SpDocs SpDocsSyn
+, KatOrg OrgForm
+, KatPodr PodrForm
+, KatOrg GrOtp
+, KatOrg GrPol
+, MarPunkt MarPunktSyn_P
+, MarPunkt MarPunktSyn_R
+, KatOrg Contragent
+, Dogovor
+, Dogovor AppDogovor
+, KatOrg Contributor
+, WayMove
+, GroupMC
+, GroupUsl
+, KatMC
+, KatUsl
+, KatOtpEd
+, MoveCell
+, ResOtgr
+, Shipment
+, TipOtg
+, KatNotes
+, ActSaldo
+
+Where
+((
+     Node                == OtgOrder.cOwner
+
+AND  OtgOrder.NRec       == SpOtgOrd.cOtgOrder
+AND  OtgOrder.cOwner     == OtgOrderUp.NRec
+AND  OtgOrder.cOrgForm   == OrgForm.NRec
+AND  OtgOrder.cPodrForm  == PodrForm.NRec
+AND  OtgOrder.cGrOtp     == GrOtp.NRec
+AND  OtgOrder.cPunktP    == MarPunktSyn_P.NRec
+AND  OtgOrder.cNote      == KatNotes.NRec
+
+AND  SpOtgOrd.cNZakaz    == NZakaz.NRec
+AND  NZakaz.cDogovor     == Dogovor.NRec
+AND  NZakaz.cAppDogovor  == AppDogovor.NRec
+AND  Dogovor.cOrg        == ContrAgent.NRec
+AND  NZakaz.cContrib     == Contributor.NRec
+AND  NZakaz.cGrPol       == GrPol.NRec
+AND  NZakaz.cPunktR      == MarPunktSyn_R.NRec
+
+AND  SpOtgOrd.NRec       == SpNZRasp.cSpOtgOrd
+
+AND  SpNZRasp.cSpNZak    == SpDocs.NRec
+AND  SpDocs.cGrMCUsl     == GroupMC.NRec
+AND  SpDocs.cGrMCUsl     == GroupUsl.NRec
+AND  SpDocs.cMCUsl       == KatMC.NRec
+AND  SpDocs.cMCUsl       == KatUsl.NRec
+AND  SpDocs.cOtpEd       == KatOtpEd.NRec
+AND  SpDocs.cMoveCell    == MoveCell.NRec
+AND  SpDocs.cResOtgr     == ResOtgr.NRec
+AND  SpDocs.cShipment    == Shipment.NRec
+AND  SpDocs.cTipOtg      == TipOtg.NRec
+AND  SpDocs.cWayMove     == WayMove.NRec
+))
+
+//------------------------------------------------------------------------------
+bounds byDate      = begdate <<= OtgOrder.dDoc  (noindex) AND
+                     enddate >>= OtgOrder.dDoc  (noindex)
+//------------------------------------------------------------------------------
+bounds byDescr     = DscName  == OtgOrder.Descr (noindex)
+//------------------------------------------------------------------------------
+bounds byGrDsc     = DesGroup == OtgOrder.DesGr (noindex)
+//------------------------------------------------------------------------------
+bounds byDateGrDsc = DesGroup == OtgOrder.DesGr (noindex) AND
+                     begdate <<= OtgOrder.dDoc  (noindex) AND
+                     enddate >>= OtgOrder.dDoc  (noindex)
+//------------------------------------------------------------------------------
+bounds byDateDsc   = DscName  == OtgOrder.Descr (noindex) AND
+                     begdate <<= OtgOrder.dDoc  (noindex) AND
+                     enddate >>= OtgOrder.dDoc  (noindex)
+//------------------------------------------------------------------------------
+bounds SorterBnd ordered OtgOrder.dDoc, OtgOrder.NoDoc
+//------------------------------------------------------------------------------
+;
+
+//******************************************************************************
+Parameters
+  parNRec;
+//******************************************************************************
+
+var piKatDopEd: iKatDEI; // Интерфейс с public-функциями для ДЕИ
+var UseDEI: boolean;       // признак использования ДЕИ
+var AutoDEI: boolean;       // автоформирование ДЕИ
+
+
+//******************************************************************************
+
+Function GetDocTreeType: byte;
+{
+  GetDocTreeType := if (OtgOrder.IsLeaf = 1, ntfText, if(TreeNodeIsOpen(MyTree), ntfOpen, ntfClose));
+}
+
+//******************************************************************************
+
+#include DogIcons.vpp
+
+//******************************************************************************
+
+Tree trOtgOrderMain (, hcDogVieListRasp, sci1478EnEscTree);
+  Table OtgOrder;
+
+Fields
+//------------------------------------------------------------------------------
+  OtgOrder.DesGr
+        #3'Группа'                      ('Код группы пользователей', , )
+        : [10], Protect;
+//------------------------------------------------------------------------------
+  OtgOrder.Descr
+        #3'Дескр.'                      ('Дескриптор(идентификатор) пользователя' , )
+        : [5], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder.NoDoc
+        #3'Номер'#13#3'документа'       ('Номер документа', , )
+        : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder.dDoc
+        #3'Дата'#13#3'документа'        ('Дата документа', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatNotes.Name
+        #3'Статус'#13#3'документа'      ('Статус документа', , )
+        : [14], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  OtgOrder.dFrom
+        #3'Выполнить'#13#3'с'           ('Дата начала действия', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered,
+        {Font = {BackColor = if (OtgOrder.dTo < OtgOrder.dFrom, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  OtgOrder.dTo
+        #3'Выполнить'#13#3'по'          ('Дата окончания действия', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered,
+    {Font = {BackColor = if (OtgOrder.dTo < OtgOrder.dFrom, ColorError, 0)}};
+//------------------------------------------------------------------------------
+End; // trOtgOrderMain
+
+//******************************************************************************
+
+Browse brOtgOrderMain(, hcDogVieListRasp, sci1478EnEsc);
+  Table OtgOrder;
+
+Fields
+//------------------------------------------------------------------------------
+  OtgOrder.DesGr
+        #3'Группа'                      ('Код группы пользователей', , )
+        : [10], Protect;
+//------------------------------------------------------------------------------
+  OtgOrder.Descr
+        #3'Дескр.'                      ('Дескриптор(идентификатор) пользователя', , )
+        : [5], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder.NoDoc
+        #3'Номер'#13#3'документа'       ('Номер документа', , )
+        : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder.dDoc
+        #3'Дата'#13#3'документа'        ('Дата документа', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatNotes.Name
+        #3'Статус'#13#3'документа'      ('Статус документа', , )
+        : [14], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  OtgOrder.dFrom
+        #3'Выполнить'#13#3'с'           ('Дата начала действия', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered,
+        {Font = {BackColor = if (OtgOrder.dTo < OtgOrder.dFrom, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  OtgOrder.dTo
+        #3'Выполнить'#13#3'по'          ('Дата окончания действия', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered,
+    {Font = {BackColor = if (OtgOrder.dTo < OtgOrder.dFrom, ColorError, 0)}};
+//------------------------------------------------------------------------------
+End; // brOtgOrderMain
+
+//******************************************************************************
+
+#include serv_str.vpp
+#include direct.vpp
+
+#include DocShoz.Vpp
+#include ROtg_Sh.Vpp // Общие Функции OtgOrder
+#include ROtg_F.vpp  // Все Функции
+
+//******************************************************************************
+
+#include nzakaz.vpp
+
+//******************************************************************************
+
+#doc
+Окно с дополнительной информацией по спецификации
+#end
+Window winSpNZRasp_AddInf 'Дополнительная информация по спецификации' EscClose;
+  Show at (, , 100, 19);
+
+Screen scrSpNZRasp_AddInf (, hcDogRaspSpecNZ, sci1Esc);
+  Table SpNZRasp;
+
+Fields
+  SpDocs.Code         ('Номер по порядку', , );
+  SpDocsPrMC          ('Признак МЦ/услуги', , )                         : Protect;
+  SpDocsObjName       ('Наименование МЦ/услуги', , )                    : Protect;
+  SpDocsGrName        ('Наименование группы МЦ/услуг', , )              : Protect;
+  KatOtpEd.Name       ('Наименование отпускной единицы измерения', , )  : Protect;
+  SpDocs.Kol          ('Заказанное количество по наряд-заказу', , )     : [prSignsInKol], Protect;
+  SpNZRasp.KolFact    ('Количество к отгрузке', , )                     : [prSignsInKol], NoProtect, {Font = {Bold = TRUE}};
+  MoveCell.Name       ('Наименование единицы подвижного состава', , )   : Protect;
+  ResOtgr.Name        ('Наименование ресурса отгрузки', , )             : Protect;
+  Shipment.Name       ('Способ отгрузки', , )                           : Protect;
+  TipOtg.Name         ('Базис поставки', , )                            : Protect;
+  WayMove.Name        ('Способ транспортировки', , )                    : Protect;
+  SpDocs.ShipAddTerms ('Дополнительные условия отгрузки', , )           : Protect;
+<<
+
+ `Номер позиции`      .@@@@@@@@@@@@@@@@@@@@
+ `Признак МЦ/услуги`  .@@@@
+ `Наименование`       .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Группа`             .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Отпускная единица`  .@@@@@@@@@@@@@@@@@@@@
+  Количество
+           `заказано` .@@@@@@@@@@@@@@@@@@@@
+           `отгрузить`.@@@@@@@@@@@@@@@@@@@@
+
+ `Единица подвижного состава`
+                      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Ресурс отгрузки`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Способ отгрузки`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Базис`              .@@@@@@@@@@@@@@@@@@@@
+ `Транспорт`          .@@@@@@@@@@@@@@@@@@@@
+ `Дополнительно`      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+End; // Screen scrSpNZRasp_AddInf
+
+HandleEvent
+
+cmDone:
+  if (not UpdateTable)
+    Abort
+  else
+    RescanPanel(#SpNZRasp);
+
+cmHotKeys:
+  RaspOtgr_Edit_HotKeys;
+
+cmPickClass:
+  P_ROtg_PickClass;
+
+cmPickAttr:
+  P_ROtg_PickAttr;
+
+End; // HandleEvent
+End; // Window winSpNZRasp_AddInf
+
+
+//******************************************************************************
+
+#doc
+Окно редактирования распоряжения на отгрузку
+#end
+Window winOtgOrder_Edit 'Редактирование распоряжения на отгрузку' EscClose;
+  Show at (, , 110, 31);
+
+Screen scrOtgOrder_Edit(, hcDogRaspEdit, sci178Esc);
+  Show at (, , , 9);
+  Table OtgOrder;
+
+Fields
+//------------------------------------------------------------------------------
+  OtgOrder.dInput    ('Дата ввода документа в компьютер', , sci178Esc)     : ['DD/MM/YYYY'], Skip, Centered;
+//------------------------------------------------------------------------------
+  OtgOrder.DesGr     ('Код группы пользователей', , sci1378Esc)        : Protect;
+//------------------------------------------------------------------------------
+  OtgOrder.Descr     ('Дескриптор(идентификатор) пользователя', , sci1378Esc)                : Protect;
+//------------------------------------------------------------------------------
+  OtgOrder.NoDoc     ('Номер документа', , sci178Esc),
+    {Font = {BackColor = if (OtgOrder.NoDoc = '', ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  OtgOrder.dDoc      ('Дата документа', , sci178Esc)                       : ['DD/MM/YYYY'];
+//------------------------------------------------------------------------------
+  KatNotes.Name      ('Статус документа', , sci1378Esc)                    : PickButton, Protect;
+//------------------------------------------------------------------------------
+  OtgOrder.dFrom     ('Дата начала действия документа', , sci178Esc)       : [10, 'DD/MM/YYYY'],
+    {Font = {BackColor = if (OtgOrder.dTo < OtgOrder.dFrom, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  OtgOrder.dTo       ('Дата окончания действия документа', , sci178Esc)    : [10, 'DD/MM/YYYY'],
+    {Font = {BackColor = if (OtgOrder.dTo < OtgOrder.dFrom, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  if (OtgOrderUpName = '', '', 'Взамен распоряжения')                      : Skip, Right, {Font = {Color = ColorSysBlack}};
+//------------------------------------------------------------------------------
+  OtgOrderUpName     ('Номер заменяемого распоряжения', , sci178Esc)       : Skip, {Font = {Bold = TRUE}};
+//------------------------------------------------------------------------------
+  OrgForm.Name       ('Наименование контрагента', , sci1378Esc)            : Protect,
+    {Font = {BackColor = if (not IsValid(#OrgForm), ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  PodrForm.Name      ('Наименование подразделения', , sci1378Esc)          : Protect;
+//------------------------------------------------------------------------------
+  GrOtp.Name         ('Грузоотправитель', , sci1378Esc)                    : Protect;
+//------------------------------------------------------------------------------
+  MarPunktSyn_P.Name ('Пункт погрузки', , sci1378Esc)                      : Protect,
+    {Font = {BackColor = if (not IsValid(#MarPunktSyn_P), ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  OtgOrder.DocNote   ('Примечание', , sci178Esc)                           : NoProtect;
+//------------------------------------------------------------------------------
+<<
+&Внесено      &Группа    &Дескр.    &Распоряжение №     &от          &Статус           &Выполнить с...&...по
+&.@@@@@@@@@@@@&.@@@@@@&  .@@@@@@ &.@@@@@@@@@@@@@@@@@@@&.@@@@@@@@@@@&.@@@@@@@@@@@@@@@@@&.@@@@@@@@@&.@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@
+ Контрагент    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Подразделение .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Отправитель   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Пункт погрузки.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ Примечание    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+End; // Screen
+
+//------------------------------------------------------------------------------
+
+Browse brNZakaz(, hcDogMakeNZList, sci178Esc);
+  Show at (, 10, , 17);
+  Table SpOtgOrd;
+
+Fields
+//------------------------------------------------------------------------------
+  SpOtgOrd.Code
+        #3'№'#13#3'п/п'                   ('Номер в спецификации. <Ctrl><Enter> - просмотр НЗ', , )
+        : [5], NoAutoSize;
+//------------------------------------------------------------------------------
+  NZakaz.NoDoc
+        #3'Номер наряд-'#13#3'заказа'     ('Номер наряд-заказа. <Ctrl><Enter> - просмотр НЗ', , sci1378Esc)
+        : [11], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  NZakaz.dDoc
+        #3'Дата наряд-'#13#3'заказа'      ('Дата наряд-заказа. <Ctrl><Enter> - просмотр НЗ', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  NZakazPrior
+        #3'Приоритет'#13#3'наряд-заказа'  ('Приоритет наряд-заказа.<Ctrl><Enter> - просмотр НЗ', , )
+        : [11], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  Dogovor.NoDoc
+        #3'Наряд-заказ'#13#3'по договору' ('Номер договора. <Ctrl><Enter> - просмотр НЗ', , )
+        : [11], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  Dogovor.dDoc
+        #3'Дата'#13#3'договора'           ('Дата договора. <Ctrl><Enter> - просмотр НЗ', , )
+        : [10, 'DD/MM/YYYY'], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  Contributor.Name
+        #3'Заявитель'                     ('Заявитель по наряд-заказу. <Ctrl><Enter> - просмотр НЗ', , )
+        : [15], Protect;
+//------------------------------------------------------------------------------
+  MarPunktSyn_R.Name
+        #3'Пункт'#13#3'назначения'        ('Пункт назначения по наряд-заказу. <Ctrl><Enter> - просмотр НЗ', , )
+        : [16], Protect;
+//------------------------------------------------------------------------------
+End; // Browse
+
+//------------------------------------------------------------------------------
+
+Browse brSpNZRasp (, hcDogRaspSpecNZ, sci1Esc);
+  Show at (, 18, , );
+  Table SpNZRasp;
+
+Fields
+  SpDocs.Code
+        #3'№'#13#3'строки'             ('Номер строки.<Ctrl><Enter> - расширенная информация', , )
+        : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SpDocsPrMC
+        #3'МЦ /'#13#3'усл'             ('Признак МЦ/услуги.<Ctrl><Enter> - расширенная информация', , )
+        : [4], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  SpDocsGrName
+        #3'Группа'                     ('Группа МЦ/услуг.<Ctrl><Enter> - расширенная информация', , )
+        : [15], Protect;
+//------------------------------------------------------------------------------
+  SpDocsObjName
+        #3'Наименование'               ('Наименование МЦ/услуги.<Ctrl><Enter> - расширенная информация', , )
+        : [15], Protect;
+//------------------------------------------------------------------------------
+  KatOtpEd.Name
+        #3'Отпускная'#13#3'единица'    ('Наименование отпускной единицы.<Ctrl><Enter> - расширенная информация', , )
+        : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SpDocs.Kol
+        #3'Заказано'                   ('Заказанное количество по наряд-заказу.<Ctrl><Enter> - расширенная информация', , )
+        : [12], [prSignsInKol], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SpNZRasp.KolFact
+        #3'Отгрузить'                  ('Отгрузить.<Ctrl><Enter> - расширенная информация', , )
+        : [12], [prSignsInKol], NoProtect, NoAutoSize;
+//------------------------------------------------------------------------------
+  ResOtgr.Name
+        #3'Ресурс'#13#3'отгрузки'      ('Ресурс отгрузки.<Ctrl><Enter> - расширенная информация', , )
+        : [12], Protect;
+//------------------------------------------------------------------------------
+End; // Browse
+
+//******************************************************************************
+
+HandleEvent
+
+cmDone:
+  if (not UpdateTable)
+    Abort
+  else
+    {
+      CloseWindow(winSpNZRasp_AddInf);
+      RescanPanel(#OtgOrder);
+    }
+
+cmAttrib:
+  case CurTable of
+  //--------------
+    #SpOtgOrd:
+      RunInterface(NZakaz, comp(0), NZakaz.NRec);
+  //--------------
+    #SpNZRasp:
+      RunWindow(winSpNZRasp_AddInf);
+  //--------------
+  end; // case
+
+cmInsert  :
+  if (CurTable = #SpOtgOrd)
+    {
+      if ((OtgOrder.Status > 0) AND (OtgOrder.Status < 5))
+        Message('Статус документа отличен от "оформляемый"', Information)
+      else
+        if (OtgOrder.IsLeaf = 0)
+          Message('Есть документы, сформированные взамен', Information)
+        else
+          {
+            Insert_SpOtgOrd(false);
+            PutCommand(cmEdit);
+          }
+
+      Abort;
+    }
+
+cmValue1: // для корректного удаления
+  if (TreeIsTerminal(trOtgOrderMain))
+    TreeCloseNode(trOtgOrderMain);
+
+cmHotKeys:
+  RaspOtgr_Edit_HotKeys;
+
+cmValue2:
+     if ((OtgOrder.Status > 0) AND (OtgOrder.Status < 5))
+       Message('Статус документа отличен от <оформляемый>.', Information)
+     else
+       if (OtgOrder.IsLeaf = 0)
+         Message('Есть документы сформированные взамен.', Information)
+       else
+         Insert_SpOtgOrd(false);
+
+cmAltInsert: // Формирование распоряжения на отгрузку взамен данного
+  if (CurTable = #OtgOrder)
+    if UpdateTable
+      if ( OtgOrder.Status <> 5 )
+        Down_OtgOrder; // тут проблемка с cmCheckRecord (Перечитывает запись и теряет если пользователь ввел часть корр.)
+
+cmInsLowLevel: // Формирование отмененного распоряжения на отгрузку
+  if (CurTable = #OtgOrder)
+    if UpdateTable
+      {
+        InsertType := 1;
+        PutCommand(cmEdit);
+        PutCommand(cmInsert);
+      }
+
+cmPrintDoc:
+  {
+    saveMyDsk(VidReport,'VidReport');
+  if (CurTable = #OtgOrder)
+    if (UpdateTable)
+      RunInterface(ROtg_R, OtgOrder.NRec);
+    VidReport := 0;
+  }
+
+cmValue22:
+  {
+    VidReport := 1;
+    putCommand(cmPrintDoc); 
+  }
+
+cmPlansNo:
+  {
+    saveMyDsk(VidReport,'VidReport');
+  if (CurTable = #OtgOrder)
+    if (UpdateTable)
+      if ( OtgOrder.Status <> 5 )
+        RunInterface(ROtg_R02, OtgOrder.NRec);
+    VidReport := 0;
+  }
+
+cmValue23:
+  {
+    VidReport := 1;
+    putCommand(cmPlansNo); 
+  }
+
+cmValue11:
+  {
+    saveMyDsk(VidReport,'VidReport');
+  if (CurTable = #OtgOrder)
+    if (UpdateTable)
+      RunInterface(ROtg_R03, OtgOrder.NRec);
+    VidReport := 0;
+  }
+
+cmValue12:
+  {
+    VidReport := 1;
+    putCommand(cmValue11); 
+  }
+
+cmPickAttr:
+  if (UpdateTable)
+    P_ROtg_PickAttr;
+
+cmPickClass:
+  if (UpdateTable)
+    P_ROtg_PickClass;
+
+cmOpenSearch:
+  Abort;
+
+End; // HandleEvent
+
+#include ROtg_P.vpp // Все Табличные события по панелям
+
+End; // Window winOtgOrder_Edit
+
+
+//******************************************************************************
+
+HandleEvent // Interface
+cmInit:
+ {
+   VidReport := 0;
+
+   isclose := parNRec;
+   Node      := 0;
+   varAltIns := 0;
+   MyTree := trOtgOrderMain;
+   InitDocIconsArray;
+   DscVisible := wGetTune('Doc.Visible');
+   begdate := dGetTune('User.dFilter1');
+   endDate := dGetTune('User.dFilter2');
+   isFilter := boGetTune('User.UseFilter') AND (begdate <= enddate);
+
+   DscName := sGetTune('User.Descr');
+   DesGroup := sGetTune('User.DesGr');
+   var Datechanged: boolean;
+   var tmpDsk: word;
+   SetDocBounds;
+   if (ReadMyDsk(tmpDsk, 'ROtg_ViewFormat', Datechanged))
+     {
+       Format_Main := if (tmpDsk = 1, 0, 1);
+       ChangeViewFormat(boolean(true));
+     }
+   else
+     {
+       Format_Main := 1;
+       ChangeViewFormat(boolean(true));
+     }
+
+   UseDEI := boGetTune('Doc.DEI.ROtgr');
+   AutoDEI := boGetTune('Doc.DEI.Auto.ROtgr');
+   if (UseDEI)
+    {
+      SetHelpAndStatusContext(scrSpNZRasp_AddInf, #SpNZRasp.Kolfact, sci13Esc, 0)
+      SetHelpAndStatusContext(brSpNZRasp, #SpNZRasp.Kolfact, sci13Esc, 0)
+    }
+
+   if (not IsValid(#OtgOrder))
+     PutCommand(cmEdit)
+   else
+     if (parNRec <> 0)
+      {
+       if (GetFirst OtgOrder where ((Comp(parNRec) == OtgOrder.NRec)) = tsOk)
+         {
+           Node := OtgOrder.cOwner;
+            if (Format_Main = 0)
+              {
+                TreeJumpToRecord(myTree, OtgOrder.NRec);
+                RescanPanel(#OtgOrder);
+              }
+
+           PutCommand(cmEdit);
+         }
+       }
+     else
+       if (Format_Main = 0)
+        TreeGetLast(myTree)
+       else
+        if ( GetLast OtgOrder = tsOk ) {}
+ }
+
+cmDone:
+  {
+    CloseWindow(winSpNZRasp_AddInf);
+    CloseWindow(winOtgOrder_Edit);
+  };
+
+cmHotKeys:
+  RaspOtgr_Main_HotKeys;
+
+cmAccording:
+  ChangeViewFormat(boolean(false));
+
+cmShowAll: // Раскрыть все ветки
+  if (Format_Main <> 1)
+    {
+      var sav_NRec: comp;  sav_NRec := OtgOrder.NRec;
+
+      StartNewVisual(vtRotateVisual, vfTimer, 'Раскрытие всех веток...'#13#3, 1);
+
+      if TreeGetFirst(MyTree)
+      do
+        {
+          NextVisual;
+          TreeOpenNode(MyTree);
+        }
+      While TreeGetNext(MyTree);
+
+      StopVisual('', 0);
+
+      TreeJumpToRecord(MyTree, sav_NRec);
+      RescanPanel(#OtgOrder);
+    }
+
+cmHideAll: // Свернуть все ветки
+  if (Format_Main <> 1)
+    {
+      var sav_NRec: comp;
+
+      While (OtgOrder.cOwner <> 0)
+        TreeJumpToRecord(MyTree, OtgOrder.cOwner);
+      sav_NRec := OtgOrder.NRec;
+
+      StartNewVisual(vtRotateVisual, vfTimer, 'Сворачивание всех веток...'#13#3, 1);
+
+      if TreeGetFirst(MyTree)
+      do
+        {
+          NextVisual;
+          TreeCloseNode(MyTree);
+        }
+      While TreeGetNext(MyTree);
+
+      StopVisual('', 0);
+
+      TreeJumpToRecord(MyTree, sav_NRec);
+      RescanPanel(#OtgOrder);
+    }
+
+cmInsLowLevel: // Формирование отмененного распоряжения на отгрузку
+  {
+    InsertType := 1;
+    PutCommand(cmEdit);
+    PutCommand(cmInsert);
+  }
+
+cmAddNewRec:
+ {
+   PutCommand(cmEdit);
+   PutCommand(cmInsert);
+ }
+
+cmEdit:
+  if (CurWindow = -1)
+    {
+      if ((OtgOrder.IsLeaf = 0) or
+          (((DscVisible = dcGrpRead) OR (DscVisible = dcOwnModifAllRead)) AND (OtgOrder.Descr <> DscName)) or
+          ((DscVisible = dcGrpModifAllRead) AND (OtgOrder.DesGr <> DesGroup))
+         )
+        ProtectRecord(#OtgOrder, TRUE)
+      else
+        ProtectRecord(#OtgOrder, FALSE);
+
+      FieldsOption_Edit;
+      RunWindowModal(winOtgOrder_Edit);
+      SetFieldProtected(#OtgOrder.DesGr, TRUE);
+      SetFieldProtected(#OtgOrder.Descr, TRUE);
+      SetFieldProtected(#OtgOrder.NoDoc, TRUE);
+      SetFieldProtected(#OtgOrder.dDoc , TRUE);
+      SetFieldProtected(#OtgOrder.dFrom, TRUE);
+      SetFieldProtected(#OtgOrder.dTo  , TRUE);
+      SetFieldProtected(#KatNotes.sName, TRUE);
+      RedrawPanel(#OtgOrder);
+      if (isclose <> 0)
+        ProcessCommand(cmClose);
+
+    }
+
+cmDefault:
+  PutCommand(cmEdit);
+
+cmTreeTop:
+  Node := 0;
+
+cmTreeUp:
+  Node := OtgOrder.cOwner;
+
+cmTreeDown:
+  Node := OtgOrder.NRec;
+
+cmTreeNodeType:
+  {
+    var DocTreeType: byte;
+    DocTreeType := GetDocTreeType;
+    TreeSetNodeType(trOtgOrderMain,
+                    DocTreeType,
+                    GetDocTreeIcon(word(441),
+                                   OtgOrder.Status,
+                                   DocTreeType));
+  }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(trOtgOrderMain, OtgOrder.cOwner);
+End; // HandleEvent Interface
+
+End. // Interface
+
+//******************************************************************************
+//******************************************************************************
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::ROtg>L_Dogovor::ROtg - Распоряжения на отгрузку</link>
+#end
+mnuROtg Menu
+{
+ -'Переключить режим ~о~тображения', cmAccording, 'Переключает режим с линейного списка на древовидный и наоборот', hcdg_perekNZ, 'Alt-S', kbAltS, sci1Esc;
+ -'~Ф~ормирование телеграммы по отмененным НЗ', cmInsLowLevel, 'Формирование телеграммы по отмененным НЗ', hcDogovorSOtgOrderLocalMenu, 'Ctrl-F7', kbCtrlF7, sci1Esc;
+-----------;
+- 'Раскрыть все ветки', cmShowAll, 'Разворачивает все дерево документов', , 'Ctrl +', kbCtrlGrayPlus, sci1Esc;
+- 'Свернуть все ветки', cmHideAll, 'Сворачивает все дерево документов', , 'Ctrl -', kbCtrlGrayMinus, sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Локальное меню окна редактирования интерфейса <link Interface L_Dogovor::ROtg>L_Dogovor::ROtg - Распоряжения на отгрузку</link>
+#end
+mnuROtgEdit Menu
+{
+-'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt-C', kbAltC, sci1Esc;
+-'Внешние а~т~рибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt-A', kbAltA, sci1Esc;
+-----------;
+-'Формирование распоряжения в~з~амен', cmAltInsert, 'Формирование распоряжения на отгрузку взамен текущего', hcDogovorSOtgOrderLocalMenu, 'Alt-F7', kbAltF7, sci1Esc;
+-'~Ф~ормирование телеграммы по отмененным НЗ', cmInsLowLevel, 'Формирование телеграммы по отмененным НЗ', hcDogovorSOtgOrderLocalMenu, 'Ctrl-F7', kbCtrlF7, sci1Esc;
+-'Добавление наряд-заказов', cmValue2, 'Добавление наряд-заказов', hcDogovorSOtgOrderLocalMenu, , , sci1Esc;
+-----------;
+-'~П~ечать документа', cmPrintDoc, 'Печать текущего документа', hcDogovorSOtgOrderLocalMenu, 'Ctrl-P', kbCtrlP, sci1Esc;
+-'Печать ~р~азнарядки', cmPlansNo, 'Печать разнарядки', hcDogovorSOtgOrderLocalMenu, 'Alt-P', kbAltP, sci1Esc;
+-'Печать разнарядки на ~с~нятие объемов с отгрузки', cmValue11, 'Печать разнарядки на снятие объемов с отгрузки', hcDogovorSOtgOrderLocalMenu, '', , sci1Esc;
+-----------;
+-'Печать документа в FastReport',cmValue22,'Печать текущего документа в формате FastReport', hcDogovorSOtgOrderLocalMenu,,,sci1Esc;
+-'Печать разнарядки в FastReport',cmValue23,'Печать разнарядки в формате FastReport', hcDogovorSOtgOrderLocalMenu,,,sci1Esc;
+-'Печать разнарядки на ~с~нятие объемов с отгрузки в FastReport', cmValue12, 'Печать разнарядки на снятие объемов с отгрузки в FastReport', hcDogovorSOtgOrderLocalMenu, , , sci1Esc;
+}
+
+//******************************************************************************
+
+mnuROtgSpEdit Menu
+{
+-'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt-C', kbAltC, sci1Esc;
+-'Внешние а~т~рибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt-A', kbAltA, sci1Esc;
+}
+
+//******************************************************************************
+
+mnuROtgSpNZEdit Menu
+{
+-'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt-C', kbAltC, sci1Esc;
+-'Внешние а~т~рибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt-A', kbAltA, sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Локальное меню окна редактирования аннулированного РО интерфейса <link Interface L_Dogovor::ROtg>L_Dogovor::ROtg - Распоряжения на отгрузку</link>
+#end
+mnuROtgCanceledEdit Menu
+{
+-'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt-C', kbAltC, sci1Esc;
+-'Внешние а~т~рибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt-A', kbAltA, sci1Esc;
+-----------;
+-'~Ф~ормирование телеграммы по отмененным НЗ', cmInsLowLevel, 'Формирование телеграммы по отмененным НЗ', hcDogovorSOtgOrderLocalMenu, 'Ctrl-F7', kbCtrlF7, sci1Esc;
+-'Добавление наряд-заказов', cmValue2, 'Добавление наряд-заказов', hcDogovorSOtgOrderLocalMenu, , , sci1Esc;
+-----------;
+-'~П~ечать документа', cmPrintDoc, 'Печать текущего документа', hcDogovorSOtgOrderLocalMenu, 'Ctrl-P', kbCtrlP, sci1Esc;
+-'Печать документа в FastReport',cmValue22,'Печать текущего документа в формате FastReport', hcDogovorSOtgOrderLocalMenu,,,sci1Esc;
+}
+
+//******************************************************************************

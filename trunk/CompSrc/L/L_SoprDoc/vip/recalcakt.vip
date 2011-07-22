@@ -1,0 +1,214 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Пересчет услуг отнесенных на другого контрагента
+//
+//********************************************************************************
+
+#include recalcakt.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Пересчет услуг отнесенных на другого контрагента
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+Interface IRecalcRelAkt;
+
+Create View
+
+Var
+  cKatK : comp;
+
+From
+  KatSopr
+, KatSopr KatSoprB
+, SpSopr
+, SpSopr  SpSoprB
+
+Where
+((
+     comp(cKatK)    ==  KatSopr.cKatSopr
+and  KatSopr.nRec   ==  SpSopr.cSopr
+and  word(3)       <<=  SpSopr.PrMC
+
+and  comp(cKatK)    ==  KatSoprB.nRec
+and  KatSoprB.nRec  ==  SpSoprB.cSopr
+and  word(1)        ==  SpSoprB.PrMC
+))
+;
+
+Function  _GetKSumm : double;
+Var
+  ret : double;
+{
+  ret := 0;
+
+  _loop SpSoprB
+    {
+      if ( KatSoprB.cVal = 0 )
+        ret := ret + SpSoprB.KolOpl * SpSoprB.Price;
+      else
+        ret := ret + SpSoprB.KolOpl * SpSoprB.VPrice;
+    }
+
+  _GetKSumm := ret;
+}
+
+Function  _GetKSummNalog : double;
+Var
+  ret : double;
+{
+  ret := 0;
+
+  _loop SpSoprB
+    {
+      if ( KatSoprB.cVal = 0 )
+        ret := ret + SpSoprB.SumNDS;
+      else
+        ret := ret + SpSoprB.SumVNDS;
+    }
+
+  _GetKSummNalog := ret;
+}
+
+Procedure RecalcOne(c1 : comp; var SpBuf : type$SpSopr);
+Var
+  fs0
+, fsnal
+, fs
+         : double;
+{
+  set cKatK := c1;
+
+  if ( GetFirst KatSoprB <> tsOk )
+    exit;
+
+  if ( not IsValid(#KatSopr) )
+    exit;
+
+  if ( (KatSoprB.VidSopr <> 101) or (KatSoprB.VidSopr <> 108) or (KatSopr.VidSopr <> 111) )
+    exit;
+
+  if ( GetFirst KatSopr where (( SpBuf.cSopr == KatSopr.nRec )) <> tsOk )
+    exit;
+
+  fs0 := _GetKSumm;
+  fsnal := _GetKSummNalog;
+
+  if ( KatSoprB.VhodNal > KatSopr.VhodNal )
+    fs0 := fs0 + fsnal;
+  else
+    if ( KatSoprB.VhodNal < KatSopr.VhodNal )
+      fs0 := fs0 - fsnal;
+
+  fs := oValFunc.GetAnyCurrency(KatSoprB.cVal, fs0, KatSopr.dPrice, KatSopr.cVal);
+
+  case SpBuf.PrMC of
+
+    3 :
+      {
+        if ( KatSopr.cVal = 0 )
+          SpBuf.Price  := fs * SpBuf.Kol / 100
+        else
+          SpBuf.VPrice  := fs * SpBuf.Kol / 100
+    
+        SpBuf.rVPrice := SpBuf.VPrice;
+        SpBuf.rPrice  := SpBuf.Price;
+      }
+    else
+      {
+        if ( fs < GetPresision_forKol )
+          SpBuf.Kol := 0;
+        else
+          if ( KatSopr.cVal = 0 )
+            SpBuf.Kol := SpBuf.Price * 100 / fs;
+          else
+            SpBuf.Kol := SpBuf.VPrice * 100 / fs;
+      }
+
+  end;
+
+  SpBuf.KolOpl  := 1;
+  SpBuf.KolFact := 1;
+}
+
+Procedure RecalcAll(c1 : comp; wMethod : word);
+Var
+  fs0
+, fs1
+, fsnal
+, fs
+         : double;
+{
+  set cKatK := c1;
+
+  if ( GetFirst KatSoprB <> tsOk )
+    exit;
+
+  if ( not IsValid(#KatSopr) )
+    exit;
+
+  if ( (KatSoprB.VidSopr <> 101) or (KatSoprB.VidSopr <> 108) or (KatSopr.VidSopr <> 111) )
+    exit;
+
+  fs0 := _GetKSumm;
+  fsnal := _GetKSummNalog;
+
+  _loop KatSopr
+    {
+      fs1 := fs0;
+
+      if ( KatSoprB.VhodNal > KatSopr.VhodNal )
+        fs1 := fs1 + fsnal;
+      else
+        if ( KatSoprB.VhodNal < KatSopr.VhodNal )
+          fs1 := fs1 - fsnal;
+
+      fs := oValFunc.GetAnyCurrency(KatSoprB.cVal, fs1, KatSopr.dPrice, KatSopr.cVal);
+
+      _loop SpSopr
+        {
+          case SpSopr.PrMC of
+
+            3 :
+              if ( KatSopr.cVal = 0 )
+                SpSopr.Price := fs * SpSopr.Kol / 100;
+              else
+                SpSopr.VPrice := fs * SpSopr.Kol / 100;
+
+            else
+              {
+                if ( fs < GetPresision_forKol )
+                  SpSopr.Kol := 0;
+                else
+                  if ( KatSopr.cVal = 0 )
+                    SpSopr.Kol := SpSopr.Price * 100 / fs;
+                  else
+                    SpSopr.Kol := SpSopr.VPrice * 100 / fs;
+              }
+
+          end;
+
+          SpSopr.rVPrice := SpSopr.VPrice;
+          SpSopr.rPrice  := SpSopr.Price;
+          update current SpSopr;
+        }
+
+      RunInterface( iChkSum       //chkSum.vip
+                  , KatSopr.NRec  //сопроводительный документ
+                  , 0             //позиция спецификации,
+                  , FALSE         //выполнить только пересчет позиции (true)
+                  , if ((wMethod and 1)<>1, 0, wMethod)  //метод пересчета суммы в валюте по текущему курсу
+                  , FALSE         //резутьтат выполнения (был ли пересчет) [возвращаемый]
+                  );
+    }
+}
+
+End.

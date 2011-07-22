@@ -1,0 +1,216 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Окно с редактированием налогов к позиции документа        ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+var
+  oldNalog,CurseNalog : double;
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ // good_SpDocNal
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Procedure good_SpDocNal;
+{
+  if update current SpDocNal <>tsok{};
+  pushpos(#SpDocNal);
+  CheckSumma(false);
+  poppos(#SpDocNal);
+  rereadrecord(#SpDocNal);
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// Window EditNalogs
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+#doc
+  Редактирование налогов
+#end
+
+Window EditNalogs 'Редактирование налогов' ( , hcSpSoprEditNalogs, )  EscClose;
+  Show at (,12,110,20);
+Panel pnEditSpDocNal
+  show at (,,,)
+  table SpDocNal;
+Browse brEditSpDocNal ('',hcSpSoprEditNalogs,sci1Esc)
+Fields
+  KatNalog.Name   'Налог'       :[10], skip,NoAutoSize,{font={bold=true}};
+  NalOrg.Name     'Организация' ('Контрагент - получатель суммы данного налога',,sci13Esc) :[14], protect;
+  SpDocNal.Nalog  'Ставка'      ('Ставка налога в %',,):[17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'],right,NoAutoSize;
+  SpDocNal.Summa  'Сумма в НДЕ' ('Сумма налога в национальной денежной единице',,):[17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'],right,NoAutoSize;
+  SpDocNal.SumVal 'В вал.док.'  ('Сумма налога в валюте спецификации документа',,):[17], [brForSopr_VPrice, '\2p[|-]36`666`666`666`666.88'],right,NoAutoSize;
+  KlVal.SimvolV   'Вал.'        ('Валюта спецификации документа',,):[4], skip, {font={italic=true}},NoAutoSize;
+  SpDocNal.SumNal 'В вал.нал.'  ('Сумма налога в валюте налога',,):[17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'],right,NoAutoSize;
+  ValutNal        'Вал.'        ('Валюта налога',,):[4], skip, {font={italic=true}},NoAutoSize;
+end; // Browse
+
+HandleEvent
+
+#include soprc13.vpp
+
+cmPick :
+  Case CurField of
+    #NalOrg.Name :
+    {
+      case KatSopr.VidSopr of
+        106,206:{}
+      else
+      {
+        if (KatSopr.VhodNal = 1)
+        {
+          Message(''#3'Налог входит в цену МЦ.'+
+                  ''#3#13'Изменение получателя суммы налога недоступно!');
+          RereadRecord(#SpDocNal);
+          Exit;
+        }
+
+        if (KatSopr.cStepDoc <> 0 and
+            SpSopr.cSpStep   <> 0 and
+            boGetTune('Doc.iNalogsFromSpStep'))
+        {
+          Message('Для внесения несоответствия между налогами документа и ДО '+
+                  'необходимо переключить настройку: '+
+                  '"Налоги сопроводительных документов рассчитывать по ДО"=нет');
+          RereadRecord(#SpDocNal);
+          Exit;
+        }
+
+        if (KatSopr.cStepDoc <> 0)
+          if (Message(''#3'Вы согласны внести несоответствие '+
+                      'между налогами документа и ДО ?',YesNo) <> cmYes)
+          {
+            RereadRecord(#SpDocNal);
+            Exit;
+          }
+      }
+      end;
+
+      if (RunInterface(GetKatOr, SpDocNal.cOrg, comp(0), false, comp(0), comp(0)) <> cmCancel)
+        good_SpDocNal;
+    }
+end; // case CurField
+
+
+//------------------------------------------------------------------------------
+cmCheckField :
+{
+  case KatSopr.VidSopr of
+    106,206:{}
+  else
+  {
+    if (KatSopr.cStepDoc <> 0 and
+        SpSopr.cSpStep   <> 0 and
+        boGetTune('Doc.iNalogsFromSpStep'))
+    {
+      Message('Для внесения несоответствия между налогами документа и ДО '+
+              'необходимо переключить настройку: '+
+              '"Налоги сопроводительных документов рассчитывать по ДО"=нет');
+      RereadRecord(#SpDocNal);
+      Exit;
+    }
+
+    if (KatSopr.cStepDoc <> 0)
+      if (Message(''#3'Вы согласны внести несоответствие '+
+                  'между налогами документа и ДО ?',YesNo) <> cmYes)
+      {
+        RereadRecord(#SpDocNal);
+        Exit;
+      }
+  }
+  end;
+
+  case CurField of
+    #SpDocNal.Summa:
+      if (boGetTune('Oper.SD.Nakl.RecalcSumNalog'))
+      {
+        SpDocNal.SumVal := SpDocNal.Summa / GetCursPrice;
+        SpDocNal.SumNal := SpDocNal.Summa / CurseNalog;
+      }
+
+    #SpDocNal.SumVal:
+      if (boGetTune('Oper.SD.Nakl.RecalcSumNalog'))
+      {
+        SpDocNal.Summa  := SpDocNal.SumVal * GetCursPrice;
+        SpDocNal.SumNal := SpDocNal.Summa  / CurseNalog;
+      }
+
+    #SpDocNal.SumNal:
+      if (boGetTune('Oper.SD.Nakl.RecalcSumNalog'))
+      {
+        SpDocNal.Summa  := SpDocNal.SumNal * CurseNalog;
+        SpDocNal.SumVal := SpDocNal.Summa  / GetCursPrice;
+      }
+
+    #SpDocNal.Nalog:
+      if (message(''#3'Пересчитать сумму налога?', Information + YesNo) = cmYes)
+      {
+        SpDocNal.Summa  := SpDocNal.Summa  / oldNalog *  SpDocNal.Nalog;
+        SpDocNal.SumVal := SpDocNal.SumVal / oldNalog *  SpDocNal.Nalog;
+        SpDocNal.SumNal := SpDocNal.SumNal / oldNalog *  SpDocNal.Nalog;
+        oldNalog := SpDocNal.Nalog;
+      }
+    end;
+
+    SpSopr.ManualTax := 1;
+    update current SpSopr;
+
+    good_SpDocNal;
+  }
+
+//------------------------------------------------------------------------------
+cmPositionChanged :
+{
+  oldNalog := SpDocNal.Nalog;
+  CurseNalog := if (SpDocNal.SumNal <> 0, SpDocNal.Summa/SpDocNal.SumNal, 1)
+}
+
+end;
+end; // panel
+
+
+//******************************************************************************
+HandleEvent
+
+cmInit:
+  if (GetFirst SpDocNal <> tsOk)
+    {
+      Message(''#3'По данной позиции нет налогов.',CancelButton);
+      Abort;
+    }
+  else
+    {
+      oldNalog := SpDocNal.Nalog;
+      if (SpDocNal.SumNal <> 0)
+        CurseNalog := SpDocNal.Summa/SpDocNal.SumNal;
+      else
+        CurseNalog := 1;
+    }
+
+cmHotKeys:
+  PutHotCommand(RunMenu('AttrClass_HotKeys'));
+
+cmPickClass:
+  if (UpdateTable)
+    if (SpDocNal.nRec <> 0)
+      {
+        SaveMyDsk(not OtkatToOldState(false, 0), '_CanEditClassifier_');
+        RunInterface(ExClassifier, word(coSpDocNal), SpDocNal.nRec);
+      }
+
+cmPickAttr:
+  if (UpdateTable)
+    if (SpDocNal.nRec <> 0)
+      {
+        SaveMyDsk(not OtkatToOldState(false, 0), '_CanEditAttribute_');
+        RunInterface(Attribute, word(coSpDocNal), SpDocNal.nRec);
+      }
+
+end; // HandleEvent window
+end; // window
+
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ //
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Procedure MakeKatSoprNal;
+{
+  RunInterface('iwDocNal',KatSopr.Nrec);
+}

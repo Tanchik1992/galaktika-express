@@ -1,0 +1,155 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//******************************************************************************
+
+!╔═══════════════════════════════════════════════════════════════════════════╗ 19 полей
+!║ Назначение    : Печать накладной на отгрузку материалов                   ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+! Описание номеров полей смотри в файле DOCFRM\albums.doc (форма ПД9)
+
+#include oEdIzm.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Печать накладной на отгрузку материалов
+
+Параметры:
+  pNRec - ссылка на сопроводительный документ
+#end
+
+//******************************************************************************
+
+Interface PrintNakMatOtg 'Печать накладной на отпуск материалов' EscClose;
+#include oEdIzm.var
+
+Create view
+Var
+  x      : word;
+  pNRec  : comp;
+  sumdoc: double;
+From
+  KatSopr
+, SpSopr
+, KatMC
+, SpDocNal
+, KatOrg
+, KatPodr
+, StepDoc
+, BaseDoc
+, NZakaz
+;
+
+Parameters
+  pNRec;
+
+form frmmonak('matotk.rtf', 'matotgrnak') with novisual;
+
+HandleEvent
+
+cmInit:
+  {
+    Abort;
+
+    if (GetFirst KatSopr where ((pNRec == KatSopr.NRec)) <> tsOk)
+      {
+        Message('Не найдена накладная для печати...', CancelButton);
+        Exit;
+      }
+
+    if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr AND
+                                word(1)      == SpSopr.PRMC)) <> tsOk)
+      {
+        Message('В спецификации накладной нет МЦ...', CancelButton);
+        Exit;
+      }
+
+    if (GetFirst KatOrg where ((katSopr.cGruzFrom == KatOrg.NRec)) = tsOk)
+      frmmonak.Write(KatOrg.Name);
+    else
+      frmmonak.SkipFormat(1);
+
+    frmmonak.Write(KatSopr.NSopr);
+    frmmonak.SkipFormat(1);
+    frmmonak.Write(KatSopr.DSopr, 'DD');
+    frmmonak.Write(KatSopr.DSopr, 'month');
+    frmmonak.Write(KatSopr.DSopr, 'YYYY');
+
+    if ( (KatSopr.cPodrFrom <> 0) AND
+         (GetFirst KatPodr where ((KatSopr.cPodrFrom == KatPodr.NRec)) = tsOk) )
+      frmmonak.Write(KatPodr.Kod);
+    else
+      frmmonak.Skipformat(1);
+
+    if (KatSopr.cStepdoc <> 0)
+      {
+        if( (GetFirst StepDoc where ((KatSopr.cStepDoc == StepDoc.NRec)) = tsOk) AND
+            (GetFirst BaseDoc where ((StepDoc.NRec == BaseDoc.NRec)) = tsOk) )
+          frmmonak.Write(BaseDoc.NoDoc)
+        else
+          frmmonak.SkipFormat(1);
+      }
+    else
+      {
+        if( (KatSopr.cNZakaz <> 0) AND
+            (GetFirst NZakaz where ((KatSopr.cNZakaz == NZakaz.NRec)) = tsOk) )
+          frmmonak.Write(NZakaz.NoDoc)
+        else
+          frmmonak.SkipFormat(1);
+      }
+
+    pNRec := KatSopr.cGruzTo;
+    if (pNRec = 0)
+      pNRec := KatSopr.cOrgBase;
+
+    if (GetFirst KatOrg where ((pNRec == KatOrg.NRec)) = tsOk)
+      frmmonak.Write(KatOrg.Name)
+    else
+      frmmonak.SkipFormat(1);
+
+    frmmonak.Write(KatSopr.sDover);
+
+    SumDoc := 0;
+    x := 0;
+
+    StartNewVisual(vtNumericVisual, vfTimer, 'Формирование документа: ', 1);
+
+    _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr)) ordered by index SpSopr02
+      if (SpSopr.PRMC = 1)
+        {
+          NextVisual;
+
+          if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) <> tsOk)
+            ClearBuffer(#KatMC);
+
+          frmmonak.Write(KatMC.Name);
+          frmmonak.Write(KatMC.BarKod);
+
+          if (SpSopr.cOtpEd = 0)
+            frmmonak.Write(fEdIzm.GetKatEdName(KatMC.cEd));
+          else
+            frmmonak.Write(fEdIzm.GetNameOtpEd(SpSopr.cMCUsl))
+
+          frmmonak.Write(SpSopr.KolFact, 3);
+          frmmonak.Write(SpSopr.KolOpl, 3);
+          frmmonak.Write(SpSopr.Price, 2);
+          frmmonak.Write(SpSopr.PRice * SpSopr.KolFact, 2);
+
+          x := x + 1;
+
+          SumDoc := SumDoc + SpSopr.Price * SpSopr.KolFact;
+        }
+
+    frmmonak.PutEvent(feBreak);
+    frmmonak.Write(DoubleToStr(x, '4'));
+    frmmonak.Write(DoubleToString(0, SumDoc));
+
+    StopVisual('', 0);
+    frmmonak.ShowFile;
+  }
+end;
+
+End.

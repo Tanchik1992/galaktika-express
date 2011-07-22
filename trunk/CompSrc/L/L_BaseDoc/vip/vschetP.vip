@@ -1,0 +1,4228 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Счет на предоплату продаж
+//******************************************************************************
+
+#define _VSCHETP_VPP
+#define __NewOFP__
+#define _LINKMTR2SPEC_
+
+#include Actualit.vih   // Обьектный интерфес Поддержки актуальности сальдо
+#include aOfpOut.vih    // iOfpOut (Платежный календарь)
+#include Dolg_BD.vih
+#include fpCO.vih
+#include FpSHOb.Vih     // Финоперации по SoprHoz
+#include getdbase.vih
+#include GetMol.vih
+#include KatSopr.vih    // подключение объектных интерфейсов, общих для сопроводительных документов
+#include TrDoRes.vih
+#include vschetp.vih
+#include PlanDog.vih
+#include AllowedDepartmentGroupList.vih // работа со списком разрешенных групп подразделений
+#include chkschem.vih
+#include SoprHoz.vih
+#include FactoryPrice.Vih
+#include linkmtr2spec.vih
+#include SDfuns.vih
+#include DOfuns.vih
+#include prndocs.vih
+#include DOTara.vih
+#include SpecDO.vih
+#include ResProc.Vih
+#include ExtAttrClass.vih
+
+//******************************************************************************
+
+#doc
+Интерфейс ДО на предоплату продаж
+#end
+Interface VSchetP 'Основание на предоплату (продажи)' (, hcDOPredOfSell, ) EscClose, cyan;
+  Show at (, , 110, 31);
+
+//******************************************************************************
+
+#include Actualit.var   // Переменная типа VipInterface SaldoActuality
+#include aOfpOut.var    // piOFPOut. iOfpOut
+#include Dolg_BD.var
+#include KatSopr.var    // объектные переменные, общие для сопр.документов
+#include TrDoRes.var    // oTransferDoRes
+#include chkschem.var
+#include FactoryPrice.var
+#include LinkMtr2Spec.var // аналитики целевого учета
+//------------------------------------------------------------------------------
+#include SDfuns.var
+#include DOfuns.var
+#include DOTara.var
+
+//******************************************************************************
+
+#include tmpPicked.tbl  // Временные таблицы для сохранения пометок
+
+//******************************************************************************
+Function GetKAUField(pNum : integer) : string; Forward;
+//******************************************************************************
+
+//------------------------------------------------------------------------------
+
+Create view
+Var
+//------------------------------------------------------------------------------
+  przap
+, fNal
+, IsFilter
+, ResIs
+, IsObjInt
+, bFilterOD
+                : boolean;
+//------------------------------------------------------------------------------
+  dCursa
+, d1
+, d2
+, d3
+, myDate
+                : Date;
+//------------------------------------------------------------------------------
+  myCourse
+, KolCmpl
+                : double;
+//------------------------------------------------------------------------------
+  WordPv
+, TM
+, wTmp
+, RVhod
+, w1
+, curvisib
+, IsInPr
+, tipDo
+, pnrec
+, prFormat
+, mydirect
+, naltype
+, forPrice
+, forVPrice
+, forSumma
+, forVSumma
+, SpStepFormat
+, wTimerCount
+, wSortField
+, typsoprhoz
+                : word;
+//------------------------------------------------------------------------------
+  nzap
+, prnrec
+, BVal
+, a1
+, a2
+, a3
+, myValNo
+, NRecSp
+, NRecOtp
+, BaseNrec
+, cGrDo
+, pmc_
+, SkladRes
+, SavedNRec
+, CopyStep
+, BaseDocRec
+, docNo
+, stepNo
+, CurGroup
+, AttrNrec
+                : comp;
+//------------------------------------------------------------------------------
+  CursSumR
+, CursSumV
+, tmpKoef
+, Nlg
+, PriceR
+, OldTotal
+, PriceV
+, OldRes
+, mySumma
+, AllPlat
+, AllNoPlat
+, DolgPlat
+, AllNakl
+, NewTotal
+, NaklPrih
+, NaklRash
+, PlatPrih
+, PlatRash
+, old_kol
+, oldKolSklDEI
+, oldKolDEI
+, oldKolOplDEI
+, CursV
+                : double;
+//------------------------------------------------------------------------------
+  s_SimvRub
+, ProcTxt
+, SklOtgr
+, StrNum
+, StrCurse
+, sType
+                : string;
+//------------------------------------------------------------------------------
+  myField1
+                : string[9];
+//------------------------------------------------------------------------------
+  CurDescr
+                : string[20];
+//------------------------------------------------------------------------------
+  CurDesGr
+                : string[4];
+//------------------------------------------------------------------------------
+  addallmc
+                : byte;
+//------------------------------------------------------------------------------
+
+  VidReport     : word;          // 0-отчеты в бизнес-тексте, 1 и более - шаблоны в Excel
+
+//------------------------------------------------------------------------------
+
+
+#include copydo.var
+
+//------------------------------------------------------------------------------
+
+#include tranvars.vpp
+
+//------------------------------------------------------------------------------
+
+#include FltFld.var
+
+//******************************************************************************
+
+As select
+//------------------------------------------------------------------------------
+  if ( SpStep.PrMC = 1,    KatMC.Name,          KatUsl.Name)
+    ( FieldName = NamTovar )
+//------------------------------------------------------------------------------
+, if ( SpStep.PrMC = 1,    KatMC.BarKod,        KatUsl.Kod)
+    ( FieldName = Nomenkl )
+//------------------------------------------------------------------------------
+, if ( SpStep.PrMC = 1,    'товар',             'услуга')
+    ( FieldName = NamMC )
+//------------------------------------------------------------------------------
+, if ( SpStep.PrMC = 1,    'Т', 'У')
+    ( FieldName = NamMC1 )
+//------------------------------------------------------------------------------
+, oDOfuns.DoRound(BaseDoc.cVal, tipDo, SpStep.Kol*SpStep.Price)
+    ( FieldName = SummaTov )
+//------------------------------------------------------------------------------
+, if ( BaseDoc.cVal = 0,    s_SimvRub,   KlVal.SimVolV)
+    ( FieldName = SimVolB )
+//------------------------------------------------------------------------------
+, if ( SpDocNal.cVal = 0,    s_SimvRub,   KlVal1.SimVolV)
+    ( FieldName = SimvNal )
+//------------------------------------------------------------------------------
+, if ( BaseDoc.VhSkid = 1, '%', SimVolB)
+    ( FieldName = SkidVar )
+//------------------------------------------------------------------------------
+, PrintNumber(BaseDoc.Descr, BaseDoc.NoDoc)
+    ( FieldName = NomDes )
+//------------------------------------------------------------------------------
+, (LPad(String(BaseDoc.total, 15, 2), 15)+ ' ' + SimVolB)
+    ( FieldName = TotAndSimV )
+//------------------------------------------------------------------------------
+, if ( SpStep.Reserv = 0, '-',
+       if( SpStep.Kol <= SpStep.Reserv, 'Р', 'Ч'))
+    ( FieldName = SostRes )
+//------------------------------------------------------------------------------
+, if ( IsValid(tnPick2), '√', '')
+    ( FieldName = Picked )
+//------------------------------------------------------------------------------
+, if ( SpStep.PrMC = 1, '',
+   if ( SpStep.PrUsNkl = 1, 'Переносится в накладную', 'Закрывается актом'))
+    ( FieldName = UslNakl )
+//------------------------------------------------------------------------------
+, if (IsValid(tnBaseFin),
+    if (IsValid(tnKatSopr), '√', 'П'),
+    if (IsValid(tnKatSopr), 'Н', ' '))
+    ( FieldName = NakFin )
+//------------------------------------------------------------------------------
+, if (IsValid(tnBaseFin),
+    if (IsValid(tnKatSopr), 'есть платежи и отгрузки', 'есть только платежи'),
+    if (IsValid(tnKatSopr), 'есть только отгрузки', ''))
+    ( FieldName = NakFin2 )
+//------------------------------------------------------------------------------
+, if (((BaseDoc.Total>0.0001) AND
+       (BaseDoc.Total = tmpSaldo3.Kol) AND
+       (BaseDoc.Total = tmpSaldo3.Price)), '+',
+          if( tmpSaldo3.Kol>tmpSaldo3.Price, '!',
+          if( tmpSaldo3.Kol<tmpSaldo3.Price, '*', '-')))
+    ( FieldName = NakFinDop )
+//------------------------------------------------------------------------------
+, if ( SpStep.ManualTax = 0, 'расчетные', 'ручные')
+    ( FieldName = ManTax )
+//------------------------------------------------------------------------------
+, if (BaseDoc.cNalog = 0, 'ручная', if (BaseDoc.cNalog = 1, 'по итогу', 'для покупателя'))
+    ( FieldName = SkidFunc )
+//------------------------------------------------------------------------------
+,  if (SpStep.cValAvt = 0,                                 //валюта
+    if (s_SimvRub <> '', s_SimvRub, 'руб.'),
+    TTNKlVal.SimVolV)
+    ( FieldName = ValutAvt )
+//------------------------------------------------------------------------------
+, (SpStep.mTara + SpStep.Netto)
+    ( FieldName = TTN_massa_all )
+//------------------------------------------------------------------------------
+, if(IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ': ' + SmetaStroy.Name, '')
+    ( FieldName = SmetaMy )
+//------------------------------------------------------------------------------
+, if(IsValid(tnSmetaSpec), String(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') '
+                        + SmetaSpec.Name, '')
+    ( FieldName = SmetaSpMy )
+//------------------------------------------------------------------------------
+, if (BaseDoc.cDogovor <> 0, 'Получатель платежей по договору', '')
+    ( FieldName = MyOrgDogRole )
+//------------------------------------------------------------------------------
+, if (BaseDoc.cAppDogovor <> 0, MyOrgSogl.Name,
+    if (BaseDoc.cDogovor <> 0, MyOrgDog.Name, ''))
+    ( FieldName = MyOrgDogName )
+//------------------------------------------------------------------------------
+,  if (BaseDoc.cDogovor <> 0, 'Покупатель по договору', '')
+    ( FieldName = KatOrgDogRole )
+//------------------------------------------------------------------------------
+, if (BaseDoc.cAppDogovor <> 0, KatOrgSogl.Name,
+    if (BaseDoc.cDogovor <> 0, KatOrgDog.Name, ''))
+    ( FieldName = KatOrgDogName )
+//------------------------------------------------------------------------------
+, if(wGetTune('Doc.BrAbbrEd') = 0, KatOtpEd.ABBR, KatOtpEd.Name)
+    ( FieldName = OtpEd )
+//--------------------------------------------------------------------------------
+, oFPrice.GetValFactoryPriceDO (SpStep.NRec, CursV, TRUE)
+        ( FieldName = FactoryPrice )
+//--------------------------------------------------------------------------------
+, oFPrice.FormatSpStepProcNac (SpStep.NRec)
+        ( FieldName = fSpSoprProcNac )
+//------------------------------------------------------------------------------
+#define __HozOperViewName__
+, if (IsValid(tnSoprHoz), iTxoBind.ShowName(SoprHoz.BufferP), '')
+        ( FieldName = HozOperViewName )
+, #include ofpdof1.vpp // модуль OFP
+
+  BaseDoc.*
+, BaseDocUKS.nRec
+, StepDocUKS.cBaseDoc
+, StepDocUKS.nRec
+, KatStroy.Name
+, KatStroy.cMC
+, SpStep.cUKS
+, KatStroy.nRec
+, KatStroy1.cMC
+, AddSumTune.*
+, SpecZatr.*
+, SpecZatr2.*
+, LISTPAR.*
+, StepDoc.*
+
+, GetKAUField(1)  ( FieldName = vsKau1 )
+, GetKAUField(2)  ( FieldName = vsKau2 )
+, GetKAUField(3)  ( FieldName = vsKau3 )
+, GetKAUField(4)  ( FieldName = vsKau4 )
+, GetKAUField(5)  ( FieldName = vsKau5 )
+, GetKAUField(6)  ( FieldName = vsKau6 )
+, GetKAUField(7)  ( FieldName = vsKau7 )
+, GetKAUField(8)  ( FieldName = vsKau8 )
+, GetKAUField(9)  ( FieldName = vsKau9 )
+, GetKAUField(10) ( FieldName = vsKau10 )
+
+From
+  BaseDoc
+, BaseDoc BaseDocC
+, StepDoc
+, StepDoc StepDocC
+, SpStep
+, KatUsl
+, KlVal
+, SpDocs
+, DoRes
+, KlShtraf
+, KatCompl
+, SpCompl
+, SpCompl SpCompl2
+, KatCUsl
+, SpCUsl
+, SpCUsl  SpCUsl2
+, KlPrice
+, Prices(Prices02)
+, tempNo(tempNo01)
+, KatSopr
+, BaseFin
+, Pick(Pick02)
+, PickPric(PickPric02)
+, Pick Pick2
+, Pick Pick3
+, SpStep SpStepC
+, SpStep SpStepMC
+, KatBank MyBank
+, KatBank PickBank
+, KatOrg ToOrg
+, KatOrg FromOrg
+, KatOrg MyOrg
+, KatOrg NalOrg
+, KatOrg FltKatOrg
+, KatOrg MyOrgDog
+, KatOrg MyOrgSogl
+, KatOrg KatOrgDog
+, KatOrg KatOrgSogl
+, KlVal KlVal1
+, KatPodr KatPodr1
+, KatPodr KuratPodr
+, KatParty KatParty1
+, KlShtraf KlShtraf1
+, KatOrgDescr
+, KatOrgDescr KatOrgDescr1
+, TekMC
+, TekSaldo
+, LISTPAR
+, KATED
+, Dogovor
+, Dogovor AppDogovor
+, Dogovor SpDogovor
+, Dogovor SpAppDogovor
+, Dogovor Dogovor1
+, Dogovor FltDogovor
+, CalPlan
+, CalPlan SpCalPlan
+, CalPlan CalPlan1
+, TTNDoc
+, KatPayment
+, KatNazna
+, MoveCell BDMoveCell
+, CellVal  TTNCellVal
+, MoveCell TTNMoveCell
+, KlVal    TTNKlVal
+, KatED    TTNKatED
+, ResOtgr  TTNResOtgr
+, MetMassa TTNMetMassa
+, Dogovor  DogApp
+, SpDocs   SpCalPln
+, SpDocs   SpDog
+, SpGrSch  SpGrSch2
+, TTNDoc   TTNDoc2
+, Pick     Pick4SpStep(Pick02)
+, SoprHoz
+, SpDocNal
+, SpGrSch
+, SpGrSch SpGrSchC
+, KatMC
+, KatMC KatMC2
+, SpStep SpStep2
+, KatNotes
+, KlPrice KlPrice1
+, KlPrice KlPrice2
+, Vagon VagonSP
+, FPCO OtvPodr
+, KatStroy
+, KatStroy KatStroy1
+, StepDoc StepDocUKS
+, BaseDoc BaseDocUKS
+, SpecZatr
+, SpecZatr SpecZatr2
+, AddSumTune
+, tmpPicked
+, GroupSch
+, KatPodr
+, SpSopr
+, KatOtpEd
+, KatParty
+, KatNalog
+, KatMol
+, KatOrg
+, Filial
+, KatBank
+, SklOst
+, Skidka
+, tmpSaldo3
+, KatOtpEd KatOtpEdSmeta
+, PickSmeta
+, SpDocSmeta
+, SpDocSmeta SpDocSmeta1
+, SmetaStroy
+, SmetaSpec
+, SpStep SpStepSmet
+, klskidka
+, AttrDog
+, AttrDog AttrDogD
+, AttrDog AttrDogS
+, PlanPays
+, tmpReeN
+, Statlog
+, WayMove
+, tmpPickCompl
+, DsgOtpr
+, DSNastr
+, SpecMTR
+, SaldTune
+
+//******************************************************************************
+
+Where
+((
+     word(0)                            ==  SpGrSch.wList
+AND  BaseDoc.Nrec                       ==  SpGrSch.cBaseDoc
+AND  SpGrSch.cGroupSch                  ==  GroupSch.Nrec
+AND  BaseDoc.Nrec                       ==  StepDoc.cBaseDoc
+AND  BaseDoc.cParty                     ==  KatPodr.Nrec
+AND  BaseDoc.cStatDoc                   ==  StatDoc.Nrec
+AND  BaseDoc.cGrPol                     ==  ToOrg.Nrec
+AND  BaseDoc.cGrOtpr                    ==  FromOrg.Nrec
+AND  BaseDoc.Nrec                       ==  tmpSaldo3.cMC
+AND  BaseDoc.cNote                      ==  KatNotes.nRec
+AND  StepDoc.cShtrafP                   ==  KlShtraf.Nrec
+AND  StepDoc.cShtrafG                   ==  KlShtraf1.Nrec
+AND  StepDoc.Nrec                       ==  KatSopr.cStepDoc
+AND  word(0)                            ==  BaseFin.TiDkBase
+AND  BaseDoc.Nrec                       ==  BaseFin.cPredoplDO
+AND  KatSopr.Nrec                       ==  SpSopr.cSopr
+AND  SpStep.cMCUSL                      ==  KatMC.Nrec
+AND  SpStep.cMCUSL                      ==  KatUsl.Nrec
+AND  SpStep.cOtpEd                      ==  KatOtpEd.Nrec
+AND  SpStep.cParty                      ==  KatParty.Nrec
+AND  SpStep.cPriceList                  ==  KlPrice.Nrec
+AND  SpStep.Nrec                        ==  DoRes.cSpStep
+AND  SpStep.Nrec                        ==  SpDocNal.cSpDoc
+AND  naltype                            ==  SpDocNal.TipDoc
+AND  SpDocNal.cNalog                    ==  KatNalog.Nrec
+AND  SpDocNal.cOrg                      ==  NalOrg.Nrec
+AND  SpDocNal.cVal                      ==  Klval1.Nrec
+AND  DoRes.cPodr                        ==  KatPodr1.Nrec
+AND  DoRes.cMol                         ==  KatMol.Nrec
+AND  DoRes.cParty                       ==  KatParty1.Nrec
+AND  BaseDoc.cVal                       ==  KlVal.Nrec
+AND  BaseDoc.cOrg                       ==  KatOrg.Nrec
+AND  BaseDoc.cOrg                       ==  Filial.cOrg
+AND  BaseDoc.cBank                      ==  KatBank.Nrec
+AND  BaseDoc.cMyBank                    ==  MyBank.Nrec
+AND  KatCompl.Nrec                      ==  SpCompl.cCompl
+AND  KatCUsl.Nrec                       ==  SpCUsl.cCUsl
+AND  SpStep.cMCUSL                      ==  SklOst.cMC         // подцепка текущего
+AND  BaseDoc.cParty                     ==  SklOst.cPodr       // остатка и резерва по складу
+AND  KatMC.Nrec                         ==  TekMC.cMC
+AND  coGetTune('MyOrg')                 ==  MyOrg.Nrec
+AND  word(15)                           ==  Pick2.wList
+AND  BaseDoc.nrec                       ==  Pick2.cRec
+
+AND  BaseDoc.cDogovor                   ==  Dogovor.nRec
+AND  BaseDoc.cAppDogovor                ==  AppDogovor.nRec
+AND  BaseDoc.cCalPlan                   ==  CalPlan.nRec
+
+AND  BaseDoc.cDogovor                   ==  AttrDogD.cDogovor
+AND  BaseDoc.cAppDogovor                ==  AttrDogS.cDogovor
+
+AND  Dogovor.cPol                       ==  MyOrgDog.nRec
+AND  AppDogovor.cPol                    ==  MyOrgSogl.nRec
+AND  Dogovor.cOrg                       ==  KatOrgDog.nRec
+AND  AppDogovor.cOrg                    ==  KatOrgSogl.nRec
+AND  Dogovor.cCurPodr                   ==  KuratPodr.nRec
+
+AND  word(800)                          ==  Pick4SpStep.wList
+
+AND  word(403)                          ==  SpCalPln.tiDk
+AND  CalPlan.nRec                       ==  SpCalPln.cDoc
+AND  word(3)                            >>  SpCalPln.PrMC
+
+AND  SpStep.cDogovor                    ==  SpDogovor.nRec
+AND  SpStep.cAppDogovor                 ==  SpAppDogovor.nRec
+AND  SpStep.cCalPlan                    ==  SpCalPlan.nRec
+
+AND  BaseDoc.cNazna                     ==  KatNazna.NRec
+AND  coKatSopr                          ==  TTNDoc.wTable
+AND  KatSopr.nRec                       ==  TTNDoc.cDoc
+AND  BaseDoc.cPayment                   ==  KatPayment.nRec
+
+AND  cMCPrice                           ==  KlPrice1.NRec
+AND  cUSLPrice                          ==  KlPrice2.NRec
+AND  BaseDoc.cCellVal                   ==  BDMoveCell.NRec
+AND  SpStep.cCellVal                    ==  TTNMoveCell.NRec
+AND  word(0)                            ==  TTNCellVal.PrMC
+AND  SpStep.cMCUSL                      ==  TTNCellVal.cMC
+AND  TTNMoveCell.NRec                   ==  TTNCellVal.cMoveCell
+AND  SpStep.cValAvt                     ==  TTNKlVal.NRec
+AND  SpStep.cMasEd                      ==  TTNKatED.NRec
+AND  SpStep.cResOtgr                    ==  TTNResOtgr.NRec
+AND  SpStep.cMasVid                     ==  TTNMetMassa.NRec
+
+AND  typsoprhoz                         ==  SoprHoz.TipDoc
+AND  BaseDoc.NRec                       ==  SoprHoz.cSoprDoc
+
+AND  SpStep.cSpMC                       ==  SpStepMC.nRec
+AND  SpStepMC.cMCUSL                    ==  KatMC2.Nrec
+
+AND  SpStep.nRec                        ==  SpStep2.cSpMc
+
+AND  BaseDoc.cOtvPodr                   ==  OtvPodr.nRec
+
+AND  SpStep.cUKS                        ==  KatStroy.Nrec
+AND  SpStep.cStepDoc                    ==  StepDocUKS.nRec
+AND  StepDocUKS.cBaseDoc                ==  BaseDocUKS.nRec
+AND  KatMC.nRec                         ==  KatStroy1.cMC
+AND  SpStep.nRec                        ==  SpecZatr.cSpec
+AND  coSpStep                           ==  SpecZatr.coTable
+AND  SpecZatr.cAddSumTune               ==  AddSumTune.nRec
+AND  SpStepMC.nRec                      ==  SpecZatr2.cSpec
+AND  coSpStep                           ==  SpecZatr2.coTable
+
+AND  SpStep.cNMoveCell                  ==  VagonSP.nRec
+AND  coSpStep                           ==  SpDocSmeta.coTable
+AND  SpStep.nRec                        ==  SpDocSmeta.cSpec
+AND  SpDocSmeta.cSmeta                  ==  SmetaStroy.NRec
+AND  SpDocSmeta.cPosition               ==  SmetaSpec.NRec
+AND  SpStepSmet.cOtpEd                  ==  KatOtpEdSmeta.Nrec
+
+AND  coSpStep                           ==  SpecMTR.coTable
+AND  SpStep.nRec                        ==  SpecMTR.cSpec
+AND  SpecMTR.cSaldTune                  ==  SaldTune.nRec
+))
+//******************************************************************************
+
+#include dobnd.vpp     //  баундсы ДО
+
+Bounds BrowseSpStep
+  StepDoc.Nrec  == SpStep.cStepDoc ordered by SpStep.Npp
+
+Bounds TreeSpStep
+  StepDoc.Nrec  == SpStep.cStepDoc  AND
+  CurGroup      == SpStep.cSpMc ordered by SpStep.Npp
+;
+
+//******************************************************************************
+
+Parameters BaseNrec;
+
+//******************************************************************************
+
+form sprdo('sprDo.OUT', 'sprDo') with novisual;
+//******************************************************************************
+
+File FFLst;
+
+//******************************************************************************
+
+var UseDEI     : boolean;
+var AutoDEI    : boolean;
+var _CanModify
+  , _CanModifyQuery
+               : boolean;
+
+//******************************************************************************
+
+Procedure ChangeEnabledCommands(SetEnable: boolean);
+{
+  SetCommandEnabled ( cmValFld13, SetEnable );//Рассчитать стоимость услуги как % от стоимости МЦ
+  SetCommandEnabled ( cmValue17 , SetEnable); //Параметры расчетной услуги
+  SetCommandEnabled ( cmValue20 , SetEnable); //Расчет стоимости услуги
+}
+
+//******************************************************************************
+
+#include copydo.wnd
+#include dodescr.vpp
+#include dofilt_w.vpp   // установка/снятие фильра
+#include PrnSertif.vpp  // Печать сертификатов партий
+
+//******************************************************************************
+
+Procedure SelectableSpStep;
+{
+  var b: boolean; b := (BaseDoc.SpecYes <> 0);
+
+  SetFieldSelectable(#SpStep.Npp   , b);
+  SetFieldSelectable(#NamMC1       , b);
+  SetFieldSelectable(#Nomenkl      , b);
+  SetFieldSelectable(#NamTovar     , b);
+  SetFieldSelectable(#KatOtpEd.ABBR, b);
+  SetFieldSelectable(#KatOtpEd.Name, b);
+  SetFieldSelectable(#OtpEd        , b);
+  SetFieldSelectable(#SpStep.KolSkl, b);
+  SetFieldSelectable(#SpStep.Price , b);
+  SetFieldSelectable(#SummaTov     , b);
+}
+
+//******************************************************************************
+
+#include dosoprh.vpp    // функции для работы с SoprHoz
+#include resproc.vpp    // резервирование
+#include gettot.vpp     // функции документов
+#include skidtot.vpp    // функции документов
+#include modprice.fun   // пересчет цен из одной валюты в другую
+#include modifdo.vpp
+#include incostat.vpp   // для коррекции остатка МЦ в договоре
+#define __ExSumEnter__
+#include schfunc.vpp    // функции документов
+#include reswin.vpp     // Window резервы спецификации документа
+#include resdef.vpp     // функция определения резерва
+#include pSpStep.vpp    // Window анкета спецификации документа
+#ifdef _CheckKon_VIH_
+var oCheckKon: CheckKonObj;
+#else
+#include checkkon.vpp   // проверка максимальной задолженности
+#end
+#include specdo.vpp     // функции объединения спецификаций
+#include modprpar.wnd
+
+#define __DOPRICE_VPP__
+#include doprice.fun
+
+#include FpRSHOb.Vpp    // связь с книгой финансовых операций
+
+#ifdef ComponentVersion
+ToolBar
+    F_Common::tbBuhFilter
+  , F_Common::tbPrintDoc
+  , F_Common::tbSaveRestoreDoc
+  , F_Common::tbAttrClass
+;
+#else
+ToolBar
+    tbBuhFilter
+  , tbPrintDoc
+  , tbSaveRestoreDoc
+  , tbAttrClass
+;
+#end
+
+//******************************************************************************
+
+Function DoSpStepDeleteForSmeta: boolean;
+{
+  if (GetFirst SpStep where ((SpDocSmeta1.cSpec == SpStep.nRec)) = tsOk)
+    { }
+
+  SubResTov(SpStep.Reserv); // Снятие резерва по товару
+  SubResRazrez;              // Снятие резерва по складу
+  DelPosDORES;
+  DelPosSpDocNal;
+  oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+  DoSpStepDeleteForSmeta := oDOfuns.SpStep_Delete(SpDocSmeta1.cSpec) = tsOk;
+}
+
+
+//******************************************************************************
+
+Function DoSpStepDelete: boolean;
+{
+  delete SpDocSmeta where (( coSpStep == SpDocSmeta.coTable and SpStep.nRec == SpDocSmeta.cSpec ));
+
+  SubResTov(SpStep.Reserv); // Снятие резерва по товару
+  SubResRazrez;              // Снятие резерва по складу
+  DelPosDORES;
+  DelPosSpDocNal;
+  oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+  DoSpStepDelete := oDOfuns.SpStep_Delete(SpStep.nRec) = tsOk;
+}
+
+#include savedoc.fun
+
+
+//******************************************************************************
+
+Function DoBaseDocDelete(DelSoprDoc: boolean): boolean;
+{
+  DoBaseDocDelete := FALSE;
+
+  if (DelSoprDoc)
+    {
+      // фиктивная обработка параметра - чтобы компилятор не выдавал предупреждения
+    }
+
+  if boGetTune('Doc.Sell.NotEditDO')
+    if ( IsValid(tnBaseFin) OR IsValid(tnKatSopr) )
+      {
+        Message('Редактирование документа-основания при наличии'#13
+              + 'сопроводительных или платежных документов ЗАПРЕЩЕНО!'#13#13
+              + GetTuneName('Doc.Sell.NotEditDO'), Information);
+        Exit;
+      }
+
+  if ( RecordExists BaseFin = tsOk )
+    if ( Message('По документу есть платежи. Продолжить удаление ДО?', YesNo + mfSwapButtons) <> cmYes )
+      Exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Удаление документа...', 1);
+
+  if oDOfuns.CheckFinCanDelDO(BaseDoc.VidDoc, BaseDoc.NRec)
+    {
+      oDOfuns.DelRaznPlt(BaseDoc.NRec);
+      var nextBaseDoc: comp;  nextBaseDoc := 0;
+
+      piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocDelete);
+      NextVisual;
+
+      PushPos(#BaseDoc);
+
+      if (GetNext BaseDoc = tsOk)
+        nextBaseDoc := BaseDoc.nRec
+      else
+        if (GetPrev BaseDoc = tsOk)
+          nextBaseDoc := BaseDoc.nRec;
+
+      PopPos(#BaseDoc);
+
+      oSDfuns.DeleteSoprHoz(BaseDoc.NRec, typsoprhoz);
+
+      iNextVisual('Удаление спецификации...');
+      While (GetFirst SpStep = tsOk)
+      do
+        {
+          NextVisual;
+          if not DoSpStepDelete
+            Break;
+        }
+
+      iNextVisual('Обновление ссылок...');
+      update katsopr where (( stepdoc.nrec == katsopr.cstepdoc))
+         set katsopr.cstepdoc := 0;
+
+      NextVisual;
+
+      delete safe SpGrSch;
+
+      NextVisual;
+
+      if (delete NoVisual SpDocNal
+          where (( BaseDoc.nRec                == SpDocNal.cDoc  AND
+                   word(BaseDoc.VidDoc +2000)  == SpDocNal.TipDoc )) = tsOk)
+        { }
+
+      iNextVisual('Удаление документа...');
+
+      oStatLog.StatLog_Delete(word(40), BaseDoc.nRec);
+
+      if (Pos('П', BaseDoc.Nodoc) = 1)
+        {
+          var ns: word;
+          var ls: word;
+          var s1: string;
+          var s2: string;
+
+          ls := Length(BaseDoc.Nodoc);
+          ns := Pos('/', BaseDoc.Nodoc);
+          if ((ns > 0) AND (ns < ls))
+            {
+              s1 := SubStr(BaseDoc.Nodoc, 1, ns);
+              s2 := SubStr(BaseDoc.Nodoc, ns+1, ls-ns);
+              DelLastNumD_(420, s1, s2);
+            }
+        }
+      else
+        DelLastNumDOnBaseDoc;
+
+      oChkSchem.RemoveDocFromSpSchem(BaseDoc.nRec, typsoprhoz);
+      oDOfuns.BaseDoc_Delete(BaseDoc.nRec);
+      if (IsValid(#Pick2))
+       delete current Pick2;
+
+      if (nextBaseDoc <> 0)
+        if (GetFirst BaseDoc
+            where ((Comp(nextBaseDoc) == BaseDoc.NRec)) = tsOk)
+          { }
+
+      DoBaseDocDelete := TRUE;
+    }
+  StopVisual('', 0);
+}
+
+
+//******************************************************************************
+
+Procedure PickcBuildingDO;
+{
+  var cbuilding: comp;
+  var ch: boolean; ch := FALSE;
+
+  if RunInterface(GetBuilding, cBuilding, 0, 0) = cmCancel
+    exit;
+
+  if cBuilding = 0
+    exit;
+
+  PushPos(#SpStep);
+
+  _LOOP SpStep
+    if SpStep.cUKS = 0
+      {
+        if (IsValid(#SpDocSmeta))
+          {
+            ch := TRUE;
+            Continue;
+          }
+
+        SpStep.cUKS := cBuilding;
+
+        if update current SpStep<>tsOK
+         { }
+      }
+
+  if ch
+    Message('Операция выполнена не для всех позиций из-за наличия сметных спецификаций.', Information);
+
+  PopPos(#SpStep);
+  RescanPanel(#SpStep);
+}
+
+//******************************************************************************
+
+Procedure PickZatr;
+{
+  var cnr, cZatr: comp;
+  var ch: boolean;
+  ch := FALSE;
+  if (RunInterface(GetZatrForSp, cZatr) <> cmDefault)
+    exit;
+
+  if (cZatr = 0)
+    exit;
+
+  cnr := SpStep.nRec;
+
+  _LOOP SpStep
+    if (not IsValid(#SpecZatr))
+      {
+        if (not boGetTune('Oper.Smeta.StZatr'))
+          if (IsValid(#SpDocSmeta))
+            {
+              ch := TRUE;
+              Continue;
+            }
+
+        ClearBuffer(#SpecZatr);
+        SpecZatr.coTable := coSpStep;
+        SpecZatr.cAddSumTune := cZatr;
+        SpecZatr.cUKS := SpStep.cUKS;
+        insert current SpecZatr;
+      }
+
+  if ch
+    Message('Операция выполнена не для всех позиций из-за наличия сметных спецификаций.', Information);
+
+  if (GetFirst SpStep where ((cnr == SpStep.nRec)) = tsOk)
+    { }
+
+  RereadRecord(#SpStep);
+}
+
+#include delproc.vpp
+#include bdrip3.vpp
+
+// == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == =
+
+//******************************************************************************
+
+#doc
+Окно редактирования ДО на предоплату, продажи
+#end
+Window  wVSchetZ 'Основание на предоплату, продажи' escClose;
+  Show at (, , 110, 31);
+
+HandleEvent
+
+cmInit:
+ {
+   if (GetFirst SpStep = tsOk)
+     { }
+ }
+
+cmDone:
+{
+  if (not UpdateTable)
+    {
+      Abort;
+      Exit;
+    }
+  else
+    SelectPanel(#BaseDoc);
+
+  oUKSfuns.JoinDO(BaseDoc.nRec);
+
+  KillPick2;
+  ResetBounds(tnPick2);
+
+  _LOOP tmpPicked
+   {
+     ClearBuffer(tnPick2);
+     Pick2.wList  := tmpPicked.wList;
+     Pick2.PickNum := tmpPicked.PickNum;
+     Pick2.pickkol := tmpPicked.pickkol;
+     Pick2.cRec   := tmpPicked.cRec;
+     insert current Pick2;
+   }
+  SetBounds(tnPick2);
+  RereadRecord(tnBaseDoc);
+}
+
+cmInsert:
+  {
+    _CanModify := TRUE;
+
+    if NotEditpos(false)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (((_wFltBaseDoc AND 4) = 4) AND (sFltDescr <> CurDescr))
+     {
+       Message('Установлен фильтр по дескриптору отличному от Вашего.'#13+
+                  'Создание нового документа невозможно');
+       Abort;
+       Exit
+     }
+  }
+
+end;
+
+
+//******************************************************************************
+
+Procedure ChangeSpStepFormat; forward;
+
+
+//******************************************************************************
+
+Procedure MyPass;
+{
+  Stop;               // чтобы не вызывалось дважды
+  case CurTable of
+    #BaseDoc:
+      case CurWindow of
+        wnMainWindow:
+         // если в главном окне - зайти в запись
+          PutCommand(cmDefault)
+        wDopAttr:
+         // если в расширенной информации - закрыть окно
+          CloseWindow(wDopAttr)
+        else
+         // иначе открыть расширенную информацию
+          RunWindow(wDopAttr);
+       end;
+    #SpStep:
+      case CurWindow of
+        pwSpStep:
+         // если в расширенной информации - закрыть окно
+          CloseWindow(pwSpStep);
+        else
+         // если на бравзере спецификации - открыть окно расширенной информации
+          {
+            if (BaseDoc.SpecYes = 0)
+              {
+                Abort;
+                Exit;
+              }
+            if SpStepFormat = 1
+              ChangeSpStepFormat;
+            SetWindowHelpCtx(hcDOPredISpec, pwSpStep);
+
+            oLinkMTR2Spec.SetObjParam( word(coSpStep)
+                                     , SpStep.nRec
+                                     , if( not EditDOPosEnabled(false, false) and if( not CanEditInClosePeriod(true)
+                                                                                    , not CanEditInClosePeriod(false)
+                                                                                    , true
+                                                                                    )
+                                         , 1
+                                         , if( SpStep.cSpMC = 0
+                                             , if( IsValid(#SmetaStroy)
+                                                 , 2
+                                                 , 0
+                                                 )
+                                             , 1
+                                             )
+                                         )
+                                     );
+
+            oLinkMTR2Spec.SelFormat(IsValid(#SpStep));
+            SetModified(true); // чтобы сработал cmCheckRecord
+
+            RunWindow(pwSpStep);
+            SelectField(if (wGetTune('Pick.SortMC') = 0, #NamTovar, #Nomenkl));
+            RescanPanel(#SpStep);
+          }
+      end;
+  end;
+}
+
+//******************************************************************************
+
+#include ShowKau.vpp
+
+Function GetKAUField(pNum : integer) : string;
+{
+  GetKAUField := #ShowKau(if(pNum = 1, SaldTune.wObj, SaldTune.wKau[pNum - 1]), if(pNum = 1, SpecMTR.cObj, SpecMTR.cKau[pNum - 1]));
+}
+
+//******************************************************************************
+//******************************************************************************
+
+Panel pnVSchet;   // in Window
+  Table BaseDoc;
+
+Screen scVSchet;
+  Show at (, , , 15) fixed_Y;
+
+Fields
+  BaseDoc.DesGr ('Дескриптор группы пользователей', hcDOPredOfSell, sci1378Esc): protect;
+  BaseDoc.Descr ('Дескриптор (идентификатор менеджера)', hcDOPredOfSell, sci1378Esc): protect;
+  BaseDoc.NoDoc ('Номер документа на продажу', hcKouDocFNum, sci178Esc);
+  BaseDoc.dDoc  ('Дата выписки документа', hcKouDocFBegDate, sci178Esc): [10, 'DD/MM/YYYY'];
+  BaseDoc.KolDn ('Количество дней действия документа', hcKouDocFPeriod, sci178Esc);
+  BaseDoc.TipMoney ('Тип документа по отношению к денежной единице', hcKouDocFValTyp, sci1378Esc):
+    [LIST 1 'в НДЕ', 'вал-НДЕ', 'валютный'], protect;
+  KatNotes.Name ('Статус документа: его текущее состояние', hcKouDocFSost, sci1378Esc): protect;
+  BaseDoc.Name ('Примечания к документу-основанию на продажу', hcKouDocFNote, sci1378Esc);
+  KatOrgDogRole: skip;
+  KatOrgDogName: skip,
+    {Font = {Bold = TRUE}};
+  KatOrg.Name ('Наименование организации-плательщика', hcKouDocFOrg, sci1378Esc): protect,
+    {Font = {BackColor = if (BaseDoc.cOrg = 0, ColorNeed, 0)}};
+  KatBank.Name ('Наименование банка плательщика', hcKouDocFBank, sci1378Esc);
+  sGetTune('KatOrg.FldView.MFO'): skip;
+  KatBank.MFO1 ('Код МФО/БИК банка', hcKouDocFMFO, sci1378Esc);
+  KatBank.SchET1 ('Расчетный счет плательщика', hcKouDocFSch1, sci1378Esc);
+  SklOtgr ('', hcSkladFOstSklad, sci1378Esc): skip;
+  KatPodr.Name ('Наименование склада отгрузки', hcSkladFOstSklad, sci1378Esc): protect;
+  KatBank.MFO2 ('Код МФО/БИК банка', hcKouDocFRKC, sci1378Esc);
+  KatBank.SchET2 ('Расчетный счет плательщика', hcKouDocFSch2, sci1378Esc);
+  BaseDoc.Summa ('Сумма по документу', , sci178Esc): [brForSumma], skip;
+  BaseDoc.Nds ('Сумма налогов', hcKouDocFNDS, sci1378Esc): [brForSumma], protect;
+  BaseDoc.Total ('Сумма к оплате с учетом процента к курсу', hcKouDocFDogSum, sci178Esc): [brForSumma];
+  SimVolB ('Базовая валюта документа', hcKouDocFDogVal, sci1378Esc): protect;
+  NakFin2: skip;
+  ProcTxt: skip;
+  BaseDoc.DopProc ('Процент к курсу на момент оплаты', hcKouDocFDopProc, sci178Esc): [6.2];
+
+  myField1 : skip;
+  HozOperViewName ('Типовая хозяйственная операция',,sci1378Esc): protect;
+
+  KatPayment.Name ('Форма расчета', hcGTDPaymentField, sci1378Esc): protect;
+  BaseDoc.SpecYes ('Наличие спецификации в документе-основании', hcDoPredISpec, sci178Esc):
+         [LIST 'отсутствует', 'присутствует'], protect;
+
+Buttons
+  cmValFld2  , , , 'Платежные документы по документу',     hcKouDocBPlat,  sci178Esc;
+  cmAttrib   , , , 'Расширенная информация к документу',   hcKouDocBExt,   sci178Esc;
+<<
+ Группа&Деск.&Номер       &Выписан    &На срок&Тип по валюте &Текущий статус
+ .@@@@@@.@@@@@.@@@@@@@@@@@@.@@@@@@@@@@@.@@@дней.@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@
+`Примечания`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ <.   Платежи по документу   .>
+ .@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Плательщик`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Банк`.@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@.@@@@@@@@@@`Р/с`.@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@     .@@@@@@@@@@@@@@@@@@@
+ Стоимость позиций.@@@@@@@@@@@@@@@
+`Сумма налогов`   .@@@@@@@@@@@@@@@
+`Сумма к оплате`  .@@@@@@@@@@@@@@@`в`.@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   .@@@@@@@
+ .@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ <.  Расширенная информация  .>
+`Форма расчета`   .@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Спецификация`    .@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+Screen scVSchet2;
+  Show at (, , , 15) fixed_Y;
+
+Fields
+  BaseDoc.DesGr ('Дескриптор группы пользователей', hcDOPredOfSell, sci1378Esc): protect, NoPickButton;
+  BaseDoc.Descr ('Дескриптор (идентификатор менеджера)', hcDOPredOfSell, sci1378Esc): protect, NoPickButton;
+  BaseDoc.NoDoc ('Номер документа на продажу', hcKouDocFNum, sci178Esc);
+  BaseDoc.dDoc  ('Дата выписки документа', hcKouDocFBegDate, sci178Esc): [10, 'DD/MM/YYYY'];
+  BaseDoc.KolDn ('Количество дней действия документа', hcKouDocFPeriod, sci178Esc);
+  BaseDoc.TipMoney ('Тип документа по отношению к денежной единице', hcKouDocFValTyp, sci1378Esc):
+    [LIST 1 'в НДЕ', 'вал-НДЕ', 'валютный'], protect;
+  KatNotes.Name ('Статус документа: его текущее состояние', hcKouDocFSost, sci1378Esc): protect;
+  BaseDoc.Name ('Примечания к документу-основанию на продажу', hcKouDocFNote, sci1378Esc);
+  KatOrgDogRole: skip;
+  KatOrgDogName: skip,
+    {Font = {Bold = TRUE}};
+  KatOrg.Name ('Наименование организации-плательщика', hcKouDocFOrg, sci1378Esc): protect,
+    {Font = {BackColor = if (BaseDoc.cOrg = 0, ColorNeed, 0)}};
+  KatBank.Name ('Наименование банка плательщика', hcKouDocFBank, sci1378Esc);
+  sGetTune('KatOrg.FldView.MFO'): skip;
+  KatBank.MFO1 ('Код МФО/БИК банка', hcKouDocFMFO, sci1378Esc);
+  KatBank.SchET1 ('Расчетный счет плательщика', hcKouDocFSch1, sci1378Esc);
+  SklOtgr ('', hcSkladFOstSklad, sci1378Esc): skip;
+  KatPodr.Name ('Наименование склада отгрузки', hcSkladFOstSklad, sci1378Esc): protect;
+  KatBank.MFO2 ('Код МФО/БИК банка', hcKouDocFRKC, sci1378Esc);
+  KatBank.SchET2 ('Расчетный счет плательщика', hcKouDocFSch2, sci1378Esc);
+  BaseDoc.Summa ('Сумма по документу', , sci178Esc): [brForSumma], skip;
+  SkidFunc ('Правило учета скидки для ДО', hcKouDocFSkidkaSum, sci178Esc): skip;
+  BaseDoc.Skidka ('Скидка к сумме по документу', hcKouDocFSkidkaSum, sci1378Esc): [10.2];
+  SkidVar ('Учет скидки в суммовой либо %-ной величине', hcKouDocFSkidkaTyp, sci1378Esc): protect, NoPickButton;
+  KolKompl ('Скидка к сумме по документу', hcKouDocFSkidka, sci1378Esc): [3.1], skip;
+  BaseDoc.Nds ('Сумма налогов', hcKouDocFNDS, sci1378Esc): [brForSumma], protect;
+  BaseDoc.ProcOpl ('Процент предоплаты по документу', hcDOPredPercent, sci178Esc): [10.2];
+  BaseDoc.Total ('Сумма к оплате с учетом процента к курсу', hcKouDocFDogSum, sci178Esc): [brForSumma];
+  SimVolB ('Базовая валюта документа', hcKouDocFDogVal, sci1378Esc): protect;
+  NakFin2: skip;
+  ProcTxt: skip;
+  BaseDoc.DopProc ('Процент к курсу на момент оплаты', hcKouDocFDopProc, sci178Esc): [6.2];
+  BaseDoc.VhodNal ('Входимость налогов в цену товара/услуги', hcKouDocFNalog, sci1378Esc):
+    [LIST 1 'входят', 'не входят'], protect;
+  KatPayment.Name ('Форма расчета', hcGTDPaymentField , sci1378Esc): protect;
+  BaseDoc.SpecYes ('Наличие спецификации в документе-основании', hcDOPredISpec, sci178Esc):
+         [LIST 'отсутствует', 'присутствует'], protect;
+
+Buttons
+  cmValFld2  , , , 'Платежные документы по документу',     hcKouDocBPlat,  sci178Esc;
+  cmAttrib   , , , 'Расширенная информация к документу',   hcKouDocBExt,   sci178Esc;
+<<
+ Группа&Деск.&Номер       &Выписан    &На срок&Тип по валюте &Текущий статус
+ .@@@@@@.@@@@@.@@@@@@@@@@@@.@@@@@@@@@@@.@@@дней.@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@
+`Примечания`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ <.   Платежи по документу   .>
+ .@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Плательщик`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Банк`.@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@.@@@@@@@@@@`Р/с`.@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@     .@@@@@@@@@@@@@@@@@@@
+ Стоимость позиций.@@@@@@@@@@@@@@@Скидка.@@@@@@@@@@@.@@@@@@@@@@@.@@@@@@.@@@@@@
+`Сумма налогов`   .@@@@@@@@@@@@@@@      `Предоплата`.@@@@@@@@@@@ %
+`Сумма к оплате`  .@@@@@@@@@@@@@@@`в`.@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   .@@@@@@@
+`Налоги`          .@@@@@@@@@@@@@@@ в цену товара                               <. Расширенная ~и~нформация .>
+`Форма расчета`   .@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Спецификация`    .@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+HandleEvent
+!----------------------------------------------------------------------------
+cmPositionChanged:
+  {
+    if ( CurWindow = wVSchetZ )
+      _CanModifyQuery := oSDfuns.CanModifyDocument(BaseDoc.NRec, typsoprhoz, TRUE);
+
+    _CanModify := _CanModifyQuery;
+
+    var NeedProtect: boolean;
+
+    NeedProtect := FALSE;
+
+    if ( Not EditDOPosEnabled(FALSE, FALSE) )
+      NeedProtect := TRUE
+    else
+      if (boGetTune('Doc.Sell.NotEditDO'))
+        if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+          NeedProtect := TRUE;
+
+    ProtectRecord(#BaseDoc, NeedProtect);
+    ProtectRecord(#StepDoc, NeedProtect);
+    ProtectRecord(#SpStep , NeedProtect);
+
+    if (BaseDoc.SpecYes = 0)
+     {
+       SetFormat(scVSchet);
+       _FltScrFormat := scVSchet;
+     }
+    else
+     {
+       SetFormat(scVSchet2);
+       _FltScrFormat := scVSchet2;
+     }
+
+    _FltScrExFormat := scwDopAttrBS;
+
+    SetFltStatusContext;
+    SelectableSpStep;
+  }
+!----------------------------------------------------------------------------
+cmSetCurField  :
+  case Target of
+    #BaseDoc.Total:
+      OldTotal := BaseDoc.Total;
+    #KatOrg.Name:
+      if (BaseDoc.cOrg = 0)
+        if (CurWindow > 0)
+          PutCommand(cmPick);
+    #KatPayment.Name:
+      if ( not IsValid ( tnKatPayment ))
+        if (CurWindow > 0)
+          PutCommand(cmPick);
+  end;
+!----------------------------------------------------------------------------
+cmPass:
+  MyPass;
+!----------------------------------------------------------------------------
+cmDelOnProtect:
+  case CurField of
+    #SimVolB:
+      {
+        if ((BaseDoc.TipMoney <> 1) AND (coGetTune('BaseCurrency') = 0))
+        {
+          ShowTune('Необходимо установить базовую валюту в настройке!', 'BaseCurrency');
+          Abort;
+          Exit;
+        }
+
+        var cVal_Old: comp;
+        cVal_Old := BaseDoc.cVal;
+
+        set BaseDoc.cVal := if (TipMoney <> 1, coGetTune('BaseCurrency'), 0);
+
+        BVal := BaseDoc.cVal;
+
+        BaseDoc.ValCurse := 0;
+        BaseDoc.dValCurse := 0;
+
+        StrCurse := 'Курс на '+string(BaseDoc.dValCurse)+
+                    ' за 1 ' + SimVolB;
+
+        if (IsValid(tnSpStep) AND (cVal_Old <> BaseDoc.cVal))
+          {
+            if (message('Пересчитать цены по документу?',
+                        YesNo+mfSwapButtons) = yes)
+              {
+                ModPriceNewVal (BaseDoc.nRec, cVal_Old, BVal);
+                GetTotalSkid(false);
+              }
+          }
+
+        Abort;
+      }
+    #KatPayment.Name:
+      {
+        BaseDoc.cPayment := 0;
+        GetTotalSkid(false);
+      }
+    #KatOrg.Name, #KatNotes.Name, #KatNotes.sName: Abort;
+    #BaseDoc.skidka:
+      {
+        BaseDoc.VhSkid := 1;             // установить скидку в % (ПИР 2.237)
+        Set BaseDoc.Skidka := 0;
+        if (IsValid(#SpStep)) GetTotalSkid(false);
+      }
+
+#ifdef __HozOperViewName__
+    #HozOperViewName :
+      {
+        if ( UpDateTable )
+        {
+          ReReadRecord(#BaseDoc);
+
+          iTxoBind.ResetServer;
+          iTxoBind.UnBind(SoprHoz.bufferp);
+
+          iTxoBind.ProcessProtokol;
+          ReReadRecord;
+        }
+      }
+#end
+
+  end;
+!----------------------------------------------------------------------------
+cmNullStep:
+  {
+    dOplMax := 0; dOplFact := 0; cDogAgr := 0;
+    dIzvMax := 0; dIzvFact := 0; cShtrafP := 0;
+    dOtgr   := 0; dZabor   := 0; cShtrafG := 0;
+    Nstep   := '1';
+    StepDoc.Status := BaseDoc.Status;
+  }
+!----------------------------------------------------------------------------
+cmCheckField:
+  case CurField of
+    #NoDoc:
+       {
+        set BaseDoc.Nodoc := LPadCh(trim(BaseDoc.Nodoc), '0', 6);
+        if (BaseDoc.Nodoc = '000000')
+          { Message('Не задан номер документа.'#13 +
+                   'Определите значение поля или удалите запись.', CancelButton);
+             Abort;
+          }
+       }
+    #BaseDoc.dDoc:
+       {
+         if ( not CanEditInClosePeriod(false) )
+           set BaseDoc.dDoc := StrToDate(OldFieldValue, 'DD/MM/YYYY');
+
+         update SpStep set SpStep.dDoc := BaseDoc.dDoc;
+
+         BaseDoc.YearDoc := Year(BaseDoc.dDoc);
+         BaseDoc.dEnd := Add_Day(BaseDoc.dDoc, BaseDoc.KolDn);
+         if ((BaseDoc.TipMoney > 1) AND (BaseDoc.dValCurse = ZeroDate) AND
+             (BaseDoc.cOrg <> comp(0)))
+           if (UpDateTable) GetTotalSkid(false);
+       }
+    #BaseDoc.KolDn:
+       {
+         BaseDoc.YearDoc := Year(BaseDoc.dDoc);
+         BaseDoc.dEnd := Add_Day(BaseDoc.dDoc, BaseDoc.KolDn);
+       }
+    #BaseDoc.Total  :
+      {
+        if (BaseDoc.SpecYes <> 0)
+          {
+            if (VhSkid = 1)
+              {
+               set Skidka := 100 * (1-(Total * (1-Skidka / 100)) / OldTotal);
+              }
+            else
+               set Skidka := Skidka + (OldTotal-Total);
+          }
+
+        if (IsNew)
+          if not UpdateTable
+            {
+              BaseDoc.Total := 0;
+              Skidka := 0;
+              exit;
+            }
+
+        GetTotalSkid(false);
+      }
+    #BaseDoc.Skidka:
+     if (IsValid(#SpStep))
+       GetTotalSkid(false); // пересчет всех позиций
+    #BaseDoc.SpecYes:
+      {
+        if (BaseDoc.SpecYes = 0)
+          {
+            if ( RecordExists SpStep = tsOk )
+              if ( Message('Будет удалена спецификация документа'#13'Продолжить?' , YesNo + Confirmation ) <> cmYes )
+                {
+                  set BaseDoc.SpecYes := word(OldFieldValue);
+                  Abort;
+                  Exit;
+                }
+
+            SetFormat(scVSchet);
+            _FltScrFormat := scVSchet;
+
+            While (GetFirst SpStep = tsOk) do
+              if (not DoSpStepDelete)
+                Break;
+          }
+        else
+          {
+            SetFormat(scVSchet2);
+            _FltScrFormat := scVSchet2;
+            if (delete NoVisual SpDocNal
+                where (( BaseDoc.nRec                == SpDocNal.cDoc  AND
+                         word(BaseDoc.VidDoc +2000)  == SpDocNal.TipDoc )) = tsOk)
+              { }
+          }
+
+        set BaseDoc.Summa := 0.0;
+        set BaseDoc.NDS   := 0.0;
+        set BaseDoc.Total := 0.0;
+        set BaseDoc.ProcOpl := 100.0;
+
+        SetFltStatusContext;
+        SelectableSpStep;
+
+        RereadRecord(#SpStep);
+      }
+    #BaseDoc.ProcOpl:
+      {
+        if (IsValid(#SpStep))
+          GetTotalSkid(false); // пересчет всех позиций
+      }
+    #BaseDoc.TipMoney:
+      if (IsValid(tnSpStep)) AND (BaseDoc.TipMoney <> word(OldFieldValue)) {
+        Message('Изменение типа документа возможно до ввода товарных позиций!', CancelButton + Information)
+        set BaseDoc.TipMoney := word(OldFieldValue);
+        Abort;
+      }
+      else
+        {
+          if NOT CheckAndSetCurrency
+            {
+              set BaseDoc.TipMoney := word(OldFieldValue);
+              Abort;
+              Exit;
+            }
+
+          #include rsv.vpp // изменение видимости полей
+
+          oDOfuns.SetRoundFormat(tipDO, BaseDoc.cVal <> 0);
+          RescanPanel(#BaseDoc);
+          RescanPanel(#SpStep);
+        }
+    #BaseDoc.VhodNal:
+      {
+        if (IsValid(tnSpStep)) AND (BaseDoc.VhodNal <> word(OldFieldValue))
+          {
+            if (message('Документ-основание содержит спецификацию! '+
+                        'Вы действительно хотите изменить входимость '+
+                        'налогов в цену МЦ/услуги?', YesNo+mfSwapButtons) = cmYes)
+              {
+                GetTotalSkid(false);
+              }
+            else set BaseDoc.VhodNal := word(OldFieldValue);
+          }
+      }
+  end; // case CurField
+!----------------------------------------------------------------------------
+cmPick:
+  case CurField of
+    #BaseDoc.Nds: // вывод налогов по документу
+      ShowNalogsDO;
+    #BaseDoc.Descr:
+      RunInterface('GetDescr', BaseDoc.Descr, BaseDoc.DesGr, word(0));
+    #BaseDoc.DesGr:
+      RunInterface('GetGrDescr', BaseDoc.DesGr, FALSE, FALSE, comp(0));
+    #KatPodr.Name:
+      RunInterface('GetSklad', SkladRes);
+    #BaseDoc.Name:
+      RunInterface('GetBDName', word(201), BaseDoc.Name);
+    #BaseDoc.skidka:
+      if (RunInterface('GetSkid', comp(0), curssumv) <> cmCancel)
+        {
+          BaseDoc.VhSkid := 1;             // установить скидку в % (ПИР 2.237)
+          Set BaseDoc.Skidka := curssumv;
+          if (IsValid(#SpStep)) GetTotalSkid(false);
+        }
+    #SkidVar  :
+      {
+        set BaseDoc.VhSkid := if (BaseDoc.VhSkid = 1, 2, 1)
+        if (Abs(BaseDoc.Skidka) > 0.00001)
+         {
+           set BaseDoc.Skidka :=
+             if (BaseDoc.VhSkid = 1,           // будет - поцент (было-сумма)?
+                  BaseDoc.Skidka / (BaseDoc.Summa + BaseDoc.Skidka) * 100,
+                  BaseDoc.Summa / ((1 - BaseDoc.Skidka/100)) - BaseDoc.Summa);
+           if (IsValid(#SpStep))
+             GetTotalSkid(false);
+         }
+      }
+    #SimVolB:
+      {
+        var cVal_Old: comp;
+
+        cVal_Old := BaseDoc.cVal;
+
+        if (TipMoney = 1)
+          { Message('Для данного типа документа базовая валюта не предусмотрена!', Confirmation);
+            Stop; }
+        else
+          ChangeCurseVal;
+      }
+
+    #KatPayment.Name:
+      if RunInterface('GetPayment', BaseDoc.cPayment) = cmDefault
+        if (IsValid(#SpStep))
+          GetTotalSkid(false);
+#include dokontr.vpp
+  end; // case CurField
+!----------------------------------------------------------------------------
+end; // HandleEvent
+end; // Panel p1
+
+// == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == =
+
+//******************************************************************************
+
+Panel p2;   // in Window
+  Show at (, 16, , );
+  Table SpStep;
+
+Browse brSpSchet ('Расширенная информация по <Ctrl><Enter>', hcDOPredISpec, sci178Esc); // спецификация документа
+
+Fields
+//------------------------------------------------------------------------------
+  SpStep.Npp    #3'№п/п'
+                ('Порядковый номер. Расширенная информация по <Ctrl><Enter>', , sci178Esc)
+                : [4], noprotect, NoautoSize;
+//------------------------------------------------------------------------------
+  NamMC1        #3'*'
+                (, , sci1378Esc)
+                : [1], protect, NoPickButton, NoautoSize;
+//------------------------------------------------------------------------------
+  NamTovar      #3'Наименование'
+                ('Выбор из справочника  - <Ctrl><F3>', , sci1378Esc)
+                : [16], protect,
+                  {Font = {BackColor = if (SpStep.cMCUSL = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  Nomenkl       #3'Ном.номер'
+                ('Выбор из справочника  - <Ctrl><F3>', , sci1378Esc)
+                : [13], protect,
+                  {Font = {BackColor = if (SpStep.cMCUSL = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  OtpEd         #3'ЕдИзм'
+                (, , sci1378Esc)
+                : [4], protect, NoautoSize,
+                  {Font = {BackColor = if (SpStep.cOtpEd = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  fSpSoprProcNac  #3'%' ('Процент скидки/надбавки по текущей позиции документа(входящий/исходящий)', , sci1378Esc)
+                : [6], noprotect, Centered, NoAutoSize;
+
+  FactoryPrice    #3'Заводская'#13#3'цена' ('Заводская(контрактная) цена по текущей позиции документа', , sci1378Esc)
+                : [12], [brForPrice], noprotect, NoAutoSize;
+
+  SpStep.KolSkl #3'Количество'
+                : [10], [prSignsInKol], noprotect, NoAutoSize;
+//------------------------------------------------------------------------------
+//******************************************************************************
+//!!!
+//******************************************************************************
+// Не меняйте название колонки SpStep.Price - используется в DoClear.vpp
+//******************************************************************************
+  SpStep.Price  #3'Цена за единицу'
+                : [12], [brForPrice], NoAutoSize;
+//------------------------------------------------------------------------------
+  SummaTov      #3'Стоимость'
+                : [16], [brForSumma], protect, NoAutoSize;
+//------------------------------------------------------------------------------
+#ifndef __MTR_TO_SPEC__
+  KatStroy.Name #3'Объект строительства'
+                ('Наименование объекта строительства', hcUKSPrivDocKObjStr, sci1378Esc)
+                : [20], protect, PickButton, NoAutoSize;
+//------------------------------------------------------------------------------
+  AddSumTune.Name #3'Статья затрат'
+                ('Наименование статьи затрат', , sci1378Esc)
+                : [20], Protect, PickButton, NoAutoSize;
+#else
+  SaldTune.Name #3'Объект ЦУ' (,, sci1378Esc): [10], Protect, NoAutoSize, PickButton;
+  vsKau1        #3'КАУ 1' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau2        #3'КАУ 2' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau3        #3'КАУ 3' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau4        #3'КАУ 4' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau5        #3'КАУ 5' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau6        #3'КАУ 6' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau7        #3'КАУ 7' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau8        #3'КАУ 8' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau9        #3'КАУ 9' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau10       #3'КАУ 10' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+#end
+//------------------------------------------------------------------------------
+ SmetaMy        #3'Смета'
+                ('Локальная смета: "Номер": "Наименование"', , sci1378Esc)
+                : [15], protect;
+//------------------------------------------------------------------------------
+ SmetaSpMy      #3'Спецификация сметы'
+                ('Спецификация сметы: "№ п/п" ("Код") "Наименование"', , sci1378Esc)
+                : [15], protect;
+//------------------------------------------------------------------------------
+end; // Browse
+
+Tree trSpSchet ('Расширенная информация по <Ctrl><Enter>', hcDOPredISpec, sci178EscTreePlus); // спецификация документа
+
+Fields
+//------------------------------------------------------------------------------
+  SpStep.Npp    #3'№п/п'
+                : [4], noprotect, NoAutoSize;
+//------------------------------------------------------------------------------
+  NamMC1        #3'*'
+                (, , sci1378EscTreePlus)
+                : [1], protect, NoPickButton, NoAutoSize;
+//------------------------------------------------------------------------------
+  NamTovar      #3'Наименование'
+                (, , sci1378EscTreePlus)
+                : [16], protect,
+                  {Font = {BackColor = if (SpStep.cMCUSL = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  Nomenkl       #3'Ном.номер'
+                (, , sci1378EscTreePlus)
+                : [13], protect,
+                  {Font = {BackColor = if (SpStep.cMCUSL = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  KatOtpEd.ABBR #3'Ед.изм'
+                (, , sci1378EscTreePlus)
+                : [5], protect, NoAutoSize,
+                  {Font = {BackColor = if (SpStep.cOtpEd = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  SpStep.KolSkl #3'Количество'
+                : [10], [prSignsInKol], noprotect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SpStep.Price  #3'Цена за единицу'
+                : [12], [brForPrice], NoAutoSize;
+//------------------------------------------------------------------------------
+  SummaTov      #3'Стоимость'
+                : [16], [brForSumma], protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SaldTune.Name #3'Объект ЦУ' (,, sci1378Esc): [10], Protect, NoAutoSize, PickButton;
+  vsKau1        #3'КАУ 1' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau2        #3'КАУ 2' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau3        #3'КАУ 3' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau4        #3'КАУ 4' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau5        #3'КАУ 5' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau6        #3'КАУ 6' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau7        #3'КАУ 7' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau8        #3'КАУ 8' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau9        #3'КАУ 9' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau10       #3'КАУ 10' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+//------------------------------------------------------------------------------
+  SmetaMy       #3'Смета'
+                ('Локальная смета: "Номер": "Наименование"', , sci1378Esc)
+                : [15], protect;
+//------------------------------------------------------------------------------
+  SmetaSpMy     #3'Спецификация сметы'
+                ('Спецификация сметы: "№ п/п" ("Код") "Наименование"', , sci1378Esc)
+                : [15], protect;
+//------------------------------------------------------------------------------
+end; // Browse
+
+
+//******************************************************************************
+
+Procedure ChangeSpStepFormat;
+var CurNRec, CurGr: comp;
+{
+  if IsValid ( tnSpStep )
+    {
+      CurNRec := SpStep.nRec;
+      CurGr := SpStep.cSpMC;
+    }
+  else
+    {
+      CurNRec := 0;
+      CurGr := 0;
+    }
+  ResetBounds ( tnSpStep );
+  SpStepFormat := 1 - SpStepFormat;
+  if SpStepFormat = 0
+    {
+      PushBounds ( tbBrowseSpStep );
+      SetFormat (brSpSchet)
+    }
+  else
+    {
+      CloseWindow ( pwSpStep );
+      PushBounds ( tbTreeSpStep );
+      CurGroup := CurGr;
+      SetFormat (trSpSchet)
+      if CurNRec <> 0
+        TreeJumpToRecord ( trSpSchet, CurNRec );
+      else
+        TreeGetFirst ( trSpSchet );
+    }
+  RescanPanel ( tnSpStep );
+}
+
+//******************************************************************************
+
+HandleEvent
+//------------------------------------------------------------------------------
+cmTreeTop:
+  CurGroup := 0;
+//------------------------------------------------------------------------------
+cmTreeUp:
+  CurGroup := SpStep.cSpMc;
+//------------------------------------------------------------------------------
+cmTreeDown:
+  CurGroup := SpStep.NRec;
+//------------------------------------------------------------------------------
+cmTreeNodeType:
+  if not IsValid ( tnSpStep2 )
+    TreeSetNodeType ( trSpSchet, 2 );
+//------------------------------------------------------------------------------
+cmTreeNeedOwner:
+  TreeJumpToRecord ( trSpSchet, SpStep.cSpMc );
+//------------------------------------------------------------------------------
+cmDelOnProtect:
+{
+  case CurField of
+    #SmetaMy,
+    #SmetaSpMy:
+      {
+        delete SpDocSmeta where (( coSpStep    == SpDocSmeta.coTable and
+                                   SpStep.nRec == SpDocSmeta.cSpec  ))
+
+        ReScanPanel(#SpStep);
+      }
+  //--------------
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+        RereadRecord(#SpStep);
+      }
+   end;
+}
+//------------------------------------------------------------------------------
+cmPositionChanged:  // проверка возможности редактирования записи
+{
+  AttrNrec := SpStep.nRec;
+
+  _CanModify := _CanModifyQuery;
+
+  if ( not EditDOPosEnabled(false, false) )
+    ProtectRecord(#SpStep, TRUE);
+  else
+    if (boGetTune('Doc.Sell.NotEditDO'))
+      if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+        ProtectRecord(#SpStep, TRUE);
+}
+//------------------------------------------------------------------------------
+cmPass:
+  MyPass;
+//------------------------------------------------------------------------------
+cmSetDefault:
+  {
+    if IsProtected(#BaseDoc)
+     {
+        Message('Документ доступен только для просмотра!', Information);
+        ProtectRecord(#SpStep, TRUE);
+        Abort;
+        Exit;
+     }
+
+    SpStep.dDoc := BaseDoc.dDoc;
+    SpStep.PrSkid := 1;
+    SpStep.PrMC := wGetTune('Doc.TypeSpSell')+1;
+    SpStep.cVal := StepDoc.cVal;
+    SpStep.nRec := GetNextNRec(#SpStep, 0);
+
+    oLinkMTR2Spec.SetVal(word(coSpStep), SpStep.nRec, coGetTune('CelUchForModul.SELL'));
+
+    SelectField(#NamTovar);
+    PutCommand(cmValue3);
+  }
+//------------------------------------------------------------------------------
+cmCheckRecord:
+  if (SpStep.cMCUSL = 0)
+    {
+      Message('Укажите для позиции наименование товара/услуги либо удалите запись!',
+                        Warning + OkButton);
+      Abort;
+    }
+//------------------------------------------------------------------------------
+cmInsertRecord:
+  {
+    if (addallmc = 1)
+     addallmc := 0
+    else
+     {
+      SpStep.dDoc := BaseDoc.dDoc;
+      SpStep.Npp  := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+      ChangePos(comp(0));
+      insert current SpStep;
+      ModifDo;
+     }
+  }
+//------------------------------------------------------------------------------
+cmDeleteRecord:
+{
+  _CanModify := _CanModifyQuery;
+
+  if ( not EditDOPosEnabled(true, true) )
+    Abort;
+  else
+    if ( message('Удалить текущую запись?', YesNo+mfSwapButtons ) <> yes )
+      Abort;
+    else
+     {
+       var tMC: word;  tMC := SpStep.PrMC;
+
+       DoSpStepDelete;
+
+       if (GetNext SpStep <> tsOk)
+         if( GetLast spstep <> tsOk)
+           { }
+
+       ModifDo;
+     }
+   if ( RecordExists SpStep <> tsOK )
+     #include rsv.vpp // изменение видимости полей
+}
+//------------------------------------------------------------------------------
+cmUpdateRecord:
+  {
+    IncOstatokSpDocs2;
+    ChangePos(comp(0));
+    if SpStep.PrMC = 1
+      set SpStep.cSpMc := 0;
+
+    update current SpStep;
+    ModifDo;
+  }
+//------------------------------------------------------------------------------
+cmInsert:
+  {
+    if (BaseDoc.SpecYes = 0)
+     {
+       Abort;
+       Exit;
+     }
+  }
+//------------------------------------------------------------------------------
+cmPick:
+  {
+   if (BaseDoc.SpecYes = 0)
+     {
+       Abort;
+       Exit;
+     }
+
+  case CurField of
+    #SmetaMy,
+    #SmetaSpMy:
+      {
+        RunInterface(iVSmeta, SpStep.nRec, word(coSpStep));
+        ReReadRecord(#SpStep);
+      }
+  //--------------
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+      }
+
+    #Summatov:
+      if ((BaseDoc.Direct = 1) AND (BaseDoc.cNalog = 2))
+        {
+          Message('Не допускается изменять цену/стоимость при работе в режиме Скидка к контрагенту!', Information);
+          Abort;
+        }
+      else
+        if (SpStep.KolSkl = 0)
+          {
+            Message('Введите количество!', Information);
+            SelectField(#SpStep.KolSkl);
+          }
+        else
+          CheckSumma;
+    #KatOtpEd.Name, #KatOtpEd.Abbr, #OtpEd:
+      {
+        var tmpOtpEd: comp;
+        tmpOtpEd := SpStep.cOtpEd;
+        tmpKoef := if (IsValid(#KatOtpEd), KatOtpEd.Koef, 1);
+        if (RunInterface('GetOtpEd', SpStep.cMCUSL,
+             SpStep.cOtpEd, if(SpStep.prMC = 1, 1, 2)) <> cmCancel)
+         {
+           if (wGetTune('Doc.UchEd') = 1)
+             if (KatOtpEd.Koef = 1.0)
+               {
+                  Message('В вашей настройке пользователя установлен '+
+                         'запрет на использование в документах '+
+                         'учетных единиц измерения.', Warning+CancelButton);
+                  set SpStep.cOtpEd := tmpOtpEd;
+                  Abort;
+               }
+          if (wGetTune('Doc.ChangeOtpEd') = 0)
+           {
+              SpStep.Kol := SpStep.Kol * (tmpKoef / KatOtpEd.Koef);
+              SpStep.Reserv := SpStep.Reserv * (tmpKoef / KatOtpEd.Koef);
+              if (KatOtpEd.Diskret = 1)
+                {
+                  if (SpStep.Kol - trunc(SpStep.Kol) > 0.0001)
+                    SpStep.Kol := trunc(SpStep.Kol) + 1;
+                  SpStep.Reserv := trunc(SpStep.Reserv);
+                }
+              SpStep.ProcUb := 0;
+              SpStep.KolSkl := SpStep.Kol;
+              if UseDEI
+              {
+                oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, 0, SpStep.Kol, 0, BaseDoc.VidDoc);
+                oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, 0, SpStep.KolSkl, 0, BaseDoc.VidDoc);
+              }
+           }
+          if (BaseDoc.cVal <> 0)
+              SpStep.Price := oDOfuns.froundval2_1(SpStep.Price * (KatOtpEd.Koef / tmpKoef))
+          else
+              SpStep.Price := oDOfuns.froundrub2_1(SpStep.Price * (KatOtpEd.Koef / tmpKoef));
+          UpdateTable;//volod
+         }
+      }
+    #NamTovar, #Nomenkl:
+      {
+#include doprice.vpp // выбор из прайса
+
+        oLinkMTR2Spec.SelFormat(IsValid(#SpStep));
+      }
+  end; // case CurField
+  }
+//------------------------------------------------------------------------------
+cmCheckField   :
+  case CurField of
+    #SpStep.Price:
+      {
+       set SpStep.Price := oDOfuns.DoRoundP(BaseDoc.cVal, tipdo, SpStep.Price);
+       if not boGetTune('Doc.SavePriceRef')
+         set SpStep.cPriceList := 0;
+
+       if (not IsNew)
+         if UpdateTable
+           if boGetTune('Oper.QuickEnterKol&Price')
+             if (CurWindow <> pwSpStep)
+               {
+  #ifdef ATL51
+                 RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+                 PutCommand(cmValFld10);
+  #else
+                 if (GetNext SpStep = tsOk)
+                   {
+                     CallToNeighbours(cmPosDown, #SpStep);
+                     RedrawPanel(#SpStep);
+                     PutCommand(cmValFld10);
+                   }
+  #end
+               }
+      }
+    #SpStep.Kol    :
+//------коррекция количества к оплате------------------------------------
+       if ((KatOtpEd.Diskret = 1)AND(trunc(SpStep.Kol) <> SpStep.Kol))
+        {
+         Message('Данная отпускная единица неделима! Введите целое число!',
+          Information);
+         Abort;
+        }
+       else
+         CheckKol;
+    #SpStep.ProcUb:
+//------коррекция убыли-------------------------------------------------
+        CheckProcUb;
+    #SpStep.KolSkl:
+    {
+      var tmpMyIsSmetPos   : boolean;
+      var tmpMyIsSmetPosKf: double;
+      var MySm_SmetDoc     : comp;
+      var MySm_SmetJob     : comp;
+      var MySm_SmetSpec    : comp;
+
+
+      tmpMyIsSmetPos := FALSE;
+      if (GetFirst SpDocSmeta = tsOk)
+       {
+        if (SpStep.KolSkl = 0)
+         {
+          Message('Кол-во для сметной позиции не может быть нулевым!'#13+
+                  'Для отмены изменений нажмите <Alt+Backspace>', Information);
+          Abort; Exit;
+         }
+
+        /*
+        //корректировка кол-ва по другим сметным позициям для этой же работы
+        if (Message('Сметная позиция связана с другими позициями спецификации.'
+                +''#13' При изменении кол-ва необходимо будет модифицировать кол-во'
+                +''#13' по другим позициям спецификации текущей сметной работы.'
+                +''#13#13' Продолжить?', YesNo) = Yes)
+          {
+           tmpMyIsSmetPosKf := SpStep.KolSkl/double(OldFieldValue);
+           tmpMyIsSmetPos   := TRUE;
+           MySm_SmetDoc     := SpDocSmeta.cDoc;
+           MySm_SmetJob     := SpDocSmeta.cPosition;
+           MySm_SmetSpec    := SpDocSmeta.cSpec;
+          }
+        else Set SpStep.KolSkl := double(OldFieldValue);
+        */
+       }
+      if (SpStep.PrMC = 1) AND UKS_Used // Lic_ItemExists('STROY')
+      {
+        PushPos(#KatStroy);
+        ResetBounds(#KatStroy);
+        if (GetFirst KatStroy where ((SpStep.cMCUsl == KatStroy.cMC(NoIndex))) = tsOk)
+          if (not IsNew)
+          {
+
+            Message('МЦ соответствует объекту строительства !'+chr(13)+
+                     chr(13)+'Количество может быть равно только 1 !', Information);
+            update current SpStep Set SpStep.KolSkl := 1;
+          }
+        SetBounds(#KatStroy);
+        PopPos(#KatStroy);
+      }
+      if (tmpMyIsSmetPos)
+      {
+       PushPos(#SpStep);
+       ResetBounds(#SpStep);
+       PushPos(#SpDocSmeta);
+       ResetBounds(#SpDocSmeta);
+
+       _LOOP SpDocSmeta where ((coSpStep     == SpDocSmeta.coTable
+                                   AND MySm_SmetDoc == SpDocSmeta.cDoc
+                                   AND MySm_SmetJob == SpDocSmeta.cPosition
+                                     ))
+       {
+        //корректировка спецификации дока
+        if (MySm_SmetSpec <> SpDocSmeta.cSpec)
+         if (GetFirst FastFirstRow SpStep
+             where ((SpDocSmeta.cSpec == SpStep.NRec)) = tsOk)
+          {
+           Set SpStep.KolSkl   := SpStep.KolSkl*tmpMyIsSmetPosKf;
+           if ((KatOtpEd.Diskret = 1) AND
+               (SpStep.KolSkl - trunc(SpStep.KolSkl) > 0.0001))
+             set SpStep.KolSkl := trunc(SpStep.KolSkl);
+// коррекция убыли -------------------------------------------------
+          CheckKolSkl;
+           Update Current SpStep;
+          }
+         else
+          {
+           //Message('cmCheckField: Ошибка в таблице SpDocSmeta !', Error);
+           Continue;
+          }
+
+        //корректировка объема работы (SpDocSmeta)
+        SpDocSmeta.Kol   := SpDocSmeta.Kol*tmpMyIsSmetPosKf;
+        Update Current SpDocSmeta;
+
+
+       }
+       SetBounds(#SpDocSmeta);
+       PopPos(#SpDocSmeta);
+       SetBounds(#SpStep);
+       PopPos(#SpStep);
+      }
+      if ((KatOtpEd.Diskret = 1)AND(trunc(SpStep.KolSkl) <> SpStep.KolSkl))
+        {
+          Message('Данная отпускная единица неделима! Введите целое число!',
+           Information);
+          Abort;
+        }
+      else
+        {
+// коррекция убыли -------------------------------------------------
+          CheckKolSkl;
+        }
+    }
+//------------------------------------------------------------------
+    // Для обработки конфигуратором
+    #SpDocNal.Summa, #SpDocNal.SumVal, #SpDocNal.SumNal:
+      {
+        if (Not isValid(#SpDocNal))
+          Exit;
+
+        Set SpStep.ManualTax := 1;
+
+        case CurField of
+          #SpDocNal.Summa:
+            {
+              set SpDocNal.SumVal := oValFunc.GetAnyCurrency(comp(0),
+                                                             SpDocNal.Summa,
+                                                             BaseDoc.dDoc,
+                                                             BaseDoc.cVal);
+              set SpDocNal.SumNal := oValFunc.GetAnyCurrency(BaseDoc.cVal,
+                                                             SpDocNal.SumVal,
+                                                             BaseDoc.dDoc,
+                                                             SpDocNal.cVal);
+            }
+
+          #SpDocNal.SumVal:
+            {
+              set SpDocNal.Summa  := oValFunc.GetNatCurrency(BaseDoc.cVal,
+                                                             SpDocNal.SumVal,
+                                                             BaseDoc.dDoc);
+              set SpDocNal.SumNal := oValFunc.GetAnyCurrency(BaseDoc.cVal,
+                                                             SpDocNal.SumVal,
+                                                             BaseDoc.dDoc,
+                                                             SpDocNal.cVal);
+            }
+
+          #SpDocNal.SumNal:
+            {
+              set SpDocNal.Summa  := oValFunc.GetNatCurrency(SpDocNal.cVal,
+                                                             SpDocNal.SumNal,
+                                                             BaseDoc.dDoc);
+              set SpDocNal.SumVal := oValFunc.GetAnyCurrency(SpDocNal.cVal,
+                                                             SpDocNal.SumNal,
+                                                             BaseDoc.dDoc,
+                                                             BaseDoc.cVal);
+            }
+        end;
+
+        update current SpDocNal;
+
+        PushPos(#SpDocNal);
+
+        var SumNds: double;  SumNds := 0;
+
+        _LOOP spdocnal
+          if (BaseDoc.cOrg = SpDocNal.cOrg)
+            SumNds := SumNds + SpDocNal.SumVal;
+
+        PopPos(#SpDocNal);
+
+        if (SpStep.Nds<>SumNds)
+          {
+            SpStep.Nds := SumNds;
+            update current SpStep;
+            ModifDo;
+          }
+      }
+  end; // case CurField
+
+!----------------------------------------------------------------------------
+
+end; // HandleEvent;
+end; // Panel
+
+//******************************************************************************
+
+Procedure AllSpStepCellVal(wField: word);  // фиктивное описание - чтобы собирались инклуды
+{
+  if (wField = 0)
+    {
+       // фиктивная обработка - чтобы не было предупржедений при сборке о неиспользуемом параметре
+    }
+}
+
+//******************************************************************************
+
+#ifdef __MTR_TO_SPEC__
+#include lm2sautopick.vpp
+#end
+
+//******************************************************************************
+
+Procedure MakePageUp;
+{
+  if ( GetPrev SpStep = tsOk )
+    {
+      SetCurRow(brSpSchet, GetCurRow(brSpSchet) - 1);
+
+      oLinkMTR2Spec.SetObjParam( word(coSpStep)
+                               , SpStep.nRec
+                               , if( not EditDOPosEnabled(false, false) and if( not CanEditInClosePeriod(true)
+                                                                              , not CanEditInClosePeriod(false)
+                                                                              , true
+                                                                              )
+                                   , 1
+                                   , if( SpStep.cSpMC = 0
+                                       , if( IsValid(#SmetaStroy)
+                                           , 2
+                                           , 0
+                                           )
+                                       , 1
+                                       )
+                                   )
+                               );
+
+      RedrawPanel(#SpStep);
+    }
+}
+
+//******************************************************************************
+
+Procedure MakePageDown;
+{
+  if ( GetNext SpStep = tsOk )
+    {
+      SetCurRow(brSpSchet, GetCurRow(brSpSchet) + 1);
+
+      oLinkMTR2Spec.SetObjParam( word(coSpStep)
+                               , SpStep.nRec
+                               , if( not EditDOPosEnabled(false, false) and if( not CanEditInClosePeriod(true)
+                                                                              , not CanEditInClosePeriod(false)
+                                                                              , true
+                                                                              )
+                                   , 1
+                                   , if( SpStep.cSpMC = 0
+                                       , if( IsValid(#SmetaStroy)
+                                           , 2
+                                           , 0
+                                           )
+                                       , 1
+                                       )
+                                   )
+                               );
+
+      RedrawPanel(#SpStep);
+    }
+}
+
+//******************************************************************************
+//******************************************************************************
+
+HandleEvent
+cmInit:
+{
+  CursV := _kurs;
+  SetFieldAndLabelVisible(#FactoryPrice  , boGetTune('Doc.FactoryPriceDO'));
+  SetFieldAndLabelVisible(#fSpSoprProcNac, boGetTune('Doc.FactoryPriceDO'));
+  SetFieldAndLabelVisible(#SkidVal       , boGetTune('Doc.FactoryPriceDO'));
+}
+!----------------------------------------------------------------------------
+
+cmValFld17: // группа налогов для ДО без спецификации
+  {
+    var cGrNalDO: comp;
+
+    if (not UpdateTable)
+      Exit;
+
+    if (BaseDoc.SpecYes <> 0)
+      {
+        Message('Выбор группы налогов для ДО на предоплату '+
+                'разрешен только при отсутствии спецификации!');
+        Exit;
+      }
+
+    if (GetFirst SpDocNal
+           where ((BaseDoc.nRec                == SpDocNal.cDoc  AND
+                   word(BaseDoc.VidDoc +2000)  == SpDocNal.TipDoc)) = tsOk)
+      cGrNalDO := SpDocNal.cGrNal;
+    else
+      cGrNalDO := 0;
+
+    if (RunInterface('GetGrNal', cGrNalDO, word(0)) <> cmCancel)
+      {
+        var dValNalog: Date;
+
+        dValNalog := if (BaseDoc.dValCurse = Date(0, 0, 0), BaseDoc.dDoc, BaseDoc.dValCurse);
+        if (CountBasePrice(BaseDoc.nRec, BaseDoc.nRec, tipDo+2000, cGrNalDO,
+                           BaseDoc.cOrg, 0, comp(0), dValNalog,
+                           BaseDoc.cVal, 0, 0, BaseDoc.Total,
+                           BaseDoc.cPayment) = TRUE)
+          set BaseDoc.Nds := BaseDoc.Total - GetBaseValPrice
+         else
+          set BaseDoc.Nds := 0;
+      };
+  }
+
+!----------------------------------------------------------------------------
+cmValFld12:
+  {
+    if (BaseDoc.SpecYes = 0)
+      {
+        Message('В документе-основании нет спецификации!'
+               , Information);
+        Exit;
+      }
+
+    if not ((BaseDoc.VhodNal = 1)AND(BaseDoc.VhSkid = 1)AND(BaseDoc.TipMoney = 1))
+      Message('Для выполнения данной функции валюта документа должна быть НДЕ, '+
+              'скидка как % и налоги не должны входить в цену!', Information);
+    else
+      if (message('Вы действительно хотите пересчитать цены обратным счетом?', YesNo) = yes)
+        {
+          _LOOP spstep
+            {
+              var cGN: comp;
+              var dValNalog: Date;
+
+              dValNalog := if (BaseDoc.dValCurse = Date(0, 0, 0), BaseDoc.dDoc, BaseDoc.dValCurse);
+              cGN := GetNalGr;
+
+              if (CountBasePrice(BaseDoc.Nrec, SpStep.Nrec, tipDo+1000, cGN,
+                                 BaseDoc.cOrg, SpStep.Kol, SpStep.cOtpEd, dValNalog, BaseDoc.cVal,
+                                 0, 0, SpStep.Price, BaseDoc.cPayment))
+                {
+                  SpStep.Price := oDOfuns.DoRoundNDEP(BaseDoc.ViDDoc,
+                                     GetBaseValPrice*(1-BaseDoc.Skidka/100));
+
+                  CountNalogPrice(BaseDoc.Nrec, SpStep.Nrec, tipDo+1000, cGN,
+                                   BaseDoc.cOrg, SpStep.Kol, SpStep.cOtpEd, dValNalog, BaseDoc.cVal,
+                                   0, 0, SpStep.Price, BaseDoc.cPayment);
+
+                  set SpStep.Price := GetNalogValPrice/(1-BaseDoc.Skidka/100);
+
+                  SpStep.Summa := SpStep.Price*SpStep.Kol;
+
+                  update current spstep;
+                 }
+            }
+
+          GetTotalSkid( FALSE);
+        }
+  }
+!----------------------------------------------------------------------------
+cmValFld9:
+ if (message('Удалить всякое упоминание "'+if(SpStep.PrMC = 1, KatMC.Name, KatUsl.Name)
+ +'" в данном документе?', YesNo+mfSwapButtons) = yes)
+  {
+   var MCNrec: comp;
+   var MCpr: word;
+   var ch: boolean;
+   ch := FALSE;
+   MCNrec := SpStep.cMCUSL;
+   MCpr := SpStep.PrMC;
+   ResetBounds(#SpStep);
+
+   _LOOP spstep where ((
+               stepdoc.nrec == spstep.cstepdoc AND
+               MCpr         == spstep.prmc     AND
+               MCNrec       == spstep.cmcusl
+                       ))
+    {
+      if (not IsValid(#SpDocSmeta))
+      {
+        SubResTov(SpStep.Reserv); // Снятие резерва по товару
+        SubResRazrez; // Снятие резерва по складу
+        DelPosDORES;
+        DelPosSpDocNal;
+        oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+        oDOfuns.SpStep_Delete(SpStep.nRec);
+      }
+      else
+      {
+        ch := TRUE;
+        Continue;
+      }
+    }
+   if ch
+     Message('Некоторые позиции не были удалены, ' + chr(13) +
+             'т.к. созданы по смете.', Information);
+   SetBounds(#SpStep);
+   GetTotalSkid(false);
+   RescanPanel(#SpStep);
+  }
+!----------------------------------------------------------------------------
+cmValFld11:
+  {
+    SpecDO_Sell;
+  }
+!----------------------------------------------------------------------------
+cmValFld15:
+  {
+    if (BaseDoc.SpecYes = 0)
+      Message('В документе-основании нет спецификации!', Information);
+    else
+      SpecDO_Edit;
+  }
+!----------------------------------------------------------------------------
+cmValFld16:
+  {
+    if (IsValid(#SpStep))
+      SpecDO_DublPos
+    else
+      Message('В документе-основании нет спецификации!', Information);
+  }
+!----------------------------------------------------------------------------
+
+cmPlansNo:
+ {
+  if (IsNew)
+    if (not IsModified)
+      { Message('Переход невозможен, так как не заполнен документ.', OkButton);
+        Exit;
+      }
+  if (UpdateTable)
+    if boGetTune('Doc.GrupSTN')
+      ViewSprTov
+    else
+      RunInterface('NalSchFC', BaseDoc.Nrec);
+ }
+cmValue3:
+  {
+    SelectField(if (wGetTune('Pick.SortMC') = 0, #NamTovar, #Nomenkl));
+    if boGetTune ('Pick.AutoPickinInterface')
+      if not (ExistTune('Doc.Sell.AutoPickSp'))
+        PutCommand(cmPick);
+      else
+        if ( wGetTune('Doc.Sell.AutoPickSp') = 1 )
+          PutCommand(cmRestoreDoc);
+        else
+          PutCommand(cmPick);
+  }
+
+cmValFld10  :
+  SelectField(if (SpStep.KolSkl = 0, #SpStep.KolSkl, #SpStep.Price));
+
+cmFilialNo   :
+  {
+    if (BaseDoc.SpecYes = 0)
+      {
+        Message('В документе-основании нет спецификации!'
+               , Information);
+        Exit;
+      }
+
+    if EditDOPosEnabled(true, true)
+      {
+        #include sortnom.vpp
+      }
+  }
+
+!----------------------------------------------------------------------------
+cmValue19: //справка по налогам
+ {
+  SelectField(#BaseDoc.Nds);
+  PutCommand(cmPick);
+ }
+!----------------------------------------------------------------------------
+cmValue16:
+  {
+    if (BaseDoc.SpecYes = 0)
+      {
+        Message('В документе-основании нет спецификации!'
+               , Information);
+        Exit;
+      }
+
+#include modprice.vpp
+  }
+!----------------------------------------------------------------------------
+cmValFld4:  // выбор спецификации из договора, соглашения, пункта кал.плана
+#include getspdoc.vpp
+!----------------------------------------------------------------------------
+cmRestoreDoc:
+  if EditDOPosEnabled(true, true)
+   {
+      if (BaseDoc.SpecYes = 0)
+        {
+          Abort;
+          Exit;
+        }
+
+     if (wGetTune('Pick.SelKatMc') <> 1)
+      ProcessCommand(cmValue8)
+     else
+      Message('Выбор из каталога МЦ(Услуг) недоступен!', Information);
+   }
+!----------------------------------------------------------------------------
+#ifdef __MTR_TO_SPEC__
+cmIerarchy :
+{
+  var vcSp: comp;
+
+  if ( (CurTable = #SpStep) and (IsValid(#SpStep)) )
+    {
+      RunInterface('EditMtr2Spec', if(not EditDOPosEnabled(false, false) and if(not CanEditInClosePeriod(true), not CanEditInClosePeriod(false), true), 1, if(SpStep.cSpMC = 0, if(IsValid(#SmetaStroy), 2, 0), 1))
+                                 , GetLinkMTRAutoPick(CurField), word(coSpStep), SpStep.nRec);
+
+      SetModified(true);
+      UpdateTable;
+    }
+
+  vcSp := SpStep.nRec;
+
+  PushPos(#SpStep);
+
+  _LOOP SpStep where ((vcSp == SpStep.cSpMC))
+    oMTRFun.CopySpecMTR(coSpStep, vcSp, coSpStep, SpStep.NRec);
+
+  PopPos(#SpStep);
+}
+#end
+!----------------------------------------------------------------------------
+cmMulSelDO:
+  if (EditDOPosEnabled(true, true) AND UKS_Used)
+    {
+      if (boGetTune('Doc.Sell.NotEditDO'))
+        {
+          if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+            {
+              Message('Редактирование документа-основания при наличии '+
+                      'сопроводительных или платежных документов ЗАПРЕЩЕНО!',
+                      Information);
+              Exit;
+            }
+        }
+      if (CurTable = #SpStep)
+        ProcessCommand(cmValue28);
+    }
+
+cmManagerId:
+ {
+  if (IsNew)
+    if (not IsModified)
+      {
+        Message('Переход невозможен, так как не заполнен документ.', OkButton);
+        Exit;
+      }
+ if (UpdateTable)
+  if (RunInterface('GetDescr', CurDescr, CurDesGr, CurVisib) <> cmCancel)
+    {
+      ResetBounds(#BaseDoc);
+      SetDescrBounds;
+      RereadRecord;
+    }
+ }
+!--------------------------------------------------------------------------
+cmDocBas:
+ {
+  if (IsNew)
+    if (not IsModified)
+      {
+        Message('Переход невозможен, так как не заполнен документ.', OkButton);
+        Exit;
+      }
+  if (UpdateTable)
+    RunInterface('InterDoc2Doc', BaseDoc.NRec, word(1));
+ }
+!--------------------------------------------------------------------------
+cmValue20:
+  oCalcFuns.RunCostUslRep(SpStep.NRec, coSpStep, 0);
+
+cmValue21:
+  PickcBuildingDO;
+
+cmVal7:
+  PickZatr;
+
+cmVal8:
+  {
+    if (not UpdateTable)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (CurTable <> #BaseDoc)
+      SelectPanel(#BaseDoc);
+
+#ifdef __MTR_TO_SPEC__
+    RunInterface('GetSpDocsMTR', word(coBaseDoc), BaseDoc.NRec);
+#else
+    RunInterface('GetSpDocsUKS', word(2), word(coBaseDoc), BaseDoc.NRec);
+#end
+
+    RereadRecord(#BaseDoc);
+  }
+
+cmValue60:
+  RunInterface('ShowSpesHowSmeta', BaseDoc.nRec, word(coBaseDoc));
+
+cmValue17:
+  if ( ( KatUsl.TYPEUSL = 1 ) AND ( SpStep.PrMC <> 1 ) )
+    {
+      var NewPrice, NewKolSkl: double;
+
+      NewPrice  := SpStep.Price;
+      NewKolSkl := SpStep.KolSkl;
+
+      var pSpStep, pUsl: comp;
+
+      pSpStep := SpStep.nRec;
+      pUsl    := KatUsl.nRec;
+
+      RunInterface('GETPAR1', 1, pSpStep, pUsl, NewPrice, NewKolSkl, word(coSpStep));
+
+      if ( not f_KolIsZero(NewPrice - SpStep.Price) OR not f_KolIsZero(NewKolSkl - SpStep.KolSkl) )
+        {
+          set SpStep.Price := NewPrice;
+          set SpStep.Kol   := NewKolSkl;
+
+          UpdateTable;
+        }
+    }
+
+//----------------------------------------------------------------------------
+
+cmValue22: { vidReport := 1; putCommand(cmPrintDoc);  }
+
+!--------------------------------------------------------------------------
+cmPrintDoc:
+ {
+  if (CurTable = #BaseDoc)
+  {
+    if (IsNew)
+      if (not IsModified)
+        {
+          Message('Переход невозможен, так как не заполнен документ.', OkButton);
+          Exit;
+        }
+    KillPick2;
+    saveMyDsk(vidReport,'vidReport_vschet');
+    MyPrintDoc;
+    KillPick2;
+    vidReport := 0;
+  }
+ }
+!----------------------------------------------------------------------------
+cmDone:
+  if (IsModified)
+    UpdateTable;
+!----------------------------------------------------------------------------
+cmPFormat:
+  if CurTable = tnSpStep ChangeSpStepFormat
+
+cmAccording: // кнопка ввода (дополнения) спецификации товаров из другого счета
+  {
+    if (BaseDoc.SpecYes = 0)
+      {
+        Message('Документ-основание не может содержать спецификацию!'
+               , Information);
+        Exit;
+      }
+#include copydo.vpp
+  }
+!----------------------------------------------------------------------------
+cmOpenSearch:
+  {
+  case CurField of
+    #SpStep.Price:
+      {
+      }
+  else
+    ProcessCommand(cmPick);
+  end;
+  Abort;
+  }
+
+!----------------------------------------------------------------------------
+#include docompl.vpp // кнопка ввода (дополнения) спецификации наборами товаров
+!----------------------------------------------------------------------------
+cmValFld2:
+  ButtonPayments;
+
+cmAttrib:
+  MyPass;
+
+!----------------------------------------------------------------------------
+cmValFld13:      //cmAccording:
+ if (SpStep.prMC = 2)
+  {
+   var Sum: double;
+   var procent: double;
+   procent := 0;
+   Sum := 0;
+  if (rundialog('PerCent', procent)<>cmCancel)
+    {
+     PushPos(#SpStep);
+
+     _LOOP spstep
+       if ((SpStep.PrMC = 1) AND
+           (pos(Upcase(trim(sGetTune('Tara.KodGrMcTara'))), Upcase(KatMC.kGroupMC)) <> 1))
+          Sum := Sum + SpStep.Summa*procent/100;
+
+     PopPos(#SpStep);
+     SpStep.Kol := 1;
+     SpStep.KolSkl := 1;
+     set SpStep.Price := Sum;
+
+     if (BaseDoc.cVal <> 0)
+      SpStep.Price := oDOfuns.froundval2_1(SpStep.Price)
+     else
+      SpStep.Price := oDOfuns.froundrub2_1(SpStep.Price);
+
+     if (UpdateTable)
+       { }
+    }
+  }
+!----------------------------------------------------------------------------
+cmNal:
+  {
+    if (not IsValid(#SpStep))
+      {
+        Message('В документе-основании нет спецификации!'
+               , Information);
+        Exit;
+      }
+
+    SpravTov;
+  }
+!----------------------------------------------------------------------------
+cmValue18: // пересчет налогов по выбранной группе
+  {
+    if (BaseDoc.SpecYes = 0)
+      Message('В документе-основании нет спецификации!', Information);
+    else
+      proc18;
+  }
+!----------------------------------------------------------------------------
+#include doattr.vpp //аттрибуты, классификаторы
+#include vssoprhoz.vpp
+#include vschobjs.vpp
+!----------------------------------------------------------------------------
+// связь с книгой финансовых операций
+cmBudgetPlan: // Формирование плановых данных бюджета
+  { if (not UpdateTable)  Exit;
+    RunViewFpOborotBySoprHoz(cgReg_AdmFPPlan, SoprHoz.NRec);
+  }
+cmBudgetFact: // Формирование фактических данных бюджета
+  { if (not UpdateTable)  Exit;
+    RunViewFpOborotBySoprHoz(cgReg_AdmFPFact, SoprHoz.NRec);
+  }
+!----------------------------------------------------------------------------
+cmHotKeys:
+  case CurTable of
+    #BaseDoc:
+      {
+        ChangeEnabledCommands(true);
+
+        SetCommandEnabled(cmVal7   , BaseDoc.SpecYes <> 0);
+        SetCommandEnabled(cmVal8   , BaseDoc.SpecYes <> 0);
+        SetCommandEnabled(cmValue21, BaseDoc.SpecYes <> 0);
+
+#ifndef __MTR_TO_SPEC__
+       if NOT UKS_Used
+        {
+           SetCommandEnabled(cmValue21, FALSE);
+           SetCommandEnabled(cmVal8   , FALSE);
+           SetCommandEnabled(cmVal7   , FALSE);
+        }
+#end
+
+        // динамически добавляется меню
+        // связь с книгой финансовых операций
+        PutHotCommand(RunDynMenu( MakeMenuWithViewFpOborot(#AddComp('L_BASEDOC')'mnuVschetP')
+                                                           + ';SEPARATOR;'
+                                                           + #AddComp('L_BASEDOC')'mnuVschetPVn'  ));
+      }
+    else
+      {
+        if (IsValid(#KatStroy1))
+          SetCommandEnabled(cmValFld16, FALSE);
+
+        if not UKS_Used
+          SetCommandEnabled(cmMulSelDO, FALSE);
+
+        ChangeEnabledCommands(SpStep.PrMc <> 1);
+        PutHotCommand(RunMenu('mnuVschetP1'));
+        ChangeEnabledCommands(true);
+        SetCommandEnabled(cmValFld16, TRUE);
+      }
+  end; // case
+end; // HandleEvent;
+end; // Window
+
+
+//******************************************************************************
+
+Function GetVschetpScreen: longint;
+{
+  GetVschetpScreen := if(BaseDoc.SpecYes = 0, scVSchet, scVSchet2);
+}
+// == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == =
+
+//******************************************************************************
+
+Panel pnVSchet;  // in main
+  Table BaseDoc;
+
+#include dowin.vpp
+
+//******************************************************************************
+
+Procedure SetColSort;
+{
+  if ( wSortField = 1 )
+    SetColumnSorting(brVSchet, #NoDoc, 1);
+  else
+    SetColumnSorting(brVSchet, #BaseDoc.dDoc, 1);
+}
+
+//******************************************************************************
+
+HandleEvent
+!--------------------------------------------------------------------------
+cmDocBas:
+ {
+  if (IsNew)
+    if (not IsModified)
+      { Message('Переход невозможен, так как' +
+             ''#13#3'не заполнен документ.', OkButton);
+        Exit;
+      }
+  if (UpdateTable)
+    RunInterface('InterDoc2Doc', BaseDoc.NRec, word(1));
+ }
+!--------------------------------------------------------------------------
+cmPrintDoc:
+ {
+  if (CurTable = #BaseDoc)
+  {
+    if (IsNew)
+      if (not IsModified)
+        { Message('Переход невозможен, так как' +
+               ''#13#3'не заполнен документ.', OkButton);
+          Exit;
+        }
+    var boPickedDO: boolean;
+    boPickedDO := (GetFirst FastFirstRow Pick3 where ((word(15) == Pick3.wList))<>tsOK)
+
+    saveMyDsk(vidReport,'vidReport_vschet');
+
+    MyPrintDoc;
+
+    vidReport := 0;
+
+    if (boPickedDO) KillPick2;
+    RereadRecord;
+  }
+ }
+
+//******************************************************************************
+
+cmPlansNo:
+  if ( CurTable = #BaseDoc )
+    {
+      Var tmpKM : longint;
+
+      tmpKM := InitMarker('ReestrBDoc_BaseDoc', 8, 100, 10, false);
+
+      ClearMarker(tmpKM);
+
+      PushPos(#Pick2);
+
+      if ( GetFirst Pick2 where (( word(15) ==  Pick2.wList )) = tsOk )
+        _loop Pick2 where (( word(15) ==  Pick2.wList ))
+          InsertMarker(tmpKM, Pick2.cRec);
+      else
+        InsertMarker(tmpKM, BaseDoc.NRec);
+
+      PopPos(#Pick2);
+
+      RunInterface('ReestrBDoc', tmpKM, BaseDoc.VidDoc);
+      DoneMarker(tmpKM, '');
+    }
+
+!----------------------------------------------------------------------------
+cmSetDefault:
+  {
+    if DemoMode
+      {
+        var pRecChecker: RecChecker;
+        if not pRecChecker.CheckBaseDocRecords(tipDO)
+          {
+            Abort;
+            Exit;
+          }
+      }
+
+    if (CurDescr <> sGetTune('User.Descr'))
+      if (message('При создании нового документа выбранные ограничения '+
+                  'по менеджеру будут отменены, установятся ограничения '+
+                  'из Вашей настройки пользователя.'#13#13#3'Продолжить?',
+                  YesNo+Confirmation) <> cmYes)
+         Abort
+       else
+        SetDescrBounds;
+
+    BaseDoc.Direct := 1;
+
+    if (boGetTune('FN.isNumStatDoc'))
+      if ( RunInterface(GetStatD, BaseDoc.cStatDoc) <> cmDefault )
+        if ( Message('Номер ДО будет установлен без учета категории.'#13#13'Продолжить?', Confirmation + YesNo ) <> cmYes )
+          {
+            Abort;
+            Exit;
+          }
+
+#include doset.vpp // для инкремента по SetDef ДО
+#include doclear.vpp // очистка скидок
+
+    if NotEditpos(false)
+    {
+      ProtectRecord(#BaseDoc, TRUE);
+      ProtectRecord(#StepDoc, TRUE);
+    }
+
+    ProcessCommand(cmNullStep);
+
+    if ((_wFltBaseDoc AND 2) <> 0) AND (cFltRecOrg <> comp(0))
+      {
+        BaseDoc.cOrg := cFltRecOrg;
+        SetBankDef;
+      }
+
+    if ((_wFltBaseDoc AND 8) <> 0)
+      BaseDoc.DesGr := sFltGrDes;
+
+    if boGetTune('Doc.AvtoGrDo')  // запрос группы ДО
+      {
+        cGrDo := 0;
+        RunInterface('GetGroupSch', 3, 3, 0, FALSE, cGrDo, FALSE);
+
+        if (GetFirst GroupSch where((cGrDo == GroupSch.NRec)) = tsOk)
+          if ((_wFltBaseDoc AND 2) = 0)
+            {
+              if ( GroupSch.cOrg <> 0 )
+                {
+                  #include DoKontrBefore.vpp
+
+                  BaseDoc.cOrg := GroupSch.cOrg;
+
+                  #include DoKontrAfter.vpp
+                }
+            }
+          else
+            if (cFltRecOrg <> GroupSch.cOrg)
+              {
+                Message('Выбранная группа договоров относится к другому контрагенту!');
+                cGrDO := comp(0)
+              }
+      }
+
+    if oStatUser.Descr_Stat_U(true, typsoprhoz, CurDescr, BaseDoc.cNote)
+      BaseDoc.Status := KatNotes.Status;
+    else
+      BaseDoc.cNote := oNotes.GetFirstNote(word(40), BaseDoc.Status);
+
+#include rsv.vpp // изменение видимости полей
+
+    oDOfuns.SetRoundFormat(tipDO, BaseDoc.cVal <> 0);
+
+    if (BaseDoc.SpecYes = 0)
+     {
+       SetFormat(scVSchet);
+       // для изменения статус-строки при наложении фильтров
+       _FltScrFormat := scVSchet;
+     }
+    else
+     {
+       SetFormat(scVSchet2);
+       // для изменения статус-строки при наложении фильтров
+       _FltScrFormat := scVSchet2;
+     }
+
+    SetFltStatusContext;
+    SelectableSpStep;
+
+    BaseDoc.ProcOpl := 100.0;
+
+    SaveMyDsk(TRUE, 'BaseDoc_MakeDO');
+
+    epBeforeMakeDO(TBaseDoc(BaseDoc.Buffer));
+
+    var Datechanged, ChanSt: boolean;
+
+    ReadMyDsk(ChanSt, 'BaseDoc_MakeDO', Datechanged);
+
+    if not ChanSt
+      {
+        Abort;
+        Exit;
+      }
+
+    if (CurWindow < 0)
+      PutCommand(cmValue1);
+    SelectField(#NoDoc);
+    ProcessCommand(cmIdle);
+  }
+!----------------------------------------------------------------------------
+cmDefault:
+  {
+    // сохранение помеченных
+    delete all tmpPicked;
+
+    _LOOP Pick3 where ((word(15) == Pick3.wList))
+     {
+       ClearBuffer(tntmpPicked);
+       tmpPicked.wList  := Pick3.wList;
+       tmpPicked.PickNum := Pick3.PickNum;
+       tmpPicked.pickkol := Pick3.pickkol;
+       tmpPicked.cRec   := Pick3.cRec;
+       insert current tmpPicked;
+     }
+
+    KillPick2;
+
+    _CanModify      := TRUE;
+    _CanModifyQuery := TRUE;
+
+    var NeedProtect: boolean;
+
+    if NotEditPos(FALSE)
+      NeedProtect := TRUE
+    else
+      {
+        _CanModifyQuery := oSDfuns.CanModifyDocument(BaseDoc.NRec, typsoprhoz, TRUE);
+        NeedProtect     := not _CanModifyQuery;
+      }
+
+    if ( NotEditPosStatus(FALSE))
+      NeedProtect := TRUE
+    else
+      if boGetTune('Doc.Sell.NotEditDO')
+        if ( IsValid(tnBaseFin) OR IsValid(tnKatSopr) )
+          NeedProtect := TRUE;
+
+    ProtectRecord(#BaseDoc, NeedProtect);
+    ProtectRecord(#StepDoc, NeedProtect);
+    ProtectRecord(#SpStep,  NeedProtect);
+
+    oDOfuns.SetRoundFormat(tipDO, BaseDoc.cVal <> 0);
+    RunWindow(wVSchetZ);
+    SelectField(#BaseDoc.dDoc);
+    RescanPanel(#BaseDoc);
+    Stop;
+  }
+!----------------------------------------------------------------------------
+cmCheckRecord:
+  if (BaseDoc.cOrg = 0)
+    {
+      Message('В документе-основании необходимо указать контрагента',
+                        Warning + OkButton);
+      SelectField(#KatOrg.Name);
+      Abort;
+    }
+  else
+    {
+      if (not (IsValid(tnKatPayment) AND IsValidNew(tnKatPayMent)))
+       if (boGetTune('Doc.Sell.FormPlatPO'))
+        {
+          Message('В документе-основании не указана форма расчета!',
+                  Warning + OkButton);
+        }
+      if (BaseDoc.cCalPlan <> 0)
+        oChkSchem.CheckSchem(BaseDoc.cCalPlan, word(403), BaseDoc.nRec, typsoprhoz, TRUE)
+      else
+        if (BaseDoc.cAppDogovor <> 0)
+          oChkSchem.CheckSchem(BaseDoc.cAppDogovor, word(401), BaseDoc.nRec, typsoprhoz, TRUE)
+        else
+          if (BaseDoc.cDogovor <> 0)
+            oChkSchem.CheckSchem(BaseDoc.cDogovor, word(400), BaseDoc.nRec, typsoprhoz, TRUE);
+    }
+!----------------------------------------------------------------------------
+cmInsertRecord:
+  if ((BaseDoc.TipMoney <> 1) AND ( BaseDoc.cVal = 0 ))
+       {
+         Message('Задайте базовую валюту для документа!', Confirmation);
+         if (CurWindow > 0)
+           {
+             SelectField(#SimVolB);
+             PutCommand(cmPick);
+           }
+         Abort
+       }
+  else
+    {
+#include doins.vpp // для инкремента по insert ДО
+      BaseDoc.Nrec := 0;
+
+      if (BaseDoc.cGrPol = comp(0))
+        BaseDoc.cGrPol := BaseDoc.cOrg;
+      if (BaseDoc.cGrOtpr = comp(0))
+        BaseDoc.cGrOtpr := coGetTune('MyOrg');
+      if (BaseDoc.cNazna = comp(0))
+        BaseDoc.cNazna := coGetTune('Doc.cNazna');
+
+      if ( insert current BaseDoc <> tsOk )
+        {
+          message('Ошибка добавления записи в таблицу BASEDOC'#13#13
+                + 'Для отмены ввода нажмите <Alt+Backspace>', Error + OkButton);
+          Abort;
+          Exit;
+        }
+
+      if (cGrDo <> 0) AND boGetTune('Doc.AvtoGrDo')
+       {
+        ClearBuffer(#SpGrSch);
+        SpGrSch.cGroupSch := cGrDo;
+        insert current SpGrSch;
+       }
+      ProcessCommand(cmNullStep);
+      dStart := BaseDoc.dDoc;
+      StepDoc.dEnd := BaseDoc.dEnd;
+      if (BaseDoc.cVal = 0)
+        {
+          StepDoc.Summa := Total;
+          StepDoc.SumVal := 0;
+        }
+      else
+        {
+          StepDoc.Summa := 0;
+          StepDoc.SumVal := Total;
+        }
+      StepDoc.cVal := BaseDoc.cVal;
+      StepDoc.Name := BaseDoc.Name;
+      StepDoc.Status := BaseDoc.Status;
+      StepDoc.Nrec := 0;
+      StepDoc.cBaseDoc := BaseDoc.Nrec;
+      if (insert current StepDoc <> 0)
+         Message('not insert step', 0);
+
+      InsertDoSoprHoz;
+      piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocInsert);
+    }
+!----------------------------------------------------------------------------
+cmUpdateRecord:
+  if ((BaseDoc.TipMoney <> 1) AND ( BaseDoc.cVal = 0 ))
+       {
+         Message('Задайте базовую валюту для документа!', Confirmation);
+         if (CurWindow > 0)
+           {
+            SelectField(#SimVolB);
+            PutCommand(cmPick);
+           }
+         Abort
+       }
+  else {
+         update current BaseDoc;
+         dStart := BaseDoc.dDoc;
+         StepDoc.dEnd := BaseDoc.dEnd;
+         if (BaseDoc.cVal = 0)
+              {
+                StepDoc.Summa := Total;
+                StepDoc.SumVal := 0;
+              }
+         else {
+                StepDoc.Summa := 0;
+                StepDoc.SumVal := Total;
+              }
+         StepDoc.cVal := BaseDoc.cVal;
+         StepDoc.Name := BaseDoc.Name;
+         StepDoc.Status := BaseDoc.Status;
+         if (update current StepDoc <> 0)
+            Message('not update step', 0);
+
+         UpDateDoSoprHoz;
+      piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocUpdate);
+       }
+!----------------------------------------------------------------------------
+cmAbortInsert:
+  if ( not IsMakingDOOnDog )
+    DelLastNumDOnBaseDoc;
+!----------------------------------------------------------------------------
+cmDelete:
+{
+  if (IsNew)
+    DelLastNumDOnBaseDoc;
+
+    _CanModify := TRUE;
+    if ( not EditDOPosEnabled(true, true) )
+      Exit;
+    else
+      if not oSDfuns.CanDeleteDocumentOborot(BaseDoc.NRec, typsoprhoz)
+        {
+          Stop;
+          Exit;
+        }
+      else
+        {
+          ProtectRecord(#BaseDoc, FALSE);
+          ProtectRecord(#StepDoc, FALSE);
+          ProtectRecord(#SpStep, FALSE);
+        }
+}
+!----------------------------------------------------------------------------
+cmDeleteRecord:
+  if EditDOPosEnabled(true, true)
+   {
+    if SomePicked AND boGetTune('Doc.DelByMarker')
+    {
+      if (message('Удалить помеченные документы?', YesNo+mfSwapButtons) = yes)
+      {
+        ResetBounds(#Pick2);
+
+        _LOOP Pick2 where ((word(15) == Pick2.wList))
+        {
+          if (GetFirst BaseDoc where (( Pick2.cRec == BaseDoc.nRec )) = tsOk)
+            if DoBaseDocDelete(true)
+              { }
+        }
+        SetBounds(#Pick2);
+        KillPick2;
+      }
+      RereadRecord(#BaseDoc)
+      Exit;
+    }
+    if (message('Удалить текущий документ?', YesNo+mfSwapButtons) <> yes)
+      Abort
+    else
+     {
+       if DoBaseDocDelete(false)
+        RereadRecord(#BaseDoc)
+       else Abort;
+     }
+   }
+  else Abort;
+!----------------------------------------------------------------------------
+cmPick:
+  {
+    if (CurField = #KatNotes.Name)
+      {
+        if ((not IsValid(tnSpStep)) AND (BaseDoc.SpecYes <> 0))
+          {
+            Message('Нет товарных позиций!'#13#3+
+                    'Изменить статус нельзя...', Warning+CancelButton);
+            Exit;
+          }
+
+        if (BaseDoc.cOrg = comp(0))
+          {
+            Message('Не задан контрагент!'#13#3+
+                    'Изменить статус нельзя...', Warning+CancelButton);
+            Exit;
+          }
+
+        if (BaseDoc.Status = 1)
+          {
+            if (wGetTune('Doc.DolgKontr') <> 0)
+              {
+  #ifdef _CheckKon_VIH_
+                if NullVipRef(oCheckKon) GetVipRef(oCheckKon, 'KatOrg');
+                if (not oCheckKon.CheckDolgKon(BaseDoc.cOrg, BaseDoc.dDoc, BaseDoc.Total, BaseDoc.cVal))
+  #else
+                if (not CheckDolgKon(BaseDoc.cOrg, BaseDoc.dDoc, BaseDoc.Total, BaseDoc.cVal))
+  #end
+                  {
+                    Abort;
+                    Exit;
+                  }
+              }
+
+            if (wGetTune('OPER.Dogovor.ControlDO') <> 0) // Контроль в ДО наличия ссылки на договор
+              if (BaseDoc.cDogovor = comp(0))
+                {
+                  Message('Нет ссылки на договор!'#13'Изменение статуса запрещено!'#13#13+
+                          GetTuneName('OPER.Dogovor.ControlDO'),
+                          Warning + CancelButton);
+
+                  Abort;
+                  Exit;
+                }
+          }
+
+        Var cn1 : comp;
+        Var st  : word;
+
+        cn1 := BaseDoc.cNote;
+        st  := BaseDoc.Status;
+
+        SaveMyDsk(TRUE, 'BaseDoc_ChangeStatusDO');
+
+        epBeforeChangeStatusDO(TBaseDoc(BaseDoc.Buffer));
+
+        var Datechanged, ChanSt: boolean;
+
+        ReadMyDsk(ChanSt, 'BaseDoc_ChangeStatusDO', Datechanged);
+
+        if not ChanSt
+          {
+            Abort;
+            Exit;
+          }
+
+        UpdateTable;
+
+        if not RunPostStatusChangeAlg(cn1, TRUE)
+          Exit;
+
+        ReReadRecord(#BaseDoc);
+
+        if (RunInterface('StatLog',
+                          word(1024+1),
+                          BaseDoc.NRec,
+                          word(typsoprhoz),
+                          BaseDoc.Status,
+                          BaseDoc.cNote,
+                          word(0)) = cmCancel)
+          {
+            Abort;
+            Exit;
+          }
+
+        set BaseDoc.Status := BaseDoc.Status;
+        set BaseDoc.cNote  := BaseDoc.cNote;
+
+        UpdateTable;
+
+        if not RunPostStatusChangeAlg(cn1, FALSE)
+          {
+            oStatLog.StatLog_InsNewStat(word(40),
+                                        BaseDoc.nRec,
+                                        BaseDoc.Status,
+                                        BaseDoc.cNote,
+                                        st,
+                                        cn1,
+                                        'Изменение статуса блокировано алгоритмом');
+
+            Update Current BaseDoc set BaseDoc.Status := st,
+                                       BaseDoc.cNote  := cn1;
+          }
+
+        ReReadRecord(#BaseDoc);
+      }
+  }
+
+cmMarkUnMark:
+  Pick2Ins;
+
+cmSelectall:
+  Pick2Plus;
+
+cmUnSelectall:
+  Pick2Minus;
+
+cmColumnClicked :
+{
+  if ( (Target <> #BaseDoc.dDoc) and (Target <> #NoDoc) )
+    exit;
+
+  if ( Target = #NoDoc )
+    {
+      if ( CurVisib <> dcAllModif )
+        {
+          Message( 'Для установки сортировки по полю "Номер" настройка'#13
+                 + '"Доступ к документам" должна иметь значение "все права".'
+                 );
+
+          exit;
+        }
+
+      if ( (not BoundActive(tbMainBoundOdDoc)) and (not BoundActive(tbMainBoundONoDoc)) )
+        {
+          Message( 'Для установки сортировки по полю "Номер"'#13
+                 + '             необходимо снять фильтр.'
+                 );
+
+          exit;
+        }
+
+      if ( BoundActive(tbMainBoundOdDoc) )
+        {
+          PopBounds(tbMainBoundOdDoc);
+          PushBounds(tbMainBoundONoDoc);
+        }
+
+      wSortField := 1;
+    }
+  else
+    {
+      if ( BoundActive(tbMainBoundONoDoc) )
+        {
+          PopBounds(tbMainBoundONoDoc);
+          PushBounds(tbMainBoundOdDoc);
+        }
+
+      wSortField := 0;
+    }
+
+  SetColSort;
+  ReReadRecord;
+}
+
+!----------------------------------------------------------------------------
+end; // HandleEvent
+end; // Panel
+
+
+
+#include ofpdof2.vpp
+
+//******************************************************************************
+
+HandleEvent  // для интерфейса
+!--------------------------------------------------------------------------
+#include dofilt.vpp
+!----------------------------------------------------------------------------
+cmValue1:
+  RunWindow(wVSchetZ);
+!----------------------------------------------------------------------------
+cmValue8:
+  {
+    var PrRasUsl: boolean;  // признак расчетной услуги
+    var NSpecif: string;
+    var PrNom   : word;
+    var UsAll   : word;    UsAll := SpStep.PrUsNkl;
+    var TruncedEd: longint; TruncedEd := 0;
+
+    PrRasUsl := FALSE;
+    PrNom := SpStep.PrMC;
+    pmc_ := SpStep.cMcUsl;
+    if (PrNom = 1)
+      {
+        w1 := RunInterface('GetSomeMC', pmc_)
+        WordPV := 7;
+      }
+    else
+      {
+        w1 := RunInterface('GetSomeUsl', pmc_);
+        WordPV := 12;
+      }
+
+    var NRecSaved: comp;
+    NRecSaved := 0;
+
+    if (w1 = cmCancel)
+      Abort
+    else
+     { if (not IsNew)
+         {
+           var cSmet: comp;
+           var cDO: comp;
+           if (GetFirst SpDocSmeta where ((coSpStep == SpDocSmeta.coTable AND
+                                           SpStep.nRec == SpDocSmeta.cSpec)) = tsOk)
+           {
+             cSmet := SpDocSmeta.cPosition;
+             cDO := SpStep.cStepDoc;
+
+             _LOOP SpDocSmeta1 where ((coSpStep == SpDocSmeta1.coTable AND
+                                       cDO == SpDocSmeta1.cDoc AND
+                                       cSmet == SpDocSmeta1.cPosition))
+             {
+               if (GetFirst SpStep where ((SpDocSmeta1.cSpec == SpStep.nRec)) = tsOk)
+                 { }
+
+               SubResTov(SpStep.Reserv); // Снятие резерва по товару
+               SubResRazrez; // Снятие резерва по складу
+               DelPosDORES;
+               DelPosSpDocNal;
+               oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+               oDOfuns.SpStep_Delete(SpStep.nRec);
+             }
+           }
+           else
+           {
+             SubResTov(SpStep.Reserv); // Снятие резерва по товару
+             SubResRazrez; // Снятие резерва по складу
+             DelPosDORES;
+             DelPosSpDocNal;
+             oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+             oDOfuns.SpStep_Delete(SpStep.nRec);
+           }
+         }
+       if (GetFirst Pick where ((WordPV == Pick.wList)) = tsOk)
+       {
+
+         _LOOP Pick where ((WordPV == Pick.wList)) ordered by index pick02
+         {
+           if (GetFirst FastFirstRow KatOtpEd
+                  where (( Pick.cRec == KatOtpEd.cMCUSL AND
+                           word(1)   == KatOtpEd.Akt AND
+                           if(prnom<>1,
+                            word(2),
+                            word(1)) == KatOtpEd.PrMC )) = tsOk)
+             SpStep.cOtpEd := KatOtpEd.Nrec
+           else
+             {
+               NSpecif := '';
+               if (PrNom = 1)
+                 {
+                   if (GetFirst FastFirstRow KatMC
+                          where ((Pick.cRec == KatMc.NRec)) <> tsOk)
+                     NSpecif := KatMC.Name;
+                 }
+               else
+                 {
+                   if (GetFirst FastFirstRow KatUsl
+                          where ((Pick.cRec == KatUsl.NRec)) <> tsOk)
+                     NSpecif := KatUsl.Name;
+                 }
+               Message('Не задана активная отпускная единица '+
+                  'измерения для ' + NSpecif + '!', Warning);
+               SpStep.cOtpEd := 0;
+             }
+
+           SpStep.nRec := 0;
+
+           if ( GetFirst SpStepC where (( SpStep.nRec == SpStepC.nRec )) <> tsOk )
+             oLinkMTR2Spec.DelVal(word(coSpStep), SpStep.nRec);
+
+           SpStep.nRec := GetNextNRec(#SpStep, 0);
+           oLinkMTR2Spec.SetVal(word(coSpStep), SpStep.nRec, coGetTune('CelUchForModul.SELL'));
+
+           SpStep.cGrNal := 0;
+           SpStep.dDoc := BaseDoc.dDoc;
+           SpStep.cMcUsl := Pick.cRec;
+           SpStep.KolSkl := Pick.PickKol;
+           //проверка на неделимость отп.ед. для МЦ
+           if (SpStep.cOtpEd <> 0) AND (KatOtpEd.Diskret = 1) AND
+              (trunc(SpStep.KolSkl) <> SpStep.KolSkl)
+             {
+               SpStep.KolSkl := trunc(SpStep.KolSkl);
+               TruncedEd     := TruncedEd + 1;
+             }
+
+           if  ((SpStep.KolSkl = 0) AND (WordPV = 12))
+             {
+               if (GetFirst FastFirstRow KatUsl = tsOk)
+                 { }
+
+               SpStep.KolSkl := KatUsl.KolAkt;
+               SpStep.cGrNal := KatUsl.cGrNal;
+             }
+
+           SpStep.Kol := SpStep.KolSkl;
+           SpStep.ProcUb := 0;
+           SpStep.PrMC := PrNom;
+           if ((BaseDoc.VidDoc = 201)AND(SpStep.PrMC = 2))  // для ДО на продажу
+             SpStep.PrUsNkl := UsALL;
+           if (SpStep.PrMC = 1)
+            {
+               if (GetFirst FastFirstRow KatMC where (( Pick.cRec == KatMC.nRec )) = tsOk)
+                 {
+                   SpStep.ProcUb := oSDfuns.GetNormUbFromKatalog(oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc), 0, KatMC.NormUb);
+                   SpStep.Kol    := SpStep.KolSkl * (1-SpStep.ProcUb/100);
+                   SpStep.cMasEd := KatMC.cMasEd;
+                   SpStep.Netto  := KatMC.Massa;
+                   SpStep.mTara  := KatMC.mTara;
+                   SpStep.cGrNal := KatMC.cGrNal;
+                 }
+            }
+           SpStep.cStepDoc := StepDoc.NRec;
+           SpStep.Price := 0;
+           SpStep.cVal := StepDoc.cVal;
+           SpStep.Summa := 0;
+           SpStep.SumVal := 0;
+           SpStep.Nds := 0;
+           SpStep.Reserv := 0;
+           SpStep.cSpMC  := 0;
+           addallmc := 1;
+#include DOUKS.vpp
+           SpStep.Npp := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+           insert current SpStep;
+           if (NrecSaved = 0) // запомнить первую вставляемую позицию
+             NRecSaved := SpStep.Nrec;
+           if ((SpStep.PrMC <> 1) AND (KatUsl.TYPEUSL = 1))
+             {
+               RunInterface('GETPAR1', 0, SpStep.Nrec, KatUsl.Nrec, SpStep.Price, SpStep.KolSkl, word(coSpStep));
+               SpStep.Kol := SpStep.KolSkl;
+               UpDate current SpStep;
+
+               PrRasUsl := TRUE;
+             }
+           if UseDEI
+           {
+             oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, 0, SpStep.KolSkl, 0, BaseDoc.VidDoc);
+             oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, 0, SpStep.Kol, 0, BaseDoc.VidDoc);
+           }
+         }
+
+         GetTotalSkid(false);
+
+         if (NrecSaved > 0)
+           {
+             if (GetFirst SpStep where ((NrecSaved == SpStep.Nrec)) <> tsOk)
+               { }
+           }
+         else
+           {
+             if (GetFirst SpStep <> tsOk)
+               { }
+           }
+       }
+       RereadRecord;
+       SelectField(#SpStep.Price);
+       if (TruncedEd <> 0)
+         Message('Произведено отбрасывание дробной части для позиций'#13#3+
+                  'с неделимыми отпускными единицами измерения.'#13#13#3+
+                  'Всего сделано изменений: ' + string(TruncedEd)+'.',
+                  Information+OkButton);
+     }
+  }
+
+!-------------------------------------------------------------------------------
+cmValue28:
+  {
+    var PrRasUsl: boolean;  // признак расчетной услуги
+    var NSpecif   : string;
+    var PrNom     : word;
+    var UsAll     : word;    UsAll     := SpStep.PrUsNkl;
+    var TruncedEd: longint; TruncedEd := 0;
+
+    var bisNew: boolean;
+    bisNew := IsNew;
+
+    PrNom := SpStep.PrMC;
+    pmc_ := SpStep.cMcUsl;
+    w1 := RunInterface('GetSmetaMCU'
+                     , '51' //строковый тип документа для хранения настроек в DSK
+                     , 0       //0-строительство/1-ремонты/100-все (SmetaStroy.coTable)
+                     , 2       //контроль остатков МЦ (0-нет/1-да/2-на выбор)
+                     , 0       //на будущее
+                     , 0       //ссылка на смету
+                     , 0       //ссылка на спецификацию сметы
+                     , 0       //признак 0-МЦ/1-Услуги
+                     , 0       //1-МЦ/2-Услуга
+                     , 0       //Подразделение (для МЦ)
+                     , 0       //МОЛ           (для МЦ)
+                     , 0       //Партия        (для МЦ)
+                     , 0       //режимы выбора
+                    );
+
+    var NRecSaved: comp;
+    NRecSaved := 0;
+
+    if (w1 = cmCancel)
+      {
+        Abort; Exit;
+      }
+    else
+     {
+       if (not bisNew)
+         {
+           SubResTov(SpStep.Reserv); // Снятие резерва по товару
+           SubResRazrez; // Снятие резерва по складу
+           DelPosDORES;
+           DelPosSpDocNal;
+           oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+           oDOfuns.SpStep_Delete(SpStep.nRec);
+         }
+
+       _LOOP PickSmeta where ((word(0) == PickSmeta.wList))
+       {
+
+         _LOOP SpDocSmeta where ((coSpStep == SpDocSmeta.coTable AND
+                                         StepDoc.NRec == SpDocSmeta.cDoc AND
+                                         PickSmeta.cPosition == SpDocSmeta.cPosition))
+           if (GetFirst SpStepSmet where ((SpDocSmeta.cSpec == SpStepSmet.nRec)) = tsOk)
+             {
+               if (not bisNew)
+                 PushPos(#SpStep);
+               if (GetFirst SpStep where ((SpStepSmet.nRec == SpStep.nRec)) = tsOk)
+               {
+                 SubResTov(SpStep.Reserv); // Снятие резерва по товару
+                 SubResRazrez; // Снятие резерва по складу
+                 DelPosDORES;
+                 DelPosSpDocNal;
+                 oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);//volod
+                 oDOfuns.SpStep_Delete(SpStep.nRec);
+               }
+               if (not bisNew)
+                 PopPos(#SpStep);
+             }
+       }
+       if (RecordExists PickSmeta where ((Word(0) == PickSmeta.wList)) = tsOk)
+       {
+         StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+                         'Пополнение спецификации документа выбранными '+
+                         'позициями сметы...'#13#3, 1);
+
+         _LOOP PickSmeta where ((Word(0) == PickSmeta.wList)) ordered by PickSmeta.NPP
+         {
+           if not NextVisual Break;
+           PrNom := PickSmeta.PrMC;
+           if (GetFirst FastFirstRow KatOtpEd
+                  where (( PickSmeta.cMCUsl       == KatOtpEd.cMCUSL AND
+                           word(1)         == KatOtpEd.Akt    AND
+                           PrNom == KatOtpEd.PrMC )) = tsOk)
+             SpStep.cOtpEd := KatOtpEd.Nrec
+           else
+             {
+               NSpecif := '';
+               if (PrNom = 1)
+                 {
+                   if (GetFirst FastFirstRow KatMC
+                          where ((PickSmeta.cMCUsl == KatMc.NRec)) <> tsOk)
+                     NSpecif := KatMC.Name;
+                 }
+               else
+                 {
+                   if (GetFirst FastFirstRow KatUsl
+                          where ((PickSmeta.cMCUsl == KatUsl.NRec)) <> tsOk)
+                     NSpecif := KatUsl.Name;
+                 }
+               Message('Не задана активная отпускная единица '+
+                  'измерения для ' + NSpecif + '!', Warning);
+               SpStep.cOtpEd := 0;
+             }
+           SpStep.NRec   := 0;
+           SpStep.Price  := 0;
+           SpStep.cGrNal := 0;
+           SpStep.dDoc   := BaseDoc.dDoc;
+           SpStep.cMcUsl := PickSmeta.cMCUsl;
+           SpStep.KolSkl := PickSmeta.Kol / KatOtpEd.Koef;
+           SpStep.PrMC   := PrNom;
+
+           if  ((SpStep.KolSkl = 0) AND (SpStep.PrMC = 2))
+             {
+               if (GetFirst KatUsl = tsOk)
+                 { }
+
+               SpStep.KolSkl := KatUsl.KolAkt;
+               SpStep.cGrNal := KatUsl.cGrNal;
+             }
+
+           //проверка на неделимость отп.ед. для МЦ
+           if (SpStep.cOtpEd <> 0) AND
+              (trunc(SpStep.KolSkl) <> SpStep.KolSkl)
+             if (KatOtpEd.Diskret = 1)
+              {
+               SpStep.KolSkl := trunc(SpStep.KolSkl);
+               TruncedEd     := TruncedEd + 1;
+              }
+
+           SpStep.Kol := SpStep.KolSkl;
+           SpStep.ProcUb := 0;
+           if ((BaseDoc.VidDoc = 201)AND(SpStep.PrMC = 2))  // для ДО на продажу
+             SpStep.PrUsNkl := UsALL;
+           if (SpStep.PrMC = 1)
+             {
+               if (GetFirst FastFirstRow KatMC where
+                    ((PickSmeta.cMCUsl == KatMC.Nrec)) = tsOk)
+                 { }
+
+               SpStep.ProcUb := oSDfuns.GetNormUbFromKatalog(oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc), 0, KatMC.NormUb);
+               SpStep.Kol    := SpStep.KolSkl * (1-SpStep.ProcUb/100);
+               SpStep.cMasEd := KatMC.cMasEd;
+               SpStep.Netto  := KatMC.Massa;
+               SpStep.mTara  := KatMC.mTara;
+               SpStep.cGrNal := KatMC.cGrNal;
+             }
+           SpStep.cStepDoc := StepDoc.NRec;
+           SpStep.cVal := StepDoc.cVal;
+           SpStep.Price  := 0;
+           SpStep.Summa  := 0;
+           SpStep.SumVal := 0;
+           SpStep.Nds    := 0;
+           SpStep.Reserv := 0;
+           SpStep.PrSkid := 1; //вариант учета скидки
+           SpStep.VlSkid := 0; //величина скидки
+           SpStep.cSpMC  := 0;
+
+           //--Сметные цены
+           var dValDO_Smet: Date;
+           var NewPr_Smet  : double;
+           if (GetFirst FastFirstRow SmetaStroy
+                        where ((PickSmeta.cSmeta == SmetaStroy.NRec)) = tsOk)
+            {
+             dValDO_Smet  := if(BaseDoc.dValCurse = Date(0, 0, 0), BaseDoc.dDoc, BaseDoc.dValCurse);
+             NewPr_Smet   := oValFunc.GetAnyCurrency(SmetaStroy.cVal, PickSmeta.Price
+                                                    , dValDO_Smet, SpStep.cVal) * KatOtpEd.Koef;
+             SpStep.Price := oDOfuns.DoRoundP(BaseDoc.cVal, BaseDoc.VidDoc, NewPr_Smet);
+            }
+
+           addallmc := 1;
+#include DOUKS.vpp
+           SpStep.Npp  := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+           insert current SpStep;
+           if (NrecSaved = 0) // запомнить первую вставляемую позицию
+             NRecSaved := SpStep.Nrec;
+           if ((SpStep.PrMC <> 1) AND (KatUsl.TYPEUSL = 1))
+             {
+               RunInterface('GETPAR1', 0, SpStep.Nrec, KatUsl.Nrec, SpStep.Price, SpStep.KolSkl, word(coSpStep));
+               SpStep.Kol := SpStep.KolSkl;
+               UpDate current SpStep;
+
+               PrRasUsl := TRUE;
+             }
+           if UseDEI
+           {
+             oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, 0, SpStep.KolSkl, 0, BaseDoc.VidDoc);
+             oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, 0, SpStep.Kol, 0, BaseDoc.VidDoc);
+           }
+
+           if (NrecSaved = 0) // запомнить первую вставляемую позицию
+             NRecSaved := SpStep.Nrec;
+
+           oMTRFun.GenSpecMTRForUKS(coSpStep, SpStep.nRec, PickSmeta.cObj, PickSmeta.cAddSumTune);
+
+           //--Обновляем связь спецификации документа со сметой
+           ClearBuffer(#SpDocSmeta);
+           SpDocSmeta.coTable   := coSpStep;
+           SpDocSmeta.cDoc      := StepDoc.NRec;
+           SpDocSmeta.cSpec     := SpStep.nRec;
+           SpDocSmeta.cSmeta    := PickSmeta.cSmeta;
+           SpDocSmeta.cPosition := PickSmeta.cPosition;
+           SpDocSmeta.cResource := PickSmeta.cResource;
+           SpDocSmeta.TipRes    := PickSmeta.TipRes;
+           SpDocSmeta.Kol       := PickSmeta.KolJob;
+           insert current SpDocSmeta;
+         }
+         StopVisual('', 0);
+         GetTotalSkid(false);
+
+         if (NrecSaved > 0)
+           {
+             if (GetFirst SpStep
+                    where ((NrecSaved == SpStep.nRec)) <> tsOk)
+               { }
+           }
+         else
+           {
+             if (GetFirst SpStep <> tsOk)
+               { }
+           }
+       }
+       Delete PickSmeta where ((word(0) == PickSmeta.wList));
+       RereadRecord;
+       SelectField(#SpStep.Price);
+     }
+
+   if (TruncedEd <> 0)
+     Message('Произведено отбрасывание дробной части для позиций'#13#3+
+              'с неделимыми отпускными единицами измерения.'#13#13#3+
+              'Всего сделано изменений: ' + string(TruncedEd)+'.',
+              Information+OkButton);
+  }
+
+cmIdle:
+  {
+    #include rsv.vpp
+    #include doclear.vpp
+
+    oDOfuns.SetRoundFormat(tipDO, BaseDoc.cVal <> 0);
+
+    OldTotal := BaseDoc.Total;
+  }
+!----------------------------------------------------------------------------
+cmInit:
+  {
+    VidReport  := 0;
+    typsoprhoz := 53;
+
+    SetColumnTitle(brVschet, #KatOrg.Name, 'Плательщик');
+    SetWindowHelpCtx(hcDOPredWSpisokDO, wnMainWindow);
+
+    if ( not Lic_ItemExists('CEL_UCH') )
+      SetTabbedSheetVisible(scKauEdit, false);
+    else
+      {
+        BindEmbeddedInterface(scKauEdit, oLinkMtr2Spec);
+        BindEvent(MakePageUp, oLinkMTR2Spec.DoPageUp);
+        BindEvent(MakePageDown, oLinkMTR2Spec.DoPageDown);
+      }
+
+    if ( (not Lic_ItemExists('CEL_UCH')) or (not boGetTune('Oper.CelUch.ShowKAU')) )
+      {
+        SetFieldVisible(#SaldTune.Name, false);
+        SetFieldVisible(#vsKau1, false);
+        SetFieldVisible(#vsKau2, false);
+        SetFieldVisible(#vsKau3, false);
+        SetFieldVisible(#vsKau4, false);
+        SetFieldVisible(#vsKau5, false);
+        SetFieldVisible(#vsKau6, false);
+        SetFieldVisible(#vsKau7, false);
+        SetFieldVisible(#vsKau8, false);
+        SetFieldVisible(#vsKau9, false);
+        SetFieldVisible(#vsKau10, false);
+      }
+
+    CurGroup := 0;
+    SpStepFormat := 0;
+    PushBounds ( tbBrowseSpStep );
+
+    oValFunc.InitVal;
+
+    prFormat := 0;
+    tipDo    := 211;
+
+    _LOOP tmpSaldo3
+      if (GetFirst BaseDocC where ((tmpSaldo3.cMc == BaseDocC.NRec)) = tsOk)
+        if (tipDo = BaseDocC.VidDoc)
+          delete current tmpSaldo3;
+
+    SetFormat(brVschet);
+    CheckOfpFieldVisible;
+
+    oDOfuns.SetRoundFormat(tipDO, BaseDoc.cVal <> 0);
+#include initdo.vpp
+#include doclear.vpp
+    SklOtgr := 'Склад отгрузки';
+    SetFieldVisible(#SklOtgr     , FALSE);
+    SetFieldVisible(#KatPodr.Name, FALSE);
+
+    SelectField(#KatOrg.Name);
+
+    addallmc := 0;
+
+    fNal := InitNalServ;
+
+    UseDEI  := boGetTune('Doc.DEI.DO');
+    AutoDEI := boGetTune('Doc.DEI.Auto.DO');
+
+    if (UseDEI)
+      {
+        SetHelpAndStatusContext(brSpSchet    , #SpStep.KolSkl, sci1378Esc        , -1);
+        SetHelpAndStatusContext(trSpSchet    , #SpStep.KolSkl, sci1378EscTreePlus, -1);
+        SetHelpAndStatusContext(scSpStepMC   , #SpStep.Kol   , sci1378Esc        , -1);
+      }
+
+    if ( not Lic_ItemExists('SmetaDocs') )
+      {
+        ClearFieldState(#SmetaMy,   sfVisible);
+        ClearFieldState(#SmetaSpMy, sfVisible);
+        DisableCommand(cmMulSelDO);
+      }
+
+    InitWin;
+
+    if ( bFilterOD )
+      {
+        FilterOnDoc;
+        wSortField := 0;
+
+        if ( (BaseNrec <> 0) and (BaseNrec <> -1) and (BaseDoc.nRec <> BaseNrec) )
+          {
+            ResetAllFilters;
+
+            if ( GetFirst BaseDoc where (( BaseNrec == BaseDoc.Nrec )) <> tsOk )
+              if ( GetLast BaseDoc <> tsOk )
+                {}
+          }
+      }
+    else
+      {
+        if (  (CurVisib <> dcAllModif)
+           or (not ReadMyDsk(wSortField, 'vschetp_def_sort_field', true))
+           )
+          wSortField := 0;
+
+        if ( wSortField = 1 )
+          {
+            if (NOT BoundActive(tbMainBoundONoDoc))
+              AddBounds(tbMainBoundONoDoc);
+          }
+        else
+          if (NOT BoundActive(tbMainBoundOdDoc))
+            AddBounds(tbMainBoundOdDoc);
+
+        SetColSort;
+      }
+
+    // для пересканирования
+    if (ExistTune('Oper.Sell.PredOplDO.NeedRescan'))
+      if (boGetTune('Oper.Sell.PredOplDO.NeedRescan'))
+        if (ExistTune('Oper.Sell.PredOplDO.TimeRescan'))
+          StartTimer(cmTimeRange2, 1, FALSE);
+  }
+
+cmTimeRange1:
+  {
+    wTimerCount := wTimerCount - 1;
+    if ( wTimerCount > 0 )
+      Exit;
+
+    StopTimer(cmTimeRange1);
+
+    if ( CurWindow = wnMainWindow )  // проверяем, находимся ли в главном окне
+      if ( CurTable = tnBaseDoc )    // на той, что надо таблице
+        if ( CheckSelfTopWindow )    // поверх данного не открыто никаких диалогов, меню, быстрого поиска
+        {
+          RescanPanel(tnBaseDoc);         // пересканируем 1 или несколько панелей
+        }
+
+    StartTimer(cmTimeRange2, 1, FALSE);
+    // если в этом месте просто сделать StartTimer(cmTimeRange1), он
+    // не запусится, т.к. сейчас и так находимся внутри его обработчика
+    // если же сделать PutCommand когда запущен и активен другой интерфейс,
+    // событие уйдет в активный интерфейс: (
+  }
+
+cmTimeRange2:
+  {
+    StopTimer(cmTimeRange2);
+    wTimerCount := wGetTune('Oper.Sell.PredOplDO.TimeRescan') - 1;
+    StartTimer(cmTimeRange1, 1, FALSE);
+  }
+
+cmPositionChanged:
+  {
+    if ( ( wTimerCount > 0 ) AND ( wTimerCount < 5 ) )  // если таймер запущен и меньше 5 секунд,
+      wTimerCount := 5;                                 // установить задержку в 5 сек при смене позиции
+  }
+
+!----------------------------------------------------------------------------
+cmDone:
+  {
+    oValFunc.DoneVal;
+
+    if (fNal = TRUE) DoneNalServ;
+
+    SaveMyDSK(comp(0), 'ClosePeriod_BaseDocNRec');
+    SaveMyDsk(wSortField, 'vschetp_def_sort_field');
+  }
+
+#include savedoc.vpp
+#include doattr.vpp //аттрибуты, классификаторы
+#include vssoprhoz.vpp
+#include vschobjs.vpp
+
+cmHotKeys:
+{
+  ChangeEnabledCommands(true);
+  // добавляет меню с пуктом "Формирование финобязательств"
+  PutHotCommand(RunDynMenu(#AddComp('L_BASEDOC')'mnuVschetP2;' + piOFPOut.GetMakeFoMenuName));
+}
+
+cmNal:
+  ofpMakeFO(BaseDoc.VidDoc, BaseDoc.nRec);
+
+cmExp:
+  {
+    oOnExpImp.OnExportHandler( ieDO, BaseDoc.VidDoc, BaseDoc.nRec, word(15), 0 );
+    RescanPanel(tnBaseDoc);
+  }
+
+cmImp:
+  {
+    oOnExpImp.OnImportHandler( ieDO, BaseDoc.VidDoc );
+    RescanPanel(tnBaseDoc);
+  }
+
+cmIEHist:
+  oOnExpImp.OnExportImportHistory( ieDO, BaseDoc.nRec );
+
+#include dofin.vpp
+#include modpric2.vpp
+
+cmInsert:
+  {
+    if not boGetTune('Doc.ModDo')
+      {
+        Abort;
+        Exit;
+      }
+    if (((_wFltBaseDoc AND 4) = 4) AND (sFltDescr <> CurDescr))
+     {
+       Message('Установлен фильтр по дескриптору отличному от Вашего.'#13+
+                  'Создание нового документа невозможно');
+       Abort;
+       Exit
+     }
+  }
+
+cmOnVipLoad:
+  {
+    IsObjInt := TRUE;
+    TipDO := 0;
+    ProcessCommand(cmInit);
+  }
+
+cmOnVipUnLoad:
+  ProcessCommand(cmDone);
+
+cmSetCurTable:
+{
+  if (Target = #SpStep) AND (BaseDoc.SpecYes = 0)
+    Abort;
+  if UKS_Used
+    if (CurTable = #SpStep)
+      if (Target = #BaseDoc)
+        if (UpdateTable)
+          oUKSfuns.JoinDO(BaseDoc.nRec);
+}
+
+cmProtectedInput:
+  {
+    Stop;//чтобы по Backspace не возникало сообщение "Запись защищена от модификации"
+
+    if NOT CanEditInClosePeriod(TRUE)
+      if CanEditInClosePeriod(FALSE)
+        {
+          ProtectRecord(#BaseDoc, FALSE);
+          ProtectRecord(#StepDoc, FALSE);
+          ProtectRecord(#SpStep , FALSE);
+          Exit;
+        }
+
+    if Not EditDOPosEnabled(FALSE, FALSE)
+      if CanLinkDogovor(TRUE)
+        DoProcessPick;
+  }
+
+//----------------------------------------------------------------------------
+
+cmValue22: { vidReport := 1; putCommand(cmPrintDoc);  }
+
+end; // HandleEvent для интерфейса
+End. // Interface
+//******************************************************************************
+#doc
+Локальное меню шапки окна редактирования интерфейса <link Interface L_BaseDoc::VschetP>L_BaseDoc::VschetP - ДО на предоплату (продажи)</link>
+#end
+mnuVschetP Menu
+{
+- 'Смена дескриптора', cmManagerId, 'Перейти на другой дескриптор', hcZakupLocMDODescr, 'Alt+M', kbAltM, sci1Esc;
+-----------;
+= 'Печать', 'Печать', , sci1Esc;
+{
+  - 'Печать документа', cmPrintDoc, 'Печать документа', hcCtxSoprPrintDoc, 'Ctrl+P', kbCtrlP, sci1Esc;
+  - 'Печать документа в FastReport',cmValue22,'Печать документа в формате FastReport',hcctxSoprPrintDoc,,,sci1Esc;
+  - 'Налоговый счет-фактура/справка по документу', cmPlansNo, 'Печать налогового счета-фактуры/просмотр справки по документу', hcCtxNalSchFact, 'Alt+P', kbAltP, sci1Esc;
+}
+-----------;
+- 'Изменение цен по выбранному прайс-листу', cmValue16, 'Изменение цен по выбранному прайс-листу', hcCtxPriceIzm, , , sci1Esc;
+- 'Пересчет цен обратным счетом', cmValFld12, 'Пересчет цен обратным счетом', hcSellM1DocCena, , , sci1Esc;
+-----------;
+- 'Справка по налогам к документу', cmValue19, 'Справка по налогам к документу', hcSellM1DocNal, , , sci1Esc;
+- 'Выбор группы налогов для ДО', cmValFld17, 'Выбор группы налогов для текущего ДО', hcKouDocLocMPredoplNalog, , , sci1Esc;
+-----------;
+- 'Пересортировка спецификации', cmFilialNo, 'Пересортировка спецификации', hcCtxSortMC, 'Alt+N', kbAltN, sci1Esc;
+-----------;
+- 'Копирование спецификации из другого документа', cmAccording, 'Копирование спецификации', hcCtxCopyDocSp, 'Alt+S', kbAltS, sci1Esc;
+-----------;
+- 'Хозоперации по документу', cmHozOper, 'Просмотр хозопераций по документу', hcXozOperDOC, 'Ctrl+H', kbCtrlH, sci1Esc;
+-----------;
+- 'Разноска Объектов целевого учета по спецификации', cmVal8, 'Выбор Объектов целевого учета для нескольких позиций спецификации', hcUKS_RaznosPoSpesific, '', , sci1Esc;
+-----------;
+- 'Отображение спецификации в виде сметы', cmValue60, 'Отображение спецификации в виде сметы', hcuks_Otobraz_Sp_VidSmet, '', , sci1Esc;
+-----------;
+- 'Документооборот', cmDocBas, 'Войти в режим документооборота', hcCtxDocOborot, 'Alt+D', kbAltD, sci1Esc;
+}
+
+mnuVschetPVn Menu
+{
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+}
+
+#doc
+Локальное меню спецификации окна редактирования интерфейса <link Interface L_BaseDoc::VschetP>L_BaseDoc::VschetP - ДО на предоплату (продажи)</link>
+#end
+mnuVschetP1 Menu
+{
+- 'Смена дескриптора', cmManagerId, 'Перейти на другой дескриптор', hcZakupLocMDODescr, 'Alt+M', kbAltM, sci1Esc;
+-----------;
+- 'Налоговый счет-фактура/справка по документу', cmPlansNo, 'Печать налогового счета-фактуры/просмотр справки по документу', hcCtxNalSchFact, 'Alt+P', kbAltP, sci1Esc;
+-----------;
+- 'Справка по товару', cmNal, 'Справка по товару', hcKouDocBNalRes, 'Alt+F', kbAltF, sci1Esc;
+- 'Расчет налогов по позиции по выбранной группе', cmValue18, 'Расчет налогов по позиции по выбранной группе', hcSellM1RasNal, , , sci1Esc;
+-----------;
+- 'Удаление всех позиций ДО по текущей МЦ/услуге', cmValFld9, 'Удаление всех позиций ДО по текущей МЦ/услуге', hcSellM1DelPart, , , sci1Esc;
+- 'Объединение позиций ДО', cmValFld11, 'Объединение позиций ДО', hcSellM1AddPart, , , sci1Esc;
+- 'Дублирование текущей МЦ/услуги', cmValFld16, 'Дублирование текущей МЦ/услуги', hcSellDublPos, , , sci1Esc;
+- 'Заполнение позиций ДО по текущей МЦ/услуге', cmValFld15, 'Заполнение позиций ДО по текущей МЦ/услуге', hcSellM1EditPart, , , sci1Esc;
+-----------;
+- 'Рассчитать стоимость услуги как % от стоимости МЦ', cmValFld13, 'Рассчитать стоимость услуги как % от стоимости МЦ', hcSellM1SumUslPart, , , sci1Esc;
+- 'Запрет на пересчет суммы по ДО', cmSortMC, '', hcZapret, 'Alt+R', kbAltR, sci1Esc;
+-----------;
+- 'Выбор матценностей из каталога', cmRestoreDoc, 'Выбор МЦ непосредственно из каталога, минуя прайс-лист', hcSellLocMFromKatal, 'Ctrl+F3', kbCtrlF3, sci1Esc;
+-----------;
+- 'Выбор спецификации ДО из спецификации договора', cmValFld4, 'Выбор МЦ из договора, соглашения, пункта календарного плана', hcDOPredLocMPickSpecFromDog, , , sci1Esc;
+-----------;
+- 'Выбор из смет', cmMulSelDO, 'Выбор позиции из смет', hcm_zakup_Lok_Smeta, 'Ctrl+I', kbCtrlI, sci1Esc;
+-----------;
+- 'Документооборот', cmDocBas, 'Войти в режим документооборота', hcCtxDocOborot, 'Alt+D', kbAltD, sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+- 'Расчет стоимости услуги', cmValue20, 'Отчет - Расчет стоимости услуги', hccuMCalc, '', , sci1Esc;
+- 'Параметры расчетной услуги', cmValue17, 'Просмотр и изменение параметров расчетной услуги', hccuMInPar, '', , sci1Esc;
+#ifdef __MTR_TO_SPEC__
+-----------;
+- 'Целевой учет', cmIerarchy, '', hcUKS_LokM_Chelev, 'Ctrl+U', kbCtrlU, sci1Esc;
+#end
+-----------;
+- 'Расширенная информация', cmAttrib, 'Открыть окно расширенной информации', hcKouDocBExt, 'Ctrl+Enter', kbCtrlEnter, sci1Esc;
+}
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_BaseDoc::VschetP>L_BaseDoc::VschetP - ДО на предоплату (продажи)</link>
+#end
+mnuVschetP2 Menu
+{
+- 'Ф~и~льтр ...', cmFilterSave, 'Установка/снятие фильтра на документы-основания', hcLok_Filtr_doc, 'Alt+B', kbAltB, sci1Esc;
+-----------;
+= 'Печать', 'Печать', , sci1Esc;
+{
+  - 'Печать документа', cmPrintDoc, 'Печать документа', hcCtxSoprPrintDoc, 'Ctrl+P', kbCtrlP, sci1Esc;
+  - 'Печать документа в FastReport',cmValue22,'Печать документа в формате FastReport',hcctxSoprPrintDoc,,,sci1Esc;
+  - 'Печать реестра ДО',cmPlansNo,'Печать реестра ДО на предоплату продаж',hcm_sell_Pech_Reestr,'Alt+P',kbAltP,sci1Esc;
+}
+-----------;
+- 'Переключение формата на отгрузку/оплату', cmValue12, 'Расчет отгрузок/оплат по ДО', hcHotDoFormat, , , sci1Esc;
+-----------;
+- 'Пересчет сумм и налогов по документам', cmValue20, 'Пересчет сумм и налогов по документам', hcHotDoRas, , , sci1Esc;
+- 'Изменение цен по выбранному прайс-листу', cmValue17, 'Изменение цен по выбранному прайс-листу', hcCtxPriceIzm, , , sci1Esc;
+- 'Пересчет стоимости услуг', cmValue31, 'Пересчет стоимости услуг', hcm_sell_Stoim_Uslyg, , , sci1Esc;
+-----------;
+- 'Сохранение записи', cmSaveDoc, 'Сохранение записи', hcctxSoprSaveDoc, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+- 'Вставка сохраненной записи', cmRestoreDoc, 'Вставка сохраненной записи', hcctxSoprRestoreDoc, 'Ctrl+F3', kbCtrlF3, sci1Esc;
+-----------;
+- 'Хозоперации по документу', cmHozOper, 'Просмотр хозопераций по документу', hcXozOperDOC, 'Ctrl+H', kbCtrlH, sci1Esc;
+-----------;
+- 'Замена объектов строительства', cmValue59, 'Замена объектов строительства', hcuks_Zamen_ObStroit,,, sci1Esc;
+-----------;
+- 'Документооборот', cmDocBas, 'Войти в режим документооборота', hcCtxDocOborot, 'Alt+D', kbAltD, sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+- 'Тиражирование внешней классификации',cmExClassRepl,'Тиражирование внешней классификации',,,,sci1Esc;
+-----------;
+- 'Экспорт', cmExp, 'Экспорт документов', hcSwiftMAll, 'Alt+O', kbAltO, sci1Esc;
+- 'Импорт', cmImp, 'Импорт документов', hcSwiftMAll, 'Alt+I', kbAltI, sci1Esc;
+- 'Протокол', cmIEHist, 'Протокол экспорта/импорта', hcSwiftMAll, 'Alt+H', kbAltH, sci1Esc;
+}
+
+#doc
+Локальное меню расширенной информации по спецификации окна редактирования интерфейса <link Interface L_BaseDoc::VschetP>L_BaseDoc::VschetP - ДО на предоплату (продажи)</link>
+#end
+mnuVSchetPSpStep Menu
+{
+- 'Выбор позиций из каталога', cmRestoreDoc, 'Выбор позиций непосредственно из каталога, минуя прайс-лист', hcSellLocMFromKatal, 'Ctrl+F3', kbCtrlF3, sci1Esc;
+-----------;
+- 'Расчет налогов по позиции по выбранной группе', cmValue18, 'Расчет налогов по позиции по выбранной группе', hcSellM1RasNal, , , sci1Esc;
+/*
+#ifdef __MTR_TO_SPEC__
+-----------;
+-'Целевой учет', cmIerarchy, '', hcUKS_LokM_Chelev, 'Ctrl+U', kbCtrlU, sci1Esc;
+#end
+*/
+}

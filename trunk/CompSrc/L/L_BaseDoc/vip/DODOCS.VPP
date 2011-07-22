@@ -1,0 +1,276 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - Документы-основания
+// Выбор из прайс-листа МЦ/Услуг #NamTovar, #Nomenkl
+//******************************************************************************
+
+{
+  var ret: word;
+  var pRec: comp;
+
+  if ( BaseDoc.cCalPlan <> 0 )
+    ret := RunInterface('GetSomeSpDocs1'
+                      , TRUE
+                      , BaseDoc.cCalPlan
+                      , word(403)
+                      , pRec
+                      , word(1)
+                      , comp(0)
+                      , word(1)
+                      , CalPlan.DirectMC
+                       )
+  else
+    if ( BaseDoc.cAppDogovor <> 0 )
+      ret := RunInterface('GetSomeSpDocs1'
+                        , TRUE
+                        , BaseDoc.cAppDogovor
+                        , word(401)
+                        , pRec
+                        , word(1)
+                        , comp(0)
+                        , word(1)
+                        , word(2 - (AppDogovor.Direct AND 1))
+                         )
+    else
+      if ( BaseDoc.cDogovor <> 0 )
+        ret := RunInterface('GetSomeSpDocs1'
+                          , TRUE
+                          , BaseDoc.cDogovor
+                          , word(400)
+                          , pRec
+                          , word(1)
+                          , comp(0)
+                          , word(1)
+                          , word(2 - (Dogovor.Direct AND 1))
+                           )
+      else
+        Exit;
+
+  if ( ret <> cmDefault )
+    Exit;
+
+  var i, Marker, MarkerKol, MarkerCount: longint;
+  var isFirst  : boolean;
+  var NRecSaved: comp;
+
+  Marker      := InitMarker('MSpDocs'   , 8, 100, 10);
+  MarkerKol   := InitMarker('MSpDocsKol', 8, 100, 10);
+  MarkerCount := GetMarkerCount(Marker);
+  isFirst     := TRUE;
+  NRecSaved   := 0;
+
+  For(i := 0; i < MarkerCount; i++)
+    if GetMarker(Marker, i, pRec)
+      {
+        var tmpKol: double;
+
+        if not GetMarker(MarkerKol, i, tmpKol)
+          tmpKol := 0;
+
+        var pMCUsl : comp;
+        var SpPrice: double;
+
+        pMCUsl  := 0;
+        SpPrice := 0;
+
+        if ( GetFirst SpDocs where (( pRec == SpDocs.nRec )) <> tsOk )
+          Continue;
+
+        pMCUsl := SpDocs.cMCUsl;
+
+        var pUpDoc: comp;
+
+        pUpDoc := SpDocs.cDoc;
+
+        if ( SpDocs.TiDk = 439 )
+          if ( GetFirst FastFirstRow SpDocs where (( pUpDoc == SpDocs.nRec )) = tsOk )
+            if ( SpDocs.cPriceLs <> 0 )
+              if ( GetFirst FastFirstRow KlPrice where (( SpDocs.cPricels == KlPrice.nRec )) = tsOk )
+                if ( GetFirst FastFirstRow Prices where (( KlPrice.nRec == Prices.cKlPrice AND
+                                                           pMCUsl       == Prices.cThing )) = tsOk )
+                  if ( BaseDoc.cVal = KlPrice.cVal )
+                    {
+                      if ( BaseDoc.cVal = 0 )
+                        SpPrice := oDOfuns.DoRoundNDEP(BaseDoc.VidDoc, Prices.Price)
+                      else
+                        SpPrice := oDOfuns.DoRoundVltP(BaseDoc.VidDoc, Prices.SumVal);
+                    }
+                  else
+                    {
+                      var TmpDbl: double;
+
+                      if ( KlPrice.cVal = 0 )
+                        TmpDbl := oValFunc.GetAnyCurrency(KlPrice.cVal
+                                                        , Prices.Price
+                                                        , BaseDoc.dDoc
+                                                        , BaseDoc.cVal
+                                                         )
+                      else
+                        TmpDbl := oValFunc.GetAnyCurrency(KlPrice.cVal
+                                                        , Prices.SumVal
+                                                        , BaseDoc.dDoc
+                                                        , BaseDoc.cVal
+                                                         );
+
+                      SpPrice := oDOfuns.DoRoundP(BaseDoc.cVal, BaseDoc.VidDoc, TmpDbl);
+                    }
+
+        if isFirst
+          {
+            isFirst := FALSE;
+
+            if not IsNew
+              {
+                iSaldoActuality.DropActualityForPlansSch(0); // сброс актуальности сальдо для всех планов счетов
+
+                if ( BaseDoc.VidDoc = 202 ) // Удаление актов реализации
+                  While ( GetFirst FastFirstRow KatSopr where
+                         (( StepDoc.nRec == KatSopr.cStepDoc  AND
+                            word(251)    == KatSopr.VidSopr )) = tsOk ) do
+                    {
+                      if ( GetFirst SoprHoz where (( KatSopr.VidSopr == SoprHoz.TipDoc AND
+                                                     KatSopr.nRec    == SoprHoz.cSoprDoc )) = tsOk )
+                        {
+                          delete Oborot where (( SoprHoz.TipDoc == Oborot.TiDk AND SoprHoz.cSoprDoc == Oborot.cSoprDoc ));
+                          delete current SoprHoz;
+                        }
+
+                      delete safe SpSopr where (( KatSopr.nRec == SpSopr.cSopr ));
+                      delete current KatSopr;
+                    }
+
+                if ( BaseDoc.Direct = 1 )
+                  SubResTov(SpStep.Reserv); // Снятие резерва по товару
+
+                if ( BaseDoc.VidDoc = 201 OR BaseDoc.VidDoc = 1420 )
+                  {
+                    SubResRazRez;          // Снятие резерва по складу
+                    delete safe dores;
+                  }
+
+                delete safe spdocnal;
+                oDOfuns.SpStep_Delete(SpStep.nRec);
+              }
+
+            StartNewVisual(vtNumericVisual
+                         , vfTimer + vfBreak + vfConfirm
+                         , 'Пополнение спецификации документа выбранными позициями ...'#13, 1
+                          );
+          }
+
+        if not NextVisual
+          Break;
+
+        SpStep.dDoc        := BaseDoc.dDoc;
+        SpStep.cStepDoc    := StepDoc.nRec;
+        SpStep.Price       := if (SpPrice <> 0.0, SpPrice, SpDocs.price);
+        SpStep.PrMC        := SpDocs.prMC;
+        SpStep.cOtpEd      := SpDocs.cOtpEd;
+        SpStep.cMCUsl      := pMCUsl;
+        SpStep.KOL         := tmpKol;
+
+        var cAkt: comp;
+        cAkt := fEdIzm.GetAktOtpEdNrec(SpStep.cMCUsl, SpStep.prMC);
+
+        SpStep.Kol         := fEdIzm.ConvertToSecondEd(SpStep.Kol, SpStep.cOtpEd, cAkt);
+        SpStep.Price       := fEdIzm.ConvSellSumToSecondEd(SpStep.Price, SpStep.cOtpEd, cAkt);
+        SpStep.cOtpEd      := cAkt;
+
+        SpStep.KolSkl      := SpStep.Kol;
+        SpStep.KolOpl      := 0;               //double "количество оплаченного",
+        SpStep.ProcUb      := 0;               //double "% естественной убыли",
+        SpStep.cParty      := 0;               //tNRec  "код партии",
+        SpStep.cVal        := StepDoc.cVal;    //tNRec  "код валюты",
+                                               //double "цена за единицу",
+        SpStep.Summa       := 0;               //double "стоимость по товару",
+        SpStep.Reserv      := 0;               //double "количество товара в резерве",
+        SpStep.SumVal      := 0;               //double "сумма в валюте по товару",
+        SpStep.Garant      := 0;               //double "срок гарантии в месяцах",
+        SpStep.SrokRes     := 0;               //date   "последний день действия резерва",
+        SpStep.SopUsl      := 0;               //word   "1- %, 2- сумма к товару",
+        SpStep.StoTov      := 0;               //double "стоимость или % к товару",
+        SpStep.PrSkid      := 1;               //word   "1- скидка в %, 2- в сумме",
+        SpStep.VlSkid      := 0;               //double "стоимость или % к товару",
+        SpStep.NDS         := 0;               //double "величина налогов к позиции",
+
+        SpStep.cPriceList  := SpDocs.cPriceLs; //tNRec "Ссылка на прайс-лист",
+        SpStep.NVagon      := '';              //s20 "Номер ж/д вагона",
+        SpStep.NKvit       := '';              //s20 "Номер ж/д квитанции",
+
+        if ( BaseDoc.vidDoc = 201 AND SpStep.PrMC = 2) //word "Вх. усл. в накладную",
+          SpStep.PrUsNkl := wGetTune('Doc.UslDoSell');
+
+        if (BaseDoc.vidDoc = 1420 AND SpStep.prMC = 2) //word "Вх. усл. в накладную",
+          SpStep.PrUsNkl := wGetTune('Doc.Wood.Schet.UslDoSell');
+
+        SpStep.ManualTax   := 0;               //word "Ручные налоги",
+        SpStep.cAltEd      := 0;               //tNRec "Альт.единица измерения",
+        SpStep.cPersons    := 0;               //tNRec "Сотрудник, выполняющий услугу"
+        SpStep.cSpDocs     := if(SpDocs.TiDk = 439, SpDocs.cDoc, SpDocs.nRec);
+
+        SpStep.Npp         := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+        SpStep.cResOtgr    := SpDocs.cResOtgr;
+        SpStep.cDogovor    := Dogovor.nRec;
+        SpStep.cAppDogovor := if (IsValid(#AppDogovor), AppDogovor.nRec, comp(0));
+        SpStep.cCalPlan    := if (IsValid(#CalPlan), CalPlan.nRec, comp(0));
+        SpStep.cGrNal      := SpDocs.cGrNal;
+
+        insert current SpStep;
+
+        if ( NRecSaved = 0 )
+          NRecSaved := SpStep.nRec;
+
+        if ( ( SpStep.PrMC <> 1 ) AND ( KatUsl.TYPEUSL = 1 ) )  // SVG
+          {
+            RunInterface('GETPAR1', word(0), SpStep.nRec, KatUsl.nRec, SpStep.Price, SpStep.KolSkl, word(coSpStep));
+
+            SpStep.Kol := SpStep.KolSkl;
+
+            update current SpStep;
+          }
+      }
+
+
+  StopVisual('', 0);
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Пересчет суммы по документу...', 1);
+
+  GetTotalSkid(FALSE);  //полный пересчет
+
+  NextVisual;
+
+  if ( boGetTune('Reserv.SchReserv') //автоматическое резервирование?
+        AND
+       ( BaseDoc.Direct = 1 )
+        AND
+       ( BaseDoc.Status = 2 )
+        AND
+       ( BaseDoc.VidDoc <> 211 )
+        AND
+       ( SpStep.PrMC = 1 )
+     )
+    {
+      SetVisualHeader('Резервирование...');
+      Proc20;                       // резервирование
+    }
+
+  if ( NRecSaved <> 0 )
+    {
+      SetVisualHeader('Позиционирование на первую добавленную запись...');
+
+      if ( GetFirst SpStep where (( NRecSaved == SpStep.nRec )) <> tsOk )
+        {}
+    }
+  else
+    if ( GetFirst SpStep <> tsOk )
+      {}
+
+  RereadRecord(#SpStep);
+
+  SelectField(#SpStep.KolSkl);
+
+  StopVisual('', 0);
+
+  DoneMarker(Marker   , 'MSpDocs');
+  DoneMarker(MarkerKol, 'MSpDocsKol');
+}

@@ -1,0 +1,999 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Сервисные функции для наряд-заказов                       ║
+ ║ Ответственный : Сидоров Владимир Геннадьевич (VOLOD)                      ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+var oExtAtr: iExtAttr;
+var oExtCls: iExtClass;
+
+#INCLUDE nzmdf.vpp // функции работы
+
+//-- Запомнить документ
+function OnSaveNZakaz:boolean;
+{
+  OnSaveNZakaz := false;
+  if (NZakaz.NRec = 0) exit;
+  SavedNRec    := NZakaz.NRec;
+  message(''#3'Запомнен наряд-заказ № '+NZakaz.NoDoc, OkButton);
+  OnSaveNZakaz := true;
+}
+
+//-- Скопировать документ
+function OnRestoreNZakaz:boolean;
+var ret     : word;
+    SpDNRec : comp;
+    sTempFileName : String;
+{
+  OnRestoreNZakaz := false;
+  if (SavedNRec = 0) exit;
+  ret := GetFirst NZakaz where ((Comp(SavedNRec) == NZakaz.NRec));
+  if (ret <> tsOk)  exit;
+
+  StartNewVisual(vtNumericVisual,vfTimer+vfConfirm
+  ,''#3'Копирование документа:',1);
+  NextVisual;
+  NZakaz.NRec := 0;
+  SetNZakazDefMainFld;//-- обязательные значения по умолчанию
+  ret := Insert_current_NZakaz('Сформирован новый наряд-заказ');
+  if (ret <> tsOk)  {StopVisual('',0);exit;}
+
+  oExtAtr.CopyAllAttr    (word(coNZakaz), SavedNRec, NZakaz.NRec);
+  oExtCls.CopyAllClassVal(word(coNZakaz), SavedNRec, NZakaz.NRec);
+
+  var piKatDopEd2 :iKatDEI;
+  for (ret := GetFirst SpDocs where ((Comp(SavedNRec) == SpDocs.cDoc and
+                                      word(440)       == SpDocs.TiDk
+                                    ));
+       ret = tsOk;
+       ret := GetNext SpDocs where ((Comp(SavedNRec) == SpDocs.cDoc and
+                                     word(440)       == SpDocs.TiDk
+                                   ))
+      )
+    {
+      NextVisual;
+      PushPos(#SpDocs);
+      SpDNRec     := SpDocs.NRec;
+      SpDocs.NRec := 0;
+      SpDocs.Code := '';
+      SpDocs.TiDk := 440;
+      SpDocs.cDoc := NZakaz.NRec;
+      ret := oSpDocs.insert_current_Spdocs(SpDocs.BufferP);
+      if (ret <> tsOk)  { PopPos(#SpDocs);StopVisual('',0);exit;}
+      //---------Копирование ДЕИ
+      piKatDopEd2.CopyDopEd(coSpDocs,     // код таблицы спецификации источника
+                            SpDNrec,      // ссылка на запись спецификации источника
+                            2,            // тип количества источника
+                            SpDocs.Kol,   // количество источника в отпускных единицах
+                            coSpDocs,     // код таблицы спецификации приемника
+                            SpDocs.NRec,  // ссылка на запись спецификации приемника
+                            2,            // тип количества приемника
+                            SpDocs.Kol,   // количество приемника в отпускных единицах
+                            SpDocs.TiDk
+                           );
+      oExtAtr.CopyAllAttr    (word(coSpDocs), SpDNRec, SpDocs.NRec);
+      oExtCls.CopyAllClassVal(word(coSpDocs), SpDNRec, SpDocs.NRec);
+      PopPos(#SpDocs);
+    }
+
+//---Копирование примечания (MEMO-поля)------
+  if (GetFirst DocInfo_1 where (( SavedNRec  ==  DocInfo_1.cDoc and
+                                  word(440)  ==  DocInfo_1.DocType )) = tsOk)
+    {
+     ClearBuffer(#DocInfo);
+     DocInfo.cDoc     := nZakaz.NRec;
+     DocInfo.DocType  := word(440);
+     if IsMemoText(#DocInfo_1)
+       DocInfo.TextData := DocInfo_1.TextData;
+     else
+       {
+         sTempFileName := Replace(CreateTmpFileName, '.tmp', '.' + GetMemoPrefix(#DocInfo_1) );
+         if (ExportMemoToFile(DocInfo_1.TextData, sTempFileName, False))
+           if ImportFileToMemo(DocInfo.TextData, sTempFileName, False)
+             DeleteFile(sTempFileName);
+       }
+     insert current DocInfo;
+    }
+//-------------------------------------------
+
+
+  StopVisual('',0);
+
+  OnRestoreNZakaz := true;
+}
+
+create view CV1
+from Pick, KatOtpEd
+where (( word(800) == Pick.wList));
+
+
+//-- копирование спецификации из договора/соглашения
+Procedure HandleDogovorSpec( Mode : word; showMes : boolean; NotWithOutOstatok : boolean );
+var tmpDogovor : comp;
+    tmpTiDkDog : word;
+    tmpDirectDog : word;
+    IsSelect_, IsOne_, IsOneSp_ : boolean;
+    tmpC_ : comp;
+{
+!  if ( isValid(#SpDocs) ) Exit;
+
+  if (oSpDocs.SpDocs_Delete(NZakaz.NRec,440,showMes) <> tsOk) Exit;
+  if ( Mode = 0 ) tmpDogovor := nZakaz.cDogovor;
+   else tmpDogovor := nZakaz.cAppDogovor;
+  if (GetFirst Dogovor where ((tmpDogovor == Dogovor.NRec))=tsOk) {}
+  tmpTiDkDog   := Dogovor.TiDk;
+  tmpDirectDog := Dogovor.Direct;
+
+  IsOneSp_ := false;
+  if boGetTune('Doc.NZ.SpOnePos')
+   {
+    IsOneSp_  := true;
+    IsSelect_ := false;
+    IsOne_    := false;
+    if (getfirst fastfirstrow SpDocs
+           where (( tmpDogovor == SpDocs.cDoc and
+                    tmpTiDkDog == SpDocs.TiDk )) = tsOk)
+      if (getnext fastfirstrow SpDocs
+             where (( tmpDogovor == SpDocs.cDoc and
+                      tmpTiDkDog == SpDocs.TiDk )) = tsOk)
+       {
+        if (RunInterface(GetSomeSpDocs1,false,tmpDogovor,tmpTiDkDog,tmpC_,word(1),comp(0),
+                         word(1),word(2-(tmpDirectDog mod 2)))=cmDefault)
+          IsSelect_ := true
+        else Exit;
+       }
+      else
+       {
+        IsOne_ := true;
+       }
+   }
+
+
+ _loop SpDocs where (( tmpDogovor  == SpDocs.cDoc and
+                       tmpTiDkDog  == SpDocs.TiDk
+#ifdef __TVEL__
+and word((2-(tmpDirectDog mod 2))) == SpDocs.Direct and
+                      word(3)      >> SpDocs.PrMC
+#end
+                    ))
+   {
+    if (boGetTune('Doc.NZ.SpOnePos') and not IsOne_
+       and IsSelect_ and (SpDocs.NRec <> tmpC_))
+     {
+      // Надо пропустить цикл в этом случае
+     }
+    else
+     {
+    if SpDocs.cMCUsl<>0
+       {
+         if (oSpDocs.SpDocs_isHaveZam(SpDocs.NRec,SpDocs.TiDk))
+           {
+             message(''#3'В спецификации исходного документа выбрана'+
+                     ''#13#3'позиция, для которой возможны замены.'+
+                     ''#13#3'Выберите необходимые позиции.');
+             if (RunInterface('GetSomeSpDocs1',true,tmpDogovor,
+                  tmpTiDkDog,SpDocs.NRec,word(1),SpDocs.NRec,word(1),
+                  word(2-(tmpDirectDog))) = cmDefault)
+               oSpDocs.SpDocs_InsFromMarker(NZakaz.NRec,440,0,NotWithOutOstatok);
+           }
+         else
+         oSpDocs.SpDocs_InsCurentFromUpDoc
+                              (SpDocs.NRec,NZakaz.NRec,440,true,0.0,
+                                   NZakaz.cShipment,NZakaz.cTipOtg,NZakaz.cWayMove,
+                                   oNotes.Notes_InUseStatus(NZakaz.cNote),word(0),NotWithOutOstatok)
+       }
+     else
+      if SpDocs.cGrMCUsl<>0
+       {
+          if Runinterface(PickByGrMCUsl_1, SpDocs.cGrMCUsl, SpDocs.prMC, SpDocs.ostatok, SpDocs.cOtpEd, IsOneSp_) =cmCancel
+             continue;
+         var piKatDopEd2 :iKatDEI;
+         var OldKol :double;
+         CV1._loop Pick
+         {
+           oSpDocs.SpDocs_InsCurentFromUpDoc
+                 (SpDocs.NRec, NZakaz.NRec, 440,
+                   false, CV1.Pick.PickKol,
+                   NZakaz.cShipment, NZakaz.cTipOtg, NZakaz.cWayMove,
+                   oNotes.Notes_InUseStatus(NZakaz.cNote),word(0),NotWithOutOstatok);
+           SpDog.BufferP := type$p_SpDocs(oSpDocs.GetCurrentPositionP);
+           var wPrMC : word; wPrMC := SpDog.PrMC;
+           SpDog.cMCUsl := CV1.Pick.cRec;
+           if CV1.GetFirst fastfirstrow KatOtpEd
+                     where (( wPrMC         == KatOtpEd.prMC   and
+                              CV1.Pick.cRec == KatOtpEd.cMCUsl and
+                              word(1)       == KatOtpEd.akt )) = tsOk
+             {
+               SpDog.Price  := fEdIzm.ConvSellSumToSecondEd(SpDog.Price, SpDog.cOtpED, CV1.KatOtpEd.nRec);
+               SpDog.cOtpED := CV1.KatOtpEd.nRec;
+             }
+           update current SpDog;
+         }
+       }
+     if (boGetTune('Doc.NZ.SpOnePos') and IsOne_) Abort;
+     if (boGetTune('Doc.NZ.SpOnePos') and (SpDocs.NRec = tmpC_)) Abort;
+     }
+   }
+}
+
+//-- копирование спецификации из календарного плана
+Procedure HandleCalPlanSpec(showMes : boolean; NotWithOutOstatok: boolean);
+var IsSelect_, IsOne_, IsOneSp_ :boolean;
+    tmpC_ : comp;
+{
+!  if ( isValid(#SpDocs) ) then Exit;
+   if (oSpDocs.SpDocs_Delete(NZakaz.NRec,440,showMes) <> tsOk) Exit;
+
+  IsOneSp_ := false;
+  if boGetTune('Doc.NZ.SpOnePos')
+   {
+    IsOneSp_  := true;
+    IsSelect_ := false;
+    IsOne_    := false;
+    if (getfirst fastfirstrow SpDocs
+           where ((nZakaz.cCalPlan  == SpDocs.cDoc and
+                   word(403)        == SpDocs.TiDk)) = tsOk)
+      if (getnext fastfirstrow SpDocs
+             where ((nZakaz.cCalPlan  == SpDocs.cDoc and
+                     word(403)        == SpDocs.TiDk)) = tsOk)
+       {
+        if (RunInterface(GetSomeSpDocs1,false,NZakaz.cCalPlan,word(403),tmpC_,word(1),comp(0),word(1),CalPlan.DirectMC)=cmDefault)
+          IsSelect_ := true
+        else Exit;
+       }
+      else
+       {
+        IsOne_ := true;
+       }
+   }
+
+
+  _loop SpDocs where ((nZakaz.cCalPlan  == SpDocs.cDoc and
+                       word(403)        == SpDocs.TiDk
+#ifdef __TVEL__
+                   and CalPlan.DirectMC == SpDocs.Direct
+                   and word(3)          >> SpDocs.PrMC
+#end
+                     ))
+   {
+    if (boGetTune('Doc.NZ.SpOnePos') and not IsOne_
+       and IsSelect_ and (SpDocs.NRec <> tmpC_))
+     {
+      // Надо пропустить цикл в этом случае
+     }
+    else
+     {
+    if SpDocs.cMCUsl<>0
+       {
+         if (oSpDocs.SpDocs_isHaveZam(SpDocs.NRec,SpDocs.TiDk))
+           {
+             message(''#3'В спецификации исходного документа выбрана'+
+                     ''#13#3'позиция, для которой возможны замены.'+
+                     ''#13#3'Выберите необходимые позиции.');
+             if (RunInterface('GetSomeSpDocs1',true,NZakaz.cCalPlan,
+                  SpDocs.TiDk,SpDocs.NRec,word(1),SpDocs.NRec,word(1),
+                  CalPlan.DirectMC) = cmDefault)
+               oSpDocs.SpDocs_InsFromMarker(NZakaz.NRec,440,0,NotWithOutOstatok);
+           }
+         else
+          oSpDocs.SpDocs_InsCurentFromUpDoc
+                               (SpDocs.NRec,NZakaz.NRec,440,true,0.0,
+                                    NZakaz.cShipment,NZakaz.cTipOtg,NZakaz.cWayMove,
+                                    oNotes.Notes_InUseStatus(NZakaz.cNote),word(0),NotWithOutOstatok)
+        }
+      else
+       if SpDocs.cGrMCUsl<>0
+       {
+         if Runinterface(PickByGrMCUsl_1, SpDocs.cGrMCUsl, SpDocs.prMC, SpDocs.ostatok, SpDocs.cOtpEd, IsOneSp_) =cmCancel
+           continue;
+
+         var piKatDopEd2 :iKatDEI;
+         var OldKol :double;
+         CV1._loop Pick
+         {
+           oSpDocs.SpDocs_InsCurentFromUpDoc
+                 (SpDocs.NRec, NZakaz.NRec, 440,
+                   false, CV1.Pick.PickKol,
+                   NZakaz.cShipment, NZakaz.cTipOtg, NZakaz.cWayMove,
+                   oNotes.Notes_InUseStatus(NZakaz.cNote),word(0),NotWithOutOstatok);
+           SpDog.BufferP := type$p_SpDocs(oSpDocs.GetCurrentPositionP);
+           var wPrMC : word; wPrMC := SpDog.PrMC;
+           SpDog.cMCUsl := CV1.Pick.cRec;
+           if CV1.GetFirst fastfirstrow KatOtpEd
+                     where (( wPrMC         == KatOtpEd.prMC   and
+                              CV1.Pick.cRec == KatOtpEd.cMCUsl and
+                              word(1)       == KatOtpEd.akt )) = tsOk
+             {
+               SpDog.Price  := fEdIzm.ConvSellSumToSecondEd(SpDog.Price, SpDog.cOtpED, CV1.KatOtpEd.nRec);
+               SpDog.cOtpED := CV1.KatOtpEd.nRec;
+             }
+           update current SpDog;
+         }
+       }
+      if (boGetTune('Doc.NZ.SpOnePos') and IsOne_) Abort;
+      if (boGetTune('Doc.NZ.SpOnePos') and (SpDocs.NRec = tmpC_)) Abort;
+     }
+   }
+}
+
+//-- копирование спецификации из наряд-заказа
+Procedure HandleNZakazUpSpec;
+var IsSelect_, IsOne_, IsOneSp_ :boolean;
+    tmpC_ : comp;
+{
+!  if ( isValid(#SpDocs) ) then Exit;
+
+!  if (DeleteSpNZak(NZakaz.NRec)<>true) Exit;
+   if (oSpDocs.SpDocs_Delete(NZakaz.NRec,440,false) <> tsOk) Exit;
+
+  IsOneSp_ := false;
+  if boGetTune('Doc.NZ.SpOnePos')
+   {
+    IsOneSp_  := true;
+    IsSelect_ := false;
+    IsOne_    := false;
+    if (getfirst fastfirstrow SpNZakUp
+           where (( nZakaz.cOwner == SpNZakUp.cDoc and
+                    word(440)     == SpNZakUp.TiDk )) = tsOk)
+      if (getnext fastfirstrow SpNZakUp
+             where (( nZakaz.cOwner == SpNZakUp.cDoc and
+                      word(440)     == SpNZakUp.TiDk )) = tsOk)
+       {
+        if (RunInterface(GetSomeSpDocs1,false,NZakaz.cOwner,word(440),tmpC_,word(1),comp(0),word(1),word(0))=cmDefault)
+          IsSelect_ := true
+        else Exit;
+       }
+      else
+       {
+        IsOne_ := true;
+       }
+   }
+
+  _loop SpNZakUp where (( nZakaz.cOwner == SpNZakUp.cDoc and
+                          word(440)     == SpNZakUp.TiDk ))
+   {
+     if (boGetTune('Doc.NZ.SpOnePos') and not IsOne_
+       and IsSelect_ and (SpNZakUp.NRec <> tmpC_))
+     {
+      // Надо пропустить цикл в этом случае
+     }
+    else
+     {
+      oSpDocs.SpDocs_InsCurentFromUpDoc
+                          (SpNZakUp.NRec,NZakaz.NRec,440,true,0.0,
+                               NZakaz.cShipment,NZakaz.cTipOtg,NZakaz.cWayMove,
+                               oNotes.Notes_InUseStatus(NZakaz.cNote),word(0),false);
+      if (boGetTune('Doc.NZ.SpOnePos') and IsOne_) Abort;
+      if (boGetTune('Doc.NZ.SpOnePos') and (SpDocs.NRec = tmpC_)) Abort;
+     }
+   }
+}
+
+//-- сфомировать подчиненый наряд заказ
+//-- подчиненный наряд-заказ может быть сформирован только по групповому
+//-- наряд-заказу находящемуся в состоянии исполняемый
+function newNZakazFromUp(ownNRec:Comp):boolean;
+var ret : word;
+    Res : boolean;
+{
+  Res := false;
+  ResetBounds(#NZakazUp);
+  ret := GetFirst NZakazUp where ((ownNRec == NZakazUp.NRec));
+  if (ret = tsOk)
+    {  Res := true;
+       if ((NZakazUp.TypeDoc=1) and (NZakazUp.Status = 1))
+         { //-- подчиненный НЗ можно создавать только
+           //-- для групповых исполняемых НЗ
+           ClearBuffer(#NZakaz);
+           SetNZakazDef; //-- обязательные значения по умолчанию
+           nZakaz.dInput := cur_date;
+           nZakaz.dDoc   := cur_date;
+           nZakaz.dBeg   := cur_date;
+           nZakaz.IsLeaf := 1;
+           nZakaz.Status := 0;
+           nZakaz.Prior  := 2;
+           nZakaz.TypeDoc:= 2; //-- подчиненный НЗ делаем детальным
+           set nZakaz.cOwner := NZakazUp.NRec; //ownNRec;
+           NZ_Up2NZakaz; // установить поля NZakaz из владельца
+           ret := Insert_current_NZakaz('Сформирован новый наряд-заказ по вышестоящему');
+//-- копируем внешнюю классификацию
+          if boGetTune('Oper.ExClassNZ')
+             {
+               oExtAtr.CopyAllAttr    (word(coNZakaz), NZakazUp.NRec, NZakaz.NRec);
+               oExtCls.CopyAllClassVal(word(coNZakaz), NZakazUp.NRec, NZakaz.NRec);
+             }
+           if ( message(''#3'Копировать спецификацию'+
+                        ''#13#3'вышестоящего наряд-заказа?',YesNo) = cmYes )
+             {
+               HandleNZakazUpSpec;
+               if boGetTune('Oper.ExClassNZ')
+                 _loop SpDocs where (( nZakaz.NRec == SpDocs.cDoc and
+                                       word(440)   == SpDocs.TiDk ))
+                   {
+                     oExtAtr.CopyAllAttr    (word(coSpDocs), SpDocs.cUpDoc, SpDocs.NRec);
+                     oExtCls.CopyAllClassVal(word(coSpDocs), SpDocs.cUpDoc, SpDocs.NRec);
+                   }
+             }
+         }
+       else
+        {
+          Res := false;
+          Message(''#3'Подчиненный НЗ можно создавать только'+''#13+
+                      'для групповых исполняемых НЗ',Warning);
+        }
+    }
+  SetBounds(#NZakazUp);
+  newNZakazFromUp := Res;
+}
+
+//-- наряд-заказ по договору
+function FillNZakazByDogovor(isIns:boolean;showMes : boolean;NotWithOutOstatok: boolean):boolean;
+{
+  FillNZakazByDogovor := false;
+//-- сделать проверку можно ли
+
+//-- формируем наряд-заказ
+  if (GetFirst Dogovor where ((nZakaz.cDogovor==Dogovor.NRec))=tsOk)
+    {
+/*
+      if (coGetTune('MyOrg')<>Dogovor.cMyOrg)
+        { //--НЗ формируется только по нашим договорам
+          if (showMes = true)
+            message(''#3'По выбранному договору наряд-заказ'+
+                    ''#13#3'не может быть сформирован.'+
+                    ''#13#3'Наряд-заказы можно формировать только'+
+                    ''#13#3'по нашим договорам, а выбранный'+
+                    ''#13#3'договор является сторонним.',OkButton
+                   );
+          exit;
+        }
+*/
+      set NZakaz.cOrg := Dogovor.cOrg;
+      set NZakaz.cShipment   := Dogovor.cShipment;
+      set NZakaz.cWaymove    := Dogovor.cWaymove;
+      set NZakaz.cTipOtg     := Dogovor.cTipOtg;
+      if ((NZakaz.dBeg = date(0,0,0)) and (NZakaz.dEnd = date(0,0,0)))
+        {
+          set NZakaz.dBeg        := Dogovor.dBeg;
+          set NZakaz.dEnd        := Dogovor.dEnd;
+        }
+      set NZakaz.cAppDogovor := 0;
+      set NZakaz.cCalPlan    := 0;
+      set NZakaz.AddTerms    := Dogovor.ShipAddTerms;
+      if (isIns)
+        insert_current_NZakaz('Создан новый наряд-заказ по договору')
+      else
+        UpDateTable;
+      if (showMes = true)
+        {
+          if (GetFirst SpDocs where((NZakaz.NRec==SpDocs.cDoc and
+                                     word(440) == SpDocs.TiDk))=tsOk)
+            {
+              if ( message(''#3'Заменить спецификацию?',YesNo) = cmYes )
+                HandleDogovorSpec(0,showMes,NotWithOutOstatok);
+            }
+          else
+            {
+              if ( message(''#3'Копировать спецификацию из договора?',YesNo) = cmYes )
+                HandleDogovorSpec(0,showMes,NotWithOutOstatok);
+            }
+        }
+      else
+        HandleDogovorSpec(0,showMes,NotWithOutOstatok);
+      FillNZakazByDogovor := true;
+    }
+}
+
+function FillNZakazByAppDogovor(isIns:boolean;showMes : boolean;NotWithOutOstatok: boolean):boolean;
+{
+  FillNZakazByAppDogovor := false;
+//-- сделать проверку можно ли
+  set NZakaz.cCalPlan    := 0;
+  if (GetFirst AppDogovor where ((nZakaz.cAppDogovor==AppDogovor.NRec))=tsOk)
+    {
+      set NZakaz.cOrg        := AppDogovor.cOrg;
+      if (NZakaz.cOrg = 0)
+        if (NZakaz.cDogovor <> 0)
+          if (GetFirst Dogovor where ((nZakaz.cDogovor==Dogovor.NRec))=tsOk)
+            {
+              set NZakaz.cOrg := Dogovor.cOrg;
+            }
+      set NZakaz.cShipment   := AppDogovor.cShipment;
+      set NZakaz.cWaymove    := AppDogovor.cWaymove;
+      set NZakaz.cTipOtg     := AppDogovor.cTipOtg;
+      if ((NZakaz.dBeg = date(0,0,0)) and (NZakaz.dEnd = date(0,0,0)))
+        {
+          set NZakaz.dBeg        := AppDogovor.dBeg;
+          set NZakaz.dEnd        := AppDogovor.dEnd;
+        }
+      set NZakaz.AddTerms    := AppDogovor.ShipAddTerms;
+      if (isIns)
+        insert_current_NZakaz('Создан новый наряд-заказ по договору')
+      else
+        UpDateTable;
+      if (showMes = true)
+        {
+          if (GetFirst SpDocs where((NZakaz.NRec==SpDocs.cDoc and
+                                     word(440) == SpDocs.TiDk))=tsOk)
+            {
+              if ( message(''#3'Заменить спецификацию?',YesNo) = cmYes )
+                HandleDogovorSpec(1,showMes,NotWithOutOstatok);
+            }
+          else
+            {
+              if ( message(''#3'Копировать спецификацию из договора?',YesNo) = cmYes )
+                HandleDogovorSpec(1,showMes,NotWithOutOstatok);
+            }
+        }
+      else
+        HandleDogovorSpec(1,showMes,NotWithOutOstatok);
+      FillNZakazByAppDogovor := true;
+    }
+}
+
+function FillNZakazByCalPlan(isIns:boolean;showMes : boolean;NotWithOutOstatok: boolean):boolean;
+{
+  FillNZakazByCalPlan := false;
+  if (GetFirst CalPlan where ((nZakaz.cCalPlan==CalPlan.NRec))=tsOk)
+    {
+      if (CalPlan.cOrg <> 0)
+        set NZakaz.cOrg        := CalPlan.cOrg
+      else
+        {
+          if (NZakaz.cAppDogovor <> 0)
+            if (GetFirst AppDogovor where ((nZakaz.cAppDogovor==AppDogovor.NRec))=tsOk)
+              {
+                set NZakaz.cOrg := AppDogovor.cOrg;
+              }
+          if (NZakaz.cOrg = 0)
+            if (NZakaz.cDogovor <> 0)
+              if (GetFirst Dogovor where ((nZakaz.cDogovor==Dogovor.NRec))=tsOk)
+                {
+                  set NZakaz.cOrg := Dogovor.cOrg;
+                }
+        }
+
+      set NZakaz.cGrOtp      := CalPlan.cGrOtp;
+      set NZakaz.cPunktP     := CalPlan.cPunktP;
+      set NZakaz.cGrPol      := CalPlan.cGrPol;
+      set NZakaz.cPunktR     := CalPlan.cPunktR;
+      set NZakaz.cShipment   := CalPlan.cShipment;
+      set NZakaz.cWaymove    := CalPlan.cWaymove;
+      set NZakaz.cTipOtg     := CalPlan.cTipOtg;
+      if ((NZakaz.dBeg = date(0,0,0)) and (NZakaz.dEnd = date(0,0,0)))
+        {
+          set NZakaz.dBeg        := CalPlan.dFrom;
+          set NZakaz.dEnd        := CalPlan.dTo;
+        }
+      set NZakaz.AddTerms    := CalPlan.AddTerms;
+      if (isIns)
+        insert_current_NZakaz('Создан новый наряд-заказ по договору')
+      else
+        UpDateTable;
+      if (showMes = true)
+        {
+          if (GetFirst SpDocs where((NZakaz.NRec==SpDocs.cDoc and
+                                     word(440) == SpDocs.TiDk))=tsOk)
+            {
+              if ( message(''#3'Заменить спецификацию?',YesNo) = cmYes )
+                HandleCalPlanSpec(showMes,NotWithOutOstatok);
+            }
+          else
+            {
+              if ( message(''#3'Копировать спецификацию из календарного плана?',YesNo) = cmYes )
+                HandleCalPlanSpec(showMes,NotWithOutOstatok);
+            }
+        }
+      else
+        HandleCalPlanSpec(showMes,NotWithOutOstatok);
+      FillNZakazByCalPlan := true;
+    }
+}
+//***************************************************************************
+//-- наряд-заказ взамен отмененного
+function NewNZakFromOtmen(sourNRec : Comp): boolean;
+var ret : word;
+    oNum : string;
+    sourSpNRec : comp;
+{
+  NewNZakFromOtmen := false;
+  ret := GetFirst NZakaz where((comp(sourNRec) == NZakaz.NRec));
+  if (ret <> tsOk) //-- н-з источник не найден
+    {  exit;}
+  if (NZakaz.Status <> 3) //-- н-з не является отмененным
+    {  exit;}
+  oNum := NZakaz.NoDoc;
+  StartNewVisual(vtNumericVisual,vfTimer+vfConfirm
+  ,''#3'Формирование наряд-заказа взамен отмененного:',1);
+  NextVisual;
+  NZakaz.NRec     := 0;
+  NZakaz.Status   := 0;
+  NZakaz.cInstead := sourNRec;
+  SetNZakazDefMainFld;//-- обязательные значения по умолчанию
+  if boGetTune('Doc.NZ.Num=Num')
+    {
+      AbortNewDocument;
+      NZakaz.NoDoc := oNum;
+    }
+  ret := insert_current_NZakaz('Сформирован новый наряд-заказ взамен отмененного');
+// копирование примечания
+  if (GetFirst DocInfo where ((
+                     sourNRec  ==  DocInfo.cDoc
+                 and word(440) ==  DocInfo.DocType )) = tsOk)
+   {
+    DocInfo.NRec := comp(0);
+    DocInfo.cDoc := Nzakaz.NRec;
+    insert current DocInfo;
+   }
+
+  if (ret <> tsOk)  {StopVisual('',0);exit;}
+   if boGetTune('Oper.ExClassZamNz')
+     {
+       oExtAtr.CopyAllAttr    (word(coNZakaz), sourNRec, NZakaz.NRec);
+       oExtCls.CopyAllClassVal(word(coNZakaz), sourNRec, NZakaz.NRec);
+     }
+  for (ret := GetFirst SpDocs where ((Comp(sourNRec) == SpDocs.cDoc and
+                                      word(440) == SpDocs.TiDk));
+       ret = tsOk;
+       ret := GetNext SpDocs where ((Comp(sourNRec) == SpDocs.cDoc and
+                                     word(440) == SpDocs.TiDk))
+      )
+    {
+      NextVisual;
+      sourSpNRec := SpDocs.NRec;
+      PushPos(#SpDocs);
+      SpDocs.NRec := 0;
+      SpDocs.FilialNo := oNotes.Notes_InUseStatus(NZakaz.cNote);
+      SpDocs.Code    := '';
+      SpDocs.cDoc := NZakaz.NRec;
+      SpDocs.TiDk := 440;
+      ret := oSpDocs.insert_current_Spdocs(SpDocs.BufferP);
+      if (ret <> tsOk)  { PopPos(#SpDocs);StopVisual('',0);exit;}
+      if boGetTune('Oper.ExClassZamNz')
+        {
+          oExtAtr.CopyAllAttr    (word(coSpDocs), sourSpNRec, SpDocs.NRec);
+          oExtCls.CopyAllClassVal(word(coSpDocs), sourSpNRec, SpDocs.NRec);
+        }
+      PopPos(#SpDocs);
+    }
+  StopVisual('',0);
+  NewNZakFromOtmen := true;
+}
+
+//-- Формирование для текущего наряд-заказа нового взамен отмененного
+procedure MakeNewNZakFromOtmen;
+var OldNoDoc : string;
+{
+  OldNoDoc := NZakaz.NoDoc;
+  if (NewNZakFromOtmen(NZakaz.NRec) = true)
+    {
+      message(''#3'Сформирован наряд-заказ № '+NZakaz.NoDoc+
+              ''#13#3'вместо наряд-заказа № '+OldNoDoc);
+    }
+  RescanPanel(#NZakaz);
+}
+
+
+//***************************************************************************
+//-- Формирование детальных наряд-заказов на основании групповых
+function GetDetNZKol: word;
+var kol : word;
+{
+  kol := 1;
+  if (RunDialog(KolDetailsNZak,kol) <> cmOk)
+    kol := 0;
+  GetDetNZKol := kol;
+}
+
+procedure ClearPickRep(spNRec: comp;nList : word);
+var ret : word;
+{
+  for ( ret:= GetFirst PickRep where ((comp(spNRec)==PickRep.cUserDeskRep and
+                                       word(nList) ==PickRep.wList and
+                                       UserName    ==PickRep.OwnName
+                                     ));
+        ret = tsOk;
+        ret:= GetFirst PickRep where ((comp(spNRec)==PickRep.cUserDeskRep and
+                                       word(nList) ==PickRep.wList and
+                                       UserName    ==PickRep.OwnName
+                                     ))
+      )
+    {
+      ret := Delete current PickRep;
+    }
+}
+function MakeTmpForMaster(sourNRec : Comp;Kol:word): word;
+var ret : word;
+    indx: word;
+{
+  for (ret:=GetFirst SpDocs where ((Comp(sourNRec) == SpDocs.cDoc and
+                                    word(440)      == SpDocs.TiDk
+                                  ));
+       ret = tsOk;
+       ret:=GetNext SpDocs where ((Comp(sourNRec) == SpDocs.cDoc and
+                                   word(440)      == SpDocs.TiDk
+                                 ))
+      )
+    {
+      ClearPickRep(SpDocs.NRec,10);
+      for (indx:=1;indx<=Kol;indx:=indx+1)
+        {
+          PickRep.NRec         := 0;
+          PickRep.cRec         := 0;
+          PickRep.cUserDeskRep := SpDocs.NRec;
+          PickRep.wList        := 10;
+          PickRep.PickKol      := 0;
+          PickRep.PickNum      := indx;
+          PickRep.OwnName      := UserName;
+          ret := insert current PickRep;
+        }
+    }
+  MakeTmpForMaster := 0;
+}
+
+function StartMaster(isVis : boolean;sourNRec : comp;Kol:word): word;
+var ret    : word;
+    indx   : word;
+    tmpKol : double;
+    tmpNDoc: string;
+    MustNZ, DelNZ : word;
+{
+  StartMaster := 0;
+  MustNZ := 0;
+  DelNZ := 0;
+  if (RunInterface('MakeDetailedNZak',sourNRec) <> cmDefault)
+    {
+      StartMaster := 1;
+      exit;
+    }
+  ret := GetFirst NZakaz where ((comp(sourNRec)==NZakaz.NRec));
+//-- Формируем детальные наряд-заказы
+  if (isVis=true)
+    {
+      StartNewVisual(vtNumericVisual,vfTimer+vfConfirm
+        ,''#3'Формирование детальных наряд-заказов по групповому:',1);
+      NextVisual;
+    }
+
+  for (indx:=1;indx<=Kol;indx:=indx+1)
+    {
+      ret := GetFirst NZakaz where ((sourNRec == NZakaz.NRec));
+      if (ret <> tsOk) continue;
+      NZakaz.NRec    := 0;
+      NZakaz.cOwner  := sourNRec;
+      NZakaz.TypeDoc := 2;
+      NZakaz.isLeaf  := 1;
+      SetNZakazDefMainFld; //-- обязательные значения по умолчанию
+      ret := insert_current_NZakaz('Сформирован новый детальный наряд-заказ по групповому');
+      MustNZ := MustNZ + 1;
+//-- копируем внешнюю классификацию
+   if boGetTune('Oper.ExClassNZ')
+     {
+       oExtAtr.CopyAllAttr    (word(coNZakaz), sourNRec, NZakaz.NRec);
+       oExtCls.CopyAllClassVal(word(coNZakaz), sourNRec, NZakaz.NRec);
+     }
+      tmpNDoc := NZakaz.NoDoc;
+      ExClass_GetNZakazSpecNoDoc(coNZakaz, NZakaz.NRec, KatOrg.Code, NZakaz.dDoc, tmpNDoc);
+      if (tmpNDoc <> NZakaz.NoDoc)
+        {
+          set NZakaz.NoDoc := tmpNDoc;
+          ret := update current NZakaz;
+        }
+      for (ret:=GetFirst SpDocs where((comp(sourNRec)==SpDocs.cDoc and
+                                       word(440)      == SpDocs.TiDk
+                                     ));
+           ret=tsOk;
+           ret:=GetNext SpDocs where((comp(sourNRec)==SpDocs.cDoc and
+                                      word(440)      == SpDocs.TiDk
+                                    ))
+          )
+        {
+          PushPos(#SpDocs);
+          if (isVis=true) NextVisual;
+          ret := GetFirst PickRep where((SpDocs.NRec==PickRep.cUserDeskRep and
+                                         UserName == PickRep.OwnName and
+                                         word(10) == PickRep.wList and
+                                         word(indx) == PickRep.PickNum
+                                       ));
+          tmpKol := 0.0;
+          if (ret = tsOk)
+            tmpKol := PickRep.PickKol;
+          if (tmpKol <> 0.0)
+            {
+              SpDocs.Code    := '';
+              SpDocs.cUpDoc  := SpDocs.NRec;
+              SpDocs.NRec    := 0;
+              SpDocs.cDoc    := NZakaz.NRec;
+              SpDocs.TiDk    := 440;
+              SpDocs.Kol     := tmpKol;
+
+              ret := oSpDocs.insert_current_Spdocs(SpDocs.BufferP);
+//-- копируем внешнюю классификацию
+              if boGetTune('Oper.ExClassNZ')
+                {
+                  oExtAtr.CopyAllAttr    (word(coSpDocs), SpDocs.cUpDoc, SpDocs.NRec);
+                  oExtCls.CopyAllClassVal(word(coSpDocs), SpDocs.cUpDoc, SpDocs.NRec);
+                }
+            }
+          PopPos(#SpDocs);
+        }
+//-- проверяем, если нараяд-заказ сформировался без спецификации, то удаляем
+//-- этот наряд-заказ
+      ret:=GetFirst SpDocs where((comp(NZakaz.NRec) == SpDocs.cDoc and
+                                       word(440)    == SpDocs.TiDk));
+      if (ret <> tsOk)
+        {
+          NZakaz_Delete(NZakaz.NRec,false);
+          DelNZ := DelNZ + 1;
+        }
+//---------------------------------------------------------------------------
+    }
+  if (isVis=true) StopVisual('',0);
+  if (DelNZ = MustNZ)
+    StartMaster := 1;
+}
+
+function DetailedNZFromGroup(sourNRec:comp): boolean;
+var ret      : word;
+    DetNZKol : word;
+{
+  DetailedNZFromGroup := false;
+  ret := GetFirst NZakaz where ((comp(sourNRec)==NZakaz.NRec));
+  if (ret <> tsOk) exit;
+//-- детальные НЗ формируются по групповым исполняемым НЗ
+  if (NZakaz.TypeDoc <> 1) exit;
+    if (NZakaz.Status <> 1) exit;
+  //-- Получить количество детальных НЗ на которое будем разбивать
+  DetNZKol := GetDetNZKol;
+  if (DetNZKol = 0.0)
+    {
+      exit;
+    }
+  //-- Заполняем временную таблицу для мастера
+  ret := MakeTmpForMaster(sourNRec,DetNZKol);
+  if (ret <> 0) exit;
+  ret := StartMaster(true,sourNRec,DetNZKol);
+  if (ret <> 0) exit;
+  DetailedNZFromGroup := true;
+}
+procedure MakeDetailedNZFromGroup;
+{
+  PushPos(#NZakaz);
+  if (DetailedNZFromGroup(NZakaz.NRec) = true)
+    {
+      message(''#3'Детальные наряд-заказы успешно сформированы');
+    }
+  else
+    message(''#3'Детальные наряд-заказы не сформированы');
+  PopPos(#NZakaz);
+  RescanPanel(#NZakaz);
+}
+
+//-- Проверяет, можноли установить данное состояние
+function CanISetStatus(nzNRec : comp;nStat:word): boolean;
+var ret : word;
+    CurOwn : Comp;
+    curStat : word;
+{
+  CanISetStatus := true;
+  ret := GetFirst NZakaz where((Comp(nzNRec)==NZakaz.NRec));
+  if (ret <> tsOk)
+    {
+      CanISetStatus := false;
+      Exit;
+    }
+ case (nstat) of
+  0,1:
+    {
+      curStat := NZakaz.Status;
+      CurOwn := NZakaz.cOwner;
+      ret := GetFirst NZakaz where((Comp(CurOwn)==NZakaz.NRec));
+      if ((ret <> tsOk) or (CurOwn = 0)) exit;
+      if ((NZakaz.Status = 2) or (NZakaz.Status = 3))
+        {
+          CanISetStatus := false;
+          Exit;
+        }
+    }
+  2,3:  //-- проверяются только статусы: отменен и закрыт
+    { //-- Чтобы установить статус наряд-заказа ОТМЕНЕН/ЗАКРЫТ
+      //-- надо чтобы во всех подчиненных наряд-заказах стояли
+      //-- статусы ОТМЕНЕН/ЗАКРЫТ, иначе нельзя
+      PushPos(#NZakaz);
+      CurOwn := nzNRec;
+      _loop NZakaz where((Comp(nzNRec)==NZakaz.cOwner))
+        {
+         if (NZakaz.Status <> nStat)
+           {
+             CanISetStatus := false;
+             break;
+           }
+        }
+      PopPos(#NZakaz);
+    }
+ end;
+}
+
+//-- возвращает маску запрещенных состояний для наряд-заказа
+function SetStatusMask(nzNRec : comp): word;
+var ret : word;
+    CurOwn : Comp;
+    curStat : word;
+    stt0,stt1,stt2,stt3,stt4:word;
+{
+  SetStatusMask := 0;
+  if (nzNRec = 0) exit;
+  stt0 := 0;stt1 := 0;stt2 := 0;stt3 := 0;stt4 := 0;
+
+  if (RecordExists NZakaz where((Comp(nzNRec)==NZakaz.NRec)) <> tsOk)
+    Exit;
+
+  PushPos(#NZakaz);
+
+  if (GetFirst NZakaz where((Comp(nzNRec)==NZakaz.NRec)) <> tsOk)
+    {}
+
+//-- проверяю допустимые статусы по значению полей самого НЗ
+  if (NZakaz.TypeDoc <> 1)
+    {
+      if ( wGetTune('Doc.NZ.CheckFieldRazPog') = 1 )
+        {
+          if ((NZakaz.cPunktP = 0) or (NZakaz.cPunktR = 0) or (NZakaz.cOrg = 0))
+            stt1 := 2;
+        }
+      else
+        if (NZakaz.cOrg = 0)
+          stt1 := 2;
+    }
+  else
+    {
+      if ( wGetTune('Doc.NZ.CheckFieldRazPog') = 1 )
+        {
+          if ((NZakaz.cPunktP = 0) or (NZakaz.cOrg = 0))
+            stt1 := 2;
+        }
+      else
+        if (NZakaz.cOrg = 0)
+          stt1 := 2;
+    }
+
+//-- проверяем допустимые состояния по владельцу
+  curStat := NZakaz.Status;
+  CurOwn := NZakaz.cOwner;
+  ret := GetFirst NZakaz where((Comp(CurOwn)==NZakaz.NRec));
+  if ((ret = tsOk) and (CurOwn <> 0))
+    {
+      case (NZakaz.Status) of
+        3: {stt0 := 1;stt1 := 2;stt2 := 4;stt4 := 16;}
+        4: {stt0 := 1;stt1 := 2;stt2 := 4;stt3 := 8;}
+      end;
+    }
+
+//-- Чтобы установить статус наряд-заказа ОТМЕНЕН/ЗАКРЫТ
+//-- надо чтобы во всех подчиненных наряд-заказах стояли
+//-- статусы ОТМЕНЕН/ЗАКРЫТ, иначе нельзя
+  CurOwn := nzNRec;
+  _loop NZakaz where((Comp(nzNRec)==NZakaz.cOwner))
+    {
+      if (NZakaz.Status <> 3)
+        stt3 := 8;
+      if (NZakaz.Status <> 4)
+        stt4 := 16;
+      if ((stt3<>0) and (stt4<>0)) break;
+    }
+
+  CurOwn := nzNRec;
+  ret := GetFirst NZakaz where ((Comp(nzNRec)==NZakaz.cInstead));
+  if (ret = tsOk)
+    {
+      stt1 := 2;
+    }
+  PopPos(#NZakaz);
+  SetStatusMask := stt0 + stt1 + stt2 + stt3 + stt4;
+}

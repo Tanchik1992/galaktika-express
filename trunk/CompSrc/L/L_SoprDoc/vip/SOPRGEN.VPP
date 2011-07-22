@@ -1,0 +1,988 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика-сопроводительные документы
+// Общие функции для всех сопроводительных документов
+//********************************************************************************
+
+// Округление рублевых величин
+#ifNdef _SOPRGEN_VPP
+#define _SOPRGEN_VPP
+
+#ifNdef _SOPUSL_VIP
+
+#include SDfuns.var
+
+#ifndef SOPRGEN_EXTCALL
+#include sopredit.vpp // права доступа
+
+//фунции, использующиеся при удалении KatSopr
+#include soprgen1.vpp
+
+//фунцкии округления
+#include soprgen2.vpp
+#include fsround.vpp
+
+//********************************************************************************
+// Округление величины в зависимости от типа накладной (используется при печати документов)
+Function PrRoundS(Value: double): double;
+{
+  PrRoundS := if (KatSopr.cVal = 0, FSRoundRub(Value), FSRoundVal(Value));
+}
+
+//********************************************************************************
+//установка ограничений на документы
+#include soprgen3.vpp
+//проверка количества
+#include soprgen4.vpp
+
+//********************************************************************************
+#include KatSoprToBaseDoc.vpp
+
+//********************************************************************************
+// Перерассчитывает необходимые парамтеры в позиции сопроводительного
+// документа и возвращает коэффициент если необходимы дополнительные перерасчеты
+Function ChangeOtpEd: double;
+{
+  ChangeOtpEd := 1;
+
+  var Kf: double;  kf := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+  var cSavOtp: comp; cSavOtp := SpSopr.cOtpEd;
+
+  if (RunInterface(GetOtpEd, SpSopr.cMCUsl, SpSopr.cOtpEd, if (SpSopr.PrMC = 1, 1, 2)) = cmCancel)
+    Exit;
+
+  if (cSavOtp = SpSopr.cOtpEd)
+    Exit;
+
+  if (wGetTune('Doc.UchEd') = 1)
+    if (fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) = 1.0)
+      {
+         Message('В настройке ' + GetTuneName('Doc.UchEd') + ' установлен ' +
+                'запрет на использование в документах учетных единиц измерения.',
+                Warning+CancelButton);
+         set SpSopr.cOtpEd := cSavOtp;
+         Exit;
+       }
+
+  Kf := kf / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+  SpSopr.Price   := SpSopr.Price   / kf;
+  SpSopr.rPrice  := SpSopr.rPrice / kf;
+
+  SpSopr.VPrice  := SpSopr.VPrice  / kf;
+  SpSopr.rVPrice := SpSopr.rVPrice / kf;
+
+  if (wGetTune('Doc.ChangeOtpEd') <> 0)
+    ProcessCommand(cmCheckSumma);
+  else
+  {
+    SpSopr.KolFact := SpSopr.KolFact * kf;
+    SpSopr.KolOpl := SpSopr.KolOpl * kf;
+    SpSopr.Kol := SpSopr.Kol * kf;
+
+    var iField: integer;
+    iField := CurField;
+
+    CheckAndMakeKolParam(TRUE, FALSE, #SpSopr.KolFact);
+
+    #ifdef _SOPRDOCB_VIP
+    _LOOP SoprOrdB
+    {
+      SoprOrdB.kol := SoprOrdB.Kol * kf;
+      Update current SoprOrdB;
+    }
+    #end
+
+   #ifdef _AKT_211_111_VIP
+    _LOOP SoprOrdB
+    {
+      SoprOrdB.Kol := SoprOrdB.Kol * kf;
+      Update current SoprOrdB;
+    }
+   #end
+  }
+
+  ChangeOtpEd := kf;
+
+  RedrawPanel(#SpSopr);
+}
+
+//********************************************************************************
+// отвязка спецификации при отвязке договора
+Procedure UnBindSpDocs;
+{
+  if (isValid(#SpSopr))
+  {
+    PushPos(#SpSopr);
+    Update SpSopr Set SpSopr.cSpDocs := 0;
+    PopPos(#SpSopr);
+  }
+}
+
+//********************************************************************************
+// выдача сообщения об ошибке
+Procedure ErrorMessage(ercode: word);
+var mes: string;
+{
+  if (erCode = 0)
+    Exit;
+
+  Case ercode of
+  //------------
+    ercInsertSklOrder:  mes := 'Невозможно сформировать складской ордер';
+  //------------
+    ercSoprHoz:         mes := 'Ошибка при модификации таблицы разноски хозяйственных операций';
+  //------------
+    ercInsertSpOrder:   mes := 'Невозможно вставить позицию в складской ордер';
+  //------------
+    else                Mes := 'Неопределенная ошибка'
+  //------------
+  end;
+  Message(mes, CancelButton);
+}
+
+
+//******************************************************************************
+//проверка задолженности контрагента
+Function CheckDolgKonSopr(bNew: boolean): boolean;
+var
+  tSumDoc: double;
+{
+  CheckDolgKonSopr := TRUE;
+
+  tSumDoc := 0;
+
+  if ((wGetTune('Oper.SoprInBalans') = 1) AND (KatSopr.dOpr = ZeroDate))
+    tSumDoc := if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal);
+
+ #ifdef _SOPRDOC_VIP
+  var oCheckKon: CheckKonObj;
+
+  // контроль задолженности по договорам контрагента
+  if (not iDolg_DG.ControlDolg_DG_4KatSopr(KatSopr.cOrgBase,
+                                           if(KatSopr.cAppDogovor = 0, KatSopr.cDogovor, KatSopr.cAppDogovor),
+                                           tSumDoc,
+                                           KatSopr.cVal,
+                                           word(1)))
+    {
+      if (NOT bNew)
+        RereadRecord(#KatSopr);
+
+      CheckDolgKonSopr := FALSE;
+      Exit;
+    }
+
+  if NullVipRef(oCheckKon)
+    GetVipRef(oCheckKon, 'KatOrg');
+
+  if (not oCheckKon.CheckDolgKon(if(KatSopr.cOrg <> 0, KatSopr.cOrg, KatSopr.cOrgBase),
+                                 KatSopr.dSopr,
+                                 if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal), KatSopr.cVal))
+    {
+      if (NOT bNew)
+        RereadRecord(#KatSopr)
+
+      CheckDolgKonSopr := FALSE;
+      Exit;
+    }
+ #end // _SOPRDOC_VIP
+
+ #ifdef _AKTUSL_VIP
+  var oCheckKon: CheckKonObj;
+
+  // контроль задолженности по договорам контрагента
+  if (not iDolg_DG.ControlDolg_DG_4KatSopr(KatSopr.cOrgBase,
+                                           if(KatSopr.cAppDogovor = 0, KatSopr.cDogovor, KatSopr.cAppDogovor),
+                                           tSumDoc,
+                                           KatSopr.cVal,
+                                           word(1)))
+    {
+      if (NOT bNew)
+        RereadRecord(#KatSopr);
+
+      CheckDolgKonSopr := FALSE;
+      Exit;
+    }
+
+  if NullVipRef(oCheckKon)
+    GetVipRef(oCheckKon, 'KatOrg');
+
+  if (not oCheckKon.CheckDolgKon(if(KatSopr.cOrg <> 0, KatSopr.cOrg, KatSopr.cOrgBase),
+                                 KatSopr.dSopr,
+                                 if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal), KatSopr.cVal))
+    {
+      if (NOT bNew)
+        RereadRecord(#KatSopr)
+
+      CheckDolgKonSopr := FALSE;
+      Exit;
+    }
+ #end // _AKTUSL_VIP
+}
+
+//********************************************************************************
+
+Procedure RedrawCurTable;
+{
+  RedrawPanel(CurTable);
+}
+
+#end // #ifndef SOPRGEN_EXTCALL
+
+//********************************************************************************
+
+Procedure KatSoprDefault;
+{
+  ClearBuffer(#KatSopr);
+
+  if (wGetTune('FN.AvtoNum') <> 1)
+    Case TypeSopr of
+    //--------------
+      106, 115,
+      201..206, 211, 210, 229, 1421,
+      551..553, 554, 557, 559,
+      601..605, 611..613, 621, 622, 629, 610, 1610
+           : KatSopr.NSopr := GetLastNumD(TypeSopr);
+    //--------------
+      110  : KatSopr.NSopr := GetLastNumD(1110);
+      501  : KatSopr.NSopr := GetLastNumD(207);
+      502  : KatSopr.NSopr := GetLastNumD(208);
+      503  : KatSopr.NSopr := GetLastNumD(220);
+      504  : KatSopr.NSopr := GetLastNumD(217);
+      505  : KatSopr.NSopr := GetLastNumD(218);
+      506  : KatSopr.NSopr := GetLastNumD(219);
+      507  : KatSopr.NSopr := GetLastNumD(507);
+      508  : KatSopr.NSopr := GetLastNumD(508);
+      511  : KatSopr.NSopr := GetLastNumD(212);
+      512  : KatSopr.NSopr := GetLastNumD(213);
+      513  : KatSopr.NSopr := GetLastNumD(214);
+      521  : KatSopr.NSopr := GetLastNumD(216);
+      522  : KatSopr.NSopr := GetLastNumD(522);
+      523  : KatSopr.NSopr := GetLastNumD(523);
+      600  : KatSopr.NSopr := GetLastNumD(209);
+      606  : KatSopr.NSopr := GetLastNumD(209);
+      1111 : KatSopr.NSopr := GetLastNumD(210);
+      else   KatSopr.NSopr := '000000';
+    //--------------
+    end;
+  else
+    {
+      if (TypeSopr > 199) or
+//пир 102.53959         (TypeSopr = 111) or
+         (TypeSopr = 106) or
+         (TypeSopr = 110) or
+         (TypeSopr = 629) or
+         (TypeSopr = 610) or
+         (TypeSopr = 1610)
+        {
+          PushPos(#KatSopr);
+          PopAllConditions;
+          ResetBounds(#KatSopr);
+
+          var NDD: string[20];
+
+          if (GetLast KatSopr where ((TypeSopr == KatSopr.VidSopr AND
+                                      Year(Cur_Date) == KatSopr.YearSopr)) = tsOk)
+            NDD := NextNumStr(KatSopr.NSopr) else NDD := '000001';
+
+          SetBounds(#KatSopr);
+          PopPos(#KatSopr);
+
+          KatSopr.NSopr := NDD;
+#ifndef _CALLMAKE_
+#ifdef _InRemont_
+          if (pStepDoc <> comp(0))
+            PushCondition(tcpStepDoc);
+#end
+#end
+
+#ifdef _OutRemont_
+          if (pStepDoc <> comp(0))
+            PushCondition(tcpStepDoc);
+#end
+        }
+      else
+        KatSopr.NSopr := '000000';
+    }
+
+  KatSopr.cOtvPodr := DefaultBaseCO;
+
+  Case TypeSopr of
+    201, 211, 210, 229:
+      if (boGetTune('FN.isNumOtvPodr'))
+        {
+          if (wGetTune('FN.AvtoNum') = 0)      //Автонумерация с помощью специальной таблицы
+            DelLastNumD(TypeSopr, KatSopr.NSopr);
+
+          KatSopr.NSopr := GetLastNumD_(TypeSopr, string(KatSopr.cOtvPodr));
+        }
+    1421:
+      if (boGetTune('Doc.Wood.Nakl.isNumOtvPodr'))
+        {
+          if (wGetTune('FN.AvtoNum') = 0)      //Автонумерация с помощью специальной таблицы
+            DelLastNumD(TypeSopr, KatSopr.NSopr);
+
+          KatSopr.NSopr := GetLastNumD_(TypeSopr, string(KatSopr.cOtvPodr));
+        }
+  end;
+
+  Case TypeSopr of
+    201, 202, 101, 102, 108:
+      {
+#ifdef _RETTARA_
+        KatSopr.TaraVoz :=wGetTune('Tara.TaraVoz') + 1;  //andr
+#end //_RETTARA_
+      }
+  end;
+
+  KatSopr.dSopr    := Cur_Date;
+  KatSopr.YearSopr := year(Cur_date);
+  KatSopr.VidSopr  := TypeSopr;
+  KatSopr.cNazna   := coGetTune('Doc.cNazna');
+  KatSopr.FilialNo := lGetTune('Konsolid.FilialNo');
+  KatSopr.Descr    := sGetTune('User.Descr');
+  KatSopr.DesGr    := sGetTune('User.DesGr');
+
+  if (wGetTune('Doc.SoprDataKurs') <> 0)
+    KatSopr.dPrice := KatSopr.dSopr;
+
+#ifndef SOPRGEN_EXTCALL
+  if (isFilter)
+    if (KatSopr.dSopr > endDate)
+      KatSopr.dSopr := enddate
+    else
+      if (KatSopr.dSopr < begdate)
+        KatSopr.dSopr := begdate;
+#end
+
+  case TypeSopr of
+    201, 210, 229, 1421,
+    501,
+    600..603, 605, 606:
+      {
+        if coGetTune('User.cCurSklad') <> comp(0)
+          KatSopr.cPodrFrom := coGetTune('User.cCurSklad');
+
+        if coGetTune('Doc.cMol') <> comp(0)
+          KatSopr.cMolFrom  := coGetTune('Doc.cMol');
+      }
+  end;
+
+  if (TypeSopr <> 508)  // для производственного Акта на услуги это не надо
+    if (TMCUsl = 2) OR (TypeSopr = 114)
+      KatSopr.dOpr := KatSopr.dSopr;
+
+  if (TypeSopr = 1610)
+    KatSopr.dOpr := KatSopr.dSopr;
+
+  case TypeSopr of
+  //--------------
+     501..506,
+     600, 603,
+     606,
+     511, 512,
+     601, 602, 605, 611, 612, 613,
+     521, 522, 523,
+     621, 622, 604, 554, 559:
+       KatSopr.TipSopr := 0; // Внутренние перемещения
+  //--------------
+     110:
+       {
+#ifndef SOPRGEN_EXTCALL
+         var TipKS: word; TipKS := 0;
+         RunDialog('GetTipKS', TipKS);
+         KatSopr.TipSopr := TipKS + 1;
+#else
+         KatSopr.TipSopr := 1;
+#end
+       }
+  //--------------
+     114,
+     101, 102, 103, 111, 105, 106, 108, 553, 1411:
+       KatSopr.TipSopr := 1; // Прием МЦ и услуг
+  //--------------
+     210, 229, 629, 610, 1610,
+     201, 202, 203, 211, 205, 206, 1421,
+     513, 557:
+       KatSopr.TipSopr := 2; // Отпуск МЦ и услуг
+  //--------------
+  end; // case
+
+  KatSopr.cOrg := KatSopr.cOrgBase; //пир 180.1487
+
+  Case KatSopr.TipSopr of
+    1:  KatSopr.cGruzTo := coGetTune('MyOrg');
+    2:  KatSopr.cGruzFrom := coGetTune('MyOrg');
+   else
+     {
+       KatSopr.cGruzTo := 0;
+       KatSopr.cGruzFrom := 0;
+     }
+  end;
+
+  KatSopr.cValut := coGetTune('BaseCurrency');
+
+  Case TypeSopr of
+  //--------------
+    110:
+        KatSopr.Status := 1-wGetTune(if (KatSopr.TipSopr = 1, 'Doc.Buy.SoprStatus', 'Doc.Sell.SoprStatus'));
+  //--------------
+    114,
+    101, 111: KatSopr.Status := 1-wGetTune('Doc.Buy.SoprStatus');
+  //--------------
+    1411: KatSopr.Status := 1-wGetTune('Doc.Wood.Journ.SoprStatus');
+  //--------------
+    210, 229,
+    201, 211: KatSopr.Status := 1-wGetTune('Doc.Sell.SoprStatus');
+  //--------------
+    1421: KatSopr.Status := 1-wGetTune('Doc.Wood.Nakl.SoprStatus');
+  //--------------
+    103, 203: KatSopr.Status := 1-wGetTune('Doc.PrCons.SoprStatus');
+  //--------------
+    102, 202: KatSopr.Status := 1-wGetTune('Doc.OtpCons.SoprStatus');
+  //--------------
+    551, 552: KatSopr.Status := 1-wGetTune('Doc.Remont.SoprStatus');
+  //--------------
+    // пока нет редактируемого поля в возвратных накладных
+    1610, 610, 629, 106, 206: KatSopr.Status := 1;
+  //--------------
+    #ifdef AKT_112 // __TAXES__
+    cgTiDk_TaxAkt: // налоговый акт
+       GetDefNalStatus(CurDescr, cgTiDk_TaxAkt, KatSopr.cNote, KatSopr.Status)
+    #end
+  //--------------
+    else KatSopr.Status := 0;
+  //--------------
+  end;
+
+
+  Case TypeSopr of
+  //-------------
+    110: KatSopr.VhodNal := if (wGetTune(if (KatSopr.TipSopr = 1,'Doc.Buy.Nalog','Doc.Sell.Nalog')) = 1, 1, 2);
+  //-------------
+    114,
+    101,
+    111:
+      {
+        KatSopr.VhodNal := if (wGetTune('Doc.Buy.Nalog') = 1, 1, 2); //накл. на закупку
+        if (coGetTune('Oper.Buy.Nakl.cPayment') <> 0)
+          KatSopr.cPayment := coGetTune('Oper.Buy.Nakl.cPayment');
+      }
+  //-------------
+    1411:
+      {
+        KatSopr.VhodNal := if (wGetTune('Doc.Wood.Journ.Nalog') = 1, 1, 2); //накл. на закупку
+        if (coGetTune('Doc.Wood.Journ.cPayment') <> 0)
+          KatSopr.cPayment := coGetTune('Doc.Wood.Journ.cPayment');
+      }
+  //-------------
+    102,
+    103: KatSopr.VhodNal := if (wGetTune('Doc.PrCons.Nalog') = 1, 1, 2); //прием на консигнацию
+  //-------------
+    201,
+    211,
+    513:
+      {
+        KatSopr.VhodNal := if (wGetTune('Doc.Sell.Nalog')  = 1, 1, 2); //накл. на продажу
+        if (coGetTune('Oper.Sell.Nakl.cPayment') <> 0)
+          KatSopr.cPayment := coGetTune('Oper.Sell.Nakl.cPayment');
+      }
+  //-------------
+    1421:
+      {
+        KatSopr.VhodNal := if (wGetTune('Doc.Wood.Nakl.Nalog')  = 1, 1, 2); //накл. на продажу
+        if (coGetTune('Doc.Wood.Nakl.cPayment') <> 0)
+          KatSopr.cPayment := coGetTune('Doc.Wood.Nakl.cPayment');
+      }
+  //-------------
+    202,
+    203: KatSopr.VhodNal := if (wGetTune('Doc.OtpCons.Nalog') = 1, 1, 2); //отпуск в консигнации
+  //-------------
+    551,
+    552: KatSopr.VhodNal := if (wGetTune('Doc.Remont.Nalog')  = 1, 1, 2);  //накл. для ремонта
+  //-------------
+    501: set KatSopr.VhodNal := 2;
+  //-------------
+    502,
+    503: KatSopr.VhodNal := if (wGetTune('Oper.FormUch')  = 1, 1, 2);
+  //-------------
+    600:
+      {
+        if ExistTune('Sklad.SoprDoc.Nalog')
+          KatSopr.VhodNal := if (wGetTune('Sklad.SoprDoc.Nalog') = 1, 1, 2)
+        else
+          KatSopr.VhodNal := if (wGetTune('Oper.FormUch')  = 1, 1, 2);
+      }
+  //-------------
+    else  KatSopr.VhodNal := 1;
+  //-------------
+  end;
+
+
+  case KatSopr.VidSopr of
+   101, 201, 103, 108, 202, 1411, 1421:
+     Case wGetTune('Doc.NaklDef') of
+     //-----------------------------
+       0: {};
+     //-----------------------------
+       1: SelectField (#KatSopr.NSopr);
+     //-----------------------------
+       #ifdef _SOPRDOC_VIP
+     //-----------------------------
+       2: SelectField (#BDNomDes);
+     //-----------------------------
+       3: SelectField (#KatSopr.dSopr);
+     //-----------------------------
+       #end
+     //-----------------------------
+       #ifdef _SOPRDOCB_VIP
+     //-----------------------------
+       2: SelectField (#BDNomDes);
+     //-----------------------------
+       3: SelectField (#KatSopr.dSopr);
+     //-----------------------------
+       #end
+     //-----------------------------
+     end;
+   else
+     SelectField (#KatSopr.NSopr);
+  end;
+
+#ifndef SOPRGEN_EXTCALL
+  //-- проверка задолженности контрагента
+  if (KatSopr.cOrgBase <> 0)
+    if (NOT CheckDolgKonSopr(TRUE))
+      Abort;
+#end
+}
+
+//********************************************************************************
+#include SpSoprDefault.vpp
+//********************************************************************************
+
+#ifndef SOPRGEN_EXTCALL
+
+Procedure AllPickParty;
+var PickPart: comp;
+var SkpDlg: word;
+var ToDo: boolean;
+var OldPName: string[80];
+var NewPName: string[80];
+{
+  PickPart := 0;
+
+  if (not IsValid(#SpSopr))
+    {
+      Message('В документе нет позиций спецификации', CancelButton);
+      Exit;
+    }
+
+  if (RunInterface(GetPar__, PickPart, comp(0)) = cmCancel)
+    Exit;
+
+  if (KatSopr.VidSopr = 201) OR (KatSopr.VidSopr = 1421)
+    if boGetTune('Oper.MultiCurrReg')
+      if (GetFirst KatParty where((PickPart == KatParty.nRec)) = tsOk)
+        if (KatParty.cValPar <> KatSopr.cVal)
+          {
+            Message('Установлен режим многовалютного учета'#13 +
+                    '('+GetTuneName('Oper.MultiCurrReg')+')'#13#13+
+                    'При этом валюта выбранной партии должна совпадать с валютой документа');
+            Exit;
+          }
+
+  NewPName := '';
+  PushPos(#SpSopr);
+  SkpDlg := 0;
+  ToDo := FALSE;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak,
+         'Установка партии для позиций документа: ', 1);
+  _LOOP SpSopr
+    {
+      if (not NextVisual)
+        if (Message('Прекратить установку партий для позиций спецификации документа?', YesNo) = cmYes)
+          Break;
+
+      if (SpSopr.cParty = 0) OR (SpSopr.cParty = PickPart)
+       {
+         SpSopr.cParty := PickPart;
+         if (Update current SpSopr <> tsOk)
+           {};
+       }
+     else
+       {
+         ResetBounds(#KatParty);
+         if (GetFirst KatParty where ((SpSopr.cParty == KatParty.NRec)) = tsOk)
+           OldPName := '"' + KatParty.Name + '".';
+         else
+           OldPName := '"!!! Неизвестная ссылка (код ' + string(SpSopr.cParty) + ')".';
+
+         if (NewPName = '')
+           if (GetFirst KatParty where ((PickPart == KatParty.NRec)) = tsOk)
+             NewPName := '"' + KatParty.Name + '"?';
+           else
+             NewPName := '"!!! Неизвестная ссылка (код ' + string(PickPart) + ')"?';
+
+         SetBounds(#KatParty);
+
+         if (SkpDlg = 0)
+           Case RunDialog(SoprPartConflict, OldPName, NewPName, SkpDlg) of
+             cmYes : ToDo := TRUE;
+             cmNo  : ToDo := FALSE;
+           end;
+
+         if (ToDo)
+           {
+             SpSopr.cParty := PickPart;
+             if (Update current SpSopr <> tsOk) {};
+           }
+       }
+    }
+
+  PopPos(#SpSopr);
+  RescanPanel(#SpSopr);
+  StopVisual('', 0);
+}
+
+#include CanEditStatusDO.vpp
+
+#include CanEditDocumentNotMessage.vpp
+
+//********************************************************************************
+
+Function SoprDoc_NRec_DSKName: string;
+{
+  SoprDoc_NRec_DSKName := 'SoprDoc_GetNRec_' + string(TypeSopr);
+} // Function SoprDoc_NRec_DSKName
+
+//********************************************************************************
+
+Create view SpSo2
+var
+  cKatSopr: comp;
+From
+  SpSopr
+Where
+((
+  cKatSopr == SpSopr.cSopr
+))
+;
+
+Procedure CheckdSopr2;
+{
+  if not isValid(#SpSopr)
+    Exit;
+
+  Update_Current_KatSopr;
+
+  SpSo2.cKatSopr := KatSopr.Nrec;
+
+  SpSo2._Loop SpSopr
+  {
+    SpSo2.SpSopr.dSopr   := KatSopr.dSopr;
+    SpSo2.SpSopr.dOprTTN := KatSopr.dOpr;
+    SpSo2.Update Current SpSopr;
+  }
+
+  ReReadRecord(#KatSopr);//сбросить буфер текущей записи
+}
+
+//********************************************************************************
+
+Function CheckdSopr: boolean;
+{
+  CheckdSopr := FALSE;
+
+  // проверка на попадание в закрытый период
+  var tmpStr  : string;
+  var tDate   : date;
+  var OldDate : date;
+  var tMode   : word;
+  tDate   := dGetTune('Oper.DateClosePeriod');
+  OldDate := StrToDate(OldFieldValue, 'DD/MM/YYYY');
+  tMode   := wGetTune('Oper.ModifyInClosePeriod');
+  tmpStr  := ''#3'Текущий документ попал в закрытый период: до ' + DateToStr(tDate,'DD/MM/YYYYг.')
+
+ if ( KatSopr.VidSopr <> 551)
+ if ( KatSopr.VidSopr <> 552 )// для накладных ТОРО есть другая настройка проверки закрытого периода
+  if (tMode <> 0)
+    if (tDate <> Date(0,0,0))
+      if (KatSopr.dSopr <= tDate)
+        if (tMode = 2)
+        {
+          tmpStr := tmpStr + ''#13#3'Настройкой запрещено редактирование документов в закрытом периоде'
+                           + ''#13#3'См. ' + GetTuneName('Oper.ModifyInClosePeriod');
+          Message(tmpStr);
+          set KatSopr.dSopr := OldDate;
+          Exit;
+        }
+        else
+        {
+          tmpStr := tmpStr + ''#13#3'Подтверждаете установку выбранной даты?';
+
+          if (message(tmpStr,YesNo) <> Yes)
+          {
+            set KatSopr.dSopr := OldDate;
+            Exit;
+          }
+        }
+
+
+  case KatSopr.VidSopr of
+  //---------------------
+    201, 101, 108, 1411, 1421,//накладные
+    210, 229, 106, 206, //рекламация
+    102, 103, 202, 203: //консигнация
+      If KatSopr.dOpr<>date(0, 0, 0)
+        If KatSopr.dSopr<>KatSopr.dOpr
+          IF (Message('Дата документа не совпадает с датой формирования ордера'#13+
+                      'Откатить изменение?', YesNo) = cmYes)
+            {
+              RereadRecord(#KatSopr);
+              Exit;
+            }
+  //---------------------
+    110,111,114,115,
+    211: //акты
+       {
+         If KatSopr.dOpr = StrToDate(OldFieldValue, 'DD/MM/YYYY')//имеется ввиду KatSopr.dSopr
+           set KatSopr.dOpr := KatSopr.dSopr;
+       }
+  //---------------------
+  end;
+
+  CheckdSopr2;
+
+// после изменения даты цен ДОЛЖЕН БЫТЬ ПЕРЕСЧЕТ ПО КУРСУ (см.soprc22.vpp)
+// пока сделано для документа без спецификации
+  if (NOT isValid(#SpSopr))
+    if (wGetTune('Doc.SoprDataKurs') <> 0)
+      set KatSopr.dPrice := KatSopr.dSopr;
+
+#ifdef _SOPRDOCB_VIP
+  case KatSopr.VidSopr of
+  101, 102, 103, 108, 1411:
+   {
+    var PNnRec  : comp;
+    var KNdSopr: Date;
+    // если накладная является корректирующей,
+    // то необходимо выполнить дополнительные действия для сторнирующей накладной
+    if (KatSopr.wADoc = adSoprDocKN)
+      if (KatSopr.dSopr < dGetTune('Dat_M_Ot'))
+        {
+          Message('Дата выписки корректирующей накладной должна находиться в открытом отчетном периоде.');
+          Abort;
+        }
+      else
+        {
+          PushPos(#KatSopr);
+          PNnRec  := KatSopr.cADoc;
+          KNdSopr := KatSopr.dSopr;
+          CheckdSopr2;
+          // ищем сторнирующую накладную...
+
+          PopCondition(tcNo_SN_KatSopr); // иначе не найдем сторнирующую накладную
+
+          if (GetFirst KatSopr where ((adSoprDocSN == KatSopr.wADoc AND
+                                       PNnRec == KatSopr.cADoc)) = tsOk)
+            {
+              set KatSopr.dSopr := KNdSopr;
+              CheckdSopr2;
+            }
+          PopPos(#KatSopr);
+          PushCondition(tcNo_SN_KatSopr);
+          RedrawPanel(tnKatSopr);
+        }
+   }
+  end;
+#end
+
+  CheckdSopr := TRUE;
+}
+
+#end // #ifndef SOPRGEN_EXTCALL
+#end //_SOPUSL_VIP
+
+//********************************************************************************
+
+#ifndef SOPRGEN_EXTCALL
+
+Procedure PickcBuilding;
+{
+  if (KatSopr.VidSopr = 110) AND (KatSopr.cUKS <> 0)
+    {
+      Message('Объект строительства установлен для всего документа!'#13'Нельзя изменять объект строительства.');
+      Exit;
+    }
+
+  var cbuilding: comp;
+  var ch: word;  ch := 0;
+  var ch1: word; ch1 := 0;
+
+  If RunInterface(GetBuilding, cBuilding, 0, 0) = cmcancel
+    exit;
+
+  If cBuilding = 0
+    exit;
+
+  PushPos(#SpSopr);
+
+  if (KatSopr.VidSopr = 110)
+    ResetBounds(#SpSopr);
+
+  _LOOP spsopr where ((KatSopr.nRec == SpSopr.cSopr))
+    {
+      #ifdef _SMETA_IN_SOPR_
+      if (GetFirst SpDocSmeta = tsOk)
+        {
+          ch1 := ch1 + 1;
+          continue;
+        }
+      #end
+
+      if SpSopr.cUKS = 0
+        {
+          if (GetFirst SpSopHoz where ((SpSopr.NRec == SpSopHoz.cSpSopr)) <> tsOk)
+            SpSopr.cUKS := cBuilding
+          else
+            ch := ch + 1;
+
+         if update current SpSopr<>tsOK{};
+       }
+    }
+
+  if (KatSopr.VidSopr = 110)
+    SetBounds(#SpSopr);
+
+  PopPos(#SpSopr);
+
+  RescanPanel(#SpSopr);
+
+#ifdef _SOPRDOCB_VIP
+  PushPos(#SpSopUsl);
+
+  _LOOP spsopUsl
+    if SpSopUsl.cUKS = 0
+     {
+      if (GetFirst SpSopHoz where ((SpSopUsl.NRec == SpSopHoz.cSpSopr)) <> tsOk)
+        SpSopUsl.cUKS := cBuilding
+      else
+        ch := ch + 1;
+
+      if update current SpSopUsl<>tsOK{};
+     }
+
+  PopPos(#SpSopUsl);
+  RescanPanel(#SpSopUsl);
+#end
+
+ if (ch <> 0)
+   Message('Операция выполнена не для всех позиций из-за наличия распределенных платежей.', Information);
+
+ if (ch1 <> 0)
+   Message('Операция выполнена не для всех позиций из-за наличия сметных спецификаций.', Information);
+
+}
+
+//********************************************************************************
+// расчет грузового места по текущей позиции накладной
+Procedure ReCalcGrM;
+var
+  bRecalc: boolean;
+{
+  bRecalc := FALSE;
+
+  if (SpSopr.PrMc = 1)
+    case SpSopr.VidSopr of
+      600: {
+        bRecalc := boGetTune('Sklad.CalcGrM');
+      }
+
+      201: {
+        bRecalc := boGetTune('Oper.Sell.Nakl.CalcGrM');
+      }
+
+      1421: {
+        bRecalc := boGetTune('Doc.Wood.Nakl.CalcGrM');
+      }
+    end;
+
+  if (bRecalc)
+    RunInterface('iKolGrM', SpSopr.NRec, SpSopr.cMCUsl, SpSopr.KolFact,
+                            SpSopr.KolGrM, SpSopr.cOtpEdGRM, SpSopr.cOtpEd);
+}
+
+//********************************************************************************
+//обновление данных на событиях cmPick, cmCheckField и cmDelOnProtect
+Procedure Update_Record_KatSopr;
+{
+  if CurTable<>#KatSopr
+    Exit;
+
+  if (isNew) AND (isModified)
+    {
+      insert current KatSopr;
+      SetNew(false);
+      Update_Current_KatSopr;
+    }
+  else
+    if (isModified)
+    {
+      Update_Current_KatSopr;
+    }
+}
+
+// удаление ордеров по настройке
+Function IsDelOrder: boolean;
+var
+  sTuneVal: string;
+{
+  IsDelOrder := TRUE;
+
+  if (RecordExists SklOrder where (( KatSopr.NRec == SklOrder.cSopr )) <> tsOk)
+    Exit;
+
+  case KatSopr.VidSopr of
+  // снабжение
+    101, 108, 206, 111:
+      sTuneVal := 'Oper.Buy.Nakl.IsDelOrder';
+  // УЛХ. Дневник приемки
+    1411:
+      sTuneVal := 'Doc.Wood.Journ.IsDelOrder';
+  // сбыт
+    201, 106, 211:
+      sTuneVal := 'Oper.Sell.Nakl.IsDelOrder';
+  // накладная на отпуск лесопродукции
+    1421:
+      sTuneVal := 'Doc.Wood.Nakl.IsDelOrder';
+  // остальные удалять по-умолчанию можно
+  else
+    Exit;
+  end;
+
+  case wGetTune(sTuneVal) of
+    1: {
+
+      ShowTune('Удаление ордеров запрещено настройкой', sTuneVal);
+
+      IsDelOrder := FALSE;
+    }
+
+    2: {
+
+      if (KatSopr.cSchfact <> comp(0))
+      {
+        ShowTune('По накладной/акту создан документ для учета НДС'#13 +
+                 'Удаление ордеров запрещено настройкой', sTuneVal);
+
+        IsDelOrder := FALSE;
+      }
+    }
+
+  end;
+}
+
+#end // #ifndef SOPRGEN_EXTCALL
+#end //_SOPRGEN_VPP
+//********************************************************************************

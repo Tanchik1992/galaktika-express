@@ -1,0 +1,518 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+#ifndef _SHT_CE_A_VPP
+#define _SHT_CE_A_VPP
+
+#include SDfuns.var
+
+procedure SHT_CE_View_Massa ;
+{
+  CASE SHT_CE_vid OF
+    1 :
+      {
+      ClearFieldState(#SpSopr.Netto, sfVisible) ;
+      ClearFieldState(#SpSopr.mTara, sfVisible) ;
+      ClearFieldState(#TTN_massa_all, sfVisible) ;
+      }
+    2 :
+      {
+        SetFieldState(#SpSopr.Netto, sfVisible) ;
+        SetFieldState(#SpSopr.mTara, sfVisible) ;
+        SetFieldState(#TTN_massa_all, sfVisible) ;
+      }
+  END ;
+} // procedure SHT_CE_View_Massa ;
+
+procedure SHT_CE_View_SpSopr_Fileds ;
+{
+  if (SpSopr.PrMC>1)
+    { // для услуг
+        setFieldOption(#NameMCUsl, ofSelectable) ;
+        setFieldOption(#KodMCUsl, ofSelectable) ;
+
+        ClearFieldOption(#SpSopr.mTara, ofSelectable) ;
+        ClearFieldOption(#SpSopr.Netto, ofSelectable) ;
+        ClearFieldOption(#TTN_massa_all, ofSelectable) ;
+        if boGetTune('Ves.AddMC_DO') or boGetTune('Ves.AddMC_Price')
+          setFieldOption(#PrMCUsl, ofSelectable) ;
+        else
+          ClearFieldOption(#PrMCUsl, ofSelectable) ;
+    }
+  else
+    {
+      if (SHT_CE_vid=2) // навальная
+        {
+          ClearFieldOption(#NameMCUsl, ofSelectable) ;
+          ClearFieldOption(#KodMCUsl, ofSelectable) ;
+          ClearFieldOption(#SpSopr.KolFact, ofSelectable) ;
+          ClearFieldOption(#PrMCUsl, ofSelectable) ;
+        }
+      else
+        { // тарная
+          setFieldOption(#SpSopr.KolFact, ofSelectable) ;
+          // в тарной накладной если разрешено можно добавлять МЦ
+          if boGetTune('Ves.AddMC_DO') or boGetTune('Ves.AddMC_Price')
+            {
+              setFieldOption(#NameMCUsl, ofSelectable) ;
+              setFieldOption(#KodMCUsl, ofSelectable) ;
+              setFieldOption(#PrMCUsl, ofSelectable) ;
+            }
+          else
+            {
+              ClearFieldOption(#NameMCUsl, ofSelectable) ;
+              ClearFieldOption(#KodMCUsl, ofSelectable) ;
+              ClearFieldOption(#PrMCUsl, ofSelectable) ;
+            }
+        }
+
+    if not boGetTune('Ves.Corr')
+      { // заперещена ручная модификация
+        setFieldOption(#SpSopr.mTara, ofProtected) ;
+        setFieldOption(#SpSopr.Netto, ofProtected) ;
+        setFieldOption(#TTN_massa_all, ofProtected) ;
+      }
+    else
+      { // разрешена ручная корректировка
+        ClearFieldOption(#SpSopr.mTara, ofProtected) ;
+        ClearFieldOption(#SpSopr.Netto, ofProtected) ;
+        ClearFieldOption(#TTN_massa_all, ofProtected) ;
+      }
+    // установка видимости нужных полей
+    if (sht_ce_tip = 0)
+      {
+        ClearFieldOption(#SpSopr.Netto, ofSelectable) ;
+        setFieldOption(#SpSopr.mTara, ofSelectable) ;
+        ClearFieldOption(#TTN_massa_all, ofSelectable) ;
+      }
+    else
+      {
+        setFieldOption(#SpSopr.Netto, ofSelectable) ;
+        ClearFieldOption(#SpSopr.mTara, ofSelectable) ;
+        setFieldOption(#TTN_massa_all, ofSelectable) ;
+      }
+    }
+} // procedure SHT_CE_View_SpSopr_Fileds ;
+
+// при переходе на панель позиционирование на открытом поле
+procedure SelectPanelSpSopr ;
+{
+  SHT_CE_View_Massa ;
+  SHT_CE_View_SpSopr_Fileds ;
+  if (SpSopr.PrMC >1)
+    SelectField(#NameMCUsl) ;
+  else
+    SelectField(if (SHT_CE_tip=0, #SpSopr.mTara, #SpSopr.Netto));
+  SHT_CE_View_SpSopr_Fileds ;
+} // procedure SelectPanelSpSopr ;
+
+Panel SHT_CE_KatSopr
+  Table KatSopr
+
+HandleEvent // Panel SHT_CE_KatSopr
+
+cmAbortInsert :
+  if (boGetTune('Ves.Use'))
+    if (sht_ce_tip=0)
+      Abort ;
+
+cmPositionChanged :
+  if (boGetTune('Ves.Use'))
+    {
+      Abort ;
+      SHT_CE_View_SpSopr_Fileds ;
+    }
+
+cmInsertRecord :
+  if (boGetTune('Ves.Use'))
+    if (sht_ce_tip=0)
+      if (KatSopr.nRec <> 0)
+        SHT_CE_nrec := KatSopr.nRec ;
+
+
+cmSetDefault :
+  if (boGetTune('Ves.Use'))
+    {
+      var pSpStep : comp ;
+      var pPrices : comp;
+      var pKol    : double;
+      var MarkerPrice,
+          MarkerKolPrice : Longint;
+      var CountMark, i   : Longint;
+      var Curse : double ;
+
+      if (sht_ce_tip=0)
+        SHT_CE_nrec := 0 ;
+
+      KatSopr.FilialNo  := SHT_CE_vid ;
+
+      if (not SGetBaseDoc(Curse, 0))
+        {
+          Abort ;
+          CloseWindow (SHT_CE_KatSopr) ;
+          EXIT ;
+        }
+
+      if (wGetTune('Ves.afterDo') = 0)
+       {
+         if (GetFirst SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc))<> tsOk)
+           {
+             Abort ;
+             CloseWindow (SHT_CE_KatSopr) ;
+             EXIT ;
+           }
+
+        if (wGetTune('Ves.choiceMC') = 0)
+         {
+          if (GetFirst Prices where ((SpStep.cPriceList == Prices.cKlPrice))<> tsOk)
+            {
+             Message(''#3'Нет позиций по прайс листу спецификации ДО',Information);
+             Abort ;
+             CloseWindow (SHT_CE_KatSopr) ;
+             EXIT ;
+            }
+
+          if (GetFirst KlPrice where ((SpStep.cPriceList==KlPrice.NRec))=tsOk) {}
+          if (RunInterface('GetPrice_ShterCement',
+                           SpStep.cPriceList,
+                           False,               //единичный выбор
+                           False,
+                           pPrices,
+                           pKol) = cmCancel)
+           {
+            Abort ;
+            CloseWindow (SHT_CE_KatSopr) ;
+            EXIT ;
+           }
+
+          if (GetFirst Prices where ((pPrices == Prices.nRec))<> tsOk)
+            {
+              Abort ;
+              CloseWindow (SHT_CE_KatSopr) ;
+              EXIT ;
+            }
+
+          SpSopr.NRec := 0;//G58502 без этого перестала работать вставка в спецификации
+          SpSoprDefault;
+          SpSopr.cOtpEd      := Prices.cOtpEd;
+          SpSopr.cParty      := Prices.cParty;
+          SpSopr.Kol         := 0;
+          SpSopr.KolFact     := 0;
+          SpSopr.cMCUSL      := Prices.cThing;
+          SpSopr.PrMC        := if(((Prices.Tip=0) or (Prices.Tip=2)),1,2);
+          SpSopr.KolOpl      := 0;
+          SpSopr.cPriceList  := Prices.NRec;
+
+          Case KlPrice.TipMoney of
+            0 : {
+                  if (KatSopr.cValut <> 0)
+                    SpSopr.VPrice := FSRoundVal(Prices.Price / Curse);
+                  SpSopr.Price := FSRoundRub(Prices.Price);
+                }
+            1 : {
+                  SpSopr.VPrice := FSRoundVal(Prices.SumVal);
+                  SpSopr.Price := FSRoundRub(Prices.Price);
+                }
+            2 : {
+                  SpSopr.VPrice := FSRoundVal(Prices.SumVal);
+                  SpSopr.Price := FSRoundRub(Prices.SumVal * Curse);
+                }
+          end;
+
+
+          if (insert current SpSopr = tsOK)
+            {
+              if (SpSopr.PrMC = 1)
+                {
+                  if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk) { }
+                }
+              else
+                {
+                  if (GetFirst KatUsl
+                    where ((SpSopr.cMCUsl == KatUsl.NRec)) = tsOk) { }
+                }
+              OnAfterInsertSpSoprFromPrice;
+            };
+
+         }
+        else//--------------множественный выбор-------------------------------------
+         {
+          if (RunInterface('GetPrice_ShterCement',
+                           SpStep.cPriceList,
+                           True,               //множественный выбор
+                           False,
+                           pPrices,
+                           pKol) = cmCancel)
+           {
+            Abort ;
+            CloseWindow (SHT_CE_KatSopr) ;
+            EXIT ;
+           }
+          //---Инициализация Маркеров
+          MarkerPrice      := InitMarker ('GetPrices1_MarkerPrice',8,100,10,false);
+          CountMark := GetMarkerCount(MarkerPrice);
+
+          if (CountMark = 0)
+            {
+             DoneMarker(MarkerPrice,'');
+             Abort ;
+             CloseWindow (SHT_CE_KatSopr) ;
+             EXIT ;
+            }
+
+          for (i:=0; i<CountMark; i:=i+1)
+            if (GetMarker(MarkerPrice,i,pPrices))
+              if (GetFirst Prices where ((pPrices == Prices.nRec)) = tsOk)
+                {
+                 SpSopr.NRec:=0;//G58502 без этого перестала работать вставка в спецификации
+                 SpSoprDefault;
+                 SpSopr.cOtpEd      := Prices.cOtpEd;
+                 SpSopr.cParty      := Prices.cParty;
+                 pKol:=0;
+                 SpSopr.Kol         := 0;
+                 SpSopr.KolFact     := 0;
+                 SpSopr.cMCUSL      := Prices.cThing;
+                 SpSopr.PrMC        := if(((Prices.Tip=0) or (Prices.Tip=2)),1,2);
+                 SpSopr.KolOpl      := 0;
+                 SpSopr.cPriceList  := Prices.NRec;
+
+                 Case KlPrice.TipMoney of
+                 0 : {
+                         if (KatSopr.cValut <> 0)
+                         SpSopr.VPrice := FSRoundVal(Prices.Price / Curse);
+                         SpSopr.Price := FSRoundRub(Prices.Price);
+                         }
+                 1 : {
+                         SpSopr.VPrice := FSRoundVal(Prices.SumVal);
+                         SpSopr.Price := FSRoundRub(Prices.Price);
+                         }
+                 2 : {
+                         SpSopr.VPrice := FSRoundVal(Prices.SumVal);
+                         SpSopr.Price := FSRoundRub(Prices.SumVal * Curse);
+                         }
+                 end;
+
+                 if (insert current SpSopr = tsOK)
+                   {
+                     if (SpSopr.PrMC = 1)
+                       {
+                         if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk) { }
+                       }
+                     else
+                       if (GetFirst KatUsl where ((SpSopr.cMCUsl == KatUsl.NRec)) = tsOk) { }
+
+                     OnAfterInsertSpSoprFromPrice;
+                   }
+                }
+
+          DoneMarker(MarkerPrice,'');
+         }
+       }
+      else//-------------- выбор из спецификации ДО --------------------------------
+        if (wGetTune('Ves.choiceMC') <> 0)
+          {
+            SelectPanel(#SpSopr) ;
+            SelectField(#NameMCUsl) ;
+            RescanPanel(#SpSopr);
+            SpSopr.PrMc := 1;
+            SetNew(TRUE);
+            GetMCUslSopr;
+          }
+        else//---------------------множественный выбор------------------------------
+         {
+           if (RunInterface('SHT_CE_DoSpec',
+                           KatSopr.cStepDoc,
+                           pSpStep ) = cmCancel)
+             {
+               Abort ;
+               CloseWindow (SHT_CE_KatSopr) ;
+               EXIT ;
+             }
+           if (GetFirst SpStep where ((pSpStep == SpStep.nRec)) <> tsOk)
+             {
+               Abort ;
+               CloseWindow (SHT_CE_KatSopr) ;
+               EXIT ;
+             }
+           OnInitInsMCInfo;
+           SpSopr.NRec:=0;//G58502 без этого перестала работать вставка в спецификации
+           SpSopr.LastDate    :=Cur_date;
+           SpSopr.LastTime    :=Cur_time;
+           SpSopr.cSopr       := KatSopr.Nrec;
+           SpSopr.dSopr       := KatSopr.dSopr;
+           SpSopr.VidSopr     := KatSopr.VidSopr;
+           SpSopr.dOprTTN     := KatSopr.dOpr;
+           SpSopr.cVal        := KatSopr.cValut;
+           SpSopr.cOtpEd      := SpStep.cOtpEd;
+           SpSopr.cParty      := SpStep.cParty;
+           SpSopr.Kol         := SpStep.KolSkl;
+           SpSopr.KolFact     := SpStep.KolSkl;
+           SpSopr.cMCUSL      := SpStep.cMCUSL;
+           SpSopr.PrMC        := SpStep.PrMC;
+           SpSopr.ProcUb      := SpStep.ProcUb;
+           SpSopr.cSpStep     := SpStep.NRec;
+           SpSopr.KolOpl      := SpStep.KolSkl * (1 - SpStep.ProcUb / 100);
+           SpSopr.cPriceList  := SpStep.cPriceList;
+           SpSopr.cCellVal    := SpStep.cCellVal;
+           SpSopr.nVagon      := SpStep.nVagon;
+     #ifDef Gal7_1
+           SpSopr.cTransp     := SpStep.cTransp;
+     #end
+           SpSopr.nKvit       := SpStep.nKvit;
+           SpSopr.SumAvt      := SpStep.SumAvt;
+           SpSopr.cValAvt     := SpStep.cValAvt;
+           SpSopr.cMasEd      := SpStep.cMasEd;
+           SpSopr.cMasVid     := SpStep.cMasVid;
+           SpSopr.cResOtgr    := SpStep.cResOtgr;
+
+           if (OnInsertSpSopr(1.0))
+             {
+               SpSopr.KolFact   := 0 ;
+               SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec,coSpSopr);
+               if (insert current SpSopr <> tsOK) {};
+               oSDfuns.TTNDoc_Copy(coSpStep,SpStep.NRec,coSpSopr,SpSopr.NRec);
+               OnAfterInsertSpSopr;
+             }
+           OnDoneInsmcInfo;
+         }
+
+      Update_Current_KatSopr;
+      RecalcSumm(TRUE);
+
+      Update_Current_KatSopr;
+
+      ReReadRecord(#SpSopr);
+
+      if (coGetTune('Ves.PunktPogr') <> 0)
+        {
+          SHT_CE_CheckTTNDoc;
+          set TTNDoc.cPunPMet := coGetTune('Ves.PunktPogr');
+          Update current TTNDoc;
+        }
+
+
+      if ((KatSopr.FilialNo and 3) = 1) // для тарных накл.
+        if (coGetTune('Ves.MetodPogr') <> 0)//-метод погрузки по умолчанию
+          {
+            SHT_CE_CheckTTNDoc;
+            set TTNDoc.cPunPMet := coGetTune('Ves.MetodPogr');
+            Update current TTNDoc;
+          }
+
+      if ((KatSopr.FilialNo and 3) = 2) // для навальных накл.
+        if (wGetTune('Ves.PrzUsl') <> 0)
+          {
+            SHT_CE_CheckTTNDoc;
+            set TTNDoc.cPunPMet := wGetTune('Ves.PrzUsl');
+            Update current TTNDoc;
+          }
+
+      if (wGetTune('Ves.AfterMC') = 0)
+      {
+         RunInterface(TTNDoc,word(coKatSopr),KatSopr.NRec);
+         ReReadRecord(#KatSopr);
+      }
+    }
+
+cmCheckRecord :
+  if (boGetTune('Ves.Use'))
+    {
+      SHT_CE_View_Massa ;
+      SHT_CE_View_SpSopr_Fileds ;
+    }
+
+cmSetCurTable :
+  if (boGetTune('Ves.Use'))
+    CASE Target OF
+      #SpSopr :
+        SelectPanelSpSopr ;
+    END ;
+end ; // HandleEvent Panel SHT_CE_KatSopr
+end ; // Panel SHT_CE_KatSopr
+
+
+!--------------------------------------------------------------
+!--------------------------------------------------------------
+!--------------------------------------------------------------
+!--------------------------------------------------------------
+
+Panel SHT_CE_SpSopr
+  Table SpSopr
+
+HandleEvent // Panel SHT_CE_SpSopr
+
+cmSetCurTable :
+  if (boGetTune('Ves.Use'))
+    CASE Target OF
+      #KatSopr :
+        if (UpDateTable)
+          ReCalcSumm(TRUE) ;
+    END ;
+
+cmPositionChanged :
+  if (boGetTune('Ves.Use'))
+    SHT_CE_View_SpSopr_Fileds ;
+
+cmSetDefault :
+  if (boGetTune('Ves.Use'))
+    {
+      if (SHT_CE_tip=1)
+        {
+          SpSopr.PrMC    := 2 ;
+          SpSopr.KolFact := 1 ;
+        }
+      SHT_CE_View_SpSopr_Fileds ;
+      if boGetTune('Ves.AddMC_DO') or boGetTune('Ves.AddMC_Price')
+        SelectField(#PrMCUsl) ;
+      else
+        SelectField(#NameMCUsl) ;
+    }
+
+cmCheckField :
+  if (boGetTune('Ves.Use'))
+    {
+      CASE CurField OF
+        #SpSopr.KolFact :
+          {
+            if (SpSopr.PrMC = 1)
+              {
+                if (SHT_CE_vid=2)
+                  if (SHT_CE_tip=0)
+                    if (SpSopr.KolFact <> 0 )
+                      {
+                        set SpSopr.KolFact := 0 ;
+                        CheckSpSoprKol2(#SpSopr.KolFact);
+                      }
+              }
+            else
+              if (SpSopr.PrMC = 2)
+                if (SpSopr.KolFact <> 1)
+                  {
+                    set SpSopr.KolFact := 1 ;
+                    CheckSpSoprKol2(#SpSopr.KolFact);
+                  }
+          }
+        #TTN_massa_all,
+        #SpSopr.Netto :
+          if (SpSopr.PrMC=1)
+            {
+              set SpSopr.KolFact := SpSopr.Netto
+                                    / if((KatMC.Massa+KatMC.mTara)=0,
+                                         1.0,(KatMC.Massa+KatMC.mTara))
+                                    / if(KatOtpEd.koef=0,1.0,KatOtpEd.koef) ;
+
+              if ( fEdIzm.CheckKolDiskret(SpSopr.KolFact,SpSopr.cOtpEd,TRUE,TRUE) )
+                set SpSopr.KolFact := SpSopr.KolFact ;
+              CheckSpSoprKol2(#SpSopr.KolFact);
+            }
+      END ;
+
+      ProcessCommand(cmCheckSumma) ;
+    }
+
+end ; // HandleEvent Panel SHT_CE_SpSopr
+end ; // Panel SHT_CE_SpSopr
+#end //_SHT_CE_A_VPP

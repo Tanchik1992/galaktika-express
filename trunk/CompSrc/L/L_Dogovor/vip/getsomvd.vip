@@ -1,0 +1,1046 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Групповой выбор видов договоров (с использованием маркера)
+//********************************************************************************
+
+/*
+  Параметры     : есть
+     pVidDog    // возвращает вид документа
+     pDirect    // возвращает направление
+     OkOne      // TRUE - груповой выбор FALSE - только один
+     pKatVidD   // входной-выходной - KatVidD.nRec
+     wDirect    // фильтр на Direct
+*/
+
+#doc
+Интерфейс выбора вида договора
+#end
+Interface GetSomVidD 'Выберите вид договора' (, hcDogDocVid, sci178Esc) doAccept, EscClose;
+  Show at (, 5, 75, 15);
+Create view
+Var
+//--параметры
+  pVidDog,
+  pDirect,
+  wDirect      : word;
+  OkOne        : boolean;
+  pKatVidD     : comp;
+//--
+  Node,
+  NewNRec,
+  OldRec,
+  NewRec       : comp;
+  sVidDog      : string;
+  curFormat    : word;   // 0 - protect, 1 - edit
+  KreateLevel,
+  WasReset,                    //Текущий режим (FALSE-иерархия; TRUE-плоский)
+  DelRecord    : boolean;
+  MarkerVidD,
+  IndexVidD    : longint;
+
+As select
+//-------
+  if (OkOne, if(SearchMarker(MarkerVidD, KatVidD.NRec, IndexVidD), 'V', ''), '')
+    (FieldName = picked)
+//-------
+, if((KatVidD.Direct < 1) OR (KatVidD.Direct > 3), '???',
+    if ((KatVidD.Direct mod 2) = 1, '1->2', '2->1'))
+    (FieldName = sDirect)
+//-------
+From
+  KatVidD
+, KatVidD KatVidD1
+, Dogovor Dogovor1
+, IerDog
+where
+((
+  KatVidD.nRec  ==  KatVidD1.cOwner
+))
+
+bounds byMain =
+  Node ==  KatVidD.cOwner
+
+Condition OnDirect
+  (wDirect = KatVidD.Direct) or (0 = KatVidD.isLeaf)
+
+;
+
+//********************************************************************************
+
+Parameters
+  pVidDog,  // возвращает вид документа
+  pDirect,  // возвращает направление
+  OkOne,    // TRUE - груповой выбор FALSE - только один
+  pKatVidD, // входной-выходной - KatVidD.nRec
+  wDirect   // фильтр на Direct
+;
+
+//********************************************************************************
+//-- Установить заголовок окна
+Procedure SetMyTitle;
+{
+  if (curFormat <> 0)
+    SetTitle('Редактирование видов договоров/соглашений');
+  else
+    if (OkOne)
+      SetTitle('Выбор видов договоров/соглашений (помечено: ' + string(GetMarkerCount(MarkerVidD)) + ')');
+    else
+      SetTitle('Выбор вида договора/соглашения');
+}
+
+//********************************************************************************
+//-- Отменить выделение
+Procedure KillPick;
+{
+  ClearMarker(MarkerVidD);
+  SetMyTitle;
+}
+
+//********************************************************************************
+//-- пометить одну позицию
+Procedure OneMarkPick;
+{
+  if ((wDirect = 0) or (wDirect = KatVidD.Direct))
+    InsertMarker(MarkerVidD, KatVidD.NRec);
+}
+
+//********************************************************************************
+Function AddVidD (_owner: comp;
+                  _vid   : word;
+                  _direct: word;
+                  _leaf  : word;
+                  _name  : string;
+                  _kod   : string;
+                  _role1: string;
+                  _role2: string ): word; // tsOk
+{
+  if (_owner = 0)
+    if (GetFirst KatVidD where ((_owner == KatVidD.cOwner AND
+                                 _vid   == KatVidD.VidDog (NoIndex) )) = tsOk)
+      {
+        AddVidD := tsOk;
+        Exit;
+      }
+  ClearBuffer(#KatVidD);
+
+  KatVidD.VidDog := _vid;
+  KatVidD.cOwner := _owner;
+  KatVidD.isLeaf := _leaf;
+  KatVidD.Direct := _direct;
+  KatVidD.Name   := _name;
+  KatVidD.sName  := _kod;
+  KatVidD.Role1  := _role1;
+  KatVidD.Role2  := _role2;
+
+  AddVidD := insert current KatVidD;
+}
+
+//********************************************************************************
+
+Procedure ChkKatVidD; // проверяет все ли виды есть в справочнике
+{
+  var pnrec, fnrec  : comp;
+  var fnstr: string;
+
+  PushPos(#KatVidD);
+
+  AddVidD (0, 0, 1, 0, 'купля-продажа', 'к/п', '', '');
+
+  fnrec := KatVidD.nRec;
+  fnstr := KatVidD.Name;
+
+  AddVidD (0,  1, 1, 0, 'комиссия'                       , 'ком'      , '', '');
+  AddVidD (0,  2, 1, 0, 'обмен'                          , 'обм'      , '', '');
+  AddVidD (0,  3, 1, 0, 'хранение'                       , 'хра'      , '', '');
+  AddVidD (0,  4, 1, 0, 'агентский'                      , 'агн'      , '', '');
+  AddVidD (0,  5, 1, 0, 'подряд'                         , 'пдр'      , '', '');
+  AddVidD (0,  6, 1, 0, 'аренда'                         , 'арн'      , '', '');
+  AddVidD (0,  7, 1, 0, 'оказание услуг'                 , 'усл'      , '', '');
+  AddVidD (0,  8, 1, 0, 'Фиксация цены'                  , 'фик'      , '', '');
+  AddVidD (0,  9, 1, 0, 'усл. отгрузки'                  , 'отг'      , '', '');
+  AddVidD (0, 10, 2, 0, 'строительство'                  , 'стр'      , '', '');
+  AddVidD (0, 11, 3, 0, 'переработка давальческого сырья', 'пдс'      , '', '');
+  AddVidD (0, 12, 1, 0, 'аренда объектов недвижимости'   , 'аон'      , '', '');
+  AddVidD (0, 13, 2, 0, 'НИОКР'                          , 'дог ниокр', '', '');
+  AddVidD (0, 14, 1, 0, 'агентский многосторонний'       , 'агнмн'    , '', '');
+  AddVidD (0, 15, 1, 0, 'лесопользование'                , 'лес'      , '', '');
+
+  var dStat, delrec: longint; delrec := 0;
+
+  ResetBounds(#KatVidD);
+
+  _LOOP KatVidD
+    if ( KatVidD.cOwner <> 0 )
+      {
+        PushPos(#KatVidD);
+        pnrec := KatVidD.cOwner;
+        if (GetFirst KatVidD where ((pnrec == KatVidD.nRec)) <> tsOk)
+          {
+            PopPos(#KatVidD);
+            KatVidD.cOwner := fnrec;
+            update current KatVidD;
+            delrec := delrec + 1;
+          }
+        else
+          PopPos(#KatVidD);
+      } // For "KatVidD"
+
+  _LOOP KatVidD
+    if ( KatVidD.isLeaf <> if(RecordExists KatVidD1 = tsOk, 0, 1))
+      update current KatVidD
+        set KatVidD.isLeaf := if(RecordExists KatVidD1 = tsOk, 0, 1);
+
+  var lCount: word; lCount := 0;
+
+  _LOOP KatVidD where (( comp(0) == KatVidD.cOwner ))
+    lCount := lCount + 1;
+
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Проверка каталога видов договоров', lCount);
+
+  _LOOP KatVidD where (( comp(0) == KatVidD.cOwner ))
+    {
+      NextVisual;
+
+      if ( ( KatVidD.VidDog <= 15 ) OR ( KatVidD.VidDog >= 101 ) )
+        Continue;
+
+      if ( Message('Вид договора ' + string(KatVidD.VidDog) + ' не является системным (1..100).'#13
+                 + 'Сконвертировать в пользовательский (' + string(100 + KatVidD.VidDog) + ') ?'
+                 , YesNo + Confirmation) <> cmYes )
+        Continue;
+
+      var wVD: word; wVD := KatVidD.VidDog;
+      // конвертируем вид договора в головной записи
+      update current KatVidD set KatVidD.VidDog := 100 + wVD;
+
+      // конвертируем вид договора в подчиненных записях
+      update KatVidD1 set KatVidD1.VidDog := 100 + wVD;
+
+      // конвертируем вид договора в договорах и соглашениях
+      _LOOP Dogovor where (( comp(0) == Dogovor.cDogovor AND
+                             wVD     == Dogovor.VidDog ))
+        _LOOP IerDog where (( Dogovor.nRec == IerDog.cUpRec ))
+          if ( Dogovor.nRec <> IerDog.cRec )
+            update Dogovor1 where (( IerDog.cRec == Dogovor1.nRec ))
+              set Dogovor1.VidDog := 100 + wVD;
+
+      update Dogovor where (( comp(0) == Dogovor.cDogovor AND
+                              wVD     == Dogovor.VidDog ))
+        set Dogovor.VidDog := 100 + wVD;
+    }
+
+  StopVisual('', 0);
+
+  SetBounds(#KatVidD);
+
+  if (delrec > 0)
+    Message('Востановленно некорректных записей в каталоге '+
+            '"Видов документов".'#13#13'Все записи добавлены к группе '#13#3+
+            '"'+fnstr+'"', OkButton);
+
+  PopPos(#KatVidD);
+  RereadRecord(#KatVidD);
+} // Procedure ChkKatVidD; // проверяет все ли виды есть в справочнике
+
+//********************************************************************************
+
+ToolBar
+#ifdef ComponentVersion
+  F_Common::tbAttrClass
+, F_Common::tbTree_brows
+#else
+  tbAttrClass
+, tbTree_brows
+#end
+;
+
+Panel panKatVidD;
+  Table KatVidD;
+Tree 1 trKatVidD ('Выберите статус и нажмите ВВОД', , sci14EnInsTree);
+  Table KatVidD;
+Fields
+  {Font = {Color = if ((picked = 'V') AND (curFormat = 0), ColorMark, 0) }};
+
+  picked        'V'                  : [ 1], skip;
+  KatVidD.Name  'Наименование Вида'  : [16], noprotect;
+  KatVidD.sName 'Кратко'             : [ 6], noprotect;
+  KatVidD.Role1 'Роль контрагента 1' : [16], noprotect;
+  KatVidD.Role2 'Роль контрагента 2' : [16], noprotect;
+  sDirect       'Вид' ('"1->2" - документ на продажу; "2->1" - документ на закупку'): [ 4], protect;
+end;
+
+browse brKatVidD ('Выберите статус и нажмите ВВОД', , sci14EnIns);
+  Table KatVidD;
+Fields
+  {Font = {Color = if ((picked = 'V') AND (curFormat = 0), ColorMark, 0) }};
+
+  picked        'V'                  : [ 1], skip;
+  KatVidD.Name  'Наименование Вида'  : [16], noprotect;
+  KatVidD.sName 'Кратко'             : [ 6], noprotect;
+  KatVidD.Role1 'Роль контрагента 1' : [16], noprotect;
+  KatVidD.Role2 'Роль контрагента 2' : [16], noprotect;
+  sDirect       'Вид' ('"1->2" - документ на продажу; "2->1" - документ на закупку'): [ 4], protect;
+end;
+
+//********************************************************************************
+
+Procedure SetMyFormat (_format: word ); // 0 - protect; 1 - edit
+{
+  curFormat := _format;
+
+  SetFieldVisible(#picked, ( _format = 0 ) AND OkOne);
+
+  if ( _format = 0 )
+    {
+      SetHelpAndStatusContext(trKatVidD, -1      , if (OkOne, sci14EnInsTree, sci14EnEscTree), 'DogDocVid');
+      SetHelpAndStatusContext(trKatVidD, #sDirect, if (OkOne, sci14EnInsTree, sci14EnEscTree), 'DogDocVid');
+      SetHelpAndStatusContext(brKatVidD, -1      , if (OkOne, sci14EnIns    , sci14EnEsc    ), 'DogDocVid');
+      SetHelpAndStatusContext(brKatVidD, #sDirect, if (OkOne, sci14EnIns    , sci14EnEsc    ), 'DogDocVid');
+    }
+  else
+    {
+      SetHelpAndStatusContext(trKatVidD, -1      , sci178EscExTree , 'VidDogEdit');
+      SetHelpAndStatusContext(trKatVidD, #sDirect, sci1378EscExTree, 'VidDogEdit');
+      SetHelpAndStatusContext(brKatVidD, -1      , sci178Esc       , 'VidDogEdit');
+      SetHelpAndStatusContext(brKatVidD, #sDirect, sci1378Esc      , 'VidDogEdit');
+    }
+
+  SetFieldProtected(#KatVidD.Name , CurFormat = 0);
+  SetFieldProtected(#KatVidD.sName, CurFormat = 0);
+  SetFieldProtected(#KatVidD.Role1, CurFormat = 0);
+  SetFieldProtected(#KatVidD.Role2, CurFormat = 0);
+
+  SetInterfaceOptions(opDoAccept or
+                      opEscClose or
+                      if (CurFormat = 0, opCyanInterface, 0) );
+  SetMyTitle;
+}
+
+//********************************************************************************
+//--  Пометить группу
+Procedure MarkGroup;
+var LevelClosed: boolean;
+    n          : word;
+    i          : word;
+    SaveNrec   : comp;
+{
+  OneMarkPick;
+
+  LevelClosed := TreeCloseNode(trKatVidD);
+
+  PushPos(#KatVidD);
+  n := 0;
+  if TreeGetNext(trKatVidD)
+    {
+      SaveNrec := KatVidD.NRec;
+      TreeGetPrev(trKatVidD);
+    }
+
+  if TreeOpenNode(trKatVidD)
+    {
+      n := n+1;
+      PushPos(#KatVidD);
+    }
+
+  if TreeGetNext(trKatVidD)
+    do
+      {
+        if (KatVidD.NRec = SaveNrec)
+          Break;
+
+        OneMarkPick;
+
+        if TreeOpenNode(trKatVidD)
+          {
+            n := n+1;
+            PushPos(#KatVidD);
+          }
+      }
+    While TreeGetNext(trKatVidD);
+
+  For( i := 1; i<= n; i := i+1 )
+    {
+      PopPos(#KatVidD);
+      TreeCloseNode(trKatVidD);
+    }
+
+  PopPos(#KatVidD);
+
+  if (LevelClosed)
+    TreeOpenNode(trKatVidD);
+
+  TreeJumpToRecord (trKatVidD, KatVidD.nRec);
+  RescanPanel(#KatVidD);
+}
+
+//********************************************************************************
+//--  Отменить пометку группы
+Procedure UnMarkGroup;
+var LevelClosed: boolean;
+    n          : word;
+    i          : word;
+    SaveNrec   : comp;
+{
+  DeleteMarker(MarkerVidD, KatVidD.NRec);
+
+  LevelClosed := TreeCloseNode(trKatVidD);
+
+  PushPos(#KatVidD);
+
+  n := 0;
+
+  if TreeGetNext(trKatVidD)
+    {
+      SaveNrec := KatVidD.NRec;
+      TreeGetPrev(trKatVidD);
+    }
+
+  if TreeOpenNode(trKatVidD)
+    {
+      n := n+1;
+      PushPos(#KatVidD);
+    }
+
+  if TreeGetNext(trKatVidD)
+    do
+      {
+        if (KatVidD.NRec = SaveNrec)
+          Break;
+
+        DeleteMarker(MarkerVidD, KatVidD.NRec);
+        if TreeOpenNode(trKatVidD)
+          {
+            n := n+1;
+            PushPos(#KatVidD);
+          }
+      }
+    While TreeGetNext(trKatVidD);
+
+  For ( i := 1; i<= n; i := i+1 )
+    {
+      PopPos(#KatVidD);
+      TreeCloseNode(trKatVidD);
+    }
+
+  PopPos(#KatVidD);
+  if (LevelClosed)
+    TreeOpenNode(trKatVidD);
+
+  TreeJumpToRecord (trKatVidD, KatVidD.nRec);
+
+  RescanPanel(#KatVidD);
+}
+
+//********************************************************************************
+//--  Если группа, то пустая (true) или нет (false)
+Function LeafIsEmpty: boolean;
+var LevelClosed: boolean;
+    SaveNrec   : comp;
+{
+  LeafIsEmpty := TRUE;
+  if (KatVidD.isLeaf <> 0)
+    Exit;
+
+  PushPos(#KatVidD);
+
+  LevelClosed := TreeCloseNode(trKatVidD);
+
+  if TreeGetNext(trKatVidD)
+    {
+      SaveNrec := KatVidD.NRec;
+      TreeGetPrev(trKatVidD);
+    }
+  else
+    SaveNrec := KatVidD.NRec;
+
+  if TreeOpenNode(trKatVidD)
+    {};
+
+  if TreeGetNext(trKatVidD)
+    {
+      if (SaveNrec <> KatVidD.NRec)
+        LeafIsEmpty := FALSE;
+      TreeGetPrev(trKatVidD);
+    }
+  else
+    if (SaveNrec <> KatVidD.NRec)
+      LeafIsEmpty := FALSE;
+
+  if LevelClosed
+    TreeOpenNode(trKatVidD);
+  else
+    TreeCloseNode(trKatVidD);
+
+  PopPos(#KatVidD);
+
+  TreeJumpToRecord (trKatVidD, KatVidD.nRec);
+
+  RescanPanel(#KatVidD);
+}
+
+//********************************************************************************
+
+Procedure Set_Position;  // Определяет новую запись и возвращается на исходную
+{
+  if TreeGetNext(trKatVidD)
+    {
+      NewNRec := KatVidD.nRec;
+      TreeGetPrev(trKatVidD);
+    }
+  else
+    {
+      NewNRec := comp(0);
+      if TreeGetPrev(trKatVidD)
+        {
+          NewNRec := KatVidD.nRec;
+          TreeGetNext(trKatVidD);
+        }
+    }
+}
+
+//********************************************************************************
+
+HandleEvent
+
+cmTreeTop:
+  Node := 0;
+
+cmTreeUp:
+  Node := KatVidD.cOwner;
+
+cmTreeDown:
+  {
+    pVidDog := KatVidD.VidDog;
+    sVidDog := KatVidD.Name;
+    Node    := KatVidD.NRec;
+  }
+
+cmTreeNodeType:
+  if (not (IsValid(#KatVidD1) AND (KatVidD.nRec <> 0)))
+    TreeSetNodeType(trKatVidD, 2);
+
+cmTreeNeedOwner:
+  TreeJumpToRecord (trKatVidD, KatVidD.cOwner);
+
+cmSetDefault:
+  {
+    SetFieldProtected(#KatVidD.Name , FALSE);
+    SetFieldProtected(#KatVidD.sName, FALSE);
+    SetFieldProtected(#KatVidD.Role1, FALSE);
+    SetFieldProtected(#KatVidD.Role2, FALSE);
+
+    ClearBuffer(#KatVidD);
+
+    KatVidD.isLeaf := 1;
+    KatVidD.cOwner := Node;
+    KatVidD.VidDog := pVidDog;
+    KatVidD.Name   := sVidDog;
+    KatVidD.Direct := if (KatVidD.VidDog = 11, word(3), word(1));
+
+    insert current KatVidD;
+
+    update KatVidD1 where (( Node == KatVidD1.nRec ))
+      set KatVidD1.isLeaf := 0;
+
+    NewRec := KatVidD.nRec;
+    TreeJumpToRecord(trKatVidD, OldRec);
+
+    if KreateLevel
+      TreeOpenNode(trKatVidD);
+
+    TreeJumpToRecord(trKatVidD, NewRec);
+
+    ProcessCommand(cmPositionChanged);
+
+    RereadRecord;
+
+    SetModified(true);
+
+    KreateLevel := FALSE;
+  }
+
+cmInsertRecord:
+  {
+    insert current KatVidD;
+    TreeJumpToRecord(trKatVidD, KatVidD.NRec);
+  }
+
+cmUpdateRecord:
+  update current KatVidD;
+
+cmDeleteRecord:
+  {
+    Set_Position;
+    DeleteMarker(MarkerVidD, KatVidD.NRec);
+
+    var pNode: comp; pNode := KatVidD.cOwner;
+
+    delete current KatVidD;
+
+    PushPos(#KatVidD);
+
+    update KatVidD where (( pNode == KatVidD.nRec ))
+      set KatVidD.isLeaf := if(RecordExists KatVidD1 = tsOk, 0, 1);
+
+    PopPos(#KatVidD);
+
+    if (DelRecord)
+      {
+        TreeJumpToRecord (trKatVidD, NewNRec);
+        SetMyTitle;
+        RescanPanel(#KatVidD);
+      }
+  }
+
+cmCheckRecord:
+  if (Trim(KatVidD.Name) = '')
+    {
+      Message('Введите наименование или удалите запись!', OkButton + Warning );
+      PutCommand(cmValue4);
+      Abort;
+    }
+
+cmValue4:
+    SelectField ( #KatVidD.Name );
+
+cmPositionChanged:
+  if (curFormat = 1)
+  ProtectRecord(#KatVidD, (CurFormat = 0) OR ( (KatVidD.cOwner = 0) AND (KatVidD.VidDog < 100) ));
+
+cmOpenSearch:
+  if (CurFormat = 1) Abort;
+
+cmProtectedInput:
+  {
+    if (KatVidD.VidDog < 100)
+      Message('Запрещено изменять системные виды договоров!');
+    else
+      Message('Запрещено изменять текущий вид договора!');
+
+    Stop;
+  }
+
+end; // HandleEvent
+
+end; // Panel
+
+//********************************************************************************
+
+Procedure SetFormatBr;
+{
+  if (WasReset)
+    SetFormat(brKatVidD)
+  else
+    SetFormat(trKatVidD);
+}
+
+//********************************************************************************
+
+Procedure SetFirstState;
+{
+  if (WasReset)
+    {
+      WasReset := FALSE;
+      PushBounds(tbbyMain);
+      SetFormatBr;
+      TreeJumpToRecord (trKatVidD, KatVidD.NRec);
+      RereadRecord;
+    }
+}
+
+
+//********************************************************************************
+Procedure ShowAll;
+{
+  if (not WasReset)
+    {
+      WasReset := TRUE;
+      PopBounds(tbbyMain);
+      SetFormatBr;
+      RereadRecord;
+      RescanPanel(#KatVidD);
+    }
+  else
+    SetFirstState;
+}
+//********************************************************************************
+
+Function GetLastVidDog: word;
+{
+  var VidD: word; VidD := 0;
+  PushPos(#KatVidD);
+
+  _LOOP KatVidD
+    VidD := if(VidD < KatVidD.VidDog, KatVidD.VidDog, VidD);
+
+  PopPos(#KatVidD);
+
+  GetLastVidDog := if(VidD > 100, VidD + 1, 101);
+}
+
+//********************************************************************************
+
+HandleEvent // Interface
+
+cmInit:
+  {
+    WasReset := FALSE;
+    PushBounds(tbbyMain);
+
+    ChkKatVidD;
+
+    MarkerVidD := InitMarker('MKatVidD', 8, 100, 10);
+
+    var MarkerCount, i: longint; // счетчики записей в маркере
+    var pickrec       : comp;
+
+    MarkerCount := GetMarkerCount(MarkerVidD);
+
+    For ( i := 0; i<MarkerCount; i := i+1 )
+      if GetMarker(MarkerVidD, i, pickrec)
+        if (GetFirst KatVidD where ((pickrec == KatVidD.NRec)) <> tsOk)
+          {
+            AtDeleteMarker(MarkerVidD, i);
+            dec(i);
+            dec(MarkerCount);
+          }
+
+    if (GetFirst KatVidD where ((pKatVidD == KatVidD.NRec)) = tsOk)
+      Node := KatVidD.cOwner;
+    else
+      {
+        if ( GetFirst KatVidD <> tsOk )
+          {
+            Message('Справочник видов документов пуст...');
+            Abort;
+            Exit;
+          }
+
+        Node := 0;
+      }
+
+    if (wDirect <> 0)
+      PushCondition(tcOnDirect);
+
+    SetMyFormat(0);
+
+    PutCommand(cmValue1);
+
+    KreateLevel := FALSE;
+  }
+
+cmValue1:
+  {
+    if (WasReset)
+      ShowAll;
+
+    if not OkOne
+      SetFieldVisible(#picked, FALSE);
+
+    TreeJumpToRecord (trKatVidD, KatVidD.nRec);
+
+    RescanPanel(#KatVidD);
+  }
+
+cmInsert:
+  {
+    if (WasReset)
+      ShowAll;
+
+    SetMyFormat(1);
+
+    OldRec := KatVidD.nRec;
+
+    if KreateLevel
+      {
+        Node    := KatVidD.nRec;
+        pVidDog := KatVidD.VidDog;
+        sVidDog := KatVidD.Name;
+      }
+    else
+      if (TreeNodeIsOpen(trKatVidD))
+        {
+          Node    := KatVidD.nRec;
+          pVidDog := KatVidD.VidDog;
+          sVidDog := KatVidD.Name;
+        }
+      else
+        if (KatVidD.cOwner = 0)
+          {
+            Node := 0;
+            pVidDog := GetLastVidDog;
+            sVidDog := '';
+          }
+        else
+          {
+            Node := KatVidD.cOwner;
+            pVidDog := KatVidD.VidDog;
+            TreeJumpToRecord (trKatVidD, KatVidD.cOwner);
+            sVidDog := KatVidD.Name;
+            TreeJumpToRecord (trKatVidD, OldRec);
+          }
+  }
+
+cmInsLevel:
+  {
+    KreateLevel := TRUE;
+    PutCommand(cmInsert);
+  }
+
+cmCancel:
+  if ((curFormat = 1) AND UpdateTable)
+    {
+      SetMyFormat(0);
+      RereadRecord(#KatVidD);
+      Abort;
+    }
+
+cmDefault:
+  {
+    if (curFormat = 1)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (OkOne AND (GetMarkerCount(MarkerVidD) = 0) )
+      {
+        if (KatVidD.isLeaf = 0)
+          MarkGroup;
+        else
+          OneMarkPick;
+      }
+
+    if ((wDirect <> 0) AND (wDirect <> KatVidD.Direct) AND (GetMarkerCount(MarkerVidD) = 0))
+      {
+        Message('Доступны для выбора виды договоров/соглашений'#13+
+                'только с направлением '+if(wDirect = 1, '1->2', '2->1')+'!');
+        Abort;
+      }
+
+    pVidDog  := KatVidD.VidDog;
+    pDirect  := KatVidD.Direct;
+    pKatVidD := KatVidD.NRec;
+  } // cmDefault
+
+cmDone:
+  DoneMarker(MarkerVidD, 'MKatVidD');
+
+cmEdit:
+  {
+    SetMyFormat(1);
+    ProcessCommand(cmPositionChanged);
+    RereadRecord(#KatVidD);
+  }
+
+cmPick:
+  if ( (CurField = #sDirect) AND (CurFormat = 1) )
+    if ( (KatVidD.isLeaf = 0) AND (KatVidD.cOwner = 0) ) // корневая папка
+      Message('Менять направление корневой ветки нельзя!', Information);
+    else
+      case KatVidD.Direct of
+        1, 2: set KatVidD.Direct := 3 - KatVidD.Direct;
+      else
+        if ( GetFirst FastFirstRow KatVidD1 where (( KatVidD.cOwner == KatVidD1.nRec )) = tsOk )
+          if ( KatVidD.Direct <> KatVidD1.Direct )
+            {
+              set KatVidD.Direct := KatVidD1.Direct;
+              Message('Некорректное направление'#13'Исправлено на ' + SDIRECT, Information);
+            }
+      end; //case
+
+cmPickClass:
+  if ((UpdateTable) AND (KatVidD.NRec <> 0))
+    RunInterface('ExClassifier', word(CurTableCode), KatVidD.NRec);
+
+cmPickAttr:
+  if ((UpdateTable) AND (KatVidD.NRec <> 0))
+    RunInterface('Attribute', word(CurTableCode), KatVidD.NRec);
+
+cmMarkUnMark: // Если на группу то выбирать все из группы
+  {
+    if (WasReset)
+      ShowAll;
+
+    if SearchMarker(MarkerVidD, KatVidD.NRec, IndexVidD)
+      {
+        if (KatVidD.isLeaf = 1)
+          DeleteMarker(MarkerVidD, KatVidD.NRec);
+        else
+          UnMarkGroup;
+      }
+    else
+      if (KatVidD.isLeaf = 1)
+        OneMarkPick;
+      else
+        MarkGroup;
+
+    if (TreeCloseNode(trKatVidD) )
+      TreeOpenNode(trKatVidD);
+    else
+      {
+        TreeGetNext(trKatVidD);
+        TreeJumpToRecord (trKatVidD, KatVidD.nRec);
+      }
+
+    SetMyTitle;
+
+    RescanPanel(#KatVidD);
+  }
+
+cmSelectAll:
+  {
+    PushPos(#KatVidD);
+
+    KillPick;
+
+    StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak + vfConfirm,
+            'Помечаю все виды договоров...'#13#3, RecordsInTable(#KatVidD));
+    var ret  : word;
+    ResetBounds(#KatVidD);
+
+    _LOOP KatVidD
+      if (not NextVisual)
+        Break;
+      else
+        if ((wDirect = 0) or (wDirect = KatVidD.Direct))
+          InsertMarker(MarkerVidD, KatVidD.NRec);
+
+    SetBounds(#KatVidD);
+
+    SetMyTitle;
+
+    PopPos(#KatVidD);
+
+    RereadRecord;
+
+    RescanPanel(#KatVidD);
+
+    StopVisual('', 0);
+  }
+
+cmUnSelectAll:
+  {
+    KillPick;
+    RescanPanel(#KatVidD);
+    RereadRecord;
+  }
+
+cmShowAll:
+  {
+    MarkGroup;
+    SetMyTitle;
+    RescanPanel(#KatVidD);
+  }
+
+cmHideAll:
+  {
+    UnMarkGroup;
+    SetMyTitle;
+    RescanPanel(#KatVidD);
+  }
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuGetSomVidD'));
+
+cmSaveDoc:
+  {
+    ChkKatVidD;
+    Message ('Проведена проверка целостности');
+  }
+
+cmDelete:
+  {
+    if (WasReset)
+      ShowAll;
+
+    DelRecord := FALSE;
+
+    if ( (not IsValid(#KatVidD1)) AND (KatVidD.cOwner <> comp(0)) )  //лист не корневой
+      {
+        if (Message('Удалить позицию?', YesNo+Confirmation) = cmYes)
+          DelRecord := TRUE;
+        else
+          Abort;
+      }
+    else
+      {
+        if ( (not IsValid(#KatVidD1)) AND (KatVidD.cOwner = comp(0)) AND (KatVidD.VidDog > 11) ) //лист корневой
+          {
+            if (Message('Удалить позицию?', YesNo+Confirmation) = cmYes)
+              DelRecord := TRUE;
+            else
+              Abort;
+          }
+        else
+          {
+           if ( (IsValid(#KatVidD1)) AND (KatVidD.cOwner <> comp(0)) ) //папка не корневая
+             {
+               if (Message('При удалении данного вида будут удалены все подвиды.'#13+
+                           'Продолжить?', YesNo+Confirmation) <> cmYes)
+                 Abort;
+               else
+                 {
+                   TreeDelTree(trKatVidD);
+                   RereadRecord;
+                   RescanPanel(#KatVidD);
+                   Stop;
+                 }
+             }
+           else
+             {
+               if ((IsValid(#KatVidD1)) AND
+                    (KatVidD.cOwner = comp(0)) AND (KatVidD.VidDog > 11) //папка не корневая
+                   )
+                 {
+                   if (Message('При удалении данного вида будут удалены все подвиды.'#13+
+                               'Удалять?', YesNo+Confirmation) <> cmYes)
+                     Abort;
+                   else
+                   {
+                      TreeDelTree(trKatVidD);
+                      RereadRecord;
+                      RescanPanel(#KatVidD);
+                      Stop;
+                   }
+                 }
+               else
+                 {
+                   Message('Данный вид договора является базовым!'#13+
+                           'Удаление невозможно.', Information);
+                   Abort;
+                 }
+             }
+         }
+      }
+  }
+
+cmOpenSearch:
+  if (NOT WasReset)
+    ShowAll;
+
+cmAccording: //Alt-S Переключение <иерархия/плоский вид>
+  ShowAll;
+
+
+end; // HandleEvent Interface
+
+End. // Interface
+
+//********************************************************************************
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetSomVidD>L_Dogovor::GetSomVidD - Выберите вид договора</link>
+#end
+mnuGetSomVidD Menu
+{
+- '~П~ереключить режим просмотра', cmAccording, 'Переключение режима просмотра между таблицей и деревом', , 'Alt-S', kbAltS, sci1Esc;
+-----------;
+- 'Проверка целостности таблицы', cmSaveDoc, 'Проверка целостности таблицы', hcdog_prov_tabl, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+}
+
+//********************************************************************************

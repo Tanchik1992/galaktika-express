@@ -1,0 +1,785 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.8x
+// Выбор календарного плана по договору/соглашению
+//********************************************************************************
+
+#include Dolg_DG.vih
+#include DogFuns.vih
+#include ExtAttr.vih
+#include ExtClass.vih
+#include ThemeFuncs.vih
+
+//******************************************************************************
+
+#doc
+Интерфейс выбора пункта календарного плана
+#end
+Interface GetCalPlan 'Выбор пункта календарного плана' (, hcDogViewListPlanPunkt) EscClose, DoAccept, Cyan;
+  Show at (, , , 25);
+
+//******************************************************************************
+
+#include Dolg_DG.var
+#include DogFuns.var
+
+//********************************************************************************
+Function GetSumOtgrPlan    (pDogovor, pCalPlan: comp): double; Forward;
+Function GetSumDolgOtgrPlan(pDogovor, pCalPlan: comp): double; Forward;
+Function GetAllPlat        (pDogovor, pCalPlan: comp): double; Forward;
+Function GetPlatPrih       (pDogovor, pCalPlan: comp): double; Forward;
+Function GetPlatRash       (pDogovor, pCalPlan: comp): double; Forward;
+Function GetDolgPlat       (pDogovor, pCalPlan: comp): double; Forward;
+Function GetBalance        (pDogovor, pCalPlan: comp): double; Forward;
+Function GetClassName : boolean; Forward;
+//********************************************************************************
+
+Table STRUCT GetPlansSums "ТП для хранения сумм по ПКП"
+(
+  cCalPlan       : comp   "Ссылка на документ"
+, SumOtgrPlan    : double "Сумма отгрузок"
+, SumDolgOtgrPlan: double "Сумма долга отгрузок"
+, AllPlat        : double "Сумма всех платежей"
+, PlatPrih       : double "Сумма всех входящих платежей"
+, PlatRash       : double "Сумма всех исходящих платежей"
+, DolgPlat       : double "Сумма долга по оплатам"
+, Balance        : double "Баланс по договору"
+)
+With Index
+(
+  GetPlansSums01 = cCalPlan
+);
+
+Create view vwGetCalPlan
+
+Var
+//**************
+  wStatus
+, pos_Status
+, wParam
+, ClassCode
+    : word;
+//**************
+  prmCalPlan
+, prmDogovor
+, Node
+    : comp;
+//**************
+  s_SimvRub
+, CalPlanInfo2
+, DocName
+    : string;
+//**************
+  BalanceVisible
+    : boolean;
+//**************
+  Marker
+    : longint;
+//**************
+  oExtAtr
+    : iExtAttr;
+//**************
+  oExtCls
+    : iExtClass;
+//**************
+  oThemeFuncs
+    : iThemeFuncs;
+//**************
+As select
+  if(CalPlan.DirectMC = 100, '', if(CalPlan.DirectMC = 1, '1->2',
+                                 if(CalPlan.DirectMC = 2, '2->1', '???')))
+    ( FieldName = CalPlanDirectMC_s )
+//******************************************************************************
+, if(CalPlan.DirectPlat = 100, '', if(CalPlan.DirectPlat = 1, '2->1',
+                                   if(CalPlan.DirectPlat = 2, '1->2', '???')))
+    ( FieldName = CalPlanDirectPlat_s )
+//******************************************************************************
+, if(CalPlan.cVal = 0, s_SimvRub, KlVal.SimvolV)
+    ( FieldName = ValutName )
+//******************************************************************************
+, if(Dogovor.cDogovor = 0, 'Договор', 'Соглашение')
+ + ' № ' + Dogovor.NoDoc + ' от ' + DateToStr(Dogovor.dDoc, 'DD/MM/YYYY')
+ + ' на сумму ' + DoubleToStr(Dogovor.Summa, '\2p[|-]366`666`666`666`666.88') + ' ' + ValutName
+    ( FieldName = DogovorName )
+//******************************************************************************
+, if(IsValid(tnCalPlan),
+    if(GetClassName, DocName,
+      if(CalPlan.DirectMC   = 0, 'Финансовый',
+        if(CalPlan.DirectPlat = 0, 'МЦ/Услуги',
+          if(CalPlan.DirectMC = 100, 'Обобщенный', '')))), '')
+    ( FieldName = sCalType )
+//******************************************************************************
+, oExtAtr.mGetAttr(coCalPlan, CalPlan.nRec, 'НИОКР. Наименование этапа')
+    ( FieldName = NIOKR_StepName )
+//******************************************************************************
+, oExtAtr.sGetAttr(coCalPlan, CalPlan.nRec, 'НИОКР. Вид отчетности')
+    ( FieldName = NIOKR_VipRep )
+//******************************************************************************
+, oThemeFuncs.GetThemeNumber(oThemeFuncs.GetStageOnCalPlan(CalPlan.nRec))
+    ( FieldName = PKP_Stage )
+//******************************************************************************
+, *
+//******************************************************************************
+
+From
+  CalPlan(CalPlan06) // cDogovor + Status + Descr + NoDoc
+, Dogovor
+, KatNotes
+, KatOrg  Contr1
+, KatOrg  Contr2
+, CalPlan CalPlan1
+, CalPlan CalPlan2
+, PlanPays
+, KlVal
+, GetPlansSums
+, FPCO OtvPodr
+, KatOrg GrOtp
+, KatOrg GrPol
+
+Where
+((
+//***************************************
+    prmDogovor       == CalPlan.cDogovor
+AND prmDogovor       == CalPlan2.cDogovor
+//***************************************
+AND CalPlan.NRec     == CalPlan2.cCalPlan
+AND CalPlan.cDogovor == Dogovor.NRec
+AND CalPlan.cNote    == KatNotes.NRec
+AND CalPlan.cVal     == KlVal.NRec
+AND CalPlan.cOtvPodr == OtvPodr.nRec
+AND CalPlan.cGrOtp   == GrOtp.nRec
+AND CalPlan.cGrPol   == GrPol.nRec
+//***************************************
+AND Dogovor.cMyOrg   == Contr1.NRec
+AND Dogovor.cOrg     == Contr2.NRec
+//***************************************
+))
+//********************************************************************************
+Bounds Node
+  Node == CalPlan.cCalPlan (NoIndex)
+//********************************************************************************
+Condition _Status1 ( CalPlan.Status  = pos_Status ) OR ( CalPlan.DirectMC  = 100 )
+Condition _Status2 ( CalPlan2.Status = pos_Status ) OR ( CalPlan2.DirectMC = 100 )
+//********************************************************************************
+Bounds _wParam
+  word(0) << CalPlan.DirectMC   (NoIndex)
+//********************************************************************************
+Bounds _wParamFin
+  word(0) << CalPlan.DirectPlat (NoIndex)
+//********************************************************************************
+;
+
+Parameters
+  wStatus     // 0FFFFh - все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+              // если разрешен только один статус,
+              // то по нему накладывается Bounds
+, wParam      // 0 - все кал. планы, 1 - без финансовых
+, prmDogovor
+, prmCalPlan
+;
+
+Procedure GetCalPlanSums(pDogovor, pCalPlan: comp);
+var
+  SumOtgrPlan
+, SumDolgOtgrPlan
+, AllPlat
+, PlatPrih
+, PlatRash
+, DolgPlat
+    : double;
+{
+  iDolg_DG.GetSumOtgr_Plan(pDogovor, pCalPlan, Cur_Date, SumOtgrPlan, SumDolgOtgrPlan);
+
+  iDolg_DG.GetSumOpl_Plan(pDogovor, pCalPlan, Cur_Date, AllPlat, PlatPrih, PlatRash, DolgPlat);
+
+  insert GetPlansSums
+    set GetPlansSums.cCalPlan        := pCalPlan,
+        GetPlansSums.SumOtgrPlan     := SumOtgrPlan,
+        GetPlansSums.SumDolgOtgrPlan := SumDolgOtgrPlan,
+        GetPlansSums.AllPlat         := AllPlat,
+        GetPlansSums.PlatPrih        := PlatPrih,
+        GetPlansSums.PlatRash        := PlatRash,
+        GetPlansSums.DolgPlat        := DolgPlat,
+        GetPlansSums.Balance         := if((CalPlan.DirectMC + CalPlan.DirectPlat) = 2, AllPlat - SumOtgrPlan
+                                                                                      , SumOtgrPlan - AllPlat);
+}
+
+Procedure CheckSumsTable(pDogovor, pCalPlan: comp);
+{
+  if ( GetFirst FastFirstRow GetPlansSums where (( pCalPlan == GetPlansSums.cCalPlan )) <> tsOk )
+    {
+      GetCalPlanSums(pDogovor, pCalPlan);
+
+      if ( GetFirst FastFirstRow GetPlansSums where (( pCalPlan == GetPlansSums.cCalPlan )) <> tsOk )
+        {}
+    }
+}
+
+function GetClassName : boolean;
+{
+  GetClassName := FALSE;
+
+  if ( boGetTune('Dog.DocNameKlas') )
+    {
+      DocName := oExtCls.GetSegName(ClassCode, CalPlan.nRec);
+
+      if ( DocName <> '' )
+        GetClassName := TRUE;
+    }
+}
+#declare GetFuncSum(fld)
+Function Get#fld(pDogovor, pCalPlan: comp): double;
+{
+  if ( not BalanceVisible )
+    Exit;
+
+  CheckSumsTable(pDogovor, pCalPlan);
+
+  Get#fld := GetPlansSums.#fld;
+}
+#end
+
+#GetFuncSum(SumOtgrPlan)
+#GetFuncSum(SumDolgOtgrPlan)
+#GetFuncSum(AllPlat)
+#GetFuncSum(PlatPrih)
+#GetFuncSum(PlatRash)
+#GetFuncSum(DolgPlat)
+#GetFuncSum(Balance)
+
+Function GetCalPlanInfo(pCalPlan: comp): string;
+{
+  Result := '';
+
+  if ( GetFirst CalPlan1 where (( pCalPlan == CalPlan1.nRec )) <> tsOk )
+    {
+      set CalPlanInfo2 := '';
+      Exit;
+    }
+
+  if ( CalPlan1.DirectPlat = 100 )
+    {
+      set CalPlanInfo2 := '';
+      Exit;
+    }
+
+  set CalPlanInfo2 := 'Срок действия с ' + DateToStr(CalPlan1.dFrom, 'DD/MM/YYYY')
+                                + ' по ' + DateToStr(CalPlan1.dTo  , 'DD/MM/YYYY');
+
+  if ( CalPlan1.DirectPlat = 0 )
+    Result := 'Товарный ПКП'
+  else
+    if ( RecordExists PlanPays where (( CalPlan1.nRec == PlanPays.cCalPlan
+                                   AND  word(1)       == PlanPays.VidPlat )) = tsOK )
+      Result := 'Авансовый финансовый ПКП'
+    else
+      Result := 'Финансовый ПКП на оплату по факту';
+
+  pCalPlan := CalPlan1.cPredPlan;
+
+  if ( CalPlan1.TermDefBy <> 0 )
+    {
+      Result := Result + '. В течение ' + string(CalPlan1.nDays) + ' дней после №';
+
+      if ( GetFirst CalPlan1 where (( pCalPlan == CalPlan1.nRec )) = tsOk )
+        Result := Result + CalPlan1.NoDoc;
+    }
+}
+
+Panel panCalPlan01;
+  Table CalPlan;
+
+Tree trCalPlan01 (, , sci14EnEscTree);
+  Show at (, , , 14);
+Fields { Font = { Color = if((CalPlan.DirectMC = 100) OR (wStatus and (1 shl CalPlan.Status)) = 0, ColorGray, 0) } };
+//********************************************************************************
+  sCalType      #3'Вид ПКП'
+                ('Вид пункта календарного плана')
+                : [15], Protect, NoAutoSize;
+//********************************************************************************
+  CalPlan.DesGr #3'Группа'
+                ('Код группы пользователей')
+                : [6], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  CalPlan.Descr #3'Дескр.'
+                ('Дескриптор(идентификатор) пользователя')
+                : [6], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  CalPlan.NoDoc #3'Номер'
+                ('Номер пункта плана')
+                : [15], Protect, NoAutoSize;
+//********************************************************************************
+  if(CalPlan.DirectMC = 100, '', KatNotes.sName)
+                #3'Статус'('Статус')
+                : [12], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  if(CalPlan.DirectPlat = 0, CalPlanDirectMC_s, CalPlanDirectPlat_s)
+                #3'<->'
+                ('Направление отгрузок/оказания услуг/платежей')
+                : [4], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  if(CalPlan.DirectPlat = 0, CalPlan.SummaSpec, CalPlan.Summa)
+                #3'Сумма'
+                ('Сумма отгрузок/платежей по пункту плана')
+                : [15, #SFormatNdeSign], Protect;
+//********************************************************************************
+  ValutName     #3'Вал'
+                ('Валюта')
+                : [4], Skip, Centered, NoAutoSize, { Font = {Italic = TRUE}};
+//********************************************************************************
+  PKP_Stage     #3'Этап'
+                ('Этап заказа НИОКР')
+                : [12], Protect;
+//******************************************************************************
+
+  [PlanSumOtgr ''] GetSumOtgrPlan(CalPlan.cDogovor, CalPlan.NRec)
+                #3'Отгрузка'
+                ('Сумма всех отгрузок')
+                : [15, #SFormatNdeSign], Protect, LessNull, NoAutoSize;
+//********************************************************************************
+  [PlanAllPlat '']   GetAllPlat(CalPlan.cDogovor, CalPlan.NRec)
+                #3'Оплата'
+                ('Сумма всех оплат')
+                : [15, #SFormatNdeSign], Protect, LessNull, NoAutoSize;
+//********************************************************************************
+  [PlanBalance '']   GetBalance(CalPlan.cDogovor, CalPlan.NRec)
+                #3'Баланс'
+                ('Баланс по отгрузке и оплате')
+                : [15, #SFormatNdeSign], Protect, NoAutoSize;
+//********************************************************************************
+end; // Tree
+
+Browse brCalPlan01 (, , sci14EnEsc);
+  Show at (, , , 14);
+Fields { Font = { Color = if((CalPlan.DirectMC = 100) OR (wStatus and (1 shl CalPlan.Status)) = 0, ColorGray, 0) } };
+//********************************************************************************
+  sCalType      #3'Вид ПКП'
+                ('Вид пункта календарного плана')
+                : [15], Protect, NoAutoSize;
+//********************************************************************************
+  CalPlan.DesGr #3'Группа'
+                ('Код группы пользователей')
+                : [6], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  CalPlan.Descr #3'Дескр.'
+                ('Дескриптор(идентификатор) пользователя')
+                : [6], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  CalPlan.NoDoc #3'Номер'
+                ('Номер пункта плана')
+                : [15], Protect, NoAutoSize;
+//********************************************************************************
+  if(CalPlan.DirectMC = 100, '', KatNotes.sName)
+                #3'Статус'('Статус')
+                : [12], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  if(CalPlan.DirectPlat = 0, CalPlanDirectMC_s, CalPlanDirectPlat_s)
+                #3'<->'
+                ('Направление отгрузок/оказания услуг/платежей')
+                : [4], Protect, Centered, NoAutoSize;
+//********************************************************************************
+  if(CalPlan.DirectPlat = 0, CalPlan.SummaSpec, CalPlan.Summa)
+                #3'Сумма'
+                ('Сумма отгрузок/платежей по пункту плана')
+                : [15, #SFormatNdeSign], Protect;
+//********************************************************************************
+  ValutName     #3'Вал'
+                ('Валюта')
+                : [4], Skip, Centered, NoAutoSize, { Font = {Italic = TRUE}};
+//********************************************************************************
+  PKP_Stage     #3'Этап'
+                ('Этап заказа НИОКР')
+                : [12], Protect;
+//********************************************************************************
+  PlanSumOtgr   #3'Отгрузка'
+                ('Сумма всех отгрузок')
+                : [15, #SFormatNdeSign], Protect, LessNull, NoAutoSize;
+//********************************************************************************
+  PlanAllPlat   #3'Оплата'
+                ('Сумма всех оплат')
+                : [15, #SFormatNdeSign], Protect, LessNull, NoAutoSize;
+//********************************************************************************
+  PlanBalance   #3'Баланс'
+                ('Баланс по отгрузке и оплате')
+                : [15, #SFormatNdeSign], Protect, NoAutoSize;
+//********************************************************************************
+end; // Browse brCalPlan01
+
+Screen scrCalPlan01 (, , sci1EnEsc);
+Show at (, 15, , );
+Fields
+  DogovorName ('Реквизиты договора/соглашения, по которому сформирован пункт плана', , ): Protect;
+  Contr1.Name ('Наименование контрагента 1', , ): Protect;
+  Contr2.Name ('Наименование контрагента 2', , ): Protect;
+  GrOtp.Name  ('Организация-грузоотправитель'  ): Protect;
+  GrPol.Name  ('Организация-грузополучатель'   ): Protect;
+  OtvPodr.Name('Центр ответственности, ответственный за выполнение.'): Protect;
+  GetCalPlanInfo(CalPlan.nRec): Skip;
+  CalPlanInfo2                : Skip;
+  NIOKR_StepName              : Protect;
+  NIOKR_VipRep                : Protect;
+<<
+ Документ             .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Контрагент 1         .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Контрагент 2         .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Грузоотправитель     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Грузополучатель      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Центр ответственности.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Наименование этапа   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Вид отчетности       .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+Function GetDocTreeType: byte;
+{
+  if ( GetFirst FastFirstRow CalPlan2 <> tsOk )
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(trCalPlan01), ntfOpen, ntfClose);
+}
+
+#define SHOW_NOTES_ICONS
+#include DogIcons.vpp
+
+HandleEvent
+
+cmDelOnProtect:
+  Abort;
+
+cmTreeTop:
+  Node := 0;
+
+cmTreeUp:
+  Node := CalPlan.cCalPlan;
+
+cmTreeDown:
+  Node := CalPlan.NRec;
+
+cmTreeNodeType:
+  {
+    var DocTreeType: byte; DocTreeType := GetDocTreeType;
+
+    if ( CalPlan.DirectMC = 100 )
+      {
+        TreeSetNodeType(trCalPlan01, DocTreeType);
+        Exit;
+      }
+
+    TreeSetNodeType(trCalPlan01, DocTreeType, GetDocTreeIconEx(word(403), CalPlan.Status, DocTreeType, CalPlan.cNote));
+  }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(trCalPlan01, CalPlan.cCalPlan);
+
+end; // HandleEvent Panel
+end; // Panel
+
+HandleEvent
+
+cmInit:
+  {
+    if (DemoMode)
+      if (oDogFuns.TooMuchDogovors)
+        {
+          Abort;
+          Exit;
+        }
+
+    delete all GetPlansSums;
+
+    SetFieldVisible(#PlanSumOtgr, FALSE);
+    SetFieldVisible(#PlanAllPlat, FALSE);
+    SetFieldVisible(#PlanBalance, FALSE);
+
+    ClassCode := oExtCls.GetClassCode(coCalPlan,'Наименование ПКП');
+
+    if ( ClassCode = 0)
+      {
+        oExtCls.CreateClass(coCalPlan,'Наименование ПКП',ClassCode);
+        ClassCode := oExtCls.GetClassCode(coCalPlan,'Наименование ПКП');
+      }
+
+    BalanceVisible := FALSE;
+
+    case wParam of
+      1: AddBounds(tb_wParam);
+      2: AddBounds(tb_wParamFin);
+    end;
+
+    if ( prmDogovor = 0 )
+      {
+        Message('Не указан договор/соглашение!', Warning + CancelButton);
+        Abort;
+        Exit;
+      }
+
+    if ( GetFirst CalPlan <> tsOk )
+      {
+        case wParam of
+          1: Message('У данного договора/соглашения нет товарных пунктов календарного плана!'  , Warning + CancelButton);
+          2: Message('У данного договора/соглашения нет финансовых пунктов календарного плана!', Warning + CancelButton);
+        else
+             Message('У данного договора/соглашения нет календарного плана!', Warning + CancelButton);
+        end;
+
+        Abort;
+        Exit;
+      }
+
+    InitDocIconsArray;
+
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    AddBounds(tbNode);
+
+    var ii, count_bit, _wStatus: word;
+
+    count_bit := 0;
+    _wStatus  := wStatus;
+
+    For(ii := 0; ii <= 4; inc(ii))
+      {
+        if ( (_wStatus and 1) <> 0 )
+          {
+            inc(count_bit);
+            pos_Status := ii;
+          }
+
+        _wStatus := _wStatus shr 1;
+      }
+
+    if ( count_bit = 1 )
+      {
+        PushConditionForLeave(tc_Status1, #CalPlan );
+        PushConditionForLeave(tc_Status2, #CalPlan2);
+      }
+
+    if ( GetFirst CalPlan <> tsOk )
+      {
+        Message('Нет ПКП с данным статусом!', Warning + CancelButton);
+        Abort;
+        Exit;
+      }
+
+    if ( prmCalPlan <> 0 )
+      {
+        if ( GetFirst CalPlan where (( prmCalPlan == CalPlan.NRec )) <> tsOk )
+          TreeGetLast(trCalPlan01);
+      }
+    else
+      TreeGetLast(trCalPlan01);
+
+    Node       := CalPlan.cCalPlan;
+    prmCalPlan := CalPlan.NRec;
+
+    TreeJumpToRecord(trCalPlan01, prmCalPlan);
+
+    SetFieldVisible(#PKP_Stage, oThemeFuncs.NIOKR_Used);
+
+    SetFormat(trCalPlan01);
+    SelectField(#CalPlan.NoDoc);
+  }
+
+cmEdit:
+  {
+    RunInterface('CalPlan', CalPlan.cDogovor, CalPlan.NRec);
+    RescanPanel(#CalPlan);
+  }
+
+cmDefault:
+  {
+    prmCalPlan := CalPlan.NRec;
+    if (not BoundActive(tbNode)) // были переключены в быстрый поиск
+      {
+        AddBounds(tbNode);
+
+        TreeJumpToRecord(trCalPlan01, prmCalPlan);
+
+        SetFormat(trCalPlan01);
+
+        Abort;
+        Exit;
+      }
+
+  if ( CalPlan.DirectMC = 100 )
+    {
+      Message('Нельзя выбирать обобщенный календарный план!', Warning + CancelButton);
+      Abort;
+      Exit;
+    }
+
+  if ( (wStatus and (1 shl CalPlan.Status)) = 0 )
+    {
+      Message('Нельзя выбирать ПКП с данным статусом!', Warning + CancelButton);
+      Abort;
+      Exit;
+    }
+
+  if ( RecordExists CalPlan2 = tsOk )
+    {
+      Message('Разрешен выбор ПКП только нижнего уровня!', Warning + CancelButton);
+      Abort;
+      Exit;
+    }
+  }
+
+cmOpenSearch:
+  if ( ( CurField = #CalPlan.NoDoc ) AND BoundActive(tbNode) ) // находимся в дереве
+    {
+      SubBounds(tbNode);
+      SetFormat(brCalPlan01);
+    }
+
+cmCloseSearch:
+  if ( not BoundActive(tbNode) ) // находимся в списке, а не в дереве
+    {
+      var _nrec: comp;
+
+      Node  := CalPlan.cCalPlan;
+      _nrec := CalPlan.NRec;
+
+      AddBounds(tbNode);
+
+      TreeJumpToRecord(trCalPlan01, _nrec);
+
+      SetFormat(trCalPlan01);
+    }
+
+cmShowAll: // Раскрыть все ветки
+  {
+    if ( not BoundActive(tbNode) ) // переключены в быстрый поиск
+      Exit;
+
+    var sav_NRec: comp; sav_NRec := CalPlan.NRec;
+
+    if ( TreeGetFirst(trCalPlan01) )
+      do
+        TreeOpenNode(trCalPlan01);
+      While TreeGetNext(trCalPlan01);
+
+    TreeJumpToRecord(trCalPlan01, sav_NRec);
+
+    RescanPanel(#CalPlan);
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    if ( not BoundActive(tbNode) ) // переключены в быстрый поиск
+      Exit;
+
+    var sav_NRec: comp;
+
+    While ( CalPlan.cCalPlan <> 0 ) do
+      TreeJumpToRecord(trCalPlan01, CalPlan.cCalPlan);
+
+    sav_NRec := CalPlan.NRec;
+
+    if ( TreeGetFirst(trCalPlan01) )
+      do
+        TreeCloseNode(trCalPlan01);
+      While TreeGetNext(trCalPlan01);
+
+    TreeJumpToRecord(trCalPlan01, sav_NRec);
+    RescanPanel(#CalPlan);
+  }
+
+cmHotKeys:
+{
+  var sMenu: string;
+
+  if BoundActive(tbNode) // находимся в дереве
+    {
+      sMenu := #AddComp('L_Dogovor')'mnuGetCalPlan';
+
+      if oThemeFuncs.NIOKR_Used
+        sMenu := sMenu
+               + ';SEPARATOR;'
+               + #AddComp('L_Dogovor')'mnuGetCalPlanNIKIET';
+
+      sMenu := sMenu
+             + ';SEPARATOR;'
+             + #AddComp('C_COMMON')'GetDocs_HotKeys';
+
+      PutHotCommand(RunDynMenu(sMenu));
+    }
+  else
+    {
+      if oThemeFuncs.NIOKR_Used
+        PutHotCommand(RunDynMenu(#AddComp('L_Dogovor')'mnuGetCalPlan'
+                               + ';SEPARATOR;'
+                               + #AddComp('L_Dogovor')'mnuGetCalPlanNIKIET'))
+      else
+        PutHotCommand(RunMenu('mnuGetCalPlan'));
+    }
+}
+
+cmValue1:
+{
+  RunInterface('iThemePKPInfo', CalPlan.nRec);
+}
+
+cmNal:
+  {
+    BalanceVisible := not BalanceVisible;
+
+    SetFieldVisible(#PlanSumOtgr, BalanceVisible);
+    SetFieldVisible(#PlanAllPlat, BalanceVisible);
+    SetFieldVisible(#PlanBalance, BalanceVisible);
+  }
+
+cmImp:
+  RunInterface('CalcDolgDG', Dogovor.NRec, CalPlan.NRec, Cur_Date);
+
+end; // HandleEvent
+End. // Interface
+
+//********************************************************************************
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetDocs>L_Dogovor::GetDocs - Выбор договора/соглашения/ПКП</link>
+#end
+mnuGetCalPlan Menu
+{
+//********************************************************************************
+  - 'Переключение формата (отгрузки/оплаты)'
+    , cmNal, 'Расчет отгрузок/оплат по ПКП'
+    , hcm_dogov_PereklFormat, 'Alt+F', kbAltF, sci1Esc;
+//********************************************************************************
+  - 'Информация по отгрузкам/оплатам'
+    , cmImp, 'Информация по отгрузкам/оплатам'
+    , hcm_dogov_SymmDogSogl, 'Alt+I', kbAltI, sci1Esc;
+//********************************************************************************
+}
+
+mnuGetCalPlanTree Menu
+{
+//********************************************************************************
+  - 'Раскрыть все ветки'
+    , cmShowAll, 'Разворачивает все дерево документов'
+    , , 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//********************************************************************************
+  - 'Свернуть все ветки'
+    , cmHideAll, 'Сворачивает все дерево документов'
+    , , 'Ctrl+''-''', kbCtrlGrayMinus, sci1Esc;
+//********************************************************************************
+-----------;
+//********************************************************************************
+  - 'Переключение формата (отгрузки/оплаты)'
+    , cmValue3, 'Расчет отгрузок/оплат по ПКП'
+    , hcm_dogov_PereklFormat, 'Alt+F', kbAltF, sci1Esc;
+//********************************************************************************
+  - 'Информация по отгрузкам/оплатам'
+    , cmValue4, 'Информация по отгрузкам/оплатам'
+    , hcm_dogov_SymmDogSogl, 'Alt+I', kbAltI, sci1Esc;
+//********************************************************************************
+}
+
+mnuGetCalPlanNIKIET Menu
+{
+  - 'Контроль выделения средств на оплату контрагентам'
+    , cmValue1, , , , , sci1Esc;
+}
+
+//********************************************************************************

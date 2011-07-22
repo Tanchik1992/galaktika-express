@@ -1,0 +1,927 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Функции закрытия неотфактурованных поставок
+//******************************************************************************
+
+//******************************************************************************
+
+//#include tgFpVal.vih
+#include xlReport.Vih  //Excel
+#include notes.vih
+#include oEdIzm.vih
+
+#doc
+Назначение:
+  Функции закрытия неотфактурованных поставок
+
+Параметры
+  pKatSopr - ссылка на накладную
+  pPrint   - true - печатать отчет
+#end
+
+//******************************************************************************
+
+Interface iCloseFMC 'Закрытие неотфактурованных поставок' ( , hcBCTO_Zakr_Post, ) EscClose,  AlwaysReturn, Cyan;
+  Show at (,,,);
+
+//******************************************************************************
+
+Function KolDostupAkt   : double; forward;
+
+//******************************************************************************
+
+Table struct tmpSpNakl
+(
+  NRec    : comp   ""
+, cGroup  : comp   ""
+, cRec    : comp   ""
+, cSpDocs : comp   ""
+, cMC     : comp   ""
+, cOtpEd  : comp   ""
+, Price   : double ""
+, Kol     : double ""
+, Kol2    : double ""
+, KolAkt  : double ""
+, isLeaf  : word   ""
+)
+with index
+(
+  tmpSpNakl01 = NRec(Unique, Surrogate)
+, tmpSpNakl02 = cRec
+, tmpSpNakl03 = cGroup
+)
+;
+
+Table struct tmpSpAct
+(
+  NRec   : comp   ""
+, cNakl  : comp   ""
+, cMC    : comp   ""
+, cRec   : comp   ""
+, cSopr  : comp   ""
+, Kol    : double ""
+, dOpr   : date   ""
+)
+with index
+(
+  tmpSpAct01 = NRec(Unique, Surrogate)
+, tmpSpAct02 = cNakl + dOpr
+, tmpSpAct03 = cSopr
+, tmpSpAct04 = cRec
+)
+;
+
+//******************************************************************************
+
+Var pxlrepsetup : xlrepsetup;
+
+Create View
+Var
+  ID
+, sXLSFileName
+, sXLTFileName : string;
+
+  pXL      : XLSRepBuilder;      // Excel
+
+  CurGroup
+, sav_NRec
+, pKatSopr : comp;
+
+  pPrint   : boolean;
+
+  Koef
+, OldKol
+, NewKol
+, MaxKol   : double;
+
+  oNotes   : iNotes;
+
+As select
+  if (IsValid(tnKS), 'Акт приемки №' + KS.NSopr + ' от ' + DateToStr(KS.dSopr,'DD/MM/YYYY'), '')
+    (FieldName = Act)
+//------------------------------------------------------------------------------
+, if (KS.cVal = 0, Sp_MC.rPrice, Sp_MC.rVPrice)
+    ( FieldName = Prv )
+//------------------------------------------------------------------------------
+, if (KS.cVal = 0, Sp_MC.Price * Sp_MC.KolFact, Sp_MC.VPrice * Sp_MC.KolFact)
+    ( FieldName = SumPrice )
+//------------------------------------------------------------------------------
+, if (Sp_MC.cOtpEd = 0, KatEd.Name, if (wGetTune('Doc.BrAbbrEd') = 0, KatOtpEd.ABBR, KatOtpEd.Name))
+    ( FieldName = OtpEd )
+//------------------------------------------------------------------------------
+, tmpSpNakl.Price * tmpSpNakl.Kol
+    ( FieldName = SumPrice_K )
+//------------------------------------------------------------------------------
+, if (tmpSpNakl.cOtpEd = 0, KatEd_Sp.Name, if (wGetTune('Doc.BrAbbrEd') = 0, KatOtpEd_Sp.ABBR, KatOtpEd_Sp.Name))
+    ( FieldName = OtpEd_Sp )
+//------------------------------------------------------------------------------
+, ( tmpSpNakl.Kol - tmpSpNakl.KolAkt )
+    ( FieldName = KolOst )
+//------------------------------------------------------------------------------
+, ( KolDostupAkt )
+    ( FieldName = KolDos)
+//------------------------------------------------------------------------------
+, *
+from
+  KatSopr
+, KatSopr  ActMC
+, KatSopr  KS
+, SpSopr
+, SpSopr   SpActMC
+, SpSopr   Sp_MC
+, SpSopr   SpSopr2
+, SpDocs
+, SpDocs   SpDocs2
+, SpecZatr
+, KatMC
+, KatMC    KatMC_S
+, KatMC    KatMC_F
+, KatEd
+, KatEd    KatEd_Sp
+, KatOtpEd
+, KatOtpEd KatOtpEd_Sp
+, KatOrg
+, tmpSpAct
+, tmpSpAct tmpSpAct2
+, tmpSpNakl
+, tmpSpNakl tmpSpNakl2
+
+where
+((
+     pKatSopr             ==  KatSopr.NRec
+AND  KatSopr.cOrgBase     ==  KatOrg.NRec
+
+AND  CurGroup             ==  tmpSpNakl.cGroup
+AND  tmpSpNakl.cRec       ==  SpSopr.NRec
+AND  tmpSpNakl.cMC        ==  KatMC_S.NRec
+AND  tmpSpNakl.cOtpEd     ==  KatOtpEd_Sp.NRec
+AND  KatMC_S.cEd          ==  KatEd_Sp.NRec
+
+AND  tmpSpNakl.NRec       ==  tmpSpAct.cNakl
+AND  tmpSpAct.cSopr       ==  KS.NRec
+AND  tmpSpAct.cRec        ==  Sp_MC.NRec
+AND  Sp_MC.cMCUSL         ==  KatMC_F.NRec
+
+AND  Sp_MC.cOtpEd         ==  KatOtpEd.NRec
+AND  KatMC_F.cEd          ==  KatEd.NRec
+
+))
+
+;
+
+Parameters
+  pKatSopr
+, pPrint
+
+;
+
+//******************************************************************************
+//
+Function KolDostupAkt : double;
+var dUsed : double;
+{
+  KolDostupAkt := 0;
+
+  dUsed := 0;
+
+  _LOOP SpecZatr where ((Sp_MC.NRec == SpecZatr.cUKS))
+    {
+      if (SpecZatr.coTable = 0)
+        dUsed := dUsed + double(SpecZatr.cSpec);
+    }
+  dUsed := Sp_MC.KolFact - 0.000001 * dUsed / fEdIzm.GetKoefOtpEd(Sp_MC.cOtpEd);
+
+  KolDostupAkt := if (dUsed < 0, 0, dUsed);
+}
+
+//******************************************************************************
+// проверка оприходывания накладной
+//
+
+Procedure CheckOprixod;
+var
+  bAllOprix : boolean;
+  dOprix    : date;
+  Ostatok   : double;
+{
+  bAllOprix := TRUE;
+  dOprix    := ZeroDate;
+
+  _LOOP SpSopr2 where ((KatSopr.NRec == SpSopr2.cSopr))
+    {
+      Ostatok := 0;
+
+      _LOOP tmpSpNakl where ((SpSopr2.NRec == tmpSpNakl.cRec))
+        Ostatok := Ostatok + tmpSpNakl.Kol - tmpSpNakl.KolAkt;
+
+      if (SpSopr2.dOprTTN = ZeroDate)
+        {
+          if (Ostatok < 0.00001)
+            {
+              var dD : date;
+
+              dD := ZeroDate;
+
+              _LOOP SpecZatr where (( SpSopr2.NRec == SpecZatr.cAddSumTune ))
+                {
+                  if ( SpecZatr.coTable = 0 )
+                    if ( GetFirst tmpSpAct2 where (( SpecZatr.cUKS == tmpSpAct2.cRec )) = tsOk )
+                      if ( dD < tmpSpAct2.dOpr )
+                        dD := tmpSpAct2.dOpr;
+                }
+
+              update current SpSopr2 set SpSopr2.dOprTTN := dD;
+
+              if ( dOprix < SpSopr2.dOprTTN )
+                dOprix := SpSopr2.dOprTTN;
+            }
+          else
+            bAllOprix := FALSE;
+        }
+      else
+        {
+          if (Ostatok < 0.00001)
+            {
+              if ( dOprix < SpSopr2.dOprTTN )
+                dOprix := SpSopr2.dOprTTN;
+            }
+          else
+            {
+              bAllOprix := FALSE;
+
+              update current SpSopr2 set SpSopr2.dOprTTN := ZeroDate;
+              update current KatSopr set KatSopr.dOpr    := ZeroDate;
+            }
+        }
+    }
+
+  if (KatSopr.dOpr = ZeroDate)
+    if (bAllOprix)
+      if (dOprix <> ZeroDate)
+        {
+          update current KatSopr set KatSopr.dOpr := dOprix;
+
+          if (KatSopr.Status = 0)
+            if Message('Накладная оприходована! Перевести накладную в статус исполняемый?', YesNo) = cmYes
+              update current KatSopr set KatSopr.Status := 1, KatSopr.cNote  := oNotes.GetFirstNote(100, 1);
+        }
+}
+
+//******************************************************************************
+// расчет количества в спецификации накладной, закрытое актами М-7
+//
+Procedure CaclClosedKolNakl;
+var
+  dKol, dKol0, Koef : double;
+  bOk : boolean;
+{
+  _LOOP tmpSpNakl
+    {
+      dKol0 := 0;
+
+      _LOOP SpecZatr where ((tmpSpNakl.cRec == SpecZatr.cAddSumTune))
+        {
+          if (SpecZatr.coTable = 0)
+            if (GetFirst SpActMC where ((SpecZatr.cUKS == SpActMC.NRec)) = tsOk)
+              if (SpActMC.cMCUsl = tmpSpNakl.cMC)
+                dKol0 := dKol0 + double(SpecZatr.cSpec);
+        }
+
+      dKol := 0.000001 * dKol0 / fEdIzm.GetKoefOtpEd(tmpSpNakl.cOtpEd)
+
+      update current tmpSpNakl
+                 set tmpSpNakl.Kol2   := dKol
+                   , tmpSpNakl.KolAkt := dKol;
+    }
+
+  _LOOP tmpSpNakl
+    {
+      if (tmpSpNakl.cGroup <> 0)
+        { // корректируется составляющая комплекта
+          if (GetFirst tmpSpNakl2 where ((tmpSpNakl.cGroup == tmpSpNakl2.NRec)) = tsOk)
+            {
+              Koef := tmpSpNakl.Kol / tmpSpNakl2.Kol;
+
+              update current tmpSpNakl set tmpSpNakl.KolAkt := tmpSpNakl.Kol2 + Koef * tmpSpNakl2.Kol2;
+            }
+        }
+      else
+        { // корректируется комплектная МЦ
+          dKol := tmpSpNakl.Kol;
+
+          bOk := FALSE;
+
+          _LOOP tmpSpNakl2 where ((tmpSpNakl.NRec == tmpSpNakl2.cGroup))
+            {
+              dKol0 := tmpSpNakl.Kol * tmpSpNakl2.Kol2 / tmpSpNakl2.Kol;
+
+              if (dKol > dKol0)
+                {
+                  bOk := TRUE;
+
+                  dKol := dKol0;
+                }
+            }
+
+          if bOk
+            update current tmpSpNakl set tmpSpNakl.KolAkt := tmpSpNakl.Kol2 + dKol;
+        }
+    }
+
+}
+
+//******************************************************************************
+// пересчет количества по позиции спецификации накладной, закрытое актами М-7
+//
+Procedure ClosedKolSpNakl (Kol : double);
+var
+  dKol, Koef, Koef0 : double;
+  bOk : boolean;
+{
+  update current tmpSpNakl
+             set tmpSpNakl.Kol2   := tmpSpNakl.Kol2   + Kol
+               , tmpSpNakl.KolAkt := tmpSpNakl.KolAkt + Kol;
+
+  if (tmpSpNakl.cGroup <> 0)
+    { // составляющая комплекта
+      if (GetFirst tmpSpNakl2 where ((tmpSpNakl.cGroup == tmpSpNakl2.NRec)) <> tsOk)
+        Exit;
+
+      Koef := tmpSpNakl2.Kol;
+      dKol := tmpSpNakl2.Kol;
+
+      bOk := FALSE;
+
+      _LOOP tmpSpNakl2 where ((tmpSpNakl.cGroup == tmpSpNakl2.cGroup))
+        {
+          Koef0 := tmpSpNakl2.Kol2 / tmpSpNakl2.Kol;
+
+          if (Koef > Koef0)
+            {
+              bOk := TRUE;
+
+              Koef := Koef0;
+            }
+        }
+
+      if bOk
+        update tmpSpNakl2 where ((tmpSpNakl.cGroup == tmpSpNakl2.NRec))
+           set tmpSpNakl2.KolAkt := tmpSpNakl2.Kol2 + Koef * tmpSpNakl2.Kol;
+    }
+  else
+    { // комплектная МЦ
+      _LOOP tmpSpNakl2 where ((tmpSpNakl.NRec == tmpSpNakl2.cGroup))
+        {
+          Koef := tmpSpNakl2.Kol / tmpSpNakl.Kol;
+
+          update current tmpSpNakl2 set tmpSpNakl2.KolAkt := tmpSpNakl2.KolAkt + Koef * Kol;
+        }
+    }
+}
+
+//******************************************************************************
+//
+//
+Procedure CreateTAct;
+var
+  cDoc, cGroup : comp;
+  wTiDk        : word;
+  dKol         : double;
+{
+  if (KatSopr.cCalPlan <> 0)
+    {
+      cDoc  := KatSopr.cCalPlan;
+      wTiDk := 403;
+    }
+  else
+    {
+      if (KatSopr.cAppDogovor <> 0)
+        {
+          cDoc  := KatSopr.cAppDogovor;
+          wTiDk := 401;
+        }
+      else
+        {
+          cDoc  := KatSopr.cDogovor;
+          wTiDk := 400;
+        }
+    }
+
+  // заполнение таблицы в памяти спецификацией накладной (только МЦ)
+  _LOOP SpSopr2 where ((KatSopr.NRec == SpSopr2.cSopr))
+    {
+      if (SpSopr2.PrMC <> 1)
+        Continue;
+
+      ClearBuffer(#tmpSpNakl);
+
+      tmpSpNakl.isLeaf  := 1;
+      tmpSpNakl.cRec    := SpSopr2.NRec;
+      tmpSpNakl.cGroup  := 0;
+      tmpSpNakl.cSpDocs := SpSopr2.cSpDocs;
+      tmpSpNakl.cMC     := SpSopr2.cMCUSL;
+      tmpSpNakl.cOtpEd  := SpSopr2.cOtpEd;
+      tmpSpNakl.Kol     := SpSopr2.KolFact;
+      tmpSpNakl.Price   := if (KatSopr.cVal = 0, SpSopr2.rPrice, SpSopr2.rVPrice);
+
+      if (insert current tmpSpNakl <> tsOk)
+        {}
+
+      cGroup := tmpSpNakl.NRec;
+
+      _LOOP SpDocs where (( wTiDk   == SpDocs.TiDk AND
+                            cDoc    == SpDocs.cDoc AND
+                            word(1) == SpDocs.PrMC ))
+        {
+          if (SpDocs.cMCUsl <> SpSopr2.cMCUsl)
+            Continue;
+
+          if ( GetFirst SpDocs2 where (( word(438)   == SpDocs2.TiDk AND
+                                         SpDocs.NRec == SpDocs2.cDoc )) <> tsOk)
+            Continue;
+
+          update current tmpSpNakl set tmpSpNakl.isLeaf := 0;
+
+          _LOOP SpDocs2 where (( word(438)   == SpDocs2.TiDk AND
+                                 SpDocs.NRec == SpDocs2.cDoc ))
+            {
+              dKol := SpDocs2.Kol / fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd); // количество для учетной единицы
+
+              ClearBuffer(#tmpSpNakl);
+
+              tmpSpNakl.isLeaf  := 1;
+              tmpSpNakl.cRec    := SpSopr2.NRec;
+              tmpSpNakl.cGroup  := cGroup;
+              tmpSpNakl.cSpDocs := SpDocs2.NRec;
+              tmpSpNakl.cMC     := SpDocs2.cMCUSL;
+              tmpSpNakl.cOtpEd  := SpDocs2.cOtpEd;
+              tmpSpNakl.Kol     := SpSopr2.KolFact * dKol * fEdIzm.GetKoefOtpEd(SpSopr2.cOtpEd);
+              tmpSpNakl.Price   := oValFunc.GetAnyCurrency(SpDocs2.cVal,
+                                                          SpDocs2.Price,
+                                                          KatSopr.dSopr,
+                                                          KatSopr.cVal);
+
+              if (insert current tmpSpNakl <> tsOk)
+                {}
+            }
+        }
+    }
+
+  // расчет количества в спецификации накладной, закрытое актами М-7
+  CaclClosedKolNakl;
+
+  _LOOP tmpSpNakl
+    {
+      _LOOP SpActMC where (( tmpSpNakl.cSpDocs == SpActMC.cSpDocs ))
+        {
+          if ( SpActMC.VidSopr <> 115 )
+            Continue;
+
+          if ( GetFirst ActMC where (( SpActMC.cSopr == ActMC.NRec )) <> tsOk )
+            Continue;
+
+          if ( ActMC.Status <> 1 ) // только исполняемые
+            Continue;
+
+          if (ActMC.Reserved = 1) // только не ответ. хранение
+            Continue;
+
+          if ( KatSopr.cOrgBase <> ActMC.cOrgBase )
+            Continue;
+
+          if ( KatSopr.cGruzFrom <> ActMC.cGruzFrom )
+            Continue;
+
+          if (    ( KatSopr.cDogovor    = ActMC.cDogovor )
+              AND ( KatSopr.cAppDogovor = ActMC.cAppDogovor )
+           //   AND ( KatSopr.cCalPlan    = ActMC.cCalPlan )  // По жизни проверка на совпадение ПКП не нужна. Так гласит ПНР.
+             )
+            {
+              ClearBuffer(#tmpSpAct);
+
+              tmpSpAct.cNakl := tmpSpNakl.NRec;
+              tmpSpAct.cMC   := SpActMC.cMCUSL;
+              tmpSpAct.cRec  := SpActMC.NRec;
+              tmpSpAct.cSopr := SpActMC.cSopr; ///ActMC.NRec;
+              tmpSpAct.dOpr  := SpActMC.dOprTTN;
+
+              if ( GetFirst SpecZatr where (( tmpSpNakl.cRec == SpecZatr.cAddSumTune
+                                          AND SpActMC.NRec   == SpecZatr.cUKS )) = tsOk )
+                if (SpecZatr.coTable = 0)
+                  tmpSpAct.Kol := 0.000001 * double(SpecZatr.cSpec) / fEdIzm.GetKoefOtpEd(SpActMC.cOtpEd);
+
+              if (insert current tmpSpAct <> tsOk)
+                {}
+            }
+        }
+    }
+}
+
+
+//******************************************************************************
+
+Screen scrKatSopr;
+  Show at (, , , 2);
+  Table KatSopr
+
+
+Fields
+  KatSopr.DesGr   ('Код группы пользователей'                ) : Skip;
+  KatSopr.Descr   ('Дескриптор(идентификатор) пользователя.' ) : Skip;
+  KatSopr.NSopr   ('Номер акта.'                             ) : Skip;
+  KatSopr.dSopr   ('Дата выписки акта.'                      ) : Skip;
+  KatSopr.dOpr    ('Дата оприходования МЦ.'                  ) : Skip;
+<<
+  `Группа`   `Дескр.`     `Номер`     `Выписан`   `Оприходована`
+  .@@@@@@@@ .@@@@@@@@ .@@@@@@@@@@@@@ .@@@@@@@@@@ .@@@@@@@@@@@@@
+>>
+end;
+
+
+//******************************************************************************
+
+tree trSpSopr ('', , sci1Tree);
+  Show at (, 3, , 10);
+  Table tmpSpNakl;
+
+Fields
+  KatMC_S.Name     #3'Наименование МЦ'   ('', , ) : [19], Protect;
+  KatMC_S.BarKod   #3'Код'               ('', , ) : [14], Protect;
+  OtpEd_Sp         #3'ЕдИзм'             ('', , ) : [ 7], NoAutoSize, Protect;
+  tmpSpNakl.Kol    #3'Количество'        ('', , ) : [12], [prSignsInKol     , '\3p[|-]36`666`666`666`666.888'], NoAutoSize, Protect;
+  tmpSpNakl.Price  #3'Цена'              ('', , ) : [17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88' ], NoAutoSize, Protect;
+  SumPrice_K       #3'Стоимость'         ('', , ) : [17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88' ], NoAutoSize, Protect;
+  tmpSpNakl.KolAkt #3'Закрыто',#3'актами'('', , ) : [12], [prSignsInKol     , '\3p[|-]36`666`666`666`666.888'], NoAutoSize, Protect;
+  KolOst           #3'Остаток'           ('', , ) : [12], [prSignsInKol     , '\3p[|-]36`666`666`666`666.888'], NoAutoSize, Protect,
+                   { Font = {Color = if (KolOst <> 0, ColorError, 0); bold  = (KolOst <> 0) } };
+  SpSopr.dOprTTN   #3'Дата оприх.'       ('', , ) : [10], NoAutoSize, Protect;
+end;
+
+Browse brtmpSpAct ('', , sci1Esc);
+  Show at (, 11, , );
+  Table tmpSpAct;
+
+Fields
+  {Font = {Color = if (KolDos <= 0, ColorGray, if (tmpSpAct.Kol > 0, ColorMark, 0)); italic = (KolDos <= 0) }};
+  Act             #3'Документ'        ('',,) : [20], Skip;
+  KatMC_F.BarKod  #3'Код'             ('',,) : [14], Skip;
+  KatMC_F.Name    #3'Наименование МЦ' ('',,) : [19], Skip;
+  OtpEd           #3'ЕдИзм'           ('',,) : [ 7], NoAutoSize, Skip;
+  Sp_MC.KolFact   #3'Количество'      ('',,) : [12], [prSignsInKol     , '\3p[|-]36`666`666`666`666.888'], NoAutoSize, Skip;
+  Prv             #3'Цена'            ('',,) : [17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88' ], NoAutoSize, Skip;
+  KolDos          #3'Доступно'        ('',,) : [12], [prSignsInKol     , '\3p[|-]36`666`666`666`666.888'], NoAutoSize, Skip;
+  tmpSpAct.Kol    #3'Выбрано'         ('',,) : [12], [prSignsInKol     , '\3p[|-]36`666`666`666`666.888'], NoAutoSize, NoProtect;
+end;
+
+//******************************************************************************
+
+Procedure PrintClose;
+var
+  i, ii : longint;
+{
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+  ID := 'L_SOPRDOC\Close';
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+!  Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);
+//  pXL.SetNumberVar('toc1',toc1);
+
+  pXL.SetStringVar('KSData'    , DateToStr(KatSopr.DSOPR, 'DD/MM/YYYY'));
+  pXL.SetStringVar('KSNumber'  , KatSopr.NSOPR);
+  pXL.SetStringVar('Kontragent', KatOrg.Name);
+  pXL.PublishVar;  // Excel
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('SpSopr');
+  pXL.CreateTblFld('NPP');
+  pXL.CreateTblFld('Name_MTP');
+  pXL.CreateTblFld('Kod_MTP');
+  pXL.CreateTblFld('ЕдИзм');
+  pXL.CreateTblFld('Кол_Накл');
+  pXL.CreateTblFld('КолАктВсего');
+  pXL.CreateTblFld('Остаток');
+  pXL.CreateTblFld('ДатаНомАкт');
+  pXL.CreateTblFld('Кол_Акт');
+
+  i := 0;
+
+  TreePushPos(trSpSopr);
+
+  if (TreeGetFirstEx(trSpSopr))
+    do
+      {
+        i  := i + 1;
+        ii := 0;
+
+        pXL.ClearTblBuffer;
+
+        pXL.SetTblNumberFldValue('NPP', i);
+        pXL.SetTblStringFldValue('Name_MTP', KatMC_S.Name);
+        pXL.SetTblStringFldValue('Kod_MTP' , KatMC_S.BarKod);
+        pXL.SetTblStringFldValue('ЕдИзм'   , KatOtpEd_Sp.Name);
+        pXL.SetTblNumberFldValue('Кол_Накл', tmpSpNakl.Kol);
+        pXL.SetTblNumberFldValue('Остаток' , tmpSpNakl.Kol - tmpSpNakl.KolAkt);
+        pXL.SetTblNumberFldValue('КолАктВсего', tmpSpNakl.KolAkt);
+
+        _LOOP SpecZatr where ((tmpSpNakl.cRec == SpecZatr.cAddSumTune))
+          {
+            if (SpecZatr.coTable = 0)
+              if (GetFirst SpActMC where ((SpecZatr.cUKS == SpActMC.NRec)) = tsOk)
+                {
+
+
+                  if (SpActMC.cMCUsl = tmpSpNakl.cMC)
+                    if GetFirst ActMC where ((SpActMC.cSopr == ActMC.NRec)) = tsOk
+                      {
+                        if (ii <> 0)
+                          {
+                            pXL.InsTblRow;
+                            pXL.ClearTblBuffer;
+                          }
+
+                        pXL.SetTblStringFldValue('ДатаНомАкт', ActMC.nSopr + ' от '+  DateToStr(ActMC.dSopr, 'DD/MM/YYYY'));
+                        pXL.SetTblNumberFldValue('Кол_Акт'   , 0.000001 * SpecZatr.cSpec / fEdIzm.GetKoefOtpEd(tmpSpNakl.cOtpEd));
+
+                        inc(ii);
+                      }
+                }
+          }
+
+        pXL.InsTblRow;
+      }
+    while TreeGetNextEx(trSpSopr) AND NextVisual
+
+  TreePopPos(trSpSopr);
+
+  RereadRecord(#tmpSpNakl);
+
+  pXL.PublishTbl('SpSopr');
+  pXL.LoadReport(sXLSFileName);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+}
+
+//******************************************************************************
+
+
+Panel pantmpSpNakl;
+  Table tmpSpNakl;
+
+Handleevent
+
+cmTreeTop         : CurGroup := 0;
+
+cmTreeUp          : CurGroup := tmpSpNakl.cGroup;
+
+cmTreeDown        : CurGroup := tmpSpNakl.NRec;
+
+cmTreeNodeType    : if (tmpSpNakl.isLeaf = 1)
+                      TreeSetNodeType(trSpSopr, 2);
+
+cmTreeNeedOwner   : TreeJumpToRecord (trSpSopr, tmpSpNakl.cGroup);
+
+end; // Handleevent
+
+end; // Panel pantmpSpNakl
+
+Panel pantmpSpAct;
+  Table tmpSpAct;
+
+Handleevent
+
+cmCheckField:
+  {
+    if (CurField <> #tmpSpAct.Kol)
+      {
+        Abort;
+        Exit
+      }
+
+    if NOT fEdIzm.CheckKolDiskret(tmpSpAct.Kol, Sp_MC.cOtpEd, TRUE, TRUE)
+      {
+        Abort;
+        Exit
+      }
+
+    OldKol := double(OldFieldValue);
+    NewKol := if (tmpSpAct.Kol < 0, 0, tmpSpAct.Kol);
+    MaxKol := if (KolDos < KolOst, KolDos, KolOst);
+
+    if ( (NewKol - OldKol) > MaxKol )
+      set tmpSpAct.Kol := MaxKol + OldKol;
+    else
+      set tmpSpAct.Kol := NewKol;
+
+    if (GetFirst SpecZatr where ((tmpSpNakl.cRec == SpecZatr.cAddSumTune AND
+                                  Sp_MC.NRec     == SpecZatr.cUKS)) = tsOk)
+      {
+        if (SpecZatr.coTable = 0)
+          {
+            if (tmpSpAct.Kol > 0.000001)
+              {
+                Update current SpecZatr
+                   set SpecZatr.cSpec := comp(1000000.0 * tmpSpAct.Kol * fEdIzm.GetKoefOtpEd(Sp_MC.cOtpEd));
+              }
+            else
+              {
+                Delete current SpecZatr;
+              }
+          }
+      }
+    else
+      {
+        if (tmpSpAct.Kol > 0.000001)
+          {
+            ClearBuffer(#SpecZatr);
+
+            SpecZatr.coTable     := 0;
+            SpecZatr.cAddSumTune := tmpSpNakl.cRec; // ссылка на спецификацию накладной
+            SpecZatr.cUKS        := Sp_MC.NRec;     // ссылка на спецификацию акта М-7
+            SpecZatr.cSpec       := comp(1000000.0 * tmpSpAct.Kol * fEdIzm.GetKoefOtpEd(Sp_MC.cOtpEd));
+
+            insert current SpecZatr;
+          }
+      }
+
+    Update current tmpSpAct;
+
+    ClosedKolSpNakl(tmpSpAct.Kol - OldKol);
+
+    RereadRecord(#tmpSpNakl);
+    RereadRecord(#tmpSpAct);
+    RescanPanel(#tmpSpNakl);
+  }
+
+end; // Handleevent
+
+end; // Panel pantmpSpAct
+
+//******************************************************************************
+
+
+Handleevent
+cmInit:
+  {
+    CurGroup := 0;
+
+    if (NOT IsValid(#KatSopr))
+      {
+        Message('Не найдена накладная!');
+
+        Abort;
+        Exit;
+      }
+
+    if (KatSopr.cDogovor = comp(0))
+      {
+        Message('В накладной не указан договор!');
+
+        Abort;
+        Exit;
+      }
+
+    ResetBounds(#tmpSpNakl);
+
+    CreateTAct;
+
+    if (GetFirst tmpSpNakl <> tsOK)
+      {
+        Message('В спецификации накладной нет МЦ!');
+
+        Abort;
+        Exit;
+      }
+
+    SetBounds(#tmpSpNakl);
+
+    TreeGetFirst(trSpSopr);
+
+    if GetFirst tmpSpAct = tsOk
+      {}
+
+    if pPrint
+      {
+        Abort;
+
+        PrintClose;
+      }
+  }
+
+cmDone:
+  {
+    CheckOprixod;
+  }
+
+cmSetCurTable:
+  {
+    if ( (CurTable = #tmpSpNakl) AND (Target = #tmpSpAct) AND (NOT IsValid(#tmpSpAct)) )
+      Abort;
+  }
+
+cmPrintDoc:
+  PrintClose;
+
+cmValue27:
+{
+  #ifdef Gal8_1
+    ID := 'L_SOPRDOC\Close';
+  #else
+    ID := 'oper\Close';
+  #end
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+  #ifdef Atl51
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+  #else
+    Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+  #endif
+
+  RunInterface('xlrepsetup',1,ID,sXLTFileName);
+
+  SaveMyDsk(sXLTFileName,ID);
+}
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuRepNakl'));
+
+cmShowAll: // Раскрыть все ветки
+  {
+    sav_NRec := tmpSpNakl.NRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Раскрытие всех веток ...'#13#3,1);
+
+    if (TreeGetFirst(trSpSopr))
+      do
+        {
+          NextVisual;
+          TreeOpenNode(trSpSopr);
+        }
+      while TreeGetNext(trSpSopr);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(trSpSopr, sav_NRec);
+
+    ReScanPanel(#tmpSpNakl);
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Сворачивание всех веток ...'#13#3,1);
+
+    while (tmpSpNakl.cGroup <> 0)
+      {
+        NextVisual;
+        TreeJumpToRecord(trSpSopr, tmpSpNakl.cGroup);
+      }
+
+    sav_NRec := tmpSpNakl.cGroup;
+
+    if (TreeGetFirst(trSpSopr))
+      do
+        {
+          NextVisual;
+          TreeCloseNode(trSpSopr);
+        }
+      while TreeGetNext(trSpSopr);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord (trSpSopr, sav_NRec);
+
+    ReScanPanel(#tmpSpNakl);
+  }
+
+end; // HandleEvent
+End.
+
+//***************************************************************************
+mnuRepNakl Menu
+{
+- 'Печать отчета', cmPrintDoc, 'Печать отчета', , 'Сtrl+P', kbCtrlP, sci1Esc;
+-'Настройка Excel отчета'  , cmValue27, , hcdog_pech,,, sci1Esc;
+}
+
+//******************************************************************************
+NewKol DIALOG
+Fields
+  NewKol ('') : double;
+Buttons
+  cmOk,Default, , 'Подтверждение выбора';
+  cmCancel,,,'Выход';
+<<'Подтвердите выбор'
+
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ <.~П~родолжить.>  <. ~О~тмена .>
+>>

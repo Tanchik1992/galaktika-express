@@ -1,0 +1,667 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Распределение МЦ по разрезу
+//******************************************************************************
+
+#include SDfuns.vih
+#include oDEI.vih
+#include oEdIzm.vih
+#include MTRFuncs.vih
+
+Interface RemakeSpSoprOnTeksaldo2 'Распределение МЦ по разрезу' (,hcm_sell_Raspred_MC_Razrez,) EscClose, Cyan, doAccept;
+  Show at(, , 112, 18);
+
+Table struct MemRasp
+(
+  cMC           : comp
+, cMOL          : comp
+, cPodr         : comp
+, cParty        : comp
+, TekSaldoKol   : double
+, TekSaldoRes   : double
+, TekSaldoOst   : double
+, Kol           : double
+, Percent       : double
+, Kod           : string[20]
+, Name          : string[80]
+)
+with Index
+(
+  MemRasp01 = cParty
+, MemRasp02 = cMc + cPodr + cMol
+, MemRasp03 = cMc + cPodr + cMol + TekSaldoKol
+, MemRasp04 = cMc + cPodr + cMol + TekSaldoRes
+, MemRasp05 = cMc + cPodr + cMol + TekSaldoOst
+, MemRasp06 = cMc + cPodr + cMol + Kod
+, MemRasp07 = cMc + cPodr + cMol + Name
+, MemRasp08 = Kol
+);
+
+#include SDfuns.var
+#include MTRFuncs.var
+#include oEdIzm.var
+
+Var
+  pSpSopr   : comp;    // спецификация накладной
+  wMode     : word;    // режим работы
+  AllPercent: double;  // общий распределенный процент
+  AllKol    : double;  // общее распределенное количество
+  AllKolD   : double;  // общее доступное количество
+  CurSort   : integer; // текущая сортировка
+  dPrKol    : double;  // точность
+
+Create view
+
+As select
+//------------------------------------------------------------------------------
+  (100 - AllPercent)
+        (FieldName  =  fRetPercent)
+//------------------------------------------------------------------------------
+, (AllKolD - AllKol)
+        (FieldName  =  fRetKol)
+//------------------------------------------------------------------------------
+, *
+
+From
+  TekSaldo
+, KatMC
+, KatEd
+, KatPodr
+, KatParty
+, KatMOL
+, SklOst
+, KatOtpEd
+, KlVal
+, TekMC
+, MemRasp
+, SpDocNal
+, SpSopr
+, KatSopr
+, AttrVal
+, ExClassVal
+, SpSopr SpSopr2
+, SpDocNal SpDocNal2
+, AttrVal AttrVal2
+, ExClassVal ExClassVal2
+
+Where
+((
+       pSpSopr                 ==  SpSopr.NRec
+  AND  SpSopr.NRec             ==  SpSopr2.NRec
+
+  AND  SpSopr.cSopr            ==  KatSopr.NRec
+  AND  SpSopr.NRec             ==  SpDocNal.cSpDoc
+  AND  KatSopr.VidSopr         ==  SpDocNal.TipDoc
+  AND  SpDocNal.NRec           ==  SpDocNal2.NRec
+
+  AND  coSpSopr                ==  AttrVal.wTable
+  AND  SpSopr.NRec             ==  AttrVal.cRec
+  AND  AttrVal.NRec            ==  AttrVal2.NRec
+
+  AND  coSpSopr                ==  ExClassVal.wTable
+  AND  SpSopr.NRec             ==  ExClassVal.cRec
+  AND  ExClassVal.NRec         ==  ExClassVal2.NRec
+
+  AND  KatSopr.cPodrFrom       ==  KatPodr.NRec
+  AND  KatSopr.cMolFrom        ==  KatMOL.NRec
+
+  AND  SpSopr.cMCUsl           ==  TekSaldo.cMc
+  AND  KatSopr.cPodrFrom       ==  TekSaldo.cPodr
+  AND  KatSopr.cMolFrom        ==  TekSaldo.cMol
+
+  AND  SpSopr.cMCUsl           ==  MemRasp.cMc
+  AND  KatSopr.cPodrFrom       ==  MemRasp.cPodr
+  AND  KatSopr.cMolFrom        ==  MemRasp.cMol
+
+  AND  SpSopr.cMCUsl           ==  SklOst.cMC
+  AND  MemRasp.cPodr           ==  SklOst.cPodr
+  AND  SpSopr.cMCUsl           ==  TekMC.cMC
+
+  AND  SpSopr.cMCUsl           ==  KatMC.NRec
+  AND  KatMC.cEd               ==  KatEd.NRec
+  AND  SpSopr.cOtpEd           ==  KatOtpEd.NRec
+
+  AND  MemRasp.cParty          ==  KatParty.NRec
+))
+
+  Order MemRaspTekSaldoKol by MemRasp.TekSaldoKol
+  Order MemRaspTekSaldoRes by MemRasp.TekSaldoRes
+  Order MemRaspTekSaldoOst by MemRasp.TekSaldoOst
+  Order MemRaspKod         by MemRasp.Kod
+  Order MemRaspName        by MemRasp.Name
+;
+
+Parameters
+  pSpSopr
+, wMode
+;
+
+#include SoprGen2.vpp
+#include fsround.vpp
+
+//******************************************************************************
+// Установить новый заголовок
+Procedure CheckRasp;
+{
+  AllPercent := 0;
+  AllKol     := 0;
+
+  fEdIzm.CheckKolDiskretAll(MemRasp.Kol, SpSopr.cOtpEd, KatMC.cEd, TRUE, FALSE);
+
+  if (MemRasp.TekSaldoOst < MemRasp.Kol)
+    MemRasp.Kol := MemRasp.TekSaldoOst;
+
+  if (MemRasp.Kol < dPrKol)
+    MemRasp.Kol := 0;
+
+  MemRasp.Percent := MemRasp.Kol / SpSopr.KolFact * 100;
+  Update Current MemRasp;
+
+  PushPos(#MemRasp);
+
+  _LOOP MemRasp
+  {
+    AllPercent := AllPercent + MemRasp.Percent;
+    AllKol     := AllKol     + MemRasp.Kol;
+  }
+
+  PopPos(#MemRasp);
+
+  if (AllKol > SpSopr.KolFact)
+  {
+    MemRasp.Kol     := MemRasp.Kol - ( AllKol - SpSopr.KolFact );
+    MemRasp.Percent := MemRasp.Kol / SpSopr.KolFact * 100;
+    Update Current MemRasp;
+    AllPercent := 100;
+    AllKol     := SpSopr.KolFact;
+    RedrawPanel(#MemRasp);
+  }
+
+  ReDrawPanel(#SpSopr);
+  ReDrawPanel(#MemRasp);
+
+  SetTitle ('Распределение МЦ по разрезу: ' + DoubleToStr(AllPercent, '666.88%'));
+}
+
+
+//******************************************************************************
+// Копирование ДЕИ
+Procedure CopyDEI(wPar: word; Kol, Kol2: double);
+var
+  oKatDEI: iKatDEI;
+
+{
+  oKatDEI.CopyDopEd( word(coSpSopr), SpSopr.NRec , wPar, Kol , word(coSpSopr)
+                                   , SpSopr2.NRec, wPar, Kol2, SpSopr2.VidSopr);
+}
+
+
+//******************************************************************************
+// Вставка новых позиций
+Procedure InsertNewPos;
+var
+  iCount: word;
+{
+  ResetBounds(#MemRasp);
+  Delete All MemRasp where (( dPrKol >>= MemRasp.Kol ));
+  SetBounds(#MemRasp);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer + vfConfirm, 'Создание спецификации', RecordsInTable(#MemRasp));
+
+  iCount := 0;
+
+  _LOOP MemRasp
+  {
+    if (GetFirst SpSopr2 <> tsOk)
+      Continue;
+
+    SpSopr2.NRec      := 0;
+    SpSopr2.cSopr     := KatSopr.NRec;
+    SpSopr2.dOprTTN   := 0;
+    SpSopr2.cSpOrder  := 0;
+    SpSopr2.cParty    := MemRasp.cParty;
+    SpSopr2.KolFact   := MemRasp.Kol;
+    SpSopr2.Kol       := MemRasp.Kol;
+    SpSopr2.KolOpl    := SpSopr2.KolFact * (1 - SpSopr2.ProcUb / 100);
+    SpSopr2.Npp       := SpSopr.Npp;
+
+    if (SpSopr2.PrMC = 1)
+      SpSopr2.vPriceN := 0; //для резервироания.
+
+    if ( Insert Current SpSopr2 <> tsOk)
+    {
+      Message('Операция копирования позиции неудачна...', CancelButton);
+      Break;
+    }
+
+    Inc(iCount);
+
+    // копирование МТР
+    oMTRFun.CopySpecMTR(coSpSopr, SpSopr.NRec, coSpSopr, SpSopr2.NRec);
+
+    // копирование сметы
+    RunInterface('CopySpDocSmeta', word(coSpSopr), SpSopr.NRec, word(coSpSopr), SpSopr2.NRec);
+
+    // Копирование ДЕИ
+    if (SpSopr2.PrMC = 1)
+    {
+      CopyDEI(word(1), SpSopr.KolFact, SpSopr2.KolFact);
+      CopyDEI(word(2), SpSopr.Kol    , SpSopr2.Kol);
+      CopyDEI(word(3), SpSopr.KolOpl , SpSopr2.KolOpl);
+    }
+
+    // Копирование налогов по позиции
+    _LOOP SpDocNal
+      if (GetFirst SpDocNal2 = tsOk)
+      {
+        SpDocNal2.NRec   := 0;
+        SpDocNal2.cSpDoc := SpSopr2.NRec;
+
+        Insert Current SpDocNal2;
+      }
+
+    // копирование ТТИ по позиции
+    oSDFuns.TTNDoc_Copy(coSpSopr, SpSopr.NRec, coSpSopr, SpSopr2.NRec);
+
+    // Копирую связь со внешними атрибутами
+    _LOOP AttrVal
+      if (GetFirst AttrVal2 = tsOk)
+      {
+        AttrVal2.NRec := 0;
+        AttrVal2.cRec := SpSopr2.NRec;
+
+        Insert Current AttrVal2;
+      }
+
+    // Копирую связь со внешней классификацией
+    _LOOP ExClassVal
+      if (GetFirst ExClassVal2 = tsOk)
+      {
+        ExClassVal2.NRec := 0;
+        ExClassVal2.cRec := SpSopr2.NRec;
+        Insert Current ExClassVal2;
+      }
+
+    if (NOT NextVisual)
+      Exit;
+  }//_LOOP
+
+  if (iCount > 0)
+  {
+    var iNpp : word; iNpp  := SpSopr.Npp;
+    var tSopr: comp; tSopr := KatSopr.NRec;
+
+    // удаляем текущую позицию
+    oSDfuns.SpSopr_Delete (SpSopr.NRec);
+
+    // пересчет номеров
+    if (iCount > 1)
+    {
+      ReSetBounds(#SpSopr);
+
+      iCount := iCount - 1;
+
+      _LOOP backward SpSopr where (( tSopr == SpSopr.cSopr ))
+                                     ordered by SpSopr.Npp
+      {
+        if (GetFirst SpSopr2 <> tsOk)
+          Continue;
+
+        if (SpSopr.Npp >= iNpp)
+        {
+          SpSopr2.Npp := SpSopr2.Npp + iCount;
+          Update Current SpSopr2;
+        }
+
+        if (SpSopr.Npp = iNpp)
+          iCount := iCount - 1;
+      }
+    }
+  }
+
+  StopVisual('',0);
+}
+
+//******************************************************************************
+Screen scrSpSopr (,, sci1EnEsc)
+  Show at (, , , 9);
+Table SpSopr;
+
+Bevel b1 {1, 5, 70,  9, bsLowered, bsFrame};
+Fields
+  SpSopr.Npp + '. ' + KatMC.Name + ' ' + KatMC.BarKod  : Skip, {Font = {Bold = TRUE}};
+  SpSopr.KolFact: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Skip, Left, {Font = {Bold = TRUE}};
+  if (IsValid(tnKatOtpEd), KatOtpEd.Abbr, KatED.ABBR): Skip, {Font = {Bold = TRUE}};
+  ':  ': Skip;
+  AllKol        : [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Skip, Left, {Font = {Bold = TRUE}};
+  AllPercent    : [3.2], Skip, Left, {Font = {Bold = TRUE}};
+  ':  ': Skip;
+  fRetKol       : [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Skip, Left, {Font = {Bold = TRUE}};
+  fRetPercent   : [3.2], Skip, Left, {Font = {Bold = TRUE}};
+  KatPodr.Name  : Skip, {Font = {Bold = TRUE}};
+  KatMol.Name   : Skip, {Font = {Bold = TRUE}};
+<<
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Количество к распределению.@@@@@@@@@@@@@@@@ Единица измерения.@@@@@@@@@@@@@@@@@@@
+  РАСПРЕДЕЛЕНО .@@количество.@@@@@@@@@@@@@@@@ процент.@@@@@@
+  ОСТАЛОСЬ     .@@количество.@@@@@@@@@@@@@@@@ процент.@@@@@@
+
+  РАЗРЕЗ
+   Склад .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   Мол   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+End; // Screen
+
+//******************************************************************************
+
+Browse brWithSum ('Выберите количество', , sci1EnIns);
+  Show at (, 10,,);
+Table MemRasp;
+
+Fields
+  {Font = {Color = if (MemRasp.Kol > dPrKol, ColorMark, 0)}};
+  if (MemRasp.Kol > dPrKol, '√', '')
+                      #3'√'                                              : [ 1], Skip, NoAutoSize, Centered;
+  MemRasp.Name        #3'Наименование',#3'партии' ('Наименование партии'): [20], Protect;
+  MemRasp.Kod         #3'Код',#3'партии'          ('Код партии')         : [10], Protect;
+  MemRasp.TekSaldoKol #3'Наличие'                 ('Наличие по партии'  ): [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect;
+  MemRasp.TekSaldoRes #3'Резерв'                  ('Резерв по партии')   : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect;
+  MemRasp.TekSaldoOst #3'Доступно'                ('Доступное для выбора кол-во'): [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect;
+  MemRasp.Kol         #3'Кол-во'                  ('Выбранное кол-во'): [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], noProtect, LessNull, {Font = {Bold = TRUE}};
+  MemRasp.Percent     #3'Процент'                 ('Выбранный процент от кол-ва к распределению'): [4.2], noProtect, LessNull, {Font = {Bold = TRUE}};
+End; // Browse;
+
+//******************************************************************************
+Panel pnMemRasp;
+  Table MemRasp;
+
+Handleevent
+cmMarkUnMark:
+{
+  if (MemRasp.Kol > dPrKol)
+  {
+    set MemRasp.Kol     := 0
+    set MemRasp.Percent := 0;
+  }
+  else
+  {
+    set MemRasp.Percent := 100;
+    set MemRasp.Kol     := SpSopr.KolFact;
+  }
+
+  Update Current MemRasp;
+
+  CheckRasp;
+
+  RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+
+  ReReadRecord(#MemRasp);
+  ReScanPanel(#SpSopr);
+}
+
+
+cmSelectall:
+{
+  PushPos(#MemRasp);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Отмечаю позиции', 1);
+
+  _LOOP MemRasp
+    if (NOT NextVisual)
+      Break
+    else
+      if (MemRasp.Kol = 0)
+      {
+        MemRasp.Percent := 100;
+        MemRasp.Kol     := SpSopr.KolFact;
+        Update Current MemRasp;
+
+        CheckRasp;
+      }
+
+  StopVisual('', 0);
+
+  PopPos(#MemRasp);
+
+  ReReadRecord(#MemRasp);
+  ReScanPanel(#SpSopr);
+}
+
+
+cmUnSelectall:
+{
+  PushPos(#MemRasp);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Отмена выбора', 1);
+
+  _LOOP MemRasp
+  {
+    MemRasp.Kol := 0;
+    MemRasp.Percent := 0;
+    Update Current MemRasp;
+  }
+
+  StopVisual('', 0);
+
+  PopPos(#MemRasp);
+
+  AllPercent := 0;
+  AllKol     := 0;
+
+  ReReadRecord(#MemRasp);
+  ReScanPanel(#SpSopr);
+}
+
+cmUpdateRecord:
+  Update Current MemRasp;
+
+cmCheckField:
+{
+  case CurField of
+    #MemRasp.Kol:
+    {
+      set MemRasp.Percent := MemRasp.Kol / SpSopr.KolFact * 100;
+    }
+
+    #MemRasp.Percent:
+    {
+      set MemRasp.Kol := MemRasp.Percent / 100 * SpSopr.KolFact;
+    }
+  end;
+
+  UpdateTable;
+
+  CheckRasp;
+}
+end;
+end;// panel
+
+
+//******************************************************************************
+Handleevent
+cmInit:
+{
+  if (GetFirst SpSopr <> tsOk)
+  {
+    message('Нет позиции в сопроводительном документе!');
+    Abort;
+    Exit;
+  }
+
+  if (GetFirst KatSopr <> tsOk)
+  {
+    message('Нет сопроводительного документа для позиции!');
+    Abort;
+    Exit;
+  }
+
+  if (SpSopr.PrMC <> 1)
+  {
+    message('Распределять можно только матценности!');
+    Abort;
+    Exit;
+  }
+
+  if (GetFirst KatMC <> tsOk)
+  {
+    message('Не найдена матценность!');
+    Abort;
+    Exit;
+  }
+
+  if (GetFirst TekSaldo <> tsOk)
+  {
+    Message('У МЦ не найдено партий по текущему разрезу');
+    Abort;
+    Exit;
+  }
+
+  // точность
+  var tKoef: double; tKoef := 1;
+
+  if (GetFirst KatOtpEd = tsOk)
+    tKoef := KatOtpEd.Koef;
+
+  dPrKol := doGetTune('Oper.MinKolMC') / tKoef;
+
+  // Форамат отображения
+  SetRoundFormat(KatSopr.VidSopr);
+
+  Delete All MemRasp;
+
+  // заполнение таблицы в памяти
+  StartNewVisual (vtRotateVisual, vfTimer+vfThread, ''#3'Подготовка данных...', 1);
+
+  AllKolD := 0;
+
+  _LOOP TekSaldo
+  {
+    ClearBuffer(#MemRasp);
+    MemRasp.cMc    := TekSaldo.cMc;
+    MemRasp.cMol   := TekSaldo.cMol;
+    MemRasp.cPodr  := TekSaldo.cPodr;
+    MemRasp.cParty := TekSaldo.cParty;
+
+    if (GetFirst KatOtpEd = tsOk)
+    {
+      MemRasp.TekSaldoKol := TekSaldo.Kol / KatOtpEd.Koef;
+      MemRasp.TekSaldoRes := TekSaldo.Res / KatOtpEd.Koef;
+      MemRasp.TekSaldoOst := MemRasp.TekSaldoKol - MemRasp.TekSaldoRes;
+
+      if (MemRasp.TekSaldoOst < dPrKol)
+        MemRasp.TekSaldoOst := 0;
+
+      if (KatOtpEd.Diskret = 1)
+        MemRasp.TekSaldoOst := Trunc(MemRasp.TekSaldoOst);
+    }
+
+    Insert Current MemRasp;
+
+    AllKolD := AllKolD + MemRasp.TekSaldoOst;
+
+    if (GetFirst KatParty = tsOk)
+    {
+      MemRasp.Kod  := KatParty.Kod;
+      MemRasp.Name := KatParty.Name;
+      Update Current MemRasp;
+    }
+  }
+
+  if (AllKolD > SpSopr.KolFact)
+    AllKolD := SpSopr.KolFact;
+
+  StopVisual('', 0);
+
+  CheckRasp;
+
+  // устанока сортировки
+  if (NOT ReadMyDsk(CurSort, 'Soprc342_CurSort', FALSE))
+    CurSort := tiMemRaspName;
+
+  case CurSort of
+    tiMemRaspName       : SetColumnSorting(brWithSum, #MemRasp.Name       , -1);
+    tiMemRaspKod        : SetColumnSorting(brWithSum, #MemRasp.Kod        , -1);
+    tiMemRaspTekSaldoKol: SetColumnSorting(brWithSum, #MemRasp.TekSaldoKol, -1);
+    tiMemRaspTekSaldoRes: SetColumnSorting(brWithSum, #MemRasp.TekSaldoRes, -1);
+    tiMemRaspTekSaldoOst: SetColumnSorting(brWithSum, #MemRasp.TekSaldoOst, -1);
+  end;
+
+  SetOrder(CurSort);
+
+  SelectPanel(#MemRasp);
+  SelectField(#MemRasp.Kol);
+}
+
+cmColumnClicked :
+{
+  SelectField(Target);
+
+  case CurField of
+    #MemRasp.Name, #MemRasp.Kod, #MemRasp.TekSaldoKol,
+    #MemRasp.TekSaldoRes, #MemRasp.TekSaldoOst:
+    {
+      case GetColumnSorting(GetCurrentFormat, CurField) of
+
+        0: {
+          SetColumnSorting(GetCurrentFormat, CurField, -1);
+
+          Case Target of
+            #MemRasp.Name:
+              CurSort := tiMemRaspName;
+
+            #MemRasp.Kod:
+              CurSort := tiMemRaspKod;
+
+            #MemRasp.TekSaldoKol:
+              CurSort := tiMemRaspTekSaldoKol;
+
+            #MemRasp.TekSaldoRes:
+              CurSort := tiMemRaspTekSaldoRes;
+
+            #MemRasp.TekSaldoOst:
+              CurSort := tiMemRaspTekSaldoOst;
+
+          end;
+
+          SetOrder(CurSort);
+          SetTableBackOrderIn (CurTable, FALSE);
+        }
+
+        -1: {
+          SetColumnSorting(GetCurrentFormat, CurField, 1);
+          SetTableBackOrderIn (CurTable, TRUE);
+        }
+
+        1: {
+          SetColumnSorting(GetCurrentFormat, CurField, -1);
+          SetTableBackOrderIn (CurTable, FALSE);
+        }
+      end;
+
+      RescanPanel(CurTable);
+    }
+  end;
+}
+
+cmDefault:
+{
+  if (ABS(AllKol - SpSopr.KolFact) > dPrKol)
+    if (Message('Не полностью распределено количество.'#13 +
+                'Хотите продолжить распределение?', YesNo) = cmYes)
+    {
+      Abort;
+      Exit;
+    }
+
+  InsertNewPos;
+}
+
+cmDone:
+{
+  SaveMyDsk(CurSort, 'Soprc342_CurSort');
+}
+
+end;
+
+End.

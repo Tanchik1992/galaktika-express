@@ -1,0 +1,159 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 7.10                                                      ║
+ ║ Назначение    : Автоформирование ПКП на основе корпоративных планов       ║
+ ║ Ответственный : Шукан А.Л..                                               ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#define _CurInt MakePKPCorpoPlan
+
+#define OBJINT_GLOBDATA
+#define OBJINT_ACCOUNT
+#include objintpl.vin
+
+#include calplan.vih
+#include oiPotrEx.vih
+
+#include algormem.vpp
+
+#include spdocs.vih
+#include oDEI.vih //Функции доп.ед.изм. (iKatDopEd)
+#include notes.vih
+#include oEdIzm.vih
+
+#doc
+Автоформирование ПКП на основе корпоративных планов
+#end
+Interface MakePKPCorpoPlan AlwaysReturn;
+
+#include oEdIzm.var
+
+Create view
+
+var
+  pDogovor : comp;
+  pDirect  : word;
+  pDirectPKP : word;
+/*
+(
+  MCUslName
+)
+
+As select
+  if (TmpSpDoc.PrMC = 1, KatMC.Name, KatUsl.Name),
+  TmpDoc.*,
+  TmpSpDoc.*
+*/
+From
+  SpDocs, KatSopr, TmpDoc, TmpSpDoc
+/*
+Where
+((
+   TmpDoc.nRec     == TmpSpDoc.cDoc  and
+   TmpDoc.cGrOtp   == KatOrgOtp.nRec and
+   TmpDoc.cGrPol   == KatOrgPol.nRec and
+   TmpSpDoc.cMCUsl == KatMC.nRec and
+   KatMC.cEd       == KatEd.nRec
+)) */
+;
+
+Parameters
+  pDogovor,       // ссылка на договор
+  pDirect,        // Direct договора
+  pDirectPKP;     // Direct формируемых ПКП
+
+var oNotes  : iNotes;
+#include SpDocs.var
+#include PKPmanuf.vpp
+
+//-----------------------------------------------------------------------
+/*
+panel pan1;
+table TmpDoc
+browse br1 (,,sci1EnEsc);
+show at (,,,8);
+fields
+  KatOrgOtp.Name 'Грузоотправитель'  ('',,) : [20], protect;
+  KatOrgPol.Name 'Грузополучатель'  ('',,) : [20], protect;
+  TmpDoc.dFrom   'Начало периода'  ('',,) : [10], protect;
+  TmpDoc.dTo     'Конец периода'  ('',,) : [10], protect;
+end; // browse
+end; // panel
+
+panel pan2;
+table TmpSpDoc
+browse br2 (,,sci1EnEsc);
+show at (,9,,);
+fields
+  TmpSpDoc.PrMC   'МЦ/У' ('',,) : [LIST 1 'МЦ', 'Усл'], [5], protect;
+  MCUslName       'Продукция'  ('',,) : [20], protect;
+  KatOtpEd.Name   'Ед. измерения'  ('',,) : [5], protect;
+  TmpSpDoc.Kol    'Количество'  ('',,) : [10], protect;
+  TmpSpDoc.dPost  'Реком. дата'  ('',,) : [10], protect;
+
+end; // browse
+end; // panel
+*/
+HandleEvent
+
+cmInit :
+  {
+    var acc      : Account;
+    var gldt     : GlobData;
+    var iOm      : oMainVid;
+    var pt       : TRecAcc;
+    var cFormPl  : comp;
+    var cFilter  : comp;
+
+    if ( not GetVipRef (acc,'Account_PL') )
+      {
+        Message('Системная ошибка !!!'+
+                'Не загружен интерфейс <' + 'Account_PL' +'>',Information);
+      }
+    else
+      acc.InitInter (gldt,ioM);
+
+    case pDirect of
+    1 : cFilter := coGetTune('OPER.Dogovor.AlgSell');  // продажа
+    2 : cFilter := coGetTune('OPER.Dogovor.AlgBuy');   // закупка                      // закупка
+    3 : {
+          case pDirectPKP of
+          1 : cFilter := coGetTune('OPER.Dogovor.AlgDsIn');  // передача давальческого сырья
+          2 : cFilter := coGetTune('OPER.Dogovor.AlgDsOut'); // возврат готовой продукции
+          else exit;
+          end; //case
+        }
+    else exit;
+    end; //case
+
+    cFormPl := 0;
+    if (RunInterface('PickAlgoritm',cFormPl,1,1,0,cFilter) <> cmCancel)
+      {
+        pt.cFormPl := cFormPl;
+        pt.Visua   := word(0); // 0 - вкл. визуализацию
+                               // 1 - откл. визуализацию
+        pt.MessEnd := 1;   // Не выдавать сообщение об окончании расчета
+         // Если указывать pt.TypeCpNrec := word(0) ,
+         // то берется договор из настройки алгоритма
+        pt.TypeCpNrec := word(7);   // Тип ссылки cpNrec :  7 - Ссылка на Dogovor
+        pt.cpNrec  := pDogovor; // Ссылка на Dogovor
+         // acc.RunInter - запускает заданный алгоритм по ссылке на FormPl.NRec
+        if ( acc.RunInter ( cFormPl, // ссылка на FormPl
+                             word(64), // word(64) - не загружать окно запуска алоритма
+                             pt ))
+          {
+            PKPfromCorpoPlan(pDogovor, pDirectPKP);
+          }
+      }
+
+    abort;
+  }
+
+end; // HandleEvent
+
+end. // interface

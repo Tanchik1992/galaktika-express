@@ -1,0 +1,1580 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Изменение спецификации схемы связей между документами
+//******************************************************************************
+
+#include soprdoc.vih
+#include soprdocb.vih
+#include aktusl.vih
+#include aktuslb.vih
+#include rundsel.vih
+#include SpDocs.vih
+#include notes.vih
+#include oDEI.vih //Функции доп.ед.изм. (iKatDopEd)
+#include GetDocSpecInfo.vih
+#include oEdIzm.vih
+#include DOfuns.vih
+#include SDfuns.vih
+#include GetDBase.vih
+#include SpNext.vih
+#include CalcFuns.vih
+#include DogFuns.vih
+#include SHManager.vih
+#include chkschem.vih
+#include OtkatToOldState.vih
+
+#doc
+Изменение спецификации схемы связей между документами
+#end
+Interface LinkDocs 'Связанные документы'
+                   (,hcdgDocRelations,) EscClose, Cyan, AlwaysReturn;
+  show at (0,0,80,20);
+
+Table Struct tblUsl_MC  // временная для переноса привязки услуг к МЦ
+(
+  cSpMC   : comp,
+  cOldSP  : comp,
+  cNewSP  : comp
+)
+With INDEX
+(
+  tblUsl_MC01 = cOldSP
+);
+
+#include oEdIzm.var
+#include SpNext.var
+#include DOfuns.var
+#include SDfuns.var
+#include DogFuns.var
+#include chkschem.var
+#include OtkatToOldState.var
+#include SpDocs.var
+
+create view
+var pTiDk     : word;
+    pDoc      : comp;
+    cRecSchem : comp;
+    BaseDocUp : comp;
+    TiDkUp    : word;
+    Marker,
+    MarkerKS,
+    MarkerInd : longint;
+    tipDO     : word;
+    oNotes    : iNotes;
+    (
+     NameSchem,              // 1
+     NameTipDoc,             // 2
+     No_DateDoc,             // 3
+     FullNameDoc,            // 4
+     cowTable,               // 5
+     coTekwTable             // 6
+    )
+as select
+  // 1
+  if(IsValid(tnDocSchem),'№ '+DocSchem.NoDoc+
+                         ' от '+DateToStr(DocSchem.dDoc,'DD/MM/YYYY'),''),
+  // 2
+  if(SpSchem.TiDkBase=400,'Договор',
+    if(SpSchem.TiDkBase=401,'Соглашение',
+      if(SpSchem.TiDkBase=403,'Пункт календарного плана',
+        if(SpSchem.TiDkBase=41,'Основание на закупку',
+          if(SpSchem.TiDkBase=51,'Основание на продажу',
+            if(SpSchem.TiDkBase=101,'Накладная на прием МЦ',
+              if(SpSchem.TiDkBase=108,'Накладная на прием молочного сырья',
+              if(SpSchem.TiDkBase=201,'Накладная на отпуск МЦ',
+                if(SpSchem.TiDkBase=111,'Акт на прием услуг',
+                              if(SpSchem.TiDkBase=211,'Акт на оказание услуг',
+                                 '')))))))))),
+  // 3
+  if(SpSchem.TiDkBase=400 or SpSchem.TiDkBase=401,
+     '№  '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY'),
+     if(SpSchem.TiDkBase=403,'№  '+CalPlan.NoDoc+
+                             ' от '+DateToStr(CalPlan.dInput,'DD/MM/YYYY'),
+        if(SpSchem.TiDkBase=41 or SpSchem.TiDkBase=51,
+                               ' №  '+BaseDoc.NoDoc+
+                               ' от '+DateToStr(BaseDoc.dDoc,'DD/MM/YYYY'),
+           if(SpSchem.TiDkBase=101 or SpSchem.TiDkBase=108 or SpSchem.TiDkBase=201 or
+              SpSchem.TiDkBase=111 or SpSchem.TiDkBase=211,
+                               '№  '+KatSopr.NSopr+
+                               ' от '+DateToStr(KatSopr.dSopr,'DD/MM/YYYY'),'')))),
+  // 4
+  if (SpSchem.cUpDoc <> comp(0),
+    NameTipDoc+' '+No_DateDoc, 'Базовый документ'),
+  // 5
+  if(SpSchem.TiDkBase=400,coDogovor,
+    if(SpSchem.TiDkBase=401,coDogovor,
+      if(SpSchem.TiDkBase=403,coCalPlan,
+        if(SpSchem.TiDkBase=41,coBaseDoc,
+          if(SpSchem.TiDkBase=51,coBaseDoc,
+            if(SpSchem.TiDkBase=101,coKatSopr,
+              if(SpSchem.TiDkBase=108,coKatSopr,
+              if(SpSchem.TiDkBase=201,coKatSopr,
+                if(SpSchem.TiDkBase=111,coKatSopr,
+                  if(SpSchem.TiDkBase=211,coKatSopr,0)))))))))),
+  // 5
+  if(SpSchem.TiDk=400,coDogovor,
+    if(SpSchem.TiDk=401,coDogovor,
+      if(SpSchem.TiDk=403,coCalPlan,
+        if(SpSchem.TiDk=41,coBaseDoc,
+          if(SpSchem.TiDk=51,coBaseDoc,
+            if(SpSchem.TiDk=101,coKatSopr,
+              if(SpSchem.TiDk=108,coKatSopr,
+              if(SpSchem.TiDk=201,coKatSopr,
+                if(SpSchem.TiDk=111,coKatSopr,
+                  if(SpSchem.TiDk=211,coKatSopr,0)))))))))),
+  DocSchem.*,
+  SpSchem.*
+
+From
+  DocSchem,
+  SpSchem,
+  KatSopr,
+  SpSopr,
+  BaseDoc,
+  StepDoc,
+  SpStep,
+  KatMC,
+  KatUsl,
+  CalPlan,
+  synonym SpDocs SpCP,
+  Dogovor,
+  SoprHoz,
+  SpDocs,
+  TTNDoc,
+  synonym TTNDoc TekTTNDoc,
+  synonym KatSopr TekKS,
+  synonym SpSopr TekSpSopr,
+  synonym BaseDoc TekBD,
+  synonym StepDoc TekSD,
+  synonym StepDoc StepDoc1,
+  synonym SpStep TekSpStep,
+  synonym CalPlan TekCP,
+  synonym SpDocs TekSpCP,
+  synonym Dogovor TekDG,
+  synonym SpDocs TekSpDocs,
+  synonym SpSchem SpSchem1,
+  SpGrSch,
+  synonym SpGrSch TekSpGrSch,
+  synonym Dogovor DG,
+  SpDocNal,
+  Filial,
+  KlVal,
+  CursVal,
+  tblUsl_MC,
+  synonym tblUsl_MC tblUsl_MC_S
+Where
+((
+  pDoc             == SpSchem.cDoc        and
+  pTiDk            == SpSchem.TiDk        and ((SpSchem.TiDkBase <> 454) and (SpSchem.TiDkBase <> 431)) and // __NIKIET__
+  SpSchem.cSchem   == DocSchem.nRec       and
+  SpSchem.cBaseDoc == KatSopr.nRec        and
+  KatSopr.nRec     == SpSopr.cSopr        and
+  SpSchem.cBaseDoc == BaseDoc.nRec        and
+  BaseDoc.nRec     == StepDoc.cBaseDoc    and
+  StepDoc.nRec     == SpStep.cStepDoc     and
+  SpStep.cMCUSL    == KatMC.Nrec          and  //  для пересчета сумм
+  SpStep.cMCUSL    == KatUsl.Nrec         and  //  при удалении позиций спецификации
+
+  SpSchem.cBaseDoc == CalPlan.nRec        and
+  word(403)        == SpCP.TiDK           and
+  CalPlan.nRec     == SpCP.cDoc           and
+  SpSchem.cBaseDoc == Dogovor.nRec        and
+  Dogovor.TiDK     == SpDocs.TiDK         and
+  Dogovor.nRec     == SpDocs.cDoc         and
+  cowTable         == TTNDoc.wTable       and
+  SpSchem.cBaseDoc == TTNDoc.cDoc         and
+
+  SpSchem.cDoc     == TekKS.nRec          and
+  TekKS.nRec       == TekSpSopr.cSopr     and
+  SpSchem.cDoc     == TekBD.nRec          and
+  TekBD.nRec       == TekSD.cBaseDoc and
+  TekSD.nRec       == TekSpStep.cStepDoc  and
+  SpSchem.cDoc     == TekCP.nRec          and
+  word(403)        == TekSpCP.TiDK        and
+  TekCP.nRec       == TekSpCP.cDoc        and
+  SpSchem.cDoc     == TekDG.nRec          and
+  TekDG.TiDK       == TekSpDocs.TiDK      and
+  TekDG.nRec       == TekSpDocs.cDoc      and
+  coTekwTable      == TekTTNDoc.wTable    and
+  SpSchem.cDoc     == TekTTNDoc.cDoc
+))
+;
+
+parameters
+  pDoc,     // nRec документа, определяющего условия
+  pTiDk;    // системный тип связанного со схемой документа
+
+var s : SoprDocObj1;
+var sb: SoprDocBObj1;
+var sa : objAktUsl;
+var sab : objAktUslB;
+
+#include rounddog.vpp // округление
+#include dosoprh.vpp // функции для работы с SoprHoz
+#include gettot.vpp
+
+function ReCalcSummaDG : boolean;
+  { var dStatus : word;
+    var Summa   : double;
+    var SumNal  : double;
+    var Total   : double;
+    var bRes    : boolean;
+
+    bRes := false;
+
+    Summa  := 0;
+    SumNal := 0;
+    if (Dogovor.Direct = 3)
+      {
+        _loop SpDocs where (( Dogovor.TiDk == SpDocs.TiDk and
+                              Dogovor.nRec == SpDocs.cDoc ))
+          {
+            if ((SpDocs.Direct = 2) and
+                ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3)))
+              {
+                if (Dogovor.VhodNal = 1)
+                  Summa := Summa + SpDocs.Summa
+                else
+                  Summa := Summa + SpDocs.Summa + SpDocs.SumNDS;
+
+                SumNal := SumNal + SpDocs.SumNDS;
+              }
+
+            if ( (SpDocs.Kol = 0) and
+                 (SpDocs.Price = 0) and
+                 (SpDocs.Summa = 0))
+              bRes := true;
+          }
+      }
+    else
+      {
+        _loop SpDocs where (( Dogovor.TiDk == SpDocs.TiDk and
+                              Dogovor.nRec == SpDocs.cDoc ))
+          {
+            if (Dogovor.VhodNal = 1)
+              Summa := Summa + SpDocs.Summa
+            else
+              Summa := Summa + SpDocs.Summa + SpDocs.SumNDS;
+
+            SumNal := SumNal + SpDocs.SumNDS;
+
+            if ( (SpDocs.Kol = 0) and
+                 (SpDocs.Price = 0) and
+                 (SpDocs.Summa = 0))
+              bRes := true;
+          }
+      }
+
+    case Dogovor.IsExtra of
+      0:
+        {
+          if (Dogovor.IsSum = 0)
+            Total := Summa * (1 - Dogovor.Discount / 100.0)
+          else
+            Total := Summa - Dogovor.Discount;
+        }
+      1:
+        {
+          if (Dogovor.IsSum = 0)
+            Total := Summa * (1 + Dogovor.Discount / 100.0)
+          else
+            Total := Summa + Dogovor.Discount;
+        }
+    end;
+
+    set Dogovor.Summa  := Total;
+    set Dogovor.SumNDS := SumNal;
+
+    if (update current Dogovor = tsOk)
+      oDogFuns.UpDateDogovorSoprHoz(Dogovor.Buffer);
+
+    ReCalcSummaDG := bRes;
+  }
+
+procedure ReCalcSummaCP;
+{
+  var tmpSum : double;
+  var cRecDG : comp;
+  var Summa  : double;
+  var SumNal : double;
+
+  Summa  := 0;
+  SumNal := 0;
+  _loop SpCP
+    {
+      if ((SpCP.PrMC = 4) or (SpCP.PrMC = 5))
+        continue;
+
+      if (CalPlan.VhodNal = 1)
+        Summa := Summa + SpCP.Summa
+      else
+        Summa := Summa + SpCP.Summa + SpCP.SumNDS;
+
+      SumNal := SumNal + SpCP.SumNDS;
+    }
+
+  tmpSum := 0;
+  cRecDG := Dogovor.nRec;
+  ReSetBounds(#Dogovor);
+
+  if (GetFirst Dogovor where (( CalPlan.cDogovor == Dogovor.nRec)) = tsOk )
+    case Dogovor.IsExtra of
+      0: tmpSum := if(Dogovor.IsSum = 0
+                    , CalPlan.SummaSpec * Dogovor.Discount / 100
+                    , CalPlan.SummaSpec / ( Dogovor.Summa + Dogovor.Discount ) * Dogovor.Discount);
+      1: tmpSum := -if(Dogovor.IsSum = 0
+                     , CalPlan.SummaSpec * Dogovor.Discount / 100
+                     , CalPlan.SummaSpec / ( Dogovor.Summa - Dogovor.Discount ) * Dogovor.Discount);
+    end;
+
+  SetBounds(#Dogovor);
+  if ( GetFirst Dogovor where (( cRecDG == Dogovor.nRec )) = tsOk) {}
+
+  set CalPlan.SummaSpec := Summa - tmpSum;
+  set CalPlan.SumNDS    := SumNal;
+  UpDate current CalPlan;
+};
+
+// Поиск вышестоящего документа в схеме связей
+Procedure UpDateIerSchem;
+var cRecDoc   : comp;
+    cRecUpDoc : comp;
+    cRecSchem : comp;
+    cRecSpSchem : comp;
+{
+  cRecUpDoc:=0;
+  cRecSchem:=SpSchem.cSchem;
+  cRecDoc  :=SpSchem.cDoc;
+  cRecSpSchem := SpSchem.nRec;
+  PushPos(#SpSchem);
+  ReSetBounds(#SpSchem);
+  case pTiDk of
+   400: {
+         _Loop SpSchem where ((cRecSchem == SpSchem.cSchem and
+                               (SpSchem.cUpDoc = 0) ))
+          {
+             case SpSchem.TiDk of
+              401: if ( TekDG.cDogovor = cRecDoc )
+                     {
+                       SpSchem.cUpDoc:=cRecSpSchem;
+                       update current SpSchem;
+                     }
+              403: if ( TekCP.cDogovor = cRecDoc )
+                     {
+                       SpSchem.cUpDoc:=cRecSpSchem;
+                       update current SpSchem;
+                     }
+              41,
+              51 : if ( TekBD.cDogovor = cRecDoc )
+                     {
+                       SpSchem.cUpDoc:=cRecSpSchem;
+                       update current SpSchem;
+                     }
+              101,
+              108,
+              201,
+              111,
+              211: if ( TekKS.cDogovor = cRecDoc )
+                     {
+                       SpSchem.cUpDoc:=cRecSpSchem;
+                       update current SpSchem;
+                     }
+             end
+          }
+        }
+   401: {
+          if (TekDG.cDogovor <> 0)
+           if (GetFirst SpSchem1 where ((      cRecSchem == SpSchem1.cSchem and
+                                          TekDG.cDogovor == SpSchem1.cDoc   and
+                                               word(400) == SpSchem1.TiDk )) = tsOk)
+             {
+               cRecUpDoc:=SpSchem1.nRec;
+             }
+         _Loop SpSchem where ((cRecSchem == SpSchem.cSchem and
+                               (cRecUpDoc= SpSchem.cUpDoc or
+                                SpSchem.cUpDoc = 0) ))
+          {
+            case SpSchem.TiDk of
+             403: if ( TekCP.cDogovor = cRecDoc )
+                    {
+                      SpSchem.cUpDoc:=cRecSpSchem;
+                      update current SpSchem;
+                    }
+             41,
+             51 : if ( TekBD.cAppDogovor = cRecDoc )
+                    {
+                      SpSchem.cUpDoc:=cRecSpSchem;
+                      update current SpSchem;
+                    }
+             101,
+             108,
+             201,
+             111,
+             211: if ( TekKS.cAppDogovor = cRecDoc )
+                    {
+                      SpSchem.cUpDoc:=cRecSpSchem;
+                      update current SpSchem;
+                    }
+            end
+          }
+        }
+   403: {
+           if (TekCP.cDogovor <> 0)
+            if (GetFirst SpSchem1 where ((   cRecSchem == SpSchem1.cSchem and
+                                        TekCP.cDogovor == SpSchem1.cDoc   and
+                                             word(401) == SpSchem1.TiDk )) = tsOk)
+             {
+              cRecUpDoc:=SpSchem1.nRec;
+             }
+            else
+             if (GetFirst SpSchem1 where ((       cRecSchem == SpSchem1.cSchem and
+                                             TekCP.cDogovor == SpSchem1.cDoc   and
+                                                  word(400) == SpSchem1.TiDk )) = tsOk)
+              {
+                cRecUpDoc:=SpSchem1.nRec;
+              };
+
+          _Loop SpSchem where ((cRecSchem == SpSchem.cSchem and
+                                (cRecUpDoc = SpSchem.cUpDoc or
+                                SpSchem.cUpDoc = 0) ))
+           {
+             case SpSchem.TiDk of
+              41,
+              51 : if ( TekBD.cCalPlan = cRecDoc )
+                     {
+                       SpSchem.cUpDoc:=cRecSpSchem;
+                       update current SpSchem;
+                     }
+              101,
+              108,
+              201,
+              111,
+              211: if ( TekKS.cCalPlan = cRecDoc )
+                     {
+                       SpSchem.cUpDoc:=cRecSpSchem;
+                       update current SpSchem;
+                     }
+             end
+           }
+        }
+   41,
+   51 : {
+          if (TekBD.cCalPlan <> 0)
+           if (GetFirst SpSchem1 where ((   cRecSchem == SpSchem1.cSchem and
+                                       TekBD.cCalPlan == SpSchem1.cDoc   and
+                                            word(403) == SpSchem1.TiDk )) = tsOk)
+            {
+              cRecUpDoc:=SpSchem1.nRec;
+            };
+          if ( cRecUpDoc = 0 )
+           if (TekBD.cAppDogovor <> 0)
+            if (GetFirst SpSchem1 where ((   cRecSchem == SpSchem1.cSchem and
+                                     TekBD.cAppDogovor == SpSchem1.cDoc and
+                                             word(401) == SpSchem1.TiDk )) = tsOk)
+             {
+               cRecUpDoc:=SpSchem1.nRec;
+             };
+          if ( cRecUpDoc = 0 )
+           if (TekBD.cDogovor <> 0)
+            if (GetFirst SpSchem1 where ((   cRecSchem == SpSchem1.cSchem and
+                                        TekBD.cDogovor == SpSchem1.cDoc   and
+                                             word(400) == SpSchem1.TiDk )) = tsOk)
+             {
+               cRecUpDoc:=SpSchem1.nRec;
+             };
+          _Loop SpSchem where ((cRecSchem == SpSchem.cSchem and
+                                (cRecUpDoc = SpSchem.cUpDoc or
+                                SpSchem.cUpDoc = 0) ))
+           {
+             case SpSchem.TiDk of
+              101,
+              108,
+              201,
+              111,
+              211: if (GetFirst StepDoc1 where ((TekKS.cStepDoc == StepDoc1.nRec)) =tsOk)
+                     if ( StepDoc1.cBaseDoc = cRecDoc )
+                      {
+                        SpSchem.cUpDoc:=cRecSpSchem;
+                        update current SpSchem;
+                      }
+             end
+           }
+        }
+   101,
+   108,
+   201,
+   111,
+   211: {
+          if (TekKS.cStepDoc <> 0)
+           if (GetFirst StepDoc1 where ((TekKS.cStepDoc == StepDoc1.nRec)) = tsOk)
+            if (pTiDk = 101) or (pTiDk = 108) or (pTiDk = 111)
+             if (GetFirst SpSchem1 where ((   cRecSchem == SpSchem1.cSchem and
+                                      StepDoc1.cBaseDoc == SpSchem1.cDoc   and
+                                               word(41) == SpSchem1.TiDk )) = tsOk)
+              {
+                cRecUpDoc:=SpSchem1.nRec;
+              }
+            else
+             if (GetFirst SpSchem1 where ((       cRecSchem == SpSchem1.cSchem and
+                                          StepDoc1.cBaseDoc == SpSchem1.cDoc   and
+                                                   word(51) == SpSchem1.TiDk )) = tsOk)
+              {
+                cRecUpDoc:=SpSchem1.nRec;
+              }
+          if ( cRecUpDoc = 0 )
+           if (TekKS.cCalPlan <> 0)
+            if (GetFirst SpSchem1 where ((   cRecSchem == SpSchem1.cSchem and
+                                        TekKS.cCalPlan == SpSchem1.cDoc   and
+                                             word(403) == SpSchem1.TiDk )) = tsOk)
+             {
+               cRecUpDoc:=SpSchem1.nRec;
+             }
+          if ( cRecUpDoc = 0 )
+           if (TekKS.cAppDogovor <> 0)
+            if (GetFirst SpSchem1 where ((        cRecSchem == SpSchem1.cSchem and
+                                          TekKS.cAppDogovor == SpSchem1.cDoc   and
+                                                  word(401) == SpSchem1.TiDk )) = tsOk)
+             {
+               cRecUpDoc:=SpSchem1.nRec;
+             }
+          if ( cRecUpDoc = 0 )
+           if (TekKS.cDogovor <> 0)
+            if (GetFirst SpSchem1 where ((     cRecSchem == SpSchem1.cSchem and
+                                          TekKS.cDogovor == SpSchem1.cDoc   and
+                                               word(400) == SpSchem1.TiDk )) = tsOk)
+             {
+               cRecUpDoc:=SpSchem1.nRec;
+             }
+        }
+  end;
+  SetBounds(#SpSchem);
+  if (GetFirst SpSchem where (( cRecSpSchem == SpSchem.nRec)) = tsOk) {}
+  if ( cRecUpDoc <> 0 )
+   {
+     //устанавливаем ссылку на вышестоящий документ в схеме
+     SpSchem.cUpDoc := cRecUpDoc;
+     update current SpSchem;
+   };
+};
+
+Procedure DeleteSpSchem;
+var cRecUpDoc,
+    cRecDoc,
+    cRecSchem : comp;
+{
+  cRecUpDoc:=SpSchem.cUpDoc;
+  cRecDoc  :=SpSchem.nRec;
+  cRecSchem:=SpSchem.cSchem;
+  if (delete current SpSchem = tsOK)
+    update SpSchem where (( cRecSchem == SpSchem.cSchem and
+                            cRecDoc   == SpSchem.cUpDoc))
+      set SpSchem.cUpDoc := cRecUpDoc;
+};
+
+// Копирование спецификации и шапки из выбранного документа
+// в текущий документ
+Procedure Copy_fromDocSchem;
+var cRecfromDoc,
+    cRecDoc,
+    _cSpMC      : comp;
+    TiDkfromDoc,
+    TiDkDoc     : word;
+    i           : longint;
+    boCellVal,
+    boDeleteSp,
+    boReCalcBaseDoc,
+    boReCalcKatSopr,
+    boReCalcDogovor,
+    boReCalcCalPlan,
+    boCopySpecif     : boolean;
+    piKatDopEd : iKatDEI;
+    IsModif : boolean;
+{
+  IsModif := false;
+  SaveMyDsk(IsModif,'LINKDOCS_IsModif');
+  cRecfromDoc := SpSchem.cBaseDoc;
+  cRecDoc     := SpSchem.cDoc;
+  TiDkfromDoc := SpSchem.TiDkBase;
+  TiDkDoc     := SpSchem.TiDk;
+
+  case TiDkfromDoc of
+     41,
+     51: if (pTiDk <> 41) and (pTiDk <> 51) Exit;
+    101,
+    108,
+    201,
+    111,
+    211: if (pTiDk <> 101) and (pTiDk <> 108) and (pTiDk <> 201) and
+            (pTiDk <> 111) and (pTiDk <> 211) Exit;
+    400,
+    401: if (pTiDk <> 401) and (pTiDk <> 400) Exit;
+    403: if (pTiDk <> 403) Exit;
+  end;
+
+  boReCalcBaseDoc := false;
+  boReCalcKatSopr := false;
+  boReCalcDogovor := false;
+  boReCalcCalPlan := false;
+
+  if ( RunInterface(GetSpecToCopy,cRecfromDoc,TiDkfromDoc) = cmCancel )
+    Exit;
+
+  boCopySpecif := true;
+
+  case pTiDk of
+   400, 401:
+      if (TekDG.Status <> 0) boCopySpecif := false;
+   403:
+      if (TekCP.Status <> 0) boCopySpecif := false;
+   41, 51:
+     if (boGetTune('Doc.StatusDoSopr'))
+       if (TekBD.Status <> 1) boCopySpecif := false;
+   101, 201, 111, 211, 108:
+     if (boGetTune('Doc.StatusDoSopr') )
+       if (TekKS.Status <> 0) boCopySpecif := false;
+  end;
+
+  if (not boCopySpecif)
+    {
+      message('Перенос спецификации возможен только для статуса "Оформляемый"');
+      Exit;
+    }
+
+  case pTiDk of
+   101, 201, 111, 211, 108:
+     if ( Not oOtkatToOldState.OtkatToOldState(TekKS.nRec, 0, TRUE, TRUE, FALSE, 0, coSpSopr, cmUpdaterecord) )
+       Exit;
+  end;
+
+  case TiDkFromDoc of
+    400,401:
+      if (Dogovor.Status <> 0) boDeleteSp := false;
+    403:
+      if (CalPlan.Status <> 0) boDeleteSp := false;
+    41, 51:
+      if (BaseDoc.Status <> 1) boDeleteSp := false;
+    101, 201, 111, 211, 108:
+      {
+        if (KatSopr.Status <> 0)
+          boDeleteSp := false
+        else
+         if ( Not oOtkatToOldState.OtkatToOldState(KatSopr.nRec, 0, TRUE, FALSE, FALSE, 0, coSpSopr, cmUpdaterecord) )
+           {
+             if ( message('Cвязанный документ нельзя редактировать.'#13
+                        + 'Спецификация из него не будет удалена.'#13#13
+                        + 'Продолжить ?'
+                        , YesNo + mfSwapButtons + Confirmation) <> cmYes )
+               Exit;
+
+             boDeleteSp := false;
+           }
+      }
+   end;
+
+   if boDeleteSp
+    boDeleteSp := message('Удалять скопированную спецификацию'#13
+                        + 'из связанного документа ?'
+                        , YesNo + mfSwapButtons + Confirmation) = cmYes;
+
+  Marker := InitMarker('SpecToCopy', 8, 100, 10);
+
+  if ( GetMarkerCount(Marker) = 0 )
+    {
+      DoneMarker(Marker, 'SpecToCopy');
+      Exit;
+    }
+
+  Delete All tblUsl_MC;
+  boDeleteSp:=true;
+  boCellVal :=false;
+
+  StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak + vfConfirm, 'Выполняется перенос спецификации ...', GetMarkerCount(Marker));
+
+  for (i:=0;i < GetMarkerCount(Marker) and NextVisual; i:=i+1)
+   {
+    if (GetMarker(Marker,i,cRecFromDoc))
+     {
+      case SpSchem.TiDk of
+       400,
+       401:{
+             if ( GetFirst SpDocs where ((cRecfromDoc == SpDocs.nRec ))=tsOk )
+              {
+                ClearBuffer(#TekSpDocs);
+                TekSpDocs.cGrMCUsl := SpDocs.cGrMCUsl;
+                TekSpDocs.cGrNal   := SpDocs.cGrNal;
+                TekSpDocs.cMCUsl   := SpDocs.cMCUsl;
+                TekSpDocs.cOtpEd   := SpDocs.cOtpEd;
+                TekSpDocs.Kol      := SpDocs.Kol;
+                TekSpDocs.Ostatok  := fEdIzm.ConvertToUchEd(TekSpDocs.Kol,TekSpDocs.cOtpEd);
+                TekSpDocs.Empty    := oSpDocs.GetEmpty(TekSpDocs.Ostatok);
+
+                if (TekDG.Direct = 3)
+                  {
+                    TekSpDocs.PrMC   := SpDocs.PrMC;
+                    TekSpDocs.Direct := SpDocs.Direct;
+                  }
+                else
+                  {
+                    case SpDocs.PrMC of
+                    1, 4, 5 : TekSpDocs.PrMC := 1;
+                    2, 3 :    TekSpDocs.PrMC := 2;
+                    end; // case
+                    TekSpDocs.Direct := TekDG.Direct;
+// shaf для "Почты России"
+                    if (TekDG.Direct = Dogovor.Direct)
+                      TekSpDocs.Direct := SpDocs.Direct
+                    else
+                     {
+                       TekSpDocs.Direct := if(SpDocs.Direct=1,2,1)
+                     }
+                  }
+
+                TekSpDocs.TipOtvPodr := SpDocs.TipOtvPodr;
+                TekSpDocs.cOtvPodr   := SpDocs.cOtvPodr;
+                TekSpDocs.TipPlatPodr:= SpDocs.TipPlatPodr;
+                TekSpDocs.cPlatPodr  := SpDocs.cPlatPodr;
+                TekSpDocs.cVal     := TekDG.cVal;
+                if (TekDG.cVal <> SpDocs.cVal)
+                 {
+                   TekSpDocs.Price:=DogRound_P(SpDocs.cVal <> 0, oValFunc.GetAnyCurrency(SpDocs.cVal,SpDocs.Price,TekDG.dDoc,TekDG.cVal));
+                   TekSpDocs.Summa:=DogRound  (SpDocs.cVal <> 0, oValFunc.GetAnyCurrency(SpDocs.cVal,SpDocs.Summa,TekDG.dDoc,TekDG.cVal));
+                 }
+                else
+                 {
+                  TekSpDocs.Price    := SpDocs.Price;
+                  TekSpDocs.Summa    := SpDocs.Summa;
+                 }
+                TekSpDocs.TiDK     := SpDocs.TiDK;
+                TekSpDocs.Code := oSpDocs.GetSpDocsCodeNext(TekSpDocs.cDoc,TekSpDocs.TiDk);
+                IsModif := IsModif or (insert current TekSpDocs = tsOk);
+                // для привязанных услуг к МЦ
+                ClearBuffer(#tblUsl_MC);
+                tblUsl_MC.cSpMC := SpDocs.cSpMC;
+                tblUsl_MC.cOldSP:= SpDocs.nRec;
+                tblUsl_MC.cNewSP:= TekSpDocs.nRec;
+                if (insert current tblUsl_MC = tsOk) {};
+                oSpDocs.ChangePosSpDocs(TekSpDocs.TiDk, TekSpDocs.cDoc, TekSpDocs.nRec);
+
+                // копируем ДЕИ
+               if ( SpDocs.PrMC = 1 )
+                 piKatDopEd.CopyDopEd(coSpDocs,      // код таблицы спецификации источника
+                                      cRecFromDoc,   // ссылка на запись спецификации источника
+                                      word(2),       // тип количества источника
+                                      SpDocs.Kol,    // количество источника в отпускных единицах
+                                      coSpDocs,      // код таблицы спецификации приемника
+                                      TekSpDocs.NRec,// ссылка на запись спецификации приемника
+                                      word(2),       // тип количества приемника
+                                      TekSpDocs.Kol, // количество приемника в отпускных единицах
+                                      TekSpDocs.TiDK // Тип документа системный
+                                     );
+                if ( boDeleteSp )
+                  if ( oSpDocs.Delete_current_SpDocs(SpDocs.nRec, true) = tsOk )
+                    boReCalcDogovor := true;
+              }
+           }
+       403:{
+             if ( GetFirst SpCP where ((cRecfromDoc == SpCP.nRec ))=tsOk )
+              {
+                ClearBuffer(#TekSpCP);
+                TekSpCP.cGrMCUsl := SpCP.cGrMCUsl;
+                TekSpCP.cGrNal   := SpCP.cGrNal;
+                TekSpCP.cMCUsl   := SpCP.cMCUsl;
+                TekSpCP.cOtpEd   := SpCP.cOtpEd;
+                TekSpCP.Kol      := SpCP.Kol;
+                TekSpCP.Ostatok  := fEdIzm.ConvertToUchEd(TekSpCP.Kol,TekSpDocs.cOtpEd);
+                TekSpCP.Empty    := oSpDocs.GetEmpty(TekSpCP.Ostatok);
+                TekSpCP.PrMC     := SpCP.PrMC;
+                TekSpCP.TipOtvPodr := SpCP.TipOtvPodr;
+                TekSpCP.cOtvPodr   := SpCP.cOtvPodr;
+                TekSpCP.TipPlatPodr:= SpCP.TipPlatPodr;
+                TekSpCP.cPlatPodr  := SpCP.cPlatPodr;
+                TekSpCP.cVal     := TekCP.cVal;
+                if (TekCP.cVal <> SpCP.cVal)
+                 {
+                   var dCurse: date;
+
+                   dCurse := if(TekCP.cVal = 0, date(0,0,0), TekCP.dValCurse);
+                   dCurse := if(longint(dCurse) = 0, TekCP.dInput, dCurse);
+
+                   TekSpCP.Price:=oValFunc.GetAnyCurrency(SpCP.cVal,SpCP.Price,dCurse,TekCP.cVal);
+                   TekSpCP.Summa:=oValFunc.GetAnyCurrency(SpCP.cVal,SpCP.Summa,dCurse,TekCP.cVal)
+                 }
+                else
+                 {
+                   TekSpCP.Price    := SpCP.Price;
+                   TekSpCP.Summa    := SpCP.Summa
+                 }
+                TekSpCP.TiDK     := SpCP.TiDK;
+                TekSpCP.Code := oSpDocs.GetSpDocsCodeNext(TekSpCP.cDoc,TekSpCP.TiDk);
+                TekSpCP.cResOtgr := SpCP.cResOtgr;
+                TekSpDocs.Direct   := TekCP.DirectMC;
+                IsModif := IsModif or (insert current TekSpCP = tsOk);
+                // для привязанных услуг к МЦ
+                ClearBuffer(#tblUsl_MC);
+                tblUsl_MC.cSpMC := SpCP.cSpMC;
+                tblUsl_MC.cOldSP:= SpCP.nRec;
+                tblUsl_MC.cNewSP:= TekSpCP.nRec;
+                if (insert current tblUsl_MC = tsOk) {};
+
+                oSpDocs.ChangePosSpDocs(TekSpCP.TiDk, TekSpCP.cDoc, TekSpCP.nRec);
+
+                if (SpCP.PrMC=1)
+                  piKatDopEd.CopyDopEd(coSpDocs,
+                                       cRecFromDoc,
+                                       word(2),
+                                       SpCP.Kol,
+                                       coSpDocs,
+                                       TekSpCP.NRec,
+                                       word(2),
+                                       TekSpCP.Kol,
+                                       TekSpCP.TiDK
+                                      );
+                if ( boDeleteSp )
+                  if ( oSpDocs.Delete_current_SpDocs(SpCP.nRec, true) = tsOk )
+                    boReCalcCalPlan := true;
+              }
+           }
+       41,
+       51 :{
+             if ( GetFirst SpStep where ((cRecfromDoc == SpStep.nRec ))=tsOk )
+              {
+                ClearBuffer(#TekSpStep);
+                TekSpStep.Npp        := oSpNext.GetSpNppNext(TekSpStep.cStepDoc,coSpStep);
+                TekSpStep.dDoc       := TekBD.dDoc;
+                TekSpStep.PrMC       := SpStep.PrMC;
+                TekSpStep.cMCUsl     := SpStep.cMCUsl;
+                TekSpStep.cVal       := TekBD.cVal;
+                TekSpStep.cOtpEd     := SpStep.cOtpEd;
+                TekSpStep.Kol        := SpStep.KolSkl;
+                TekSpStep.KolSkl     := SpStep.KolSkl;
+                TekSpStep.Price      := SpStep.Price;
+                if (SpSchem.TiDk = word(51))
+                 case SpStep.PrMC of
+                  3:{
+                     TekSpStep.Kol        := 1;
+                     TekSpStep.KolSkl     := 1;
+                     TekSpStep.PrMC       := 2;
+                     TekSpStep.Price     := SpStep.Summa;
+                    };
+                  4..6 : TekSpStep.PrMC := 2
+                 end;
+                if (TekBD.cVal <> SpStep.cVal)
+                 TekSpStep.Price :=oValFunc.GetAnyCurrency(SpStep.cVal,
+                                                           TekSpStep.Price,
+                                                           if((TekBD.TipMoney=word(2) and longint(TekBD.dValCurse)<>0),TekBD.dValCurse,
+                                                              if(longint(TekBD.dPrice)<>0,TekBD.dPrice,TekBD.dDoc)),
+                                                           TekBD.cVal);
+                TekSpStep.KolGrM     := SpStep.KolGrM;
+                TekSpStep.cOtpEdGrM  := SpStep.cOtpEdGrM;
+                TekSpStep.cParty     := SpStep.cParty;
+                TekSpStep.cResOtgr   := SpStep.cResOtgr;
+                TekSpStep.nKvit      := SpStep.nKvit;
+                if (( TekBD.cCellVal = comp(0) ) and
+                    ( trim(TekBD.NVagon) = ''))
+                 {
+                  if ((SpStep.cNMoveCell<>comp(0)) or
+                      (SpStep.cCellVal <> comp(0)) or
+                      (length(trim(SpStep.nVagon)) <> 0))
+                   {
+                     TekSpStep.cNMoveCell := SpStep.cNMoveCell;
+                     TekSpStep.cCellVal   := SpStep.cCellVal;
+                     TekSpStep.nVagon     := SpStep.nVagon;
+                     TekSpStep.cTransp    := SpStep.cTransp;
+                     boCellVal := true;
+                   }
+                 }
+                Insert current TekSpStep;
+                // для привязанных услуг к МЦ
+                ClearBuffer(#tblUsl_MC);
+                tblUsl_MC.cSpMC := SpStep.cSpMC;
+                tblUsl_MC.cOldSP:= SpStep.nRec;
+                tblUsl_MC.cNewSP:= TekSpStep.nRec;
+                if (insert current tblUsl_MC = tsOk) {};
+
+                if (SpStep.PrMC=1)
+                 {
+                  piKatDopEd.CopyDopEd(coSpStep,
+                                       cRecFromDoc,
+                                       word(1),
+                                       SpStep.KolSkl,
+                                       coSpStep,
+                                       TekSpStep.NRec,
+                                       word(1),
+                                       TekSpStep.KolSkl,
+                                       if(TekBD.VidDoc=101,word(41),word(51))
+                                      );
+                  piKatDopEd.CopyDopEd(coSpStep,
+                                       cRecFromDoc,
+                                       word(2),
+                                       SpStep.Kol,
+                                       coSpStep,
+                                       TekSpStep.NRec,
+                                       word(2),
+                                       TekSpStep.Kol,
+                                       if(TekBD.VidDoc=101,word(41),word(51))
+                                      );
+                 }
+                if ( boDeleteSp )
+                  if ( oDOfuns.SpStep_Delete(SpStep.nRec) = tsOk)
+                    boReCalcBaseDoc:=true;
+              }
+           }
+       101,
+       108,
+       201:{
+             if ( GetFirst SpSopr where ((cRecfromDoc == SpSopr.nRec ))=tsOk )
+              {
+                ClearBuffer(#TekSpSopr);
+                TekSpSopr.Npp       := oSpNext.GetSpNppNext(TekKS.nRec,coSpSopr);
+                TekSpSopr.dSopr     := TekKS.dSopr;
+                TekSpSopr.VidSopr   := TekKS.VidSopr;
+                TekSpSopr.PrMC      := SpSopr.PrMC;
+                TekSpSopr.cMCUsl    := SpSopr.cMCUsl;
+                TekSpSopr.cOtpEd    := SpSopr.cOtpEd;
+                TekSpSopr.Kol       := SpSopr.Kol;
+                TekSpSopr.KolOpl    := SpSopr.KolFact;
+                TekSpSopr.Kol2      := SpSopr.Kol2;
+                TekSpSopr.KolFact   := SpSopr.KolFact;
+                TekSpSopr.KolFact2  := SpSopr.KolFact2;
+                TekSpSopr.cVal      := TekKS.cValut;
+                TekSpSopr.Price     := SpSopr.Price;
+                if (SpSchem.TiDk = word(201))
+                 case SpSopr.PrMC of
+                  3    :
+                    {
+                      TekSpSopr.PrMC :=2;
+                      TekSpSopr.Kol       := 1;
+                      TekSpSopr.KolOpl    := 1;
+                      TekSpSopr.KolFact   := 1;
+                    }
+                  4..6 : TekSpSopr.PrMC :=2;
+                 end;
+                if (TekKS.cValut = comp(0))
+                 TekSpSopr.VPrice       := SpSopr.Price;
+                else
+                 if (TekKS.cValut <> SpSopr.cVal)
+                  TekSpSopr.VPrice  := oValFunc.GetAnyCurrency(SpSopr.cVal,SpSopr.VPrice,TekKS.dPrice,TekKS.cValut)
+                 else
+                  TekSpSopr.VPrice  := SpSopr.VPrice;
+
+                TekSpSopr.KolGrM    := SpSopr.KolGrM;
+                TekSpSopr.cOtpEdGrM := SpSopr.cOtpEdGrM;
+                TekSpSopr.cParty    := SpSopr.cParty;
+                TekSpSopr.cResOtgr  := SpSopr.cResOtgr;
+                TekSpSopr.nKvit     := SpSopr.nKvit;
+                if (( TekKS.cCellVal = comp(0) ) and
+                    ( trim(TekKS.NVagon) = ''))
+                 {
+                  if ((SpSopr.cNMoveCell<>comp(0)) or
+                      (SpSopr.cCellVal <> comp(0)) or
+                      (length(trim(SpSopr.nVagon)) <> 0))
+                   {
+                     TekSpSopr.cCellVal  := SpSopr.cCellVal;
+                     TekSpSopr.nVagon    := SpSopr.nVagon;
+                     TekSpSopr.cNMoveCell:= SpSopr.cNMoveCell;
+                     TekSpSopr.cTransp   := SpSopr.cTransp;
+                     boCellVal := true;
+                   }
+                 }
+
+                TekSpSopr.rVPrice := TekSpSopr.VPrice;
+                TekSpSopr.rPrice  := TekSpSopr.Price;
+
+                Insert current TekSpSopr;
+                if (SpSopr.PrMC=1)
+                 {
+                  piKatDopEd.CopyDopEd(coSpSopr,
+                                       cRecFromDoc,
+                                       word(1),
+                                       SpSopr.KolFact,
+                                       coSpSopr,
+                                       TekSpSopr.NRec,
+                                       word(1),
+                                       TekSpSopr.KolFact,
+                                       TekSpSopr.VidSopr
+                                      );
+                  piKatDopEd.CopyDopEd(coSpSopr,
+                                       cRecFromDoc,
+                                       word(2),
+                                       SpSopr.Kol,
+                                       coSpSopr,
+                                       TekSpSopr.NRec,
+                                       word(2),
+                                       TekSpSopr.Kol,
+                                       TekSpSopr.VidSopr
+                                      );
+                 }
+                if ( boDeleteSp )
+                 if ( oSDfuns.SpSopr_Delete(SpSopr.nRec) = tsOk )
+                   boReCalcKatSopr:=true;
+              }
+           }
+       111,
+       211:{
+             if ( GetFirst SpSopr where ((cRecfromDoc == SpSopr.nRec ))=tsOk )
+              {
+                if (SpSopr.PrMC <> 2)
+                  continue;
+
+                ClearBuffer(#TekSpSopr);
+                TekSpSopr.Npp       := oSpNext.GetSpNppNext(TekKS.nRec,coSpSopr);
+                TekSpSopr.dSopr     := TekKS.dSopr;
+                TekSpSopr.VidSopr   := TekKS.VidSopr;
+                TekSpSopr.PrMC      := 2;
+                TekSpSopr.cMCUsl    := SpSopr.cMCUsl;
+                TekSpSopr.cOtpEd    := SpSopr.cOtpEd;
+                TekSpSopr.Kol       := SpSopr.Kol;
+                TekSpSopr.KolOpl    := SpSopr.KolFact;
+                TekSpSopr.Kol2      := SpSopr.Kol2;
+                TekSpSopr.KolFact   := SpSopr.KolFact;
+                TekSpSopr.KolFact2  := SpSopr.KolFact2;
+                TekSpSopr.cVal      := TekKS.cValut;
+                TekSpSopr.Price     := SpSopr.Price;
+
+                if (TekKS.cValut = comp(0))
+                 TekSpSopr.VPrice       := SpSopr.Price;
+                else
+                 if (TekKS.cValut <> SpSopr.cVal)
+                  TekSpSopr.VPrice  := oValFunc.GetAnyCurrency(SpSopr.cVal,SpSopr.VPrice,TekKS.dPrice,TekKS.cValut)
+                 else
+                  TekSpSopr.VPrice  := SpSopr.VPrice;
+
+                TekSpSopr.KolGrM    := SpSopr.KolGrM;
+                TekSpSopr.cOtpEdGrM := SpSopr.cOtpEdGrM;
+                TekSpSopr.cParty    := SpSopr.cParty;
+                TekSpSopr.cResOtgr  := SpSopr.cResOtgr;
+                TekSpSopr.nKvit     := SpSopr.nKvit;
+                if (( TekKS.cCellVal = comp(0) ) and
+                    ( trim(TekKS.NVagon) = ''))
+                 {
+                  if ((SpSopr.cNMoveCell<>comp(0)) or
+                      (SpSopr.cCellVal <> comp(0)) or
+                      (length(trim(SpSopr.nVagon)) <> 0))
+                   {
+                     TekSpSopr.cCellVal  := SpSopr.cCellVal;
+                     TekSpSopr.nVagon    := SpSopr.nVagon;
+                     TekSpSopr.cNMoveCell:= SpSopr.cNMoveCell;
+                     TekSpSopr.cTransp   := SpSopr.cTransp;
+                     boCellVal := true;
+                   }
+                 }
+                TekSpSopr.rVPrice := TekSpSopr.VPrice;
+                TekSpSopr.rPrice  := TekSpSopr.Price;
+                Insert current TekSpSopr;
+                if ( boDeleteSp )
+                 if ( oSDfuns.SpSopr_Delete(SpSopr.nRec) = tsOk )
+                   boReCalcKatSopr:=true;
+              }
+           }
+      end;
+     }
+   }
+   case SpSchem.TiDk of
+    400,
+    401 :{
+           if (TekDG.cNazna = 0 )
+             TekDG.cNazna := Dogovor.cNazna;
+           Update current TekDG;
+           _loop SpGrSch where ((word(1)      == SpGrSch.wList and
+                                 Dogovor.nRec == SpGrSch.cBaseDoc))
+             if (RecordExists TekSpGrSch
+                       where (( word(1)           == TekSpGrSch.wList    and
+                                TekDG.nRec        == TekSpGrSch.cBaseDoc and
+                                SpGrSch.cGroupSch == TekSpGrSch.cGroupSch
+                             )) <> tsOK)
+             {
+               ClearBuffer(#TekSpGrSch);
+               TekSpGrSch.wList     := word(1);
+               TekSpGrSch.cBaseDoc  := TekDG.nRec;
+               TekSpGrSch.cGroupSch := SpGrSch.cGroupSch;
+               insert current TekSpGrSch;
+             }
+           if (GetFirst tblUsl_MC = tsOk)
+            do
+             if ((tblUsl_MC.cSpMC <> comp(0)) and
+                 (SearchMarker(Marker,tblUsl_MC.cSpMC,MarkerInd)))
+                 {
+                   if (GetFirst TekSpDocs where ((tblUsl_MC.cNewSP == TekSpDocs.nRec)) = tsOk)
+                    {
+                      _cSpMC := tblUsl_MC.cSpMC;
+                      if (GetFirst tblUsl_MC_S where ((_cSpMC == tblUsl_MC_S.cOldSP))= tsOk)
+                       {
+                         TekSpDocs.cSpMC := tblUsl_MC_S.cNewSP;
+                         update current TekSpDocs;
+                       };
+                    }
+                 }
+            while (GetNext tblUsl_MC = tsOk);
+         }
+    403 :{
+           if ( TekCP.cGrOtp = 0 )
+             TekCP.cGrOtp:=CalPlan.cGrOtp;
+           if ( TekCP.cGrPol = 0 )
+             TekCP.cGrPol:=CalPlan.cGrPol;
+           if ( TekCP.cPunktP = 0 )
+             TekCP.cPunktP:=CalPlan.cPunktP;
+           if ( TekCP.cPunktR = 0 )
+             TekCP.cPunktR:=CalPlan.cPunktR;
+           if ( TekCP.cNazna = 0 )
+             TekCP.cNazna:=CalPlan.cNazna;
+           if ( longint(TekCP.dFrom) = 0 )
+             TekCP.dFrom:=CalPlan.dFrom;
+           if ( longint(TekCP.dTo) = 0 )
+             TekCP.dTo:=CalPlan.dTo;
+           if ( TekCP.nDays = 0 )
+             TekCP.nDays:=CalPlan.nDays;
+           UpDate current TekCP;
+           if (GetFirst tblUsl_MC = tsOk)
+            do
+             if ((tblUsl_MC.cSpMC <> comp(0)) and
+                 (SearchMarker(Marker,tblUsl_MC.cSpMC,MarkerInd)))
+              {
+                if (GetFirst TekSpCP where ((tblUsl_MC.cNewSP == TekSpCP.nRec)) = tsOk)
+                 {
+                   _cSpMC := tblUsl_MC.cSpMC;
+                   if (GetFirst tblUsl_MC_S where ((_cSpMC == tblUsl_MC_S.cOldSP))= tsOk)
+                    {
+                      TekSpCP.cSpMC := tblUsl_MC_S.cNewSP;
+                      update current TekSpCP;
+                    };
+                 }
+              }
+            while (GetNext tblUsl_MC = tsOk);
+         }
+    41,
+    51  :{
+           if ( TekBD.cGrOtpr = 0 )
+             TekBD.cGrOtpr:=BaseDoc.cGrOtpr;
+           if ( TekBD.cGrPol = 0 )
+             TekBD.cGrPol:=BaseDoc.cGrPol;
+           if ( TekBD.cNazna = 0 )
+             TekBD.cNazna:=BaseDoc.cNazna;
+           if (boCellVal)
+             TekBD.TypeDoc  := word(0)
+           else
+            {
+             if (( TekBD.cCellVal = 0 ) and
+                 ( length(trim(TekBD.nVagon)) =0 ))
+              {
+               TekBD.cCellVal   := BaseDoc.cCellVal;
+               TekBD.nVagon     := BaseDoc.nVagon;
+               TekBD.cNMoveCell := BaseDoc.cNMoveCell;
+               TekBD.TypeDoc    := BaseDoc.TypeDoc;
+               TekBd.cTransp    := Basedoc.cTransp;
+              }
+            }
+//                if (TekBD.VhodNal <> BaseDoc.VhodNal)
+//                  TekBD.VhodNal := BaseDoc.VhodNal;
+           UpDate current TekBD;
+
+           _loop SpGrSch where ((word(0)      == SpGrSch.wList and
+                                 BaseDoc.nRec == SpGrSch.cBaseDoc))
+             if (RecordExists TekSpGrSch
+                       where (( word(0)           == TekSpGrSch.wList    and
+                                TekBD.nRec        == TekSpGrSch.cBaseDoc and
+                                SpGrSch.cGroupSch == TekSpGrSch.cGroupSch
+                             )) <> tsOK)
+             {
+               ClearBuffer(#TekSpGrSch);
+               TekSpGrSch.wList     := word(0);
+               TekSpGrSch.cBaseDoc  := TekBD.nRec;
+               TekSpGrSch.cGroupSch := SpGrSch.cGroupSch;
+               insert current TekSpGrSch;
+             }
+
+           if (IsValid(#TTNDoc))
+            {
+              if (not IsValid(#TekTTNDoc))
+               {
+                 ClearBuffer(#TekTTNDoc);
+                 TekTTNDoc.cPunktR := TTNDoc.cPunktR;
+                 TekTTNDoc.cPunROrg:= TTNDoc.cPunROrg;
+                 TekTTNDoc.cPunktP := TTNDoc.cPunktP;
+                 TekTTNDoc.cPunPOrg:= TTNDoc.cPunPOrg;
+                 insert current TekTTNDoc;
+               }
+              else
+               {
+                if ( TekTTNDoc.cPunktR = 0 )
+                  TekTTNDoc.cPunktR := TTNDoc.cPunktR;
+                if ( TekTTNDoc.cPunROrg = 0 )
+                 TekTTNDoc.cPunROrg:= TTNDoc.cPunROrg;
+                if ( TekTTNDoc.cPunktP = 0 )
+                 TekTTNDoc.cPunktP := TTNDoc.cPunktP;
+                if ( TekTTNDoc.cPunPOrg = 0 )
+                 TekTTNDoc.cPunPOrg:= TTNDoc.cPunPOrg;
+                Update current TekTTNDoc;
+               }
+            }
+           if (GetFirst tblUsl_MC = tsOk)
+            do
+             if ((tblUsl_MC.cSpMC <> comp(0)) and
+                 (SearchMarker(Marker,tblUsl_MC.cSpMC,MarkerInd)))
+              {
+                if (GetFirst TekSpStep where ((tblUsl_MC.cNewSP == TekSpStep.nRec)) = tsOk)
+                 {
+                   _cSpMC := tblUsl_MC.cSpMC;
+                   if (GetFirst tblUsl_MC_S where ((_cSpMC == tblUsl_MC_S.cOldSP))= tsOk)
+                    {
+                      TekSpStep.cSpMC := tblUsl_MC_S.cNewSP;
+                      update current TekSpStep;
+                    };
+                 }
+              }
+            while (GetNext tblUsl_MC = tsOk);
+         }
+    101,
+    108,
+    201,
+    111,
+    211 :{
+           if ( TekKS.cGruzFrom = 0 )
+             TekKS.cGruzFrom:=KatSopr.cGruzFrom;
+           if ( TekKS.cGruzTo = 0 )
+             TekKS.cGruzTo:=KatSopr.cGruzTo;
+           if ( TekKS.cNazna = 0 )
+             TekKS.cNazna:=KatSopr.cNazna;
+           if (boCellVal)
+             TekKS.TypeDoc  := word(0)
+           else
+            {
+             if (( TekKS.cCellVal = 0 ) and
+                 ( length(trim(TekKS.nVagon))=0 ))
+              {
+               TekKS.cCellVal   := KatSopr.cCellVal;
+               TekKS.nVagon     := KatSopr.nVagon;
+               TekKS.cNMoveCell := KatSopr.cNMoveCell;
+               TekKS.TypeDoc    := KatSopr.TypeDoc;
+               TekKs.cTransp    := KatSopr.cTransp;
+              }
+            }
+//                if (TekKS.VhodNal <> KatSopr.VhodNal)
+//                  TekKS.VhodNal := KatSopr.VhodNal;
+           UpDate current TekKS;
+           if (IsValid(#TTNDoc))
+            {
+              if (not IsValid(#TekTTNDoc))
+               {
+                 ClearBuffer(#TekTTNDoc);
+                 TekTTNDoc.cPunktR := TTNDoc.cPunktR;
+                 TekTTNDoc.cPunROrg:= TTNDoc.cPunROrg;
+                 TekTTNDoc.cPunktP := TTNDoc.cPunktP;
+                 TekTTNDoc.cPunPOrg:= TTNDoc.cPunPOrg;
+                 insert current TekTTNDoc;
+               }
+              else
+               {
+                if ( TekTTNDoc.cPunktR = 0 )
+                  TekTTNDoc.cPunktR := TTNDoc.cPunktR;
+                if ( TekTTNDoc.cPunROrg = 0 )
+                 TekTTNDoc.cPunROrg:= TTNDoc.cPunROrg;
+                if ( TekTTNDoc.cPunktP = 0 )
+                 TekTTNDoc.cPunktP := TTNDoc.cPunktP;
+                if ( TekTTNDoc.cPunPOrg = 0 )
+                 TekTTNDoc.cPunPOrg:= TTNDoc.cPunPOrg;
+                Update current TekTTNDoc;
+               }
+            }
+         }
+  end;
+
+  if ( boReCalcDogovor )
+   {
+     NextVisual;
+     ReCalcSummaDG;
+   }
+
+  if ( boReCalcCalPlan )
+   {
+     NextVisual;
+     ReCalcSummaCP;
+   }
+
+  if ( boReCalcBaseDoc )
+   {
+     tipDO := BaseDoc.VidDoc;
+     NextVisual;
+     GetTotal(false);
+   }
+
+  if ( boReCalcKatSopr )
+   {
+     MarkerKS := InitMarker ( 'RecalcKatSopr', 8, 10, 5 );
+     ClearMarker ( MarkerKS );
+     InsertMarker ( MarkerKS, KatSopr.nRec );
+     DoneMarker ( MarkerKS, 'RecalcKatSopr' );
+     NextVisual;
+     case KatSopr.VidSopr of
+     201: {
+            GetVipRef(s,'SoprDoc');
+            s.RecalcSoprDoc;
+          }
+     101:
+          {
+            GetVipRef(sb,'SoprDocB');
+            sb.RecalcSoprDocB;
+          }
+     108:
+          {
+            GetVipRef(sb,'SoprDocB_Milk');
+            sb.RecalcSoprDocB;
+          }
+     211: {
+            GetVipRef(sa,'AktUsl');
+            sa.RecalcAktUsl;
+          }
+     111:
+          {
+            GetVipRef(sab,'AktUslB');
+            sab.RecalcAktUslB;
+          }
+     end; //case
+   }
+
+  StopVisual('',0);
+
+  DoneMarker(Marker, 'SpecToCopy');
+  SaveMyDsk(IsModif,'LINKDOCS_IsModif');
+}
+
+Browse brLinkDocs('',,sci1378Esc);
+ show at (,,,);
+ table SpSchem;
+fields
+  NameSchem     'Схема связей'       ('Номер и дата формирования схемы связей',,sci1378Esc)      : [20], protect, PickButton;
+  FullNameDoc   'Связанный документ' ('Тип, номер и дата связанного документа схемы',,sci1378Esc) : [40] ,protect, PickButton;
+end;   // browse
+
+Panel pSpSchem;
+ Table SpSchem;
+ HandleEvent
+   cmSetDefault   :
+    {
+      ClearBuffer(#SpSchem);
+      SpSchem.cDoc := pDoc;
+      SpSchem.TiDk := pTiDk;
+    }
+
+   cmInsertRecord :
+    {
+      insert current SpSchem;
+!      UpDateIerSchem;
+      Copy_fromDocSchem;
+    }
+
+   cmUpdateRecord :
+    {
+      update current SpSchem;
+!      UpDateIerSchem;
+      Copy_fromDocSchem;
+    }
+
+
+   cmDeleteRecord :
+     if (SpSchem.cUpDoc = 0) {
+       message('Нельзя удалить текущую запись, т.к. является корневой в схеме.', Information);
+       abort
+     }
+     else
+       if (message('Удалить текущую запись ?', YesNo + mfSwapButtons) <> cmYes)
+         abort
+       else
+         DeleteSpSchem;
+
+   cmPick:
+    {
+      case CurField of
+        #NameSchem,
+        #FullNameDoc :
+         {
+           if IsValid(#SpSchem) and (SpSchem.cUpDoc = 0) {
+             message('Нельзя редактировать текущую запись, т.к. является корневой в схеме.', Information);
+             exit;
+           }
+           cRecSchem := SpSchem.cSchem;
+           BaseDocUp := SpSchem.cBaseDoc;
+           TiDkUp    := SpSchem.TiDkBase;
+           if (RunInterface(LinksSchem,cRecSchem,pDoc,pTiDk,BaseDocUp,TiDkUp,SpSchem.cUpDoc, word(3)) <> cmCancel)
+            {
+              set SpSchem.cSchem   := cRecSchem;
+              set SpSchem.cBaseDoc := BaseDocUp;
+              set SpSchem.TiDkBase := TiDkUp;
+              UpDateTable;
+
+              if (SpSchem.TiDk = SpSchem.TiDkBase)
+                {
+                  case SpSchem.TiDk of
+                  401 : {
+                          set TekDG.NoDoc_Ext := Dogovor.NoDoc;
+                          update current TekDG;
+                        }
+                  403 : {
+                          set TekCP.NoDoc_Ext := CalPlan.NoDoc;
+                          update current TekCP;
+                        }
+                  end; // case
+                }
+            }
+         }
+      end
+    }
+ End
+End;
+
+function ChoiceDop_AppDog_CP(Vid: word; var c: comp): boolean;
+var
+  c1, c2, c3: comp;
+  isSelect: word;
+  pRunDSel: RunDocSelObj;
+{
+  ChoiceDop_AppDog_CP := false;
+  if NullVipRef(pRunDSel)
+    if not(LoadVipRef(pRunDSel, 'RunDocSelections'))
+    {
+      Message('Не удалось загрузить библиотеку RunDocSelObj', Error);
+      Exit;
+    }
+  c1 := comp(0); c2 := comp(0); c3 := comp(0);
+  case Vid of
+    400: isSelect := 1;
+    401: isSelect := 2;
+    403: isSelect := 4;
+  end;
+  if pRunDSel.F3(c1,
+                 c2,
+                 c3,
+                 isSelect,
+                 word(0FFFFh),
+                 word(0)
+                ) = cmDefault {
+    if (isSelect = 4) {
+      PushPos(#CalPlan);
+      if getFirst CalPlan where (( c3 == CalPlan.nRec )) = tsOK
+        if (CalPlan.DirectMC = 0) {
+          message('В схему связей нельзя выбирать финансовые ПКП!', Information);
+          PopPos(#CalPlan);
+          Exit;
+        }
+      PopPos(#CalPlan);
+    }
+    ChoiceDop_AppDog_CP := true;
+    case isSelect of
+      1: c := c1;
+      2: c := c2;
+      4: c := c3;
+    end;
+  }
+}
+
+function ChoiceBaseDoc(BD_Vid: word; var c: comp): boolean;
+{
+  ChoiceBaseDoc := false;
+  c := 0;
+  if RunInterface(GetDBase, true,
+                            word(2),
+                            BD_Vid,
+                            c,
+                            comp(0),
+                            comp(0),
+                            double(0)) <> cmCancel
+    if (BaseDoc.VidDoc <> 101) and (BaseDoc.VidDoc <> 201)
+      message('Выберите ДО на закупку или продажу!', Error)
+    else ChoiceBaseDoc := true;
+}
+
+function ChoiceKatSopr(KS_Vid: word; var c: comp): boolean;
+{
+  c := 0;
+  ChoiceKatSopr := (RunInterface(GetKatSopr, c, KS_Vid) = cmDefault);
+}
+
+function ChoiceDocForLinks : boolean;
+var
+  Cm, Vid: word;
+  c: comp;
+  f: boolean;
+{
+  ChoiceDocForLinks := false;
+
+  f := false;
+  Cm := RunMenu('mnuLinkDocsBaseDocPick');
+  case Cm of
+    cmValue1: Vid := word(400);
+    cmValue2: Vid := word(401);
+    cmValue3: Vid := word(403);
+    cmValue4,
+    cmValue6: Vid := word(101);
+    cmValue5,
+    cmValue7: Vid := word(201);
+    cmValue8: Vid := word(111);
+    cmValue8: Vid := word(211);
+  end;
+  case Cm of
+    cmValue1,
+    cmValue2,
+    cmValue3: f := ChoiceDop_AppDog_CP(Vid, c);
+    cmValue4: { f := ChoiceBaseDoc(Vid, c); Vid := word(41); }
+    cmValue5: { f := ChoiceBaseDoc(Vid, c); Vid := word(51); }
+    cmValue6,
+    cmValue7,
+    cmValue8,
+    cmValue9: f := ChoiceKatSopr(Vid, c);
+  end;
+  if f
+    {
+      f := oChkSchem.CheckSchem(c, Vid, pDoc, pTiDk, false);
+      if (not f)
+        message('Выбранный документ ни входит ни в одну из схем связей!');
+    }
+  ReReadRecord(#SpSchem);
+
+  ChoiceDocForLinks := f;
+}
+
+HandleEvent  // для интерфейса
+
+ cmInit:
+  {
+    if ( GetFirst SpSchem = tsOk ) {}
+    SelectField(#NameSchem);
+  }
+ cmRestoreDoc:
+   {
+     if ChoiceDocForLinks
+       {
+         Copy_fromDocSchem;
+
+         if (SpSchem.TiDk = SpSchem.TiDkBase)
+           {
+             case SpSchem.TiDk of
+             401 : {
+                     set TekDG.NoDoc_Ext := Dogovor.NoDoc;
+                     update current TekDG;
+                   }
+             403 : {
+                     set TekCP.NoDoc_Ext := CalPlan.NoDoc;
+                     update current TekCP;
+                   }
+             end; // case
+           }
+       }
+   }
+End
+End.
+
+#doc
+Для выбора типа документа. Используется в интерфейсе <link Interface L_Dogovor::LinkDocs>L_Dogovor::LinkDocs - Связанные документы</link>
+#end
+mnuLinkDocsBaseDocPick Menu
+{
+- 'До~г~овор'                 ,cmValue1,'Договор'                  ,,,,sci1Esc;
+- '~С~оглашение к договору'   ,cmValue2,'Соглашение к договору'    ,,,,sci1Esc;
+- 'Пункт ~к~алендарного плана',cmValue3,'П~ункт календарного плана',,,,sci1Esc;
+- 'Основание на ~з~акупку'    ,cmValue4,'Основание на закупку'     ,,,,sci1Esc;
+- 'Основание на п~р~одажу'    ,cmValue5,'Основание на продажу'     ,,,,sci1Esc;
+- 'Накладная на ~п~рием МЦ'   ,cmValue6,'Накладная на прием МЦ'    ,,,,sci1Esc;
+- 'Накладная на ~о~тпуск МЦ'  ,cmValue7,'Накладная на отпуск МЦ'   ,,,,sci1Esc;
+- 'Акт на прием услуг'        ,cmValue8,'Акт на прием услуг'       ,,,,sci1Esc;
+- 'Акт на оказание услуг'     ,cmValue9,'Акт на отпуск услуг'      ,,,,sci1Esc;
+}

@@ -1,0 +1,152 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+
+Procedure DefaultSoprOrdB;
+{
+  ClearBuffer(#SoprOrdB);
+  SoprOrdB.cSoprDoc := KatSopr.NRec;
+  SoprOrdB.cSpSopr  := SpSopr.NRec;
+  SoprOrdB.cParty   := SpSopr.cParty;
+  SoprOrdB.cVal     := SpSopr.cVal;
+  SoprOrdB.Price    := SpSopr.Price;
+  SoprOrdB.VPrice   := SpSopr.VPrice;
+  SoprOrdB.cUKS     := SpSopr.cUKS;
+  SoprOrdB.Price    := SpSopr.rPrice;
+  SoprOrdB.VPrice   := SpSopr.rVPrice;
+  SoprOrdB.cOtpEd   := SpSopr.cOtpEd;
+  SoprOrdB.cMc      := SpSopr.cMCUsl;
+}
+
+//******************************************************************************
+// проверка суммы
+Function CheckSummSoprOrdB (var pSum, pSumV: double; all_sum, all_sumV: double): boolean;
+var
+  pSumPos : double;
+  pSumPosV: double;
+{
+  CheckSummSoprOrdB := TRUE;
+
+  pSumPos  := SpSopr.KolFact * SpSopr.Price;
+  pSumPosV := SpSopr.KolFact * SpSopr.VPrice;
+
+  if (pSum < 0)
+  {
+    pSum := 0;
+    CheckSummSoprOrdB := FALSE;
+  }
+
+  if (all_sum + pSum > pSumPos)
+  {
+    pSum := pSumPos - all_sum;
+    CheckSummSoprOrdB := FALSE;
+  }
+
+  if (all_sumV + pSumV > pSumPosV)
+  {
+    pSumV := pSumPosV - all_sumV;
+    CheckSummSoprOrdB := FALSE;
+  }
+}
+
+//******************************************************************************
+// проверка кол-ва
+Function CheckKolSoprOrdB (var pKol: double; all_kol: double; isMes: boolean): boolean;
+var
+  pKatEd  : comp;
+{
+  CheckKolSoprOrdB := TRUE;
+
+  pKatEd   := if (GetFirst fastfirstrow KatEd = tsOK, KatEd.nRec, comp(0));
+
+  fEdIzm.CheckKolDiskretAll(pKol, SpSopr.cOtpEd, pKatEd, True, True);//проверка на делимость
+
+  if (all_kol + pKol > SpSopr.KolFact)
+  {
+    if (isMes)
+      Message(''#3'Распределено больше на:' + DoubleToStr(all_kol - SpSopr.KolFact, '6666667.899999') + ' ' + OtpEd);
+
+    pKol := SpSopr.KolFact - all_kol;
+    CheckKolSoprOrdB := FALSE;
+  }
+}
+
+//******************************************************************************
+// Расчет суммы и кол-ва
+// pInput - 0 - кол-во, 1 - сумма
+Procedure RecalcSoprOrdB (pSum, pSumV, pKol: double; pInput: word; pRec: comp);
+var
+  all_kol : double;
+  all_sum : double;
+  all_sumv: double;
+  isAkt   : boolean;
+  isChange: boolean;
+{
+  all_kol  := 0;
+  all_sum  := 0;
+  all_sumv := 0;
+
+  PushPos(#SoprOrdB);
+
+  _LOOP SoprOrdB where((SpSopr.NRec == SoprOrdB.cSpSopr))
+    if (pRec <> SoprOrdB.NRec)
+    {
+      all_kol  := all_kol  + SoprOrdB.Kol;
+      all_sum  := all_sum  + SoprOrdB.Price;
+      all_sumv := all_sumv + SoprOrdB.VPrice;
+    }
+
+  PopPos(#SoprOrdB);
+
+  isChange := FALSE;
+  isAkt    := ((KatSopr.VidSopr = 111) or (KatSopr.VidSopr = 110));
+
+  // определение суммы и кол-ва
+  case pInput of
+    0: // кол-во
+    {
+      CheckKolSoprOrdB (pKol, all_kol, TRUE);
+
+      if (isAkt)
+      {
+        pSum  := FSRoundRub(pKol * SpSopr.Price);
+        pSumV := FSRoundVal(pKol * SpSopr.VPrice);
+
+        CheckSummSoprOrdB (pSum, pSumV, all_sum, all_sumV);
+      }
+    }
+    1: // сумма
+    {
+      if (isAkt)
+        isChange := NOT CheckSummSoprOrdB (pSum, pSumV, all_sum, all_sumV);
+
+      if (KatSopr.cVal = 0)
+      {
+        pKol := pSum / SpSopr.Price
+
+        if (isChange)
+          pSumV := oValFunc.GetAnyCurrency(comp(0), pSum, KatSopr.dPrice, KatSopr.cValut)
+      }
+      else
+      {
+        pKol := pSumV / SpSopr.VPrice;
+
+        if (isChange)
+          pSum := oValFunc.GetAnyCurrency(KatSopr.cVal, pSumV, KatSopr.dPrice, comp(0));
+      }
+
+      CheckKolSoprOrdB (pKol, all_kol, FALSE);
+    }
+  end;
+
+  set SoprOrdB.Kol := pKol;
+
+  if (isAkt)
+  {
+    set SoprOrdB.Price  := FSRoundRub(pSum);
+    set SoprOrdB.VPrice := FSRoundVal(pSumV);
+  }
+}

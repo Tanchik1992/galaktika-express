@@ -1,0 +1,648 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12
+// Выбор мероприятий
+//********************************************************************************
+
+#ifdef __NIOKR__
+
+#doc
+Интерфейс выбора мероприятий
+#end
+Interface GetMeasures (, , sci178Esc) EscClose;
+  Show at (, , , 20);
+
+function GetDocTreeType: byte; Forward;
+
+//******************************************************************************
+Create view
+
+Var
+  cRec         : comp;
+  bPick        : boolean;
+//----------------------
+  Owner        : comp;
+  MySort
+, curFormat    : word;   // 0 - Protect, 1 - edit;
+
+  TmpComp      : comp;
+  tmpComp_1    : comp;
+
+  OneLevel     : boolean;
+  iLevel       : integer;
+
+  ColSort      : longint;
+
+As Select
+  if (bPick,
+    if (IsValid(tnPick), '√', ''), '')
+      (FieldName = picked)
+, *
+
+From
+  Measures (Measures05)
+, Measures Measures1
+, Measures MeasuresE
+, UrgentM
+, Pick
+
+
+Where
+((
+    word(5059)                        ==  Pick.wList
+AND Measures.NRec                     ==  Pick.cRec
+AND Measures.cOwner                   ==  MeasuresE.NRec
+))
+
+order by Measures.Kod
+
+Order ByKOD   by Measures.KOD
+Order ByName  by Measures.Name
+
+Bounds MainBound  = Owner == Measures.cOwner
+                    ordered by TableOrder
+;
+
+Parameters
+  cRec
+, bPick;     // TRUE - множественный выбор
+;
+
+//******************************************************************************
+Browse brw1;
+  Table Measures;
+
+Fields
+  {Font = {Color = if (picked <> '' AND (curFormat = 0), ColorMark, 0) }};
+  Measures.Kod   #3'Код'               : [10], NoProtect, NoAutoSize;
+  Measures.Name  #3'Наименование'      : [30], NoProtect;
+end;
+//******************************************************************************
+
+Panel panMeasures;
+  Table Measures;
+
+Tree brw2;
+  Table Measures;
+
+Fields
+  {Font = {Color = if (picked <> '' AND (curFormat = 0), ColorMark, 0) }};
+  Measures.Kod  #3'Код'               : [10], NoProtect, NoAutoSize;
+  Measures.Name #3'Наименование'      : [30], NoProtect;
+
+end;
+
+HandleEvent
+cmTreeTop      : Owner := 0;
+cmTreeUp       : Owner := Measures.cOwner;
+cmTreeDown     : Owner := Measures.nRec;
+cmTreeNodeType : TreeSetNodeType(brw2, GetDocTreeType);
+cmTreeNeedOwner: TreeJumpToRecord(brw2, Measures.cOwner);
+
+cmInsertRecord:
+  {
+    Insert current Measures;
+    TreeJumpToRecord(brw2, Measures.NRec);
+  }
+
+cmUpdateRecord:
+  {
+    Update current Measures;
+    TreeJumpToRecord(brw2, Measures.NRec);
+  }
+
+cmDeleteRecord:
+  {
+    if (GetFirst UrgentM where ((Measures.NRec == UrgentM.cMeasures)) = tsOk)
+      {
+        Message('Данное мероприятие используется в неотложном мероприятии!', Information);
+        Abort;
+        Exit;
+      }
+
+    if (Message('Удалить это мероприятие?', Confirmation+YesNo) <> cmYes)
+      Abort;
+    else
+      Delete current Measures;
+  }
+
+
+end;
+end;
+
+//******************************************************************************
+
+Function GetDocTreeType: byte;
+{
+  if RecordExists Measures1 where ((Measures.NRec == Measures1.cOwner)) <> tsOK
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(brw2), ntfOpen, ntfClose);
+}
+
+//******************************************************************************
+
+Procedure KillPick;
+{
+  ResetBounds(#Pick);
+  delete Pick where ((word(5059) == Pick.wList));
+  SetBounds(#Pick);
+}
+
+//******************************************************************************
+
+Procedure SetMyTitle;
+{
+  if (curFormat = 0)
+    SetTitle('Выбор мероприятия');
+  else
+    SetTitle('Редактирование мероприятий');
+}
+
+//******************************************************************************
+Procedure SetMyFormat (_format: word; _swich: boolean; _Level: boolean); // 0 - Protect; 1 - edit
+{
+  curFormat := _format;
+
+  if ( _format = 0 )
+    {
+      SelectField(#Measures.Name);
+      SetHelpAndStatusContext(brw2, #Measures.Kod , if (bPick, sci14EnInsTree, sci14EnEscTree), 0);
+      SetHelpAndStatusContext(brw2, #Measures.Name, if (bPick, sci14EnInsTree, sci14EnEscTree), 0);
+      SetHelpAndStatusContext(brw1, #Measures.Kod , if (bPick, sci14EnIns    , sci14EnEsc)    , 0);
+      SetHelpAndStatusContext(brw1, #Measures.Name, if (bPick, sci14EnIns    , sci14EnEsc)    , 0);
+      SetFieldOption (#Measures.Kod     , ofProtected);
+      SetFieldOption (#Measures.Name    , ofProtected);
+    }
+  else
+    {
+      SetHelpAndStatusContext(brw2, #Measures.Kod , sci178EscExTree_InsLevel, 0);
+      SetHelpAndStatusContext(brw2, #Measures.Name, sci178EscExTree_InsLevel, 0);
+      SetHelpAndStatusContext(brw1, #Measures.Kod , sci178Esc               , 0);
+      SetHelpAndStatusContext(brw1, #Measures.Name, sci178Esc               , 0);
+      SelectField(#Measures.Kod);
+      ClearFieldOption (#Measures.Kod     , ofProtected);
+      ClearFieldOption (#Measures.Name    , ofProtected);
+    }
+
+  if (_Level)
+    OneLevel := NOT OneLevel;
+
+  if _swich
+    {
+      if (OneLevel)     // бровзик
+        {
+          ResetBounds(#Measures);
+          SetFormat(brw1);
+        }
+      else
+        {              // дерево
+          Owner := Measures.cOwner;
+          PushBounds(tbMainBound);
+          SetFormat(brw2);
+          TreeJumpToRecord (brw2, Measures.NRec);
+        }
+    }
+  SetMyTitle;
+  SetInterfaceOptions(opEscClose OR if (CurFormat = 0, opCyanInterface, 0) );
+  RereadRecord(#Measures);
+}
+
+//******************************************************************************
+
+#doc
+Окно редактирования вышестоящего мероприятия
+#end
+Window winParent 'Вышестоящее мероприятие' EscClose;
+  Show at (,, 62, 4);
+
+Panel p1;
+Screen scrP;
+Fields
+
+  Measures.Name                 : Skip, {Font = {Bold = TRUE}};
+  MeasuresE.Name ( , , sci13Esc): Protect;
+<<
+
+   Мероприятие:            .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   Вышестоящее мероприятие:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+>>
+end; // Screen
+
+HandleEvent // Panel
+
+cmDelOnProtect:
+  {
+    case CurField of
+       #MeasuresE.Name:
+         set Measures.cOwner := 0;
+    end;
+
+    update current Measures;
+
+    RereadRecord(#Measures);
+    ReScanPanel(#Measures);
+  }
+
+cmPick:
+  {
+    var cNRec : comp; cNRec := Measures.cOwner;
+    var c     : comp; c     := Measures.NRec;
+
+    case CurField of
+       #MeasuresE.Name:
+         if (RunInterface('GetMeasures', cNRec, FALSE) <> cmCancel)
+           {
+             if (cNRec = Measures.NRec)
+                 set Measures.cOwner := comp(0);
+             else
+               {
+                 var iLevel : integer;
+
+                 TreePushPos(brw2);
+                 iLevel := TreeLevel(brw2);
+
+                 do
+                   if (Measures.NRec = cNRec)
+                     {
+                       Message('Невозможно изменить вышестоящее мероприятие', Information);
+                       TreeJumpToRecord(brw2, c);
+                       RereadRecord(#Measures);
+                       ReScanPanel(#Measures);
+                       Exit;
+                     }
+                 while TreeGetNextEx(brw2) AND iLevel < TreeLevel(brw2)
+
+                 TreePopPos(brw2);
+
+                 set Measures.cOwner := cNRec;
+               }
+
+             update current Measures;
+
+             TreeJumpToRecord (brw2, c);
+
+             RereadRecord(#Measures);
+             ReScanPanel(#Measures);
+           }
+    end;
+
+    ReScanPanel(CurTable);
+  }
+
+end; // HandleEvent
+end; // Panel
+end; // Window
+
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    TmpComp  := 0;
+
+    if ( GetFirst Measures where ((cRec == Measures.NRec)) <> tsOk )
+      if ( GetFirst Measures <> tsOk )
+        {
+          if (Message('Каталог мероприятий пуст.'#13#13#3
+                    + 'Заполните его сейчас...'
+                    , OkButton+cmCancel) = cmCancel)
+            {
+              Abort;
+              Exit;
+            }
+
+          SetMyFormat(1, TRUE, TRUE);
+        }
+      else
+        TmpComp := 1;
+    else
+      TmpComp := 1;
+
+    //восстановление позиции:
+    if cRec = 0
+      {
+        var nRc: comp;
+
+        ReadMyDsk(nRc, 'Measures_NRec1', TRUE);
+
+        if (GetFirst Measures where ((nRc == Measures.NRec)) <>tsOk)
+          { }
+      }
+
+    if (TmpComp = 1)
+      {
+        //вспоминаем вид отображения (дерево/список)
+        if (Not ReadMyDsk(tmpComp_1, 'GetMeasures_Level', FALSE))
+          tmpComp_1 := 0;
+
+        if (tmpComp_1 = 1)
+          {
+            SetMyFormat(0, TRUE, TRUE);
+            PutCommand(cmValue1);
+          }
+        else
+          SetMyFormat(0, TRUE, FALSE);
+      }
+
+    if NOT ReadMyDsk(MySort, 'MeasuresMySort', TRUE)
+      MySort := 2;  // по коду
+    if NOT ReadMyDsk(ColSort, 'MeasuresColSort', TRUE)
+      ColSort := -1;
+
+    SetOrder(if (MySort = 1,tiByName,tiByKod));
+    SetTableBackOrderIn(tnMeasures, ColSort = 1);
+    SelectField(if (MySort = 1, #Measures.Name, #Measures.Kod));
+    SetColumnSorting(if (OneLevel ,brw1, brw2), if (MySort = 1, #Measures.Name, #Measures.Kod), ColSort);
+    RereadRecord;
+  }//cmInit
+
+cmValue1:
+  {
+    TreeJumpToRecord (brw2, Measures.NRec);
+    RescanPanel(#Measures);
+  }
+
+cmDefault:
+  if (UpdateTable)
+    {
+      if (curFormat = 1)
+        Exit;
+
+      if (bPick)
+        {
+          ResetBounds(#Pick);
+
+          if (GetFirst Pick where ((word(5059) == Pick.wList)) <> tsOk)
+            {
+              ClearBuffer(#Pick);
+              Pick.wList := 5059;
+              Pick.cRec  := Measures.NRec;
+              insert current Pick;
+            }
+        }
+      else
+        cRec := Measures.NRec;
+
+      SaveMyDsk(Measures.NRec, 'Measures_NRec1');
+      CloseInterface(cmDone);
+    }
+
+cmEdit:
+  SetMyFormat(1, FALSE, FALSE);
+
+cmAccording: //Alt+S Переключение <иерархия/плоский вид>
+  SetMyFormat(curFormat, TRUE, TRUE);
+
+cmCheckField:
+  case CurField of
+    #Measures.Kod:
+      if ( IsNew  AND GetFirst Measures1 where ((Measures.Kod == Measures1.Kod)) = tsOk )
+        {
+          Message('Уже существует мероприятие с таким кодом!' , OkButton+Warning);
+          Abort;
+          Exit;
+        }
+  end;
+
+cmCheckRecord:
+  {
+    if (Trim(Measures.Name) = '')
+      {
+        Message('Не задано наименование мероприятия!'#13#13#3
+              + 'Задайте или удалите запись!'#13
+              , CancelButton+Warning);
+        SelectField(#Measures.Name);
+        Abort;
+      }
+
+    if (Trim(Measures.Kod) = '')
+      {
+        Message('Не задан код мероприятия!'#13#13#3
+              + 'Задайте или удалите запись!'#13
+              , CancelButton+Warning);
+        SelectField(#Measures.Kod);
+        Abort;
+      }
+  }
+
+cmInsert:
+  {
+  }
+
+cmMarkUnMark:
+  if (bPick)
+    {
+      iLevel := TreeLevel(brw2);
+
+      if (IsValid(#Pick))
+        {
+          if ((Measures.NRec > 0) AND (NOT OneLevel))
+            do
+              if (IsValid(#Pick))
+                delete current Pick;
+            while TreeGetNextEx(brw2) AND iLevel < TreeLevel(brw2)
+          else
+            {
+              delete current Pick;
+#ifdef ATL51
+              RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+              if ( GetNext Measures = tsOK)
+                CallToNeighBours(cmPosDown, tnMeasures);
+
+              ReReadRecord(#Measures);
+#endif
+            }
+        }
+      else
+        {
+          if ((Measures.NRec > 0) AND (NOT OneLevel))
+            do
+              if (NOT IsValid(#Pick))
+                {
+                  Pick.wList   := 5059;
+                  Pick.PickKol := 0;
+                  Pick.cRec    := Measures.NRec;
+                  insert current Pick;
+                }
+            while TreeGetNextEx(brw2) AND iLevel < TreeLevel(brw2)
+          else
+            if (NOT IsValid(#Pick))
+              {
+                Pick.wList   := 5059;
+                Pick.PickKol := 0;
+                Pick.cRec    := Measures.NRec;
+                insert current Pick;
+#ifdef ATL51
+                RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+                if ( GetNext Measures = tsOK)
+                  CallToNeighBours(cmPosDown, tnMeasures);
+
+                ReReadRecord(#Measures);
+#endif
+              }
+        }
+      RescanPanel(#Measures);
+    }
+
+cmSelectAll:
+  if (bPick)
+    {
+      KillPick;
+      StartNewVisual(vtIndicatorVisual
+                   , vfTimer+vfBreak+vfConfirm
+                   , 'Помечаю все мероприятия...'#13#3
+                   , RecordsInTable(#Measures));
+
+      if ((Measures.NRec > 0) AND (NOT OneLevel))
+        {
+          TreePushPos(brw2);
+
+          if TreeGetFirst(brw2)
+            do
+              {
+                Pick.wList   := 5059;
+                Pick.PickKol := 0;
+                Pick.cRec    := Measures.NRec;
+                insert current Pick;
+              }
+          while TreeGetNext(brw2) and NextVisual
+
+          TreePopPos(brw2);
+        }
+      else
+        {
+          PushPos(#Measures);
+
+          _LOOP Measures
+            if (NOT NextVisual)
+              Break;
+            else
+              {
+                Pick.wList   := 5059;
+                Pick.PickKol := 0;
+                Pick.cRec    := Measures.NRec;
+                insert current Pick;
+              }
+
+          PopPos(#Measures);
+        }
+
+      ReReadRecord;
+      RescanPanel(#Measures);
+      StopVisual('', 0);
+    }
+
+cmUnSelectAll:
+  {
+    KillPick;
+    RescanPanel(#Measures);
+    ReReadRecord;
+  }
+
+cmAddNewRec:
+  PutCommand(cmInsert);
+
+cmAttrib:
+  if (TreeOpenNode(brw2))
+    RescanPanel(#Measures);
+
+cmCompressLevel:
+  if (TreeCloseNode(brw2))
+    RescanPanel(#Measures);
+
+// изменить родителя
+cmValue2:
+  RunWindow(winParent);
+
+cmHotKeys:
+  if OneLevel
+    PutHotCommand(RunMenu('mnuGetMeasures'));
+  else
+    PutHotCommand(RunMenu('mnuGetMeasures_Tree'));
+
+cmCancel:
+  if ((curFormat = 1) AND UpdateTable)
+    {
+      SetMyFormat (0, FALSE, FALSE);
+      Abort;
+    }
+
+
+cmShowAll:
+  {
+    SetMyTitle;
+    RescanPanel(#Measures);
+  }
+
+cmHideAll:
+  {
+    SetMyTitle;
+    RescanPanel(#Measures);
+  }
+
+cmDone:
+  {
+   //сохраняем вид отображения (дерево/список)
+    if (OneLevel)
+      SaveMyDsk(1, 'GetMeasures_Level');
+    else
+      SaveMyDsk(0, 'GetMeasures_Level');
+
+    SaveMyDsk(MySort,'MeasuresMySort');
+    ColSort := GetColumnSorting(if (OneLevel ,brw1, brw2), if(MySort = 1, #Measures.Name,#Measures.Kod));
+    SaveMyDsk(ColSort,'MeasuresColSort');
+  }
+
+cmColumnClicked:
+  {
+    ColSort := GetColumnSorting(if (OneLevel ,brw1, brw2), Target);
+    case Target of
+      #Measures.Name,
+      #Measures.KOD:
+        {
+          SetTableBackOrderIn(tnMeasures, (ColSort = -1));
+          SetColumnSorting(if (OneLevel ,brw1, brw2), Target, if(ColSort <> -1, -1, 1));
+          SetOrder(if(Target = #Measures.Name, tiByName, tiByKOD));
+          MySort := if(Target = #Measures.Name, 1, 2);
+        }
+    end;
+    RescanPanel(#Measures);
+    RereadRecord;
+  }
+
+
+
+end; // HandleEvent
+End. // Interface
+
+//******************************************************************************
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetMeasures>L_Dogovor::GetMeasures - Выбор мероприятий</link>
+#end
+mnuGetMeasures_Tree Menu
+{
+- 'Изменить вышестоящее мероприятие', cmValue2, 'Изменить вышестоящее мероприятие для данной запись', , , , sci1Esc;
+------------;
+- '~Р~аскрыть уровень', cmAttrib, 'Раскрыть уровень иерархии', , 'Ctrl+Enter', kbCtrlEnter, sci1Esc;
+- '~З~акрыть уровень', cmCompressLevel, 'Закрыть уровень иерархии', , 'Ctrl+BackSpace', kbCtrlBack, sci1Esc;
+- '~П~ереключить режим просмотра', cmAccording, 'Переключение режима просмотра между таблицей и деревом', , 'Alt+S', kbAltS, sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Элемент локального меню главного окна интерфейса <link Interface L_Dogovor::GetMeasures>L_Dogovor::GetMeasures - Выбор мероприятий</link>
+Для переключения режима просмотра
+#end
+mnuGetMeasures Menu
+{
+- '~П~ереключить режим просмотра', cmAccording, 'Переключение режима просмотра между таблицей и деревом', , 'Alt+S', kbAltS, sci1Esc;
+}
+#end

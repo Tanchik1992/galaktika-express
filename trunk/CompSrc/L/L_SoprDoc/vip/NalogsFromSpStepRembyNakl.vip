@@ -1,0 +1,216 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#doc
+Назначение:
+  Формирование налогов актов выполненных ремонтов
+  при вкл настройке:
+  Спецификацию акта выполненного ремонта формировать - по накладной
+Параметры:
+  c1       - ссылка на позицию сопр.документа
+  _SumNDS  - сумма налогов в НДЕ
+  _SumVNDS - сумма налогов в валюте
+  _Price   - округленная цена в НДЕ
+  _VPrice  - округленная цена в валюте
+#end
+
+//******************************************************************************
+
+Interface iNalogsFromSpStepRembyNakl, AlwaysReturn, cacheable;
+
+Create view
+var
+  c1: comp;//SpSopr.nRec
+  _SumNDS, _SumVNDS, _Price, _VPrice: double;
+
+from
+
+  SpSopr
+, SpSopr SpSopr2
+
+, SpStep
+, SpStep SpStep2
+, BaseDoc
+
+, StepDoc
+, StepDoc StepDoc2
+
+, SpDocNal
+, SpDocNal   SpDocNal2
+
+, KatOtpED
+, KatOtpED   KatOtpED2
+
+, KatSopr
+, KatSopr KatSopr2
+
+, BaseDocRem
+, BaseDocRem BaseDocRemAkt
+
+
+where
+((
+      c1                          ==  SpSopr.nRec
+  AND SpSopr.cSopr                ==  KatSopr.nRec
+  AND SpSopr.nRec                 ==  SpDocNal2.cSpDoc
+  AND SpSopr.VidSopr              ==  SpDocNal2.TipDoc
+  AND SpSopr.cSpStep              ==  SpStep.nRec
+  AND SpStep.cOtpEd               ==  KatOtpEd.nRec
+
+//--------------------------------------------------------------------------
+  AND KatSopr.Nrec                == BaseDocRemAkt.cBaseDoc
+  AND word(1)                     == BaseDocRemAkt.TipDoc
+
+  AND BaseDocRemAkt.cBaseDocRem   == BaseDoc.NRec           // это будет на заявку
+
+  AND BaseDoc.nRec                == StepDoc2.cBaseDoc
+  AND StepDoc2.nRec               == KatSopr2.cStepDoc
+  AND  word(551)                  == KatSopr2.VidSopr
+  AND KatSopr2.nRec               == SpSopr2.cSopr
+  AND SpSopr2.nRec                == SpDocNal.cSpDoc
+  AND SpSopr2.VidSopr             == SpDocNal.TipDoc
+
+  AND SpSopr2.cOtpEd              == KatOtpEd2.nRec
+  AND SpSopr2.cSpStep             == SpStep2.nRec
+  AND SpStep2.cOtpEd              == KatOtpEd2.nRec
+
+//--------------------------------------------------------------------------
+))
+;
+
+parameters
+  c1
+, _SumNDS
+, _SumVNDS
+, _Price
+, _VPrice
+;
+
+#include fsround.vpp
+
+HandleEvent
+
+cmInit:
+  {
+    delete all SpDocNal2;//удаляю налоги по позиции сопр.документа
+
+    var SpStepKoef, SpSoprKoef, KS_Course: double;
+
+    _SumNDS  := 0;
+    _SumVNDS := 0;
+
+
+    if GetFirst SpSopr where (( c1 ==  SpSopr.nRec)) = tsOk
+    { //message('SpSopr');
+      if GetFirst KatSopr = tsOk
+      { //message('KatSopr');
+        if GetFirst BaseDocRemAkt = tsOk
+        { //message('BaseDocRemAkt');
+          if GetFirst BaseDoc = tsOk
+          { //message('BaseDoc');
+            if GetFirst StepDoc2 = tsOk
+            { //message('StepDoc2');
+              _LOOP KatSopr2
+              {  //message('KatSopr2');
+                _LOOP SpSopr2
+                {  //message('SpSopr2.NRec = ' + SpSopr2.NRec);
+                  _LOOP SpDocNal
+                  { //message('_LOOP SpDocNal');
+                    SpDocNal.nRec   := 0;
+                    SpDocNal.cSpDoc := SpSopr.nRec;
+                    SpDocNal.cDoc   := KatSopr.nRec;
+                    SpDocNal.TipDoc := KatSopr.VidSopr;
+
+
+
+                    if ( SpDocNal.cOrg = BaseDoc.cOrg )
+                      SpDocNal.cOrg := KatSopr.cOrg; // иначе проблемы если есть налоги отн.на другого контрагента
+
+                    KS_Course     := if(_VPrice = 0, 1, _Price / _VPrice);
+                    //message('KS_Course = ' + KS_Course + ' _Price = ' + _Price + ' _VPrice = ' + _VPrice);
+
+                    SpStepKoef := SpStep2.Summa;
+                    //message('KS_Course = ' + KS_Course + ' SpStepKoef = ' + SpStepKoef);
+
+                    case BaseDoc.TipMoney of
+                    //******************************************************************************
+                      //НДЕ
+                      1: SpDocNal.SumVal := SpDocNal.SumNal / KS_Course;
+
+                    //******************************************************************************
+                      //ВАЛ-НДЕ
+                      2:
+                        { //message('SpDocNal.SumVal2 = ' + SpDocNal.SumVal);
+                          SpStepKoef := SpStepKoef * KS_Course;
+
+                          var BD_Course: double;
+
+                          if ( BaseDoc.ValCurse <> 0 )
+                            BD_Course := BaseDoc.ValCurse
+                          else
+                            if oValFunc.GetCurse(BaseDoc.cVal, BaseDoc.dDoc, BD_Course)
+
+                          BD_Course := if(BD_Course = 0, 1, BD_Course);
+
+                          SpDocNal.Summa  := SpDocNal.Summa / BD_Course * KS_Course;
+                          SpDocNal.SumNal := SpDocNal.Summa;
+                        }
+                    //******************************************************************************
+                      //ВАЛ
+                      3:
+                        { //message('SpDocNal.SumVal3 = ' + SpDocNal.SumVal);
+                          SpDocNal.Summa  := SpDocNal.SumVal * KS_Course;
+                          SpDocNal.SumNal := SpDocNal.Summa;
+                        }
+                    //******************************************************************************
+                    end;
+
+                    // сопутствующие услуги
+                    if ( SpSopr.PrMc > 2 )
+                      SpSoprKoef := if(KatSopr.cVal = 0, _Price, _VPrice);
+                    else
+                      SpSoprKoef := SpSopr.KolOpl * if(KatSopr.cVal = 0, _Price, _VPrice);
+
+                    //message(' SpSoprKoef = ' + SpSoprKoef);
+
+                    SpDocNal.Summa  := SpDocNal.Summa  * SpSoprKoef / SpStepKoef;
+                    SpDocNal.SumVal := SpDocNal.SumVal * SpSoprKoef / SpStepKoef;
+                    SpDocNal.SumNal := SpDocNal.SumNal * SpSoprKoef / SpStepKoef;
+
+                    // учитывать правила округления
+                    if ( ( BaseDoc.TipMoney = 2 ) AND ( wGetTune('Doc.RegulationsRoundInStoim') = 1 ) )
+                      {
+                        SpDocNal.Summa  := FSRoundRub(SpDocNal.Summa);
+                        SpDocNal.SumNal := FSRoundRub(SpDocNal.SumNal);
+                      }
+
+                    PushPos(#SpDocNal); // без этого зацикливание
+
+                    if ( insert current SpDocNal <> tsOK )
+                      {}
+
+                    PopPos(#SpDocNal);
+
+                    if ( SpDocNal.cOrg = KatSopr.cOrgBase )
+                      {
+                        _SumNDS  := _SumNDS  + SpDocNal.Summa;
+                        _SumVNDS := _SumVNDS + SpDocNal.SumVal;
+                       // MESSAGE('IF');
+                      }
+                  } //_LOOP
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Abort;
+  }
+end;
+
+End.

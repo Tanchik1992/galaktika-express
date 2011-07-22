@@ -1,0 +1,564 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика - договоры
+// Печать распоряжения на прием-отпуск
+//******************************************************************************
+
+#include MTRFuncs.vih           // функции целевого учета
+#include xlReport.Vih           // Excel
+
+#doc
+Печать распоряжения на прием-отпуск
+#end
+Interface RPriemOtp_Prn 'Печать распоряжения на прием-отпуск МТР' ( , hcBCTO_Nastr_Win_Podpis_Raspor,) EscClose, Cyan;
+  Show at (, , 65, 10);
+
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+
+Var pxlrepsetup : xlrepsetup;
+
+Create view
+
+Var
+  pcRec
+, cZam
+, cDir
+, cYpr
+, cNach
+, cOtd
+, cSog
+, _cUks
+          : comp;
+
+  wTip    : word;
+
+  sXLTFileName
+, sXLSFileName
+, ID
+          : string;
+
+  pXL     : XLSRepBuilder;      // Excel
+
+As select
+
+  if (IsValid(tnDogovorP), DogovorP.NoDoc + DateToStr(DogovorP.dDoc, ' от DD/MM/YYYY г.'), '')
+    ( FieldName = fNameDogovorP )
+
+, if (IsValid(tnDogovorR), DogovorR.NoDoc + DateToStr(DogovorR.dDoc, ' от DD/MM/YYYY г.'), '')
+    ( FieldName = fNameDogovorR )
+
+, SpSopr.KolFact * SpSopr.Price
+    ( FieldName = SumPrice )
+
+, SpSopr.KolFact * SpSopr.Price + SpSopr.SumNDS
+    ( FieldName = SumWithNDS )
+
+From
+  KatSopr
+, SpSopr
+, SpSopr        SpSopr2
+, SpDocs
+, GroupMC
+, KatMC
+, KatOtpEd
+, KatPodr       KatPodrP
+, KatPodr       KatPodrR
+, KatMol        KatMolR
+, KatOrg        KatOrgP_Post
+, KatOrg        KatOrgP_Gotp
+, KatOrg        KatOrgP_Gpol
+, KatOrg        KatOrgR_Podr
+, KatStroy
+, KatStroy      KatStroySp
+, KatNotes
+, Dogovor       DogovorP
+, Dogovor       DogovorR
+, MarPunkt      MarPunktP
+, MarPunkt      MarPunktR
+, MoveCell
+, Vagon
+, Persons
+, Persons PersonsZam
+, Persons PersonsDir
+, Persons PersonsYpr
+, Persons PersonsNach
+, Persons PersonsOtd
+, Persons PersonsSog
+, SpDopEd
+, KatDopEd
+, KatMC KatMC2
+, AllMemo
+
+
+Where
+((
+     pcRec               == KatSopr.nRec
+and  KatSopr.nRec        == SpSopr.cSopr
+
+and  KatSopr.cPodrFrom   == KatPodrP.nRec
+and  KatSopr.cOrgBase    == KatOrgP_Post.nRec
+and  KatSopr.cDogovor    == DogovorP.nRec
+and  KatSopr.cGruzFrom   == KatOrgP_Gotp.nRec
+and  KatSopr.cGruzTo     == KatOrgP_Gpol.nRec
+and  KatSopr.cNZakaz     == MarPunktP.nRec
+and  KatSopr.cCellVal    == MoveCell.nRec
+and  KatSopr.cGrSopr     == GroupMC.nRec
+and  KatSopr.cNMoveCell  == Vagon.nRec
+
+and  KatSopr.cPodrTo     == KatPodrR.nRec
+and  KatSopr.cMolTo      == KatMolR.nRec
+and  KatSopr.cOrg        == KatOrgR_Podr.nRec
+and  KatSopr.cDover      == DogovorR.nRec
+and  KatSopr.cZakaz      == MarPunktR.nRec
+and  KatSopr.cUKS        == KatStroy.nRec
+
+and  _cUks               == KatStroySp.nRec
+and  SpSopr.cMCUsl       == KatMC.nRec
+and  SpSopr.cOtpEd       == KatOtpEd.nRec
+
+and  cZam                == PersonsZam.NRec
+and  cDir                == PersonsDir.NRec
+and  cYpr                == PersonsYpr.NRec
+and  cNach               == PersonsNach.NRec
+and  cOtd                == PersonsOtd.NRec
+and  cSog                == PersonsSog.NRec
+
+and  coSpSopr            ==  SpDopEd.wTable     
+and  SpSopr.NRec         ==  SpDopEd.cRec       
+and  word(1)             ==  SpDopEd.wTipKol    
+and  SpDopEd.cDopEd      ==  KatDopEd.nRec
+
+AND  word(coKatMC)       == AllMemo.wTable
+AND  KatMC2.NRec         == AllMemo.cRec
+
+))
+;
+
+//******************************************************************************
+
+Parameters
+  pcRec
+, wTip
+;
+
+//******************************************************************************
+
+File FileMemo;
+
+//******************************************************************************
+
+Form frmRasp ('rpriemotp.out', 'RaspPrOtp');
+
+Procedure SetLongNameMC(ii : longint);
+var sMemoLine : string;
+{
+  if (NOT IsValid(#AllMemo))
+    xlSetCellStringValue(KatMC2.Name, ii,4,ii, 4);
+  else
+    {
+      if (FileMemo.OpenMemo(AllMemo.Mem))
+        {
+          _try
+            {
+            if (FileMemo.GetSize <> longint(0))
+              {
+                FileMemo.Seek(0);
+
+                While(not FileMemo.EOF())
+                  {
+                    FileMemo.ReadLn(sMemoLine);
+                    xlAddCellStringValue(sMemoLine, ii, 4);
+                  }
+
+              }
+            }
+          _except on exFile:
+          {
+            FileMemo.Close();
+          }
+          _finally
+          {
+            FileMemo.Close();
+          }
+        }
+    }
+}
+
+//******************************************************************************
+Procedure GetLongNameMC(bPos : longint; Count : longint);
+var
+ ii, iAll : longint;
+ nR : comp;
+{
+  iAll := bPos + Count;
+
+  for(ii := bPos; ii <= iAll; inc(ii))
+    {
+      nR := comp(XLGETCELLSUBSTRINGVALUE(ii,1,1,20));
+
+      if (nR <> 0)
+        if (GetFirst KatMC2 where ((nR == KatMC2.NRec )) = tsOk)
+          SetLongNameMC(ii);
+    }
+
+}
+
+//******************************************************************************
+
+Procedure PrintFieldsXLS;
+{
+#ifdef Gal8_1
+  ID := 'L_Dogovor\RPriemOtp';
+#else
+  ID := 'oper\RPriemOtp';
+#end
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+   #ifdef Atl51
+     set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+   #else
+     Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+   #endif
+
+  if not pxlrepsetup.checkParam(0,ID,sXLTFileName)
+    runinterface('xlrepsetup',1,ID,sXLTFileName);
+
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+!  Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+//  if (UpDateInsertDogovor <> tsOk) Exit;
+//  ReReadRecord(#Dogovor1);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);
+
+
+  pXL.SetStringVar('Title'  , 'Распоряжение на прием-отпуск МТР № ' + KatSopr.NSopr);
+  pXL.SetStringVar('NSopr'  , KatSopr.NSopr);
+  pXL.SetStringVar('dSopr'  , KatSopr.dSopr);
+  pXL.SetStringVar('dPrice' , KatSopr.dPrice);
+  pXL.SetStringVar('CurDate', Cur_Date);
+
+
+  pXL.SetStringVar('Prixod_Sklad_L', 'Склад ' + if(IsValid(#KatPodrP), KatPodrP.Name, ''));
+  pXL.SetStringVar('Prixod_Sklad'  ,            if(IsValid(#KatPodrP), KatPodrP.Name, ''));
+  pXL.SetStringVar('Prixod_Org_L'  , 'Организация ' + if(IsValid(#KatOrgP_Post), KatOrgP_Post.Name, ''));
+  pXL.SetStringVar('Prixod_Org '   ,                  if(IsValid(#KatOrgP_Post), KatOrgP_Post.Name, ''));
+  pXL.SetStringVar('Prixod_Dog_L'  , 'Договор ' + if(IsValid(#DogovorP), fNameDogovorP, ''));
+  pXL.SetStringVar('Prixod_Dog'    ,              if(IsValid(#DogovorP), fNameDogovorP, ''));
+  pXL.SetStringVar('Prixod_GrOtp_L', 'Грузоотправитель ' + if(IsValid(#KatOrgP_Gotp), KatOrgP_Gotp.Name, ''));
+  pXL.SetStringVar('Prixod_GrOtp'  ,                       if(IsValid(#KatOrgP_Gotp), KatOrgP_Gotp.Name, ''));
+  pXL.SetStringVar('Prixod_TSD_L'  , 'Товаросопроводительные документы ' + KatSopr.Name);
+  pXL.SetStringVar('Prixod_TSD'    ,                                       KatSopr.Name);
+  pXL.SetStringVar('Prixod_dPost_L', 'Дата поступления ' + KatSopr.dDover);
+  pXL.SetStringVar('Prixod_dPost'  ,                       KatSopr.dDover);
+  pXL.SetStringVar('Prixod_mPost_L', 'Место поступления ' + if(IsValid(#MarPunktP), MarPunktP.Name, ''));
+  pXL.SetStringVar('Prixod_mPost'  ,                        if(IsValid(#MarPunktP), MarPunktP.Name, ''));
+  pXL.SetStringVar('Prixod_VidOt_L', 'Вид отгрузки ' + if(IsValid(#MoveCell), MoveCell.Name, ''));
+  pXL.SetStringVar('Prixod_VidOt'  ,                   if(IsValid(#MoveCell), MoveCell.Name, ''));
+  pXL.SetStringVar('Prixod_Vagon_L', '№ вагона ' + KatSopr.nVagon);
+  pXL.SetStringVar('Prixod_Vagon'  ,               KatSopr.nVagon);
+  pXL.SetStringVar('Prixod_Group_L', 'Вид продукции ' + if(IsValid(#GroupMC), GroupMC.Name, ''));
+  pXL.SetStringVar('Prixod_Group'  ,                    if(IsValid(#GroupMC), GroupMC.Name, ''));
+  pXL.SetStringVar('Prixod_GrPol_L', 'Грузополучатель ' + if(IsValid(#KatOrgP_Gpol), KatOrgP_Gpol.Name, ''));
+  pXL.SetStringVar('Prixod_GrPol'  ,                      if(IsValid(#KatOrgP_Gpol), KatOrgP_Gpol.Name, ''));
+
+  pXL.SetStringVar('Rasxod_Sklad_L', 'Склад ' + if(IsValid(#KatPodrR), KatPodrR.Name, ''));
+  pXL.SetStringVar('Rasxod_Sklad'  ,            if(IsValid(#KatPodrR), KatPodrR.Name, ''));
+  pXL.SetStringVar('Rasxod_MOL_L'  , 'МОЛ ' + if(IsValid(#KatMolR), KatMolR.Name, ''));
+  pXL.SetStringVar('Rasxod_MOL'    ,          if(IsValid(#KatMolR), KatMolR.Name, ''));
+  pXL.SetStringVar('Rasxod_Org_L'  , 'Подрядчик ' + if(IsValid(#KatOrgR_Podr), KatOrgR_Podr.Name, ''));
+  pXL.SetStringVar('Rasxod_Org '   ,                if(IsValid(#KatOrgR_Podr), KatOrgR_Podr.Name, ''));
+  pXL.SetStringVar('Rasxod_SoprD_L', 'Сопроводительные документы ' + KatSopr.sDover);
+  pXL.SetStringVar('Rasxod_SoprD'  ,                                 KatSopr.sDover);
+  pXL.SetStringVar('Rasxod_dOtp_L' , 'Дата отпуска ' + KatSopr.sDover);
+  pXL.SetStringVar('Rasxod_dOtp'   ,                   KatSopr.sDover);
+  pXL.SetStringVar('Rasxod_mPost_L', 'Место отпуска ' + if(IsValid(#MarPunktR), MarPunktR.Name, ''));
+  pXL.SetStringVar('Rasxod_mPost'  ,                    if(IsValid(#MarPunktR), MarPunktR.Name, ''));
+  pXL.SetStringVar('Rasxod_Dog_L'  , 'Контракт ' + if(IsValid(#DogovorR), fNameDogovorR, ''));
+  pXL.SetStringVar('Rasxod_Dog'    ,               if(IsValid(#DogovorR), fNameDogovorR, ''));
+  pXL.SetStringVar('Rasxod_Obj_L'  , 'Объект ВСТО ' + if(IsValid(#KatStroy), KatStroy.Name, ''));
+  pXL.SetStringVar('Rasxod_Obj'    ,                  if(IsValid(#KatStroy), KatStroy.Name, ''));
+  pXL.SetStringVar('Rasxod_Field'  , KatSopr.UserField);
+
+  pXL.SetStringVar('Pers_Zam' , if(IsValid(#PersonsZam) , PersonsZam.FIO , ''));
+  pXL.SetStringVar('Pers_Dir' , if(IsValid(#PersonsDir) , PersonsDir.FIO , ''));
+  pXL.SetStringVar('Pers_Ypr' , if(IsValid(#PersonsYpr) , PersonsYpr.FIO , ''));
+  pXL.SetStringVar('Pers_Nach', if(IsValid(#PersonsNach), PersonsNach.FIO, ''));
+  pXL.SetStringVar('Pers_Otd' , if(IsValid(#PersonsOtd) , PersonsOtd.FIO , ''));
+  pXL.SetStringVar('Pers_Sog' , if(IsValid(#PersonsSog) , PersonsSog.FIO , ''));
+  pXL.PublishVar;  // Excel
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('RPriemOtp');
+  pXL.CreateTblFld('NPP');
+  pXL.CreateTblFld('MCName');
+  pXL.CreateTblFld('MCNREC');
+  pXL.CreateTblFld('MCName_L');
+  pXL.CreateTblFld('BarKod');
+  pXL.CreateTblFld('GOST');
+  pXL.CreateTblFld('EDIZM');
+  pXL.CreateTblFld('KolFact');
+  pXL.CreateTblFld('Price');
+  pXL.CreateTblFld('SumPrice');
+  pXL.CreateTblFld('SumNDS');
+  pXL.CreateTblFld('SumWithNDS');
+  pXL.CreateTblFld('OBJ');
+  pXL.CreateTblFld('Field');
+
+  var i : longint; i := 0;
+
+  _LOOP SpSopr
+    {
+      pXL.ClearTblBuffer;
+      pXL.SetTblStringFldValue('NPP'       , SpSopr.Npp);
+      pXL.SetTblStringFldValue('BarKod'    , if(IsValid(#KatMC), KatMC.BarKod, ''));
+      pXL.SetTblStringFldValue('MCName'    , if(IsValid(#KatMC), KatMC.Name, ''));
+      pXL.SetTblStringFldValue('GOST'      , if(IsValid(#KatMC), KatMC.RemMC, ''));
+      pXL.SetTblStringFldValue('EDIZM'     , if(IsValid(#KatOtpEd), KatOtpEd.Name, ''));
+      pXL.SetTblStringFldValue('KolFact'   , SpSopr.KolFact);
+      pXL.SetTblStringFldValue('Price'     , SpSopr.Price);
+      pXL.SetTblStringFldValue('SumPrice'  , SumPrice);
+      pXL.SetTblStringFldValue('SumNDS'    , SpSopr.SumNDS);
+      pXL.SetTblStringFldValue('SumWithNDS', SumWithNDS);
+      pXL.SetTblStringFldValue('MCNREC'    , if(IsValid(#KatMC), string(KatMC.NRec), ''));
+
+      set _cUks := oMTRFun.GetObjUKS(coSpSopr, SpSopr.NRec);
+
+      pXL.SetTblStringFldValue('OBJ', if(IsValid(#KatStroySp), KatStroySp.Name, ''));
+
+      _LOOP SpDopEd
+        {
+          inc(i);
+          pXL.InsTblRow;
+          pXL.ClearTblBuffer;
+          pXL.SetTblStringFldValue('EDIZM'     , if(IsValid(#KatDopEd), KatDopEd.Name, ''));
+          pXL.SetTblStringFldValue('KolFact'   , SpDopEd.Kol);
+          pXL.SetTblStringFldValue('Price'     , if (KatSopr.cVal = 0, (SpSopr.Price * SpSopr.KolFact)/SpDopEd.Kol , (SpSopr.VPrice * SpSopr.KolFact)/SpDopEd.Kol));
+          pXL.SetTblNumberFldValue('Priznak'   , 0);
+        }
+
+      inc(i);
+      pXL.InsTblRow;
+    }
+
+  pXL.PublishTbl('RPriemOtp');
+  pXL.LoadReport(sXLSFileName);
+
+  var sActiveWorkBookName : string;  sActiveWorkBookName := '';
+  xlGetActiveWorkBookName(sActiveWorkBookName);
+  xlSetActiveSheetByName('Отчет');
+
+  GetLongNameMC(19, i);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+}
+
+
+//******************************************************************************
+
+Procedure PrintFields;
+{
+  frmRasp.Write(KatSopr.nRec);
+  frmRasp.Write(KatSopr.NSopr);
+  frmRasp.Write(KatSopr.dSopr);
+  frmRasp.Write(KatSopr.dPrice);
+  frmRasp.Write(Cur_Date);
+
+  frmRasp.Write(if(IsValid(#KatPodrP), KatPodrP.Name, ''));
+  frmRasp.Write(if(IsValid(#KatOrgP_Post), KatOrgP_Post.Name, ''));
+  frmRasp.Write(if(IsValid(#DogovorP), fNameDogovorP, ''));
+  frmRasp.Write(if(IsValid(#KatOrgP_Gotp), KatOrgP_Gotp.Name, ''));
+  frmRasp.Write(KatSopr.Name);
+  frmRasp.Write(KatSopr.dDover);
+  frmRasp.Write(if(IsValid(#MarPunktP), MarPunktP.Name, ''));
+  frmRasp.Write(if(IsValid(#MoveCell), MoveCell.Name, ''));
+  frmRasp.Write(KatSopr.nVagon);
+  frmRasp.Write(if(IsValid(#GroupMC), GroupMC.Name, ''));
+  frmRasp.Write(if(IsValid(#KatOrgP_Gpol), KatOrgP_Gpol.Name, ''));
+
+  frmRasp.Write(if(IsValid(#KatPodrR), KatPodrR.Name, ''));
+  frmRasp.Write(if(IsValid(#KatMolR), KatMolR.Name, ''));
+  frmRasp.Write(if(IsValid(#KatOrgR_Podr), KatOrgR_Podr.Name, ''));
+  frmRasp.Write(KatSopr.sDover);
+  frmRasp.Write(KatSopr.dOpr);
+  frmRasp.Write(if(IsValid(#MarPunktR), MarPunktR.Name, ''));
+  frmRasp.Write(if(IsValid(#DogovorR), fNameDogovorR, ''));
+  frmRasp.Write(if(IsValid(#KatStroy), KatStroy.Name, ''));
+  frmRasp.Write(KatSopr.UserField);
+
+  frmRasp.Write(if(IsValid(#PersonsZam) , PersonsZam.FIO , ''));
+  frmRasp.Write(if(IsValid(#PersonsDir) , PersonsDir.FIO , ''));
+  frmRasp.Write(if(IsValid(#PersonsYpr) , PersonsYpr.FIO , ''));
+  frmRasp.Write(if(IsValid(#PersonsNach), PersonsNach.FIO, ''));
+  frmRasp.Write(if(IsValid(#PersonsOtd) , PersonsOtd.FIO , ''));
+  frmRasp.Write(if(IsValid(#PersonsSog) , PersonsSog.FIO , ''));
+
+  if ( GetFirst SpSopr <> tsOk )
+    frmRasp.SkipFormat(13);
+  else
+    _loop SpSopr
+      {
+        frmRasp.Write(SpSopr.nRec);
+        frmRasp.Write(SpSopr.Npp);
+        frmRasp.Write(if(IsValid(#KatMC), KatMC.BarKod, ''));
+        frmRasp.Write(if(IsValid(#KatMC), KatMC.Name, ''));
+        frmRasp.Write(if(IsValid(#KatMC), KatMC.RemMC, ''));
+        frmRasp.Write(if(IsValid(#KatOtpEd), KatOtpEd.Name, ''));
+        frmRasp.Write(SpSopr.KolFact);
+        frmRasp.Write(SpSopr.Price);
+        frmRasp.Write(SumPrice);
+        frmRasp.Write(SpSopr.SumNDS);
+        frmRasp.Write(SumWithNDS);
+
+        set _cUks := oMTRFun.GetObjUKS(coSpSopr, SpSopr.NRec);
+
+        frmRasp.Write(if(IsValid(#KatStroySp), KatStroySp.Name, ''));
+        frmRasp.SkipFormat(1);
+
+        _LOOP SpDopEd
+          {
+            frmRasp.PutEventById(feDoLoop,fcDEI);
+            frmRasp.Write(KatDopEd.Name);
+            frmRasp.Write(SpDopEd.Kol);
+            frmRasp.Write(if (KatSopr.cVal = 0, (SpSopr.Price * SpSopr.KolFact)/SpDopEd.Kol , (SpSopr.VPrice * SpSopr.KolFact)/SpDopEd.Kol));
+          }
+      }
+
+  frmRasp.PutEvent(feBreak);
+
+  if ( frmRasp.Error )
+    frmRasp.AbortForm;
+  else
+    frmRasp.ShowFile('Распоряжение на прием-отпуск МТР');
+}
+
+//******************************************************************************
+
+Procedure ReadDSK;
+{
+  if (NOT ReadMyDSK(cZam, 'Persons_cZam_MTR', TRUE))
+    cZam := comp(0);
+
+  if (NOT ReadMyDSK(cDir, 'Persons_cDir_MTR', TRUE))
+    cDir := comp(0);
+
+  if (NOT ReadMyDSK(cYpr, 'Persons_cYpr_MTR', TRUE))
+    cYpr := comp(0);
+
+  if (NOT ReadMyDSK(cNach, 'Persons_cNach_MTR', TRUE))
+    cNach := comp(0);
+
+  if (NOT ReadMyDSK(cOtd, 'Persons_cOtd_MTR', TRUE))
+    cOtd := comp(0);
+
+  if (NOT ReadMyDSK(cSog, 'Persons_cSog_MTR', TRUE))
+    cSog := comp(0);
+}
+//******************************************************************************
+
+Procedure SaveDSK;
+{
+  SaveMyDSK(cZam , 'Persons_cZam_MTR');
+  SaveMyDSK(cDir , 'Persons_cDir_MTR');
+  SaveMyDSK(cYpr , 'Persons_cYpr_MTR');
+  SaveMyDSK(cNach, 'Persons_cNach_MTR');
+  SaveMyDSK(cOtd , 'Persons_cOtd_MTR');
+  SaveMyDSK(cSog , 'Persons_cSog_MTR');
+}
+
+//******************************************************************************
+
+Screen scMainPrn
+  Table KatSopr;
+
+Fields
+  PersonsZam.FIO    ('Зам. директора по комплектации'   , , sci13Esc) : Protect;
+  PersonsDir.FIO    ('Финансовый директор'              , , sci13Esc) : Protect;
+  PersonsYpr.FIO    ('Начальник управления комплектации', , sci13Esc) : Protect;
+  PersonsNach.FIO   ('Начальник ООСХ'                   , , sci13Esc) : Protect;
+  PersonsOtd.FIO    ('Начальник отдела ОСА ЗО и КПП'    , , sci13Esc) : Protect;
+  PersonsSog.FIO    ('Согласовано с'                    , , sci13Esc) : Protect;
+
+Buttons
+  cmOK     ,Default, , 'Печать',,sci1Esc;
+  cmCancel ,       , , 'Отмена',,sci1Esc;
+
+<<
+
+ `Зам. директора по комплектации   `.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Финансовый директор              `.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Начальник управления комплектации`.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Начальник ООСХ                   `.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Начальник отдела ОСА ЗО и КПП    `.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Согласовано с                    `.@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+           <.    Печать    .>     <.    Отмена    .>
+>>
+End; // Screen
+
+HandleEvent
+
+cmInit:
+  {
+    ReadDSK;
+
+    if ( GetFirst KatSopr <> tsOk )
+      Exit;
+  }
+
+cmOk:
+  {
+    SaveDSK;
+
+    if (wTip = 0 )
+      PrintFields;
+    else
+      PrintFieldsXLS;
+
+  }
+
+cmDelOnProtect:
+  {
+    case CurField of
+      #PersonsZam.FIO:   set cZam  := comp(0);
+      #PersonsDir.FIO:   set cDir  := comp(0);
+      #PersonsYpr.FIO:   set cYpr  := comp(0);
+      #PersonsNach.FIO:  set cNach := comp(0);
+      #PersonsOtd.FIO:   set cOtd  := comp(0);
+      #PersonsSog.FIO:   set cSog  := comp(0);
+    end;
+  }
+
+cmPick:
+  {
+    case CurField of
+      #PersonsZam.FIO:
+        if RunInterface(GetPers, cZam) <> cmCancel
+          set cZam := cZam;
+      #PersonsDir.FIO:
+        if RunInterface(GetPers, cDir) <> cmCancel
+          set cDir := cDir;
+      #PersonsYpr.FIO:
+        if RunInterface(GetPers, cYpr) <> cmCancel
+          set cYpr := cYpr;
+      #PersonsNach.FIO:
+        if RunInterface(GetPers, cNach) <> cmCancel
+          set cNach := cNach;
+      #PersonsOtd.FIO:
+        if RunInterface(GetPers, cOtd) <> cmCancel
+          set cOtd := cOtd;
+      #PersonsSog.FIO:
+        if RunInterface(GetPers, cSog) <> cmCancel
+          set cSog := cSog;
+    end;
+  }
+
+
+End; // HandleEvent Interface
+End. // Interface

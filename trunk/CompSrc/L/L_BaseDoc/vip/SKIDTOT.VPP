@@ -1,0 +1,102 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Автоматический расчет скидок по ДО
+//******************************************************************************
+
+#include DOfuns.var
+
+Procedure GetTotalSkid(var NoCalc: boolean);    // Nocalc = TRUE - без полного пересчета позиций
+{
+  if ((BaseDoc.Direct = 1)AND(BaseDoc.cNalog = 1)) // скидка к сумме
+    {
+      var OldProc   : double;        OldProc   := BaseDoc.Skidka;
+      var OldVhSkid : double;        OldVhSkid := BaseDoc.VhSkid;
+      var tmpProc   : double;        tmpProc   := 0;
+      var tmpSumm   : double;        tmpSumm   := 0;
+
+      if (GetFirst klskidka = tsOk)
+        {
+          var allsum: double;   allsum := 0;
+          PushPos(#SpStep);
+
+          _LOOP SpStep
+            {
+              allsum := allsum + oDOfuns.DoRound(BaseDoc.cVal, tipDo, SpStep.Kol*SpStep.Price);
+              if (BaseDoc.VhodNal <> 1)
+                allsum := allsum + SpStep.NDS;
+            }
+
+          PopPos(#SpStep);
+
+          oValFunc.InitVal;
+
+          _LOOP skidka
+            if (BaseDoc.cVal = 0)
+              {
+                if (AllSum > Skidka.Summa) AND (Skidka.Summa > tmpSumm)
+                  {
+                    tmpProc := Skidka.Procent;
+                    tmpSumm := Skidka.Summa;
+                  }
+              }
+            else
+              {
+                Skidka.SumVal := oValFunc.GetAnyCurrency(Skidka.cVal, Skidka.SumVal, BaseDoc.dDoc, BaseDoc.cVal);
+                if (AllSum > Skidka.SumVal) AND (Skidka.SumVal > tmpSumm)
+                  {
+                    tmpProc := Skidka.Procent;
+                    tmpSumm := Skidka.SumVal;
+                  }
+              }
+        }
+
+      BaseDoc.VhSkid := 1;
+      BaseDoc.Skidka := tmpProc;
+
+      if ((OldProc <> BaseDoc.Skidka) OR (OldVhSkid <> BaseDoc.VhSkid))
+        NoCalc := FALSE;  // скидка изменилась - необходим пересчет всех позиций
+    }
+
+  // Если задан автопересчет расчетных услуг при редактировании ДО
+  if (wGetTune('Doc.DO.AutoCalcUslForDO') = 1)// AND not NoCalc
+    if AutoCalcUsl
+      Exit; //GetTotal уже вызывался в AutoCalcUsl
+
+  // полный пересчет для позиций с тарой
+  if (CurCommand <> cmDeleteRecord)
+  {
+    if (GetFirst SpOtpEd where ((SpStep.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+      NoCalc := FALSE;
+  }
+  else
+    if ((BaseDoc.Direct = 1) AND boGetTune('Tara.AutoPaste')) OR
+       ((BaseDoc.Direct = 2) AND boGetTune('Tara.AutoPaste_Buy'))
+    {
+      PushPos(#SpStep);
+
+      // если есть позиции с тарой - нужен полный пересчет
+      if (GetFirst SpStep where (( StepDoc.NRec == SpStep.cStepDoc AND
+                                   (comp(0)     <> SpStep.cOwner) )) = tsOk)
+        NoCalc := FALSE;
+
+      PopPos(#SpStep);
+    }
+
+  GetTotal(NoCalc);
+}
+
+//******************************************************************************
+
+Function GetTotalSkidEx(DB_nRec: comp): double;
+{
+  if GetFirst BaseDoc where (( DB_nRec == BaseDoc.NRec )) <> tsOk
+    GetTotalSkidEx := 0.0;
+  else
+    {
+      GetTotalSkid(false);
+      GetTotalSkidEx := BaseDoc.Total;
+    }
+}
+
+//******************************************************************************

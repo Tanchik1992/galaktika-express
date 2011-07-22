@@ -1,0 +1,1667 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Фильтры для пакетного фор-ния ДО и НЗ
+//********************************************************************************
+
+#include notes.vih
+#include fpCO.vih
+#include GetHozOper.vih
+
+#doc
+Параметры пакетного формирования документов-оснований и наряд-заказов по договорам/соглашениям/ПКП
+#end
+Interface BegFil 'Фильтры для договоров' DoAccept, EscClose, Gray;
+Const
+  Num_Of_Fields = 13;
+  FullParams: LongInt = (1 shl Num_Of_Fields) - 1;
+end
+
+Create View
+
+Var Number_Screen
+  , wDO_Date
+  , wDO_Date2
+  , AllDogs
+  , AllPKPs
+  , optView
+  , wParams
+  , wNaklAkt
+  , wGrAkt
+  , wGrAktParam
+  , whereTransf : word;
+
+    v_ProcOpl   : double;
+
+    sfDescr     : string[20];
+
+    sfDesGr     : string[4];
+
+    Date01
+  , Date02
+  , DO_Date     : date;
+
+    sfKontr
+  , sfPlat
+  , sfPol
+  , sfStatus
+  , sfStatusPKP
+  , sfstatusSogl
+  , sfVidDog
+  , sfVal
+  , sfOtvPodr
+  , sfNazna
+  , sfCurPodr
+  , lSetParam
+  , lSetFiltr   : string;
+
+    pKatNotes
+  , pKatVidD
+  , cfVal
+  , pOtvPodr
+  , pCurPodr
+  , pHozOper
+  , pNazna      : comp;
+
+    DskParams
+  , Marker_Kontr
+  , Marker_Plat
+  , Marker_Pol
+  , Marker_Stat
+  , Marker_StatPKP
+  , Marker_StatSogl
+  , MarkerStat
+  , Marker_VidD
+  , MarkerVidD  : longint;
+
+From
+    Pick
+  , KlVal
+  , KatNotes
+  , KatNotes KatNotes1
+  , KatVidD
+  , KatOrg
+  , KatPodr
+  , fpCO
+  , KatNazna
+  , HozOper
+
+Where
+((
+    cfVal     == KlVal.nRec
+and word(6)   == Pick.wList
+and pKatNotes == KatNotes.nRec
+and pKatVidD  == KatVidD.nRec
+and pOtvPodr  == fpCO.nRec
+and pNazna    == KatNazna.nRec
+and pHozOper  == HozOper.nRec
+and pCurPodr  == KatPodr.nRec
+))
+;
+
+Parameters
+  Number_Screen  // 1 - для GETDOCS3.VIP (ДО на предоплату по выбранным позициям)
+                 // 2 - для DOG2DO.VIP   (ДО на предоплату)
+                 // 3 - для DOG2NAKL.VIP (накладные)
+                 // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+                 // 5 - для
+, v_ProcOpl
+, wParams  // для Number_Screen = 3:
+           // 0-й бит(  1): 1-переносить МЦ
+           // 1-й бит(  2): 1-переносить Услуги
+           // 8-й бит(256): 0-услуга закрывается актом
+           //               1-услуга переносится в накладную
+, DskParams
+;
+
+//------------------------------------
+
+Procedure LoadPick(_Marker: longint);
+var
+  MarkerCount, i: longint; // счетчики записей в маркере
+  PickRec        : comp;
+{
+  delete safe Pick;
+  MarkerCount := GetMarkerCount(_Marker);
+  if (_Marker = Marker_VidD)
+    {
+      MarkerVidD := InitMarker('MKatVidD', 8, 100, 10);
+      ClearMarker(MarkerVidD);
+    }
+  else
+    if ((_Marker = Marker_Stat) or (_Marker = Marker_StatPKP) or (_Marker = Marker_StatSogl))
+      {
+        MarkerStat := InitMarker('MKatNotes', 8, 100, 10);
+        ClearMarker(MarkerStat);
+      }
+  For (i := 0; i < MarkerCount; inc(i))
+    if GetMarker(_Marker, i, PickRec)
+      if (_Marker = Marker_VidD) // Заполняем маркер интерфейса GetSomVidD
+        InsertMarker(MarkerVidD, PickRec);
+      else
+        if ((_Marker = Marker_StatSogl) or (_Marker = Marker_Stat) or (_Marker = Marker_StatPKP)) // Заполняем маркер интерфейса GetSomKatNotes
+          InsertMarker(MarkerStat, PickRec)
+        else // все остальные случаи
+          {
+            Pick.wList := 6;
+            Pick.PickKol := i;
+            Pick.cRec := PickRec;
+            insert current Pick;
+          }
+  if (_Marker = Marker_VidD)
+    DoneMarker(MarkerVidD, 'MKatVidD');
+  else
+    if ((_Marker = Marker_Stat) or (_Marker = Marker_StatPKP) or (_Marker = Marker_StatSogl)) //!!!!
+      DoneMarker(MarkerStat, 'MKatNotes');
+}
+
+Function NameCountPick(_Marker: longint; fromMarker: boolean): string;
+var CountRec: longint;
+{
+  NameCountPick := '';
+  if fromMarker
+    {
+      var PickRec: comp;
+      CountRec := GetMarkerCount(_Marker);
+      if (CountRec > 1)
+        NameCountPick := 'Множественный выбор (' + string(CountRec) + ')';
+      else
+        if (CountRec = 1)
+          {
+          if (_Marker = Marker_VidD) // Вид договора
+            {
+              GetMarker(Marker_VidD, 0, pKatVidD);
+              NameCountPick := if(GetFirst FastFirstRow KatVidD = tsOk, KatVidD.Name, '');
+            }
+          else
+            if ((_Marker = Marker_StatSogl) or (_Marker = Marker_Stat) or (_Marker = Marker_StatPKP))// Статус
+              {
+                GetMarker(_Marker, 0, pKatNotes);
+                NameCountPick := if(GetFirst FastFirstRow KatNotes = tsOk, KatNotes.Name, '');
+              }
+            else // Контрагент/плательщик/получатель
+              if GetMarker(_Marker, 0, PickRec)
+                if (GetFirst KatOrg where (( PickRec == KatOrg.nRec )) = tsOk)
+                  NameCountPick := KatOrg.Name;
+          }
+      Exit;
+    }
+
+  ClearMarker(_Marker);
+
+  // Обоаботка Marker_Stat отдельно
+  if ((_Marker = Marker_StatSogl) or (_Marker = Marker_Stat) or (_Marker = Marker_StatPKP))
+    {
+      MarkerStat := InitMarker('MKatNotes', 8, 100, 10);
+      var MarkerCount, i: longint; // счетчики записей в маркере
+      var PickRec: comp;
+      MarkerCount := GetMarkerCount(MarkerStat);
+      For(i := 0; i < MarkerCount; inc(i))
+        if GetMarker(MarkerStat, i, PickRec)
+          InsertMarker(_Marker, PickRec);
+      DoneMarker(MarkerStat, 'MKatNotes');
+
+      if (GetMarkerCount(_Marker) = 1)
+        {
+          GetMarker(_Marker, 0, pKatNotes);
+          NameCountPick := if(GetFirst FastFirstRow KatNotes = tsOk, KatNotes.Name, '');
+        }
+      else
+        if (GetMarkerCount(_Marker) = 0)
+          set optView := optView AND (FullParams - 256);
+        else
+          NameCountPick := 'Множественный выбор (' + string(GetMarkerCount(_Marker)) + ')';
+      Exit;
+    }
+
+  // Обоаботка Marker_VidD отдельно
+  if (_Marker = Marker_VidD)
+    {
+      MarkerVidD := InitMarker('MKatVidD', 8, 100, 10);
+      var MarkerCount, i: longint; // счетчики записей в маркере
+      var PickRec: comp;
+      MarkerCount := GetMarkerCount(MarkerVidD);
+      For(i := 0; i < MarkerCount; inc(i))
+        if GetMarker(MarkerVidD, i, PickRec)
+          InsertMarker(Marker_VidD, PickRec);
+      DoneMarker(MarkerVidD, 'MKatVidD');
+
+      if (GetMarkerCount(Marker_VidD) = 1)
+        {
+          GetMarker(Marker_VidD, 0, pKatVidD);
+          NameCountPick := if(GetFirst FastFirstRow KatVidD = tsOk, KatVidD.Name, '');
+        }
+      else
+        if (GetMarkerCount(Marker_VidD) = 0)
+          set optView := optView AND (FullParams - 32);
+        else
+          NameCountPick := 'Множественный выбор (' + string(GetMarkerCount(Marker_VidD)) + ')';
+      Exit;
+    }
+
+  // Обработка Pick'ов
+  CountRec := 0;
+  _LOOP Pick
+    {
+      InsertMarker(_Marker, Pick.cRec);
+      CountRec := CountRec + 1;
+    }
+  if (CountRec > 1)
+    NameCountPick := 'Множественный выбор (' + string(CountRec) + ')';
+  else
+    if (CountRec = 0)
+      {
+      if (_Marker = Marker_Kontr)
+        set optView := optView AND (FullParams - 4);
+      else
+        if (_Marker = Marker_Plat)
+          set optView := optView AND (FullParams - 8);
+        else
+          if (_Marker = Marker_Pol)
+            set optView := optView AND (FullParams - 16);
+      }
+    else
+      if (GetFirst FastFirstRow Pick = tsOk)
+        if (GetFirst FastFirstRow KatOrg where (( Pick.cRec == KatOrg.nRec )) = tsOk)
+          NameCountPick := KatOrg.Name;
+} // Function
+
+Procedure DeleteStatusMarker(pStat : word; _Marker : longint; pVidDoc : word);
+var
+  i     : word;
+  pNote : comp;
+{
+  i := 0;
+
+  while (i < GetMarkerCount(_Marker)) do
+    if GetMarker(_Marker, i, pNote)
+      if ( GetFirst FastFirstRow KatNotes1 where (( pNote == KatNotes1.nRec )) <> tsOk )
+        AtDeleteMarker(_Marker, i)
+      else
+        if ( (pStat AND (1 shl KatNotes1.Status)) <> 0 )
+          AtDeleteMarker(_Marker, i)
+        else
+          i++;
+}
+
+Function InsertStatusMarker(pStat : word; _Marker : longint; pVidDoc : word) : string;
+{
+  var i      : word;
+  var iNom   : integer;
+  var cNotes : comp;
+
+  for(i := 0; i < 5; i++)
+    if ( (pStat AND (1 shl i)) = 0 )
+      _LOOP KatNotes1 where ((   pVidDoc == KatNotes1.VidDoc
+                             AND i       == KatNotes1.Status ))
+        if not SearchMarker(_Marker, KatNotes1.nRec, iNom)
+          InsertMarker(_Marker, KatNotes1.nRec);
+
+  if ( GetMarkerCount(_Marker) <> 1 )
+    InsertStatusMarker := 'Множественный выбор (' + String(GetMarkerCount(_Marker)) + ')';
+  else
+    if GetMarker(_Marker, 0, cNotes)
+      if ( (GetFirst FastFirstRow KatNotes1 where (( cNotes == KatNotes1.nRec)) ) = tsOk )
+        InsertStatusMarker := KatNotes1.Name;
+}
+
+!------------------------------------------------------------------------------
+
+Screen scrbe1 (, hcdgDOPredOneParam, sci13Esc) // 1 - для GETDOCS3.VIP
+Fields
+  Date01       ('Начальная дата'): [, 'DD/MM/YYYY'], noprotect;
+  Date02       ('Конечная дата' ): [, 'DD/MM/YYYY'], noprotect;
+  v_ProcOpl    ('Процент предоплаты при формировании ДО на предоплату', hcDOPredPercent, sci1Esc): [, '\2p666.88'], noprotect;
+
+  optView      ('Установка фильтров'        ): noprotect;
+  sfDescr      ('Выбор дескриптора'         ): protect, PickButton;
+  sfDesGr      ('Выбор группы пользователей'): protect, PickButton;
+  sfKontr      ('Выбор контрагента'         ): protect, PickButton;
+  sfPlat       ('Выбор плательщика'         ): protect, PickButton;
+  sfPol        ('Выбор получателя'          ): protect, PickButton;
+  sfVidDog     ('Выбор вида договора'       ): protect, PickButton;
+  sfVal        ('Выбор валюты'              ): protect, PickButton;
+  sfStatus     ('Выбор статуса'             ): protect, PickButton;
+  sfStatusSogl ('Выбор статуса'             ): protect, PickButton;
+  sfStatusPKP  ('Выбор статуса'             ): protect, PickButton;
+Buttons
+  cmYes, Default, , 'Принять выбор', , sci1Esc;
+  cmCancel,    , , 'Отмена'       , , sci1Esc;
+<<
+
+ Период формирования:`с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+
+`Процент предоплаты у ДО:`                 .@@@@@@%
+
+`Фильтры по:`
+  [.] дескриптору         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группе пользователей`                   .@@@@
+  [.] контрагенту         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] плательщику         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] получателю          `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] виду договора       `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] валюте              `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] наличие ПКП         `
+  [.] статус договора     `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус соглашения   `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус ПКП          `.@@@@@@@@@@@@@@@@@@@@@@@
+
+    <. Продолжить .>              <.   Отмена   .>
+
+
+>>
+end; //screen
+
+Screen scrbe2 (, hcdgDOPredParam, sci13Esc) // 2-для ДО на предоплату (для DOG2DO.VIP)
+  bevel b3 {1, 0, 56, 8, bsLowered, bsBox};
+  bevel b3 {1, 8, 56, 18, bsLowered, bsBox};
+Fields
+  lSetParam (): skip, {font = {color = ColorSysBlack; bold = true}};
+  Date01    ('Начальная дата'): [, 'DD/MM/YYYY'], noprotect;
+  Date02    ('Конечная дата' ): [, 'DD/MM/YYYY'], noprotect;
+  AllPKPs   ('Показывать все ПКП или с подходящим периодом отгрузки', , ):
+    [LIST 0 'все',
+            'с периодом отгрузки пересекающимся с заданным'], protect;
+  v_ProcOpl ('Процент предоплаты при формировании ДО на предоплату', hcDOPredPercent, sci13Esc): [, '\2p666.88'], noprotect;
+  AllDogs   ('Показывать договоры, по которым уже было произведено формирование'): noprotect;
+
+  lSetFiltr (): skip, {font = {color = ColorSysBlack; bold = true}};
+  optView   ('Установка фильтров'        ): noprotect;
+  sfDescr   ('Выбор дескриптора'         ): protect;
+  sfDesGr   ('Выбор группы пользователей'): protect;
+  sfKontr   ('Выбор контрагента'         ): protect;
+  sfPlat    ('Выбор плательщика'         ): protect;
+  sfPol     ('Выбор получателя'          ): protect;
+  sfVidDog  ('Выбор вида договора'       ): protect;
+  sfVal     ('Выбор валюты'              ): protect;
+Buttons
+  cmYes, Default, , 'Принять выбор', , sci1Esc;
+  cmCancel,    , , 'Отмена'       , , sci1Esc;
+<<
+  .@@@@@@@@@@@@@@@@@@@@
+    Период формирования: `с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+
+   `Рассматривать ПКП`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   `Процент предоплаты у ДО:`                  .@@@@@@%
+
+     [.] показать все исполняемые договоры`
+
+  .@@@@@@@@@@@@@
+     [.] дескриптору         ` .@@@@@@@@@@@@@@@@@@@@@@@
+     [.] группе пользователей`                    .@@@@
+     [.] контрагенту         ` .@@@@@@@@@@@@@@@@@@@@@@@
+     [.] плательщику         ` .@@@@@@@@@@@@@@@@@@@@@@@
+     [.] получателю          ` .@@@@@@@@@@@@@@@@@@@@@@@
+     [.] виду договора       ` .@@@@@@@@@@@@@@@@@@@@@@@
+     [.] валюте              ` .@@@@@@@@@@@@@@@@@@@@@@@
+     [.] наличие ПКП         `
+
+
+    <. Продолжить .>                  <.   Отмена   .>
+
+
+>>
+end; //screen
+
+Screen scrbe3 (, hcdgWBatchFormSoprFilt, sci13Esc) // 3-для формирования накладных/актов DOG2NAKL.VIP/GETDOCS5.VIP
+Fields
+  Date01     ('Начальная дата'): [, 'DD/MM/YYYY'], noprotect;
+  Date02     ('Конечная дата' ): [, 'DD/MM/YYYY'], noprotect;
+
+  optView    ('Установка фильтров', , sci1Esc): noprotect;
+  sfDescr    ('Выбор дескриптора'            ): protect, PickButton;
+  sfDesGr    ('Выбор группы пользователей'   ): protect, PickButton;
+  sfKontr    ('Выбор контрагента'            ): protect, PickButton;
+  sfPlat     ('Выбор плательщика'            ): protect, PickButton;
+  sfPol      ('Выбор получателя'             ): protect, PickButton;
+  sfVidDog   ('Выбор вида договора'          ): protect, PickButton;
+  sfVal      ('Выбор валюты'                 ): protect, PickButton;
+
+  wDO_Date  ('Задайте алгоритм выбора даты') : NoProtect;
+  DO_Date   ('Задайте дату') : NoProtect;
+  wDO_Date2 ('Задайте откуда брать дату') :
+    [LIST 0 'дата формирования',
+            'начало периода',
+            'конец периода'], Protect;
+
+  wNaklAkt   ('Что переносить из договоров/планов', , sci1Esc): noprotect;
+  whereTransf('Куда переносить услуги в сбыте'):
+    [LIST 'акт',
+          'накладную'], protect;
+
+  HozOper.Name1 ('Наименование ТХО'): protect, PickButton;
+  wGrAkt     ('Формирование сводного сопроводительного документа', , sci1Esc): noprotect;
+  wGrAktParam('Параметры формирования сводного сопроводительного документа', , ):
+    [LIST 0 'акты и накладные',
+            'только акты',
+            'только накладные'], Protect;
+Buttons
+  cmYes, Default, , 'Принять выбор', , sci1Esc;
+  cmCancel,    , , 'Отмена'       , , sci1Esc;
+<<
+
+ Период формирования:`с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+
+`Фильтры по:`
+  [.] дескриптору         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группе пользователей`                   .@@@@
+  [.] контрагенту         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] плательщику         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] получателю          `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] виду договора       `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] валюте              `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] наличие ПКП         `
+`Дата формируемых сопроводительных документов:`
+  (.) задать явно      `                .@@@@@@@@@@
+  (.) из исх.документа:`          .@@@@@@@@@@@@@@@@
+  [.] Переносить МЦ     `
+  [.] Переносить Услуги `        в.@@@@@@@@@@@@@@@@
+ `Операция`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] Формировать сводный сопроводительный документ`
+  `Включать в сводный сопроводительный документ`
+                           .@@@@@@@@@@@@@@@@@@@@@@@
+
+    <. Продолжить .>              <.   Отмена   .>
+
+>>
+end; //screen
+
+Screen scrbe4 (, hci_dogov_Filtr_Prosm, sci13Esc) // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+Fields
+  Date01  ('Начальная дата'): [, 'DD/MM/YYYY'], noprotect;
+  Date02  ('Конечная дата' ): [, 'DD/MM/YYYY'], noprotect;
+
+  optView     ('Установка фильтров', , sci1Esc  ): noprotect;
+  sfDescr     ('Выбор дескриптора'              ): protect, PickButton;
+  sfDesGr     ('Выбор группы пользователей'     ): protect, PickButton;
+  sfKontr     ('Выбор контрагента'              ): protect, PickButton;
+  sfPlat      ('Выбор плательщика'              ): protect, PickButton;
+  sfPol       ('Выбор получателя'               ): protect, PickButton;
+  sfVidDog    ('Выбор вида договора'            ): protect, PickButton;
+  sfVal       ('Выбор валюты'                   ): protect, PickButton;
+  sfStatus    ('Выбор статуса'                  ): protect, PickButton;
+  sfStatusSogl('Выбор статуса'                  ): protect, PickButton;
+  sfStatusPKP ('Выбор статуса'                  ): protect, PickButton;
+  sfCurPodr   ('Выбор курирующего подразделения'): protect, PickButton;
+Buttons
+  cmYes, Default, , 'Принять выбор', , sci1Esc;
+  cmCancel, , , 'Отмена', , sci1Esc;
+<<
+
+ Период формирования:`с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+
+`Фильтры по:`
+  [.] дескриптору         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группе пользователей`                   .@@@@
+  [.] контрагенту         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] плательщику         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] получателю          `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] виду договора       `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] валюте              `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] наличие ПКП         `
+  [.] статус договора     `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус соглашения   `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус ПКП          `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] курирующее подр-ние `.@@@@@@@@@@@@@@@@@@@@@@@
+
+    <. Продолжить .>              <.   Отмена   .>
+
+
+>>
+end; //screen
+
+Screen scrbe5 (, hcdog_Filtr_formpl, sci13Esc)
+Fields
+  Date01     ('Начальная дата'): [, 'DD/MM/YYYY'], noprotect;
+  Date02     ('Конечная дата' ): [, 'DD/MM/YYYY'], noprotect;
+
+  optView     ('Установка фильтров', , sci1Esc ): noprotect;
+  sfDescr     ('Выбор дескриптора'             ): protect, PickButton;
+  sfDesGr     ('Выбор группы пользователей'    ): protect, PickButton;
+  sfKontr     ('Выбор контрагента'             ): protect, PickButton;
+  sfPlat      ('Выбор плательщика'             ): protect, PickButton;
+  sfPol       ('Выбор получателя'              ): protect, PickButton;
+  sfVidDog    ('Выбор вида договора'           ): protect, PickButton;
+  sfVal       ('Выбор валюты'                  ): protect, PickButton;
+  sfStatus    ('Выбор статуса'                 ): protect, PickButton;
+  sfStatusPKP ('Выбор статуса'                 ): protect, PickButton;
+  sfStatusSogl('Выбор статуса'                 ): protect, PickButton;
+  sfOtvPodr   ('Выбор центра ответственности'  ): protect, PickButton;
+  sfNazna     ('Выбор назначения'              ): protect, PickButton;
+Buttons
+  cmYes, Default, , 'Принять выбор', , sci1Esc;
+  cmCancel, , , 'Отмена', , sci1Esc;
+<<
+
+ Период формирования:  `с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+
+`Фильтры по:`
+  [.] дескриптору           `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группе пользователей  `                   .@@@@
+  [.] контрагенту           `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] плательщику           `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] получателю            `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] виду договора         `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] валюте                `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] наличие ПКП           `
+  [.] статус договора       `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус соглашения     `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус ПКП            `.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] центру ответственности`.@@@@@@@@@@@@@@@@@@@@@@@
+  [.] назначению            `.@@@@@@@@@@@@@@@@@@@@@@@
+
+    <. Продолжить .>                <.   Отмена   .>
+
+>>
+end; //screen
+
+Procedure ReadDsk_Common;
+{
+  //
+  Marker_Kontr    := InitMarker('MGetDocs_Kontr'   , 8, 100, 10);
+  Marker_Plat     := InitMarker('MGetDocs_Plat'    , 8, 100, 10);
+  Marker_Pol      := InitMarker('MGetDocs_Pol'     , 8, 100, 10);
+  Marker_Stat     := InitMarker('MGetDocs_Stat'    , 8, 100, 10);
+  Marker_StatPKP  := InitMarker('MGetDocs_StatPKP' , 8, 100, 10);
+  Marker_StatSogl := InitMarker('MGetDocs_StatSogl', 8, 100, 10);
+  Marker_VidD     := InitMarker('MGetDocs_VidD'    , 8, 100, 10);
+
+  if (
+      ( ( Number_Screen = 1 ) OR ( Number_Screen = 4 ) OR ( Number_Screen = 5 ) )
+       AND
+      ( (DskParams and vcGetDog_Status) <> 0 )
+     )
+    {
+      DskParams := DskParams and (not longint(vcGetDog_Status));
+
+      var bPar: byte;
+      var wPar: word;
+
+      ReadMyDsk(bPar, 'GetDAK_Status_e', TRUE);
+      ReadMyDsk(wPar, 'GetDAK_Status'  , TRUE);
+
+      var oNotes: iNotes;
+
+      var i: byte;
+
+      if ( wPar <> 0 )
+        {
+          if ( (bPar and 1) <> 0 )
+            ClearMarker(Marker_Stat);
+
+          if ( (bPar and 2) <> 0 )
+            ClearMarker(Marker_StatSogl);
+
+          if ( (bPar and 4) <> 0 )
+            ClearMarker(Marker_StatPKP);
+        }
+
+      FOR (i := 0; i <= 4; i := i + 1)
+        if ( (wPar and (1 shl i)) <> 0 )
+          {
+            if ( ( bPar = 0 ) OR ( (bPar and 1) <> 0 ) )
+              {
+                optView := optView or 256;
+                DskParams := DskParams or vcGetDog_KatStatus;
+                InsertMarker(Marker_Stat, oNotes.GetFirstNote(400, word(i+0)));
+              }
+
+            if ( ( bPar = 0 ) OR ( (bPar and 2) <> 0 ) )
+              {
+                optView := optView or 512;
+                DskParams := DskParams or vcGetDog_KatStatusSogl;
+                InsertMarker(Marker_StatSogl, oNotes.GetFirstNote(401, word(i+0)));
+              }
+
+            if ( ( bPar = 0 ) OR ( (bPar and 4) <> 0 ) )
+              {
+                optView := optView or 1024;
+                DskParams := DskParams or vcGetDog_KatStatusPKP;
+                InsertMarker(Marker_StatPKP, oNotes.GetFirstNote(403, word(i+0)));
+              }
+          }
+    }
+
+  sfKontr     := NameCountPick(Marker_Kontr   , TRUE);
+  sfPlat      := NameCountPick(Marker_Plat    , TRUE);
+  sfPol       := NameCountPick(Marker_Pol     , TRUE);
+  sfStatus    := NameCountPick(Marker_Stat    , TRUE);
+  sfStatusPKP := NameCountPick(Marker_StatPKP , TRUE);
+  sfStatusSogl:= NameCountPick(Marker_StatSogl, TRUE);
+  sfVidDog    := NameCountPick(Marker_VidD    , TRUE);
+
+  if (Trim(sfKontr     ) = '') set optView := optView AND (FullParams -    4);
+  if (Trim(sfPlat      ) = '') set optView := optView AND (FullParams -    8);
+  if (Trim(sfPol       ) = '') set optView := optView AND (FullParams -   16);
+  if (Trim(sfVidDog    ) = '') set optView := optView AND (FullParams -   32);
+  if (Trim(sfVal       ) = '') set optView := optView AND (FullParams -   64);
+  if (Trim(sfStatus    ) = '') set optView := optView AND (FullParams -  256);
+  if (Trim(sfStatusSogl) = '') set optView := optView AND (FullParams -  512);
+  if (Trim(sfStatusPKP ) = '') set optView := optView AND (FullParams - 1024);
+
+  if (Number_Screen <> 4) // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+    {
+      if (Trim(sfOtvPodr) = '') set optView := optView AND (FullParams - 2048);
+      if (Trim(sfNazna  ) = '') set optView := optView AND (FullParams - 4096);
+    }
+  else
+    {
+      if (Trim(sfCurPodr) = '') set optView := optView AND (FullParams - 2048);
+    }
+}
+
+Procedure ReadDsk_Std;
+var Datechanged: boolean;
+{
+  //cKontrag := 0; set Kontrag := 'все контрагенты';
+  // Даты
+  if (not ReadMyDsk(Date01, 'Dog2DO_Date01', Datechanged))
+    Date01 := date(0, 0, 0);
+  if (not ReadMyDsk(Date02, 'Dog2DO_Date02', Datechanged))
+    Date02 := Cur_Date;
+
+  //
+  if (not ReadMyDsk(AllDogs, 'Dog2DO_AllDogs', Datechanged))
+    AllDogs := 0;
+  if (not ReadMyDsk(AllPKPs, 'Dog2DO_AllPKPs', Datechanged))
+    AllPKPs := 0;
+  if (not ReadMyDsk(v_ProcOpl, 'Dog2DO_v_ProcOpl', Datechanged))
+    v_ProcOpl := 100;
+  if (not ReadMyDsk(pHozOper, 'Dog2DO_pHozOper', Datechanged))
+    pHozOper := 0;
+
+  //
+  if (not ReadMyDsk(optView, 'GetDocs3_optView', Datechanged))
+    optView := 0;
+
+  // Дескрипторы
+  if (not ReadMyDsk(sfDescr, 'GetDocs3_sfDescr', Datechanged))
+    sfDescr := sGetTune('User.Descr');
+  if (not ReadMyDsk(sfDesGr, 'GetDocs3_sfDesGr', Datechanged))
+    sfDesGr := sGetTune('User.DesGr');
+
+  var wFlag: word; wFlag := 0;
+
+  if (wGetTune('Pick.Visible') = 1)
+    {
+      if (wGetTune('Doc.Visible') = dcOwnOnly)
+        {
+          sfDescr := sGetTune('User.Descr');
+          sfDesGr := sGetTune('User.DesGr');
+          optView := optView or (1+2);
+          wFlag := 1+2;
+          SetFieldSelectable(#sfDescr, FALSE);
+          SetFieldSelectable(#sfDesGr, FALSE);
+        }
+      if ((wGetTune('Doc.Visible') = dcGrpRead) or (wGetTune('Doc.Visible') = dcGrpModif))
+        {
+          sfDesGr := sGetTune('User.DesGr');
+          optView := optView or 2;
+          wFlag := 2;
+          SetFieldSelectable(#sfDesGr, FALSE);
+        }
+    }
+
+  if (Number_Screen = 3)
+  {
+   if (not ReadMyDsk(wDO_Date, 'GetDocs3_wDO_Date', Datechanged))
+     wDO_Date := 0;
+
+   if (not ReadMyDsk(wDO_Date2, 'GetDocs3_wDO_Date2', Datechanged))
+     wDO_Date2 := 0;
+
+   if (not ReadMyDsk(DO_Date, 'GetDocs3_DO_Date', Datechanged) or (DO_Date = ZeroDate))
+     DO_Date := Cur_Date;
+  }
+
+  if (Number_Screen = 5)
+    wFlag := wFlag + 128;
+
+  if (wFlag <> 0)
+    ClusterDisabledField(#optView, wFlag);
+
+  //
+  cfVal := 0;
+  sfVal := '';
+  if (ReadMyDsk(cfVal, 'GetDocs3_cfVal', Datechanged))
+    if (GetFirst FastFirstRow KlVal = tsOk)
+      set sfVal := KlVal.Dollar
+    else
+      set cfVal := 0;
+
+  pOtvPodr  := 0;
+  sfOtvPodr := '';
+  if (ReadMyDsk(pOtvPodr, 'GetDAK_OtvPodr', Datechanged))
+    if (GetFirst FastFirstRow fpCO = tsOk)
+      set sfOtvPodr := fpCO.Name
+    else
+      set pOtvPodr := 0;
+
+  pNazna  := 0;
+  sfNazna := '';
+  if (ReadMyDsk(pNazna, 'GetDAK_Progr', Datechanged))
+    if (GetFirst FastFirstRow KatNazna = tsOk)
+      set sfNazna := KatNazna.Name
+    else
+      set pNazna := 0;
+
+  // Для scrbe3:
+  if (not ReadMyDsk(wNaklAkt, 'Dog2Nakl_wNaklAkt', Datechanged))
+    wNaklAkt := 1 + 2;
+  if ((not ReadMyDsk(WhereTransf, 'Dog2Nakl_WhereTransf', Datechanged)) or Datechanged)
+    whereTransf := wGetTune('Doc.UslDoSell'); // 0-закрываются актом; 1-переносятся в накладную
+  if ((wNaklAkt AND 2) = 0)
+    SetFieldSelectable(#WhereTransf, FALSE);
+
+  if ((not ReadMyDsk(wGrAkt, 'Dog2Nakl_wGrAkt', Datechanged)) or Datechanged)
+    wGrAkt := 0;
+
+  if ((not ReadMyDsk(wGrAktParam, 'Dog2Nakl_wGrAktParam', Datechanged)) or Datechanged)
+    wGrAktParam := 0;
+
+  SetFieldAndLabelVisible(#wGrAktParam, wGrAkt = 1);
+
+  SetCommandEnabled(cmYes, Not ((wNaklAkt = 0) AND (Number_Screen = 3)));
+
+  ReadDsk_Common;
+}
+
+Procedure ReadDsk_AltB;
+var Datechanged: boolean;
+{
+  // Даты
+  if ((DskParams AND vcGetDog_Date) <> 0)
+    {
+      if (not ReadMyDsk(Date01, 'GetDAK_begDate', Datechanged))
+        Date01 := Date(0, 0, 0);
+      if (not ReadMyDsk(Date02, 'GetDAK_endDate', Datechanged))
+        Date02 := Cur_Date;
+    }
+  else
+    {
+      Date01 := Date(0, 0, 0);
+      Date02 := Cur_Date;
+    }
+
+  //
+  optView := 0; // будем заполнять по DskParams
+
+  // Дескрипторы
+  if (not ReadMyDsk(sfDescr, 'GetDAK_Descr', Datechanged))
+    sfDescr := sGetTune('User.Descr');
+  if (not ReadMyDsk(sfDesGr, 'GetDAK_Desgr', Datechanged))
+    sfDesGr := sGetTune('User.DesGr');
+
+  pCurPodr  := 0;
+  sfCurPodr := '';
+  if (ReadMyDsk(pCurPodr, 'GetDAK_CurPodr', Datechanged))
+    if (GetFirst FastFirstRow KatPodr = tsOk)
+      set sfCurPodr := KatPodr.Name
+    else
+      set pCurPodr := 0;
+
+  var wFlag: word; wFlag := 0;
+
+  if (wGetTune('Doc.Visible') = dcOwnOnly)
+    {
+      sfDescr := sGetTune('User.Descr');
+      sfDesGr := sGetTune('User.DesGr');
+      DskParams := DskParams OR vcGetDog_Descr OR vcGetDog_DesGr;
+      wFlag := 1+2;
+      SetFieldSelectable(#sfDescr, FALSE);
+      SetFieldSelectable(#sfDesGr, FALSE);
+    }
+  if ((wGetTune('Doc.Visible') = dcGrpRead) or (wGetTune('Doc.Visible') = dcGrpModif))
+    {
+      sfDesGr := sGetTune('User.DesGr');
+      DskParams := DskParams OR vcGetDog_DesGr;
+      wFlag := 2;
+      SetFieldSelectable(#sfDesGr, FALSE);
+    }
+
+  if (wFlag <> 0)
+    ClusterDisabledField(#optView, wFlag);
+
+  if ((DskParams AND vcGetDog_Descr) <> 0)
+    optView := optView or 1;
+  if ((DskParams AND vcGetDog_DesGr) <> 0)
+    optView := optView or 2;
+
+  //
+  if ((DskParams AND vcGetDog_Kontr        ) <> 0) set optView := optView or    4;
+  if ((DskParams AND vcGetDog_Plat         ) <> 0) set optView := optView or    8;
+  if ((DskParams AND vcGetDog_Pol          ) <> 0) set optView := optView or   16;
+  if ((DskParams AND vcGetDog_VidDoc       ) <> 0) set optView := optView or   32;
+  if ((DskParams AND vcGetDog_Valut        ) <> 0) set optView := optView or   64;
+  if ((DskParams AND vcGetDog_ExistKP      ) <> 0) set optView := optView or  128;
+  if ((DskParams AND vcGetDog_KatStatus    ) <> 0) set optView := optView or  256;
+  if ((DskParams AND vcGetDog_KatStatusSogl) <> 0) set optView := optView or  512;
+  if ((DskParams AND vcGetDog_KatStatusPKP ) <> 0) set optView := optView or 1024;
+  if ((DskParams AND vcGetDog_CurPodr      ) <> 0) set optView := optView or 2048;
+  //
+  cfVal := 0;
+  sfVal := '';
+  if (ReadMyDsk(cfVal, 'GetDAK_Valut', Datechanged))
+    if (GetFirst FastFirstRow KlVal = tsOk)
+      set sfVal := KlVal.Dollar
+    else
+      set cfVal := 0;
+
+  ReadDsk_Common;
+
+  if wGetTune('Pick.DisableDogs') <> 0
+    {
+      wFlag := wFlag + 256;
+      wFlag := wFlag + 512;
+
+      optView := optView or 256;
+      optView := optView or 512;
+
+      if (wFlag <> 0)
+        ClusterDisabledField(#optView, wFlag);
+
+      DeleteStatusMarker(wGetTune('Pick.DisableDogs'), Marker_Stat    , word(400));
+      DeleteStatusMarker(wGetTune('Pick.DisableDogs'), Marker_StatSogl, word(401));
+
+      if ( GetMarkerCount(Marker_Stat) = 0 )
+        sfStatus := InsertStatusMarker(wGetTune('Pick.DisableDogs'), Marker_Stat, word(400));
+
+      if ( GetMarkerCount(Marker_StatSogl) = 0 )
+        sfStatusSogl := InsertStatusMarker(wGetTune('Pick.DisableDogs'), Marker_StatSogl, word(401));
+    }
+}
+
+Panel pbe1
+
+HandleEvent // Panel
+
+  cmPick:
+    case CurField of
+      #sfDescr: // Выбор дескриптора
+        {
+          var UserV: word;
+          UserV := 12345; // безусловно разрешает выбирать любой дескриптор
+          if (RunInterface('GetDescr', sfDescr, sfDesGr, UserV) <> cmCancel)
+            {
+              set sfDescr := sfDescr;
+              set sfDesGr := sfDesGr;
+              if (Trim(sfDescr) <> '')
+                set optView := optView or 1
+              else
+                set optView := optView AND (FullParams - 1);
+            }
+        }
+      #sfDesGr: // Выбор группы пользователей
+        {
+          if (RunInterface('GetGrDescr', sfDesGr, FALSE, FALSE, comp(0)) <> cmCancel)
+            {
+              set sfDesGr := sfDesGr;
+              if (Trim(sfDesGr) <> '')
+                set optView := optView or 2
+              else
+                set optView := optView AND (FullParams - 2);
+            }
+        }
+      #sfKontr: // Выбор контрагента
+        {
+          LoadPick(Marker_Kontr);
+          if (RunInterface('GetSomeKontr', FALSE) <> cmCancel)
+            {
+              set sfKontr := NameCountPick(Marker_Kontr, FALSE);
+              if (Trim(sfKontr) <> '')
+                set optView := optView or 4
+              else
+                set optView := optView AND (FullParams - 4);
+            }
+        }
+      #sfPlat  : // Выбор плательщика
+        {
+          LoadPick(Marker_Plat);
+          if (RunInterface('GetSomeKontr', FALSE) <> cmCancel)
+            {
+              set sfPlat := NameCountPick(Marker_Plat, FALSE);
+              if (Trim(sfPlat) <> '')
+                set optView := optView or 8
+              else
+                set optView := optView AND (FullParams - 8);
+            }
+        }
+      #sfPol   : // Выбор получателя
+        {
+          LoadPick(Marker_Pol);
+          if (RunInterface('GetSomeKontr', FALSE) <> cmCancel)
+            {
+              set sfPol := NameCountPick(Marker_Pol, FALSE);
+              if (Trim(sfPol) <> '')
+                set optView := optView or 16
+              else
+                set optView := optView AND (FullParams - 16);
+            }
+        }
+      #sfVidDog: // Выбор вида договора
+        {
+          LoadPick(Marker_VidD);
+          var pVidDog, pDirect: word;
+          if (RunInterface('GetSomVidD'
+                            , pVidDog
+                            , pDirect
+                            , TRUE
+                            , pKatVidD
+                            , if(Number_Screen = 5, word(2), word(0))
+                           ) <> cmCancel)
+            {
+              set sfVidDog := NameCountPick(Marker_VidD, FALSE);
+              if (Trim(sfVidDog) <> '')
+                set optView := optView or 32
+              else
+                set optView := optView AND (FullParams - 32);
+            }
+        }
+      #sfVal   : // Выбор валюты
+        {
+        if (RunInterface('GetValOt', cfVal) <> cmCancel)
+          if (GetFirst FastFirstRow KlVal = tsOk)
+            {
+              set sfVal   := KlVal.Dollar;
+              set optView := optView or 64;
+            }
+          else
+            set optView := optView AND (FullParams - 64);
+        }
+      #sfStatus: // Выбор статуса по договору
+        {
+          LoadPick(Marker_Stat);
+          var pVidDog, pDirect, pMaskNotes: word;
+
+          if (Number_Screen <> 4)
+            pMaskNotes := 0;
+          else
+            pMaskNotes := wGetTune('Pick.DisableDogs');
+
+          if (RunInterface('GetSomKatNotes'
+                            , word(400)
+                            , word(0)
+                            , pMaskNotes
+                            , TRUE
+                            , comp(0)) <> cmCancel)
+            {
+              set sfStatus := NameCountPick(Marker_Stat, FALSE);
+              if (Trim(sfStatus) <> '')
+                set optView := optView or 256
+              else
+                set optView := optView AND (FullParams - 256);
+            }
+        }
+      #sfStatusSogl: // Выбор статуса соглашения
+        {
+          LoadPick(Marker_StatSogl);
+          var pVidDog, pDirect, pMaskNotes : word;
+
+          if (Number_Screen <> 4)
+            pMaskNotes := 0;
+          else
+            pMaskNotes := wGetTune('Pick.DisableDogs');
+
+          if (RunInterface('GetSomKatNotes'
+                            , word(401)
+                            , word(0)
+                            , pMaskNotes
+                            , TRUE
+                            , comp(0)) <> cmCancel)
+            {
+              set sfStatusSogl := NameCountPick(Marker_StatSogl, FALSE);
+              if (Trim(sfStatusSogl) <> '')
+                set optView := optView or 512
+              else
+                set optView := optView AND (FullParams - 512);
+            }
+        }
+      #sfStatusPKP: // Выбор статуса по пкп
+        {
+          LoadPick(Marker_StatPKP);
+          var pVidDog, pDirect: word;
+          if (RunInterface('GetSomKatNotes'
+                             , word(403)
+                             , word(0)
+                             , word(0)
+                             , TRUE
+                             , comp(0)) <> cmCancel)
+            {
+              set sfStatusPKP := NameCountPick(Marker_StatPKP, FALSE);
+              if (Trim(sfStatusPKP) <> '')
+                set optView := optView or 1024
+              else
+                set optView := optView AND (FullParams - 1024);
+            }
+        }
+      #sfOtvPodr: // Выбор центра ответсвенности
+        {
+          if (RunInterface('GetCO'
+                            , word(cgiPick)
+                            , comp(0)
+                            , comp(0)
+                            , pOtvPodr) <> cmCancel)
+            if (GetFirst FastFirstRow fpCO = tsOk)
+              {
+                set sfOtvPodr := fpCO.Name;
+                set optView  := optView or 2048;
+              }
+            else
+              set optView := optView AND (FullParams - 2048);
+        }
+      #sfCurPodr: // Выбор курирующего подразделения
+        {
+          if (RunInterface('GetAnyPodr'
+                            , pCurPodr
+                            , word(4)) <> cmCancel)
+            if (GetFirst FastFirstRow KatPodr = tsOk)
+              {
+                set sfCurPodr := KatPodr.Name;
+                set optView   := optView or 2048;
+              }
+            else
+              set optView := optView AND (FullParams - 2048);
+        }
+      #sfNazna: // Выбор назначения
+        {
+          if (RunInterface('GetSomKatNazna', FALSE, pNazna) <> cmCancel)
+            if (GetFirst FastFirstRow KatNazna = tsOk)
+              {
+                set sfNazna := KatNazna.Name;
+                set optView := optView or 4096;
+              }
+            else
+              set optView := optView AND (FullParams - 4096);
+        }
+      #HozOper.Name1:
+        {
+          RunInterface('GetHozOper', comp(0), word(0), word(0), pHozOper, cgiPick);
+        }
+    end;
+
+  cmDelOnProtect:
+    case CurField of
+      #sfDescr:
+        {
+          set sfDescr := '';
+          set optView := optView AND (FullParams - 1);
+        }
+      #sfDesGr:
+        {
+          set sfDesGr := '';
+          set optView := optView AND (FullParams - 2);
+        }
+      #sfKontr:
+        {
+          set sfKontr := '';
+          set optView := optView AND (FullParams - 4);
+          ClearMarker(Marker_Kontr);
+        }
+      #sfPlat:
+        {
+          set sfPlat := '';
+          set optView := optView AND (FullParams - 8);
+          ClearMarker(Marker_Plat);
+        }
+      #sfPol:
+        {
+          set sfPol := '';
+          set optView := optView AND (FullParams - 16);
+          ClearMarker(Marker_Pol);
+        }
+      #sfVidDog:
+        {
+          set sfVidDog := '';
+          set optView := optView AND (FullParams - 32);
+          ClearMarker(Marker_VidD);
+        }
+      #sfVal:
+        {
+          set sfVal := '';
+          set optView := optView AND (FullParams - 64);
+        }
+      #sfStatus:
+        {
+          if ( (Number_Screen = 4) AND (wGetTune('Pick.DisableDogs') <> 0) )
+            {
+              ClearMarker(Marker_Stat);
+              set sfStatus := InsertStatusMarker(wGetTune('Pick.DisableDogs'), Marker_Stat, word(400));
+            }
+          else
+            {
+              set sfStatus := '';
+              set optView := optView AND (FullParams - 256);
+              ClearMarker(Marker_Stat);
+            }
+        }
+      #sfStatusSogl:
+        {
+          if ( (Number_Screen = 4) AND (wGetTune('Pick.DisableDogs') <> 0) )
+            {
+              ClearMarker(Marker_StatSogl);
+              set sfStatusSogl := InsertStatusMarker(wGetTune('Pick.DisableDogs'), Marker_StatSogl, word(401));
+            }
+          else
+            {
+              set sfStatusSogl := '';
+              set optView := optView AND (FullParams - 512);
+              ClearMarker(Marker_StatSogl);
+            }
+        }
+      #sfStatusPKP:
+        {
+          set sfStatusPKP := '';
+          set optView := optView AND (FullParams - 1024);
+          ClearMarker(Marker_StatPKP);
+        }
+      #sfOtvPodr:
+        {
+          set sfOtvPodr := '';
+          set optView := optView AND (FullParams - 2048);
+        }
+      #sfCurPodr:
+        {
+          set sfOtvPodr := '';
+          set optView := optView AND (FullParams - 2048);
+        }
+      #sfNazna:
+        {
+          set sfNazna := '';
+          set optView := optView AND (FullParams - 4096);
+        }
+
+    end;
+
+  cmCheckField:
+    case CurField OF
+      #Date01, #Date02:
+        if (Date01 > Date02)
+          {
+            Message('Перепутаны даты...', OkButton + Warning);
+            if (CurField = #Date02)
+              set Date02 := Date01;
+            Abort;
+          }
+      #optView:
+        {
+          var wtmp: word;
+          wtmp := optView xor word(OldFieldValue);
+          if (wtmp > 0)
+            case wtmp of
+              1: if ((optView AND  1) > 0)
+                    {
+                      SelectField(#sfDescr);
+                      if (sfDescr = '')
+                        PutCommand(cmPick);
+                    }
+              2: if ((optView AND  2) > 0)
+                    {
+                      SelectField(#sfDesGr);
+                      if (sfDesGr = '')
+                        PutCommand(cmPick);
+                    }
+              4: if ((optView AND  4) > 0)
+                    {
+                      SelectField(#sfKontr);
+                      if (sfKontr = '')
+                        PutCommand(cmPick);
+                    }
+              8: if ((optView AND  8) > 0)
+                    {
+                      SelectField(#sfPlat);
+                      if (sfPlat = '')
+                        PutCommand(cmPick);
+                    }
+             16: if ((optView AND 16) > 0)
+                    {
+                      SelectField(#sfPol);
+                      if (sfPol = '')
+                        PutCommand(cmPick);
+                    }
+             32: if ((optView AND 32) > 0)
+                    {
+                      SelectField(#sfVidDog);
+                      if (sfVidDog = '')
+                        PutCommand(cmPick);
+                    }
+             64: if ((optView AND 64) > 0)
+                    {
+                      SelectField(#sfVal);
+                      if (sfVal = '')
+                        PutCommand(cmPick);
+                    }
+            256: if ((optView AND 256) > 0)
+                    {
+                      SelectField(#sfStatus);
+                      if (sfStatus = '')
+                        PutCommand(cmPick);
+                    }
+            512: if ((optView AND 512) > 0)
+                    {
+                      SelectField(#sfStatusSogl);
+                      if (sfStatusSogl = '')
+                        PutCommand(cmPick);
+                    }
+           1024: if ((optView AND 1024) > 0)
+                    {
+                      SelectField(#sfStatusPKP);
+                      if (sfStatusPKP = '')
+                        PutCommand(cmPick);
+                    }
+           2048: if ((optView AND 2048) > 0)
+                    {
+                      if (Number_Screen <> 4) // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+                        {
+                          SelectField(#sfOtvPodr);
+                          if (sfOtvPodr = '')
+                            PutCommand(cmPick);
+                        }
+                      else
+                        {
+                          SelectField(#sfCurPodr);
+                          if (sfCurPodr = '')
+                            PutCommand(cmPick);
+                        }
+                    }
+           4096: if ((optView AND 4096) > 0)
+                    {
+                      SelectField(#sfNazna);
+                      if (sfNazna = '')
+                        PutCommand(cmPick);
+                    }
+            end;
+          if (((optView AND    1) > 0) AND (Trim(sfDescr     ) = ''))
+            set optView := optView AND (FullParams -    1);
+          if (((optView AND    2) > 0) AND (Trim(sfDesGr     ) = ''))
+            set optView := optView AND (FullParams -    2);
+          if (((optView AND    4) > 0) AND (Trim(sfKontr     ) = ''))
+            set optView := optView AND (FullParams -    4);
+          if (((optView AND    8) > 0) AND (Trim(sfPlat      ) = ''))
+            set optView := optView AND (FullParams -    8);
+          if (((optView AND   16) > 0) AND (Trim(sfPol       ) = ''))
+            set optView := optView AND (FullParams -   16);
+          if (((optView AND   32) > 0) AND (Trim(sfVidDog    ) = ''))
+            set optView := optView AND (FullParams -   32);
+          if (((optView AND   64) > 0) AND (Trim(sfVal       ) = ''))
+            set optView := optView AND (FullParams -   64);
+          if (((optView AND  256) > 0) AND (Trim(sfStatus    ) = ''))
+            set optView := optView AND (FullParams -  258);
+          if (((optView AND  512) > 0) AND (Trim(sfStatusSogl) = ''))
+            set optView := optView AND (FullParams -  512);
+          if (((optView AND 1024) > 0) AND (Trim(sfStatusPKP ) = ''))
+            set optView := optView AND (FullParams - 1024);
+
+          if (Number_Screen <> 4) // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+            {
+              if (((optView AND 2048) > 0) AND (Trim(sfOtvPodr   ) = ''))
+                set optView := optView AND (FullParams - 2048);
+              if (((optView AND 4096) > 0) AND (Trim(sfNazna     ) = ''))
+                set optView := optView AND (FullParams - 4096);
+            }
+          else
+            {
+              if (((optView AND 2048) > 0) AND (Trim(sfCurPodr   ) = ''))
+                set optView := optView AND (FullParams - 2048);
+            }
+        }
+      #sfDescr      : if (Trim(sfDescr     ) = '') set optView := optView AND (FullParams -    1);
+      #sfDesGr      : if (Trim(sfDesGr     ) = '') set optView := optView AND (FullParams -    2);
+      #sfKontr      : if (Trim(sfKontr     ) = '') set optView := optView AND (FullParams -    4);
+      #sfPlat       : if (Trim(sfPlat      ) = '') set optView := optView AND (FullParams -    8);
+      #sfPol        : if (Trim(sfPol       ) = '') set optView := optView AND (FullParams -   16);
+      #sfVidDog     : if (Trim(sfVidDog    ) = '') set optView := optView AND (FullParams -   32);
+      #sfVal        : if (Trim(sfVal       ) = '') set optView := optView AND (FullParams -   64);
+      #sfStatus     : if (Trim(sfStatus    ) = '') set optView := optView AND (FullParams -  256);
+      #sfStatusSogl : if (Trim(sfStatusSogl) = '') set optView := optView AND (FullParams -  512);
+      #sfStatusPKP  : if (Trim(sfStatus    ) = '') set optView := optView AND (FullParams - 1024);
+      #sfOtvPodr    : if (Trim(sfOtvPodr   ) = '') set optView := optView AND (FullParams - 2048);
+      #sfCurPodr    : if (Trim(sfCurPodr   ) = '') set optView := optView AND (FullParams - 2048);
+      #sfNazna      : if (Trim(sfNazna     ) = '') set optView := optView AND (FullParams - 4096);
+      #wNaklAkt:
+        {
+          var wtmp: word;
+          wtmp := wNaklAkt xor word(OldFieldValue);
+          if (wtmp = 2)
+            SetFieldSelectable(#WhereTransf, (wNaklAkt AND 2) <> 0);
+          if (Number_Screen = 3)
+            SetCommandEnabled(cmYes, wNaklAkt <> 0);
+        }
+      #wDO_Date:
+        {
+          SetFieldVisible(#wDO_Date2, wDO_Date = 1);
+          SetFieldVisible(#DO_Date  , wDO_Date = 0);
+        }
+      #wGrAkt:
+        {
+          SetFieldAndLabelVisible(#wGrAktParam, wGrAkt = 1);
+        }
+    end;
+
+end; // HandleEvent Panel
+end; // Panel
+
+HandleEvent
+
+  cmInit:
+    {
+      lSetParam := 'Установка параметров:';
+      lSetFiltr := 'Фильтры по:';
+      case Number_Screen of
+        1: // 1 - для GETDOCS3.VIP (ДО на предоплату по выбранным позициям)
+          {
+            LocateWin((80-54) div 2, (24-20) div 2, 54, 20, -1);
+            SetFormat(scrbe1);
+          }
+        2: // 2 - для DOG2DO.VIP   (ДО на предоплату)
+          {
+            LocateWin((80-54) div 2, (24-19) div 2, 58, 21, -1);
+            SetFormat(scrbe2);
+          }
+        3: // 3 - для DOG2NAKL.VIP (накладные. акты)
+          {
+            LocateWin((80-54) div 2, 1, 54, 25, -1);
+            SetFormat(scrbe3);
+          }
+        4: // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+          {
+            LocateWin((80-54) div 2, (24-19) div 2, 54, 19, -1);
+            SetFormat(scrbe4);
+          }
+        5:
+          {
+            LocateWin((80-54) div 2, (24-19) div 2, 54, 20, -1);
+            SetFormat(scrbe5);
+          }
+      end;
+
+      if (Number_Screen <> 4) // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+        ReadDsk_Std;
+      else
+        ReadDsk_AltB;
+
+      PutCommand(cmValFld1);
+    }
+
+  cmValFld1:
+    {
+      if (Number_Screen = 3)
+        case wDO_Date of
+          0: SetFieldVisible(#wDO_Date2, FALSE);
+          1: SetFieldVisible(#DO_Date  , FALSE);
+        end;
+
+    }
+
+  cmDone:
+    {
+      DoneMarker(Marker_Kontr   , 'MGetDocs_Kontr'   );
+      DoneMarker(Marker_Plat    , 'MGetDocs_Plat'    );
+      DoneMarker(Marker_Pol     , 'MGetDocs_Pol'     );
+      DoneMarker(Marker_Stat    , 'MGetDocs_Stat'    );
+      DoneMarker(Marker_StatPKP , 'MGetDocs_StatPKP' );
+      DoneMarker(Marker_StatSogl, 'MGetDocs_StatSogl');
+      DoneMarker(Marker_VidD    , 'MGetDocs_VidD'    );
+    }
+
+  cmYes:
+    {
+      PackFields;
+      SelectField(#date01);
+      set Date01 := Date01;
+      set Date02 := Date02;
+      if (date01 > Date02)
+        {
+          Message('Начальная дата не должна быть больше конечной');
+          Exit;
+        }
+      if (longInt(date02) = longint(0))
+        {
+          Message('Укажите конечную дату');
+          Exit;
+        }
+
+      // Даты
+      SaveMyDsk(Date01, 'Dog2DO_Date01');
+      SaveMyDsk(Date02, 'Dog2DO_Date02');
+      if ((Number_Screen = 4) or (Number_Screen = 5)) // 4 - для GETDOCS2.VIP - Фильтры по Alt+B
+        {
+        //  Можно оставить фильтр только по интервалу дат (vcGetDog_DateSrok)
+          DskParams := DskParams or vcGetDog_Date;
+          SaveMyDsk(Date01 , 'GetDAK_begDate');
+          SaveMyDsk(Date02 , 'GetDAK_endDate');
+          SaveMyDsk(byte(0), 'GetDAK_Date_e' );
+        }
+      else
+        {
+          DskParams := DskParams or vcGetDog_DateSrok;
+          SaveMyDsk(Date01 , 'GetDAK_begDateSrok');
+          SaveMyDsk(Date02 , 'GetDAK_endDateSrok');
+          SaveMyDsk(byte(0), 'GetDAK_DateSrok_e' );
+        }
+      SaveMyDsk(AllDogs  , 'Dog2DO_AllDogs'  );
+      SaveMyDsk(AllPKPs  , 'Dog2DO_AllPKPs'  );
+      SaveMyDsk(v_ProcOpl, 'Dog2DO_v_ProcOpl');
+      SaveMyDsk(optView  , 'GetDocs3_optView');
+      SaveMyDsk(sfDescr  , 'GetDocs3_sfDescr');
+      SaveMyDsk(pHozOper , 'Dog2DO_pHozOper' );
+      if ((optView AND 1) <> 0)
+        {
+          DskParams := DskParams or vcGetDog_Descr;
+          SaveMyDsk(sfDescr, 'GetDAK_Descr'  );
+          SaveMyDsk(byte(0), 'GetDAK_Descr_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_Descr));
+      SaveMyDsk(sfDesGr, 'GetDocs3_sfDesGr');
+      if ((optView AND 2) <> 0)
+        {
+          DskParams := DskParams or vcGetDog_DesGr;
+          SaveMyDsk(sfDesGr, 'GetDAK_Desgr'  );
+          SaveMyDsk(byte(0), 'GetDAK_Desgr_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_DesGr));
+
+      //
+      var PickRec: comp;
+      if ((optView AND 4) <> 0) // sfKontr
+        {
+          DskParams := DskParams or vcGetDog_Kontr;
+          if (GetMarkerCount(Marker_Kontr) = 1)
+            {
+              GetMarker(Marker_Kontr, 0, PickRec);
+              SaveMyDsk(PickRec, 'GetDAK_Kontr');
+            }
+          else
+            SaveMyDsk(comp(0), 'GetDAK_Kontr'); // Использовать маркер
+          SaveMyDsk(byte(0), 'GetDAK_Kontr_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_Kontr));
+
+      //
+      if ((optView AND 8) <> 0) // sfPlat
+        {
+          DskParams := DskParams or vcGetDog_Plat;
+          if (GetMarkerCount(Marker_Plat) = 1)
+            {
+              GetMarker(Marker_Plat, 0, PickRec);
+              SaveMyDsk(PickRec, 'GetDAK_Plat');
+            }
+          else
+            SaveMyDsk(comp(0), 'GetDAK_Plat'); // Использовать маркер
+          SaveMyDsk(byte(0), 'GetDAK_Plat_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_Plat));
+
+      //
+      if ((optView AND 16) <> 0) // sfPol
+        {
+          DskParams := DskParams or vcGetDog_Pol;
+          if (GetMarkerCount(Marker_Pol) = 1)
+            {
+              GetMarker(Marker_Pol, 0, PickRec);
+              SaveMyDsk(PickRec, 'GetDAK_Pol');
+            }
+          else
+            SaveMyDsk(comp(0), 'GetDAK_Pol'); // Использовать маркер
+          SaveMyDsk(byte(0), 'GetDAK_Pol_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_Pol));
+
+      // Статусы
+      if (Number_Screen <> 1) AND (Number_Screen <> 4) AND (Number_Screen <> 5)
+        {
+          // Задается безусловно
+          DskParams := DskParams or vcGetDog_Status;
+          if (Number_Screen = 3)
+            SaveMyDsk(word(2), 'GetDAK_Status') // исполняемые
+          else
+            SaveMyDsk(word(0FFFEh), 'GetDAK_Status'); // все, кроме оформляемых
+          SaveMyDsk(byte(0), 'GetDAK_Status_e');
+        }
+      else
+      {
+        DskParams := DskParams AND (not longint(vcGetDog_Status));
+
+        if ((optView AND 256) <> 0) // sfStatus
+          {
+            DskParams := DskParams or vcGetDog_KatStatus;
+            if (GetMarkerCount(Marker_Stat) = 1)
+              {
+                GetMarker(Marker_Stat, 0, PickRec);
+                SaveMyDsk(PickRec, 'GetDAK_KatStatus');
+              }
+            else
+              SaveMyDsk(comp(0), 'GetDAK_KatStatus'); // Использовать маркер
+            SaveMyDsk(byte(0), 'GetDAK_KatStatus_e');
+          }
+        else
+          DskParams := DskParams AND (not longint(vcGetDog_KatStatus));
+
+        if ((optView AND 512) <> 0) // статус соглашения
+          {
+            DskParams := DskParams or vcGetDog_KatStatusSogl;
+            if (GetMarkerCount(Marker_StatSogl) = 1)
+              {
+                GetMarker(Marker_StatSogl, 0, PickRec);
+                SaveMyDsk(PickRec, 'GetDAK_KatStatusSogl');
+              }
+            else
+              SaveMyDsk(comp(0), 'GetDAK_KatStatusSogl'); // Использовать маркер
+           }
+        else
+          DskParams := DskParams AND (not longint(vcGetDog_KatStatusSogl));
+
+        if ((optView AND 1024) <> 0) // статус пкп
+          {
+            DskParams := DskParams or vcGetDog_KatStatusPKP;
+            if (GetMarkerCount(Marker_StatPKP) = 1)
+              {
+                GetMarker(Marker_StatPKP, 0, PickRec);
+                SaveMyDsk(PickRec, 'GetDAK_KatStatusPKP');
+              }
+            else
+              SaveMyDsk(comp(0), 'GetDAK_KatStatusPKP'); // Использовать маркер
+           }
+        else
+          DskParams := DskParams AND (not longint(vcGetDog_KatStatusPKP));
+      }
+
+      if (Number_Screen = 3)
+        {
+          SaveMyDsk(wDO_Date , 'GetDocs3_wDO_Date');
+          SaveMyDsk(wDO_Date2, 'GetDocs3_wDO_Date2');
+          SaveMyDsk(DO_Date  , 'GetDocs3_DO_Date');
+       }
+      //
+      if ((optView AND 32) <> 0) // sfVidDog
+        {
+          DskParams := DskParams or vcGetDog_VidDoc;
+          if (GetMarkerCount(Marker_VidD) = 1)
+            {
+              GetMarker(Marker_VidD, 0, PickRec);
+              SaveMyDsk(PickRec, 'GetDAK_VidDoc');
+            }
+          else
+            SaveMyDsk(comp(0), 'GetDAK_VidDoc'); // Использовать маркер
+          SaveMyDsk(byte(0), 'GetDAK_VidDoc_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_VidDoc));
+      //
+      SaveMyDsk(cfVal, 'GetDocs3_cfVal');
+      if ((optView AND 64) <> 0) // sfVal
+        {
+          DskParams := DskParams or vcGetDog_Valut;
+          SaveMyDsk(cfVal, 'GetDAK_Valut');
+          SaveMyDsk(byte(0), 'GetDAK_Valut_e');
+        }
+      else
+        if ((Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_Valut));
+      //
+      if (((optView AND 128) <> 0) AND (Number_Screen <> 1) AND (Number_Screen <> 5))// наличие ПКП
+        DskParams := DskParams or vcGetDog_ExistKP
+      else
+        if ((Number_Screen = 1) or (Number_Screen = 4) or (Number_Screen = 5))
+          DskParams := DskParams AND (not longint(vcGetDog_ExistKP));
+
+      if (Number_Screen = 4)
+        {
+          if ((optView AND 2048) <> 0)
+            {
+              DskParams := DskParams or vcGetDog_CurPodr;
+              SaveMyDsk(pCurPodr, 'GetDAK_CurPodr');
+              SaveMyDsk(byte(0), 'GetDAK_CurPodr_e');
+            }
+          else
+            DskParams := DskParams AND (not longint(vcGetDog_CurPodr));
+        }
+      else
+        {
+          if ((optView AND 2048) <> 0)
+            {
+              DskParams := DskParams or vcGetDog_OtvPodr;
+              SaveMyDsk(pOtvPodr, 'GetDAK_OtvPodr');
+              SaveMyDsk(byte(0), 'GetDAK_OtvPodr_e');
+            }
+          else
+            DskParams := DskParams AND (not longint(vcGetDog_OtvPodr));
+
+          if ((optView AND 4096) <> 0)
+            {
+              DskParams := DskParams or vcGetDog_Progr;
+              SaveMyDsk(pNazna, 'GetDAK_Progr');
+              SaveMyDsk(byte(0), 'GetDAK_Progr_e');
+            }
+          else
+            DskParams := DskParams AND (not longint(vcGetDog_Progr));
+        }
+
+      // Для scrbe3:
+      SaveMyDsk(wNaklAkt   , 'Dog2Nakl_wNaklAkt');
+      SaveMyDsk(WhereTransf, 'Dog2Nakl_WhereTransf');
+      SaveMyDsk(wGrAkt     , 'Dog2Nakl_wGrAkt');
+      SaveMyDsk(wGrAktParam, 'Dog2Nakl_wGrAktParam');
+      // 0-й бит(  1): 1-переносить МЦ
+      // 1-й бит(  2): 1-переносить Услуги
+      // 8-й бит(256): 0-услуга закрывается актом
+      //               1-услуга переносится в накладную
+      wParams := wNaklAkt;
+      if (WhereTransf = 1) // 1-услуга переносится в накладную
+        wParams := wParams or 256;
+
+      PutCommand(cmDefault);
+    }
+
+end;
+End.

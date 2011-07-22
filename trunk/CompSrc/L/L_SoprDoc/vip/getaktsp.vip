@@ -1,0 +1,269 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Выбор спецификации из накладных
+//******************************************************************************
+#include ExtAttrClass.vih
+
+//********************************************************************************
+
+#doc
+Назначение:
+   Выбор спецификации из накладных
+
+
+Параметры:
+  pNRec   - ссылка на документ
+  wPList  - пик
+#end
+
+//********************************************************************************
+
+Interface GetAktSp 'Выбор спецификации из документа' doAccept, EscClose, cyan;
+Show at (, , 100, 14);
+
+Function KolDostupAkt : double; forward;
+
+Create View
+Var
+  pNRec       : comp;     // ссылка на документ
+
+  wPList      : word;
+
+  s_SimvRub   : string;
+
+As Select
+//******************************************************************************
+  if (isValid(tnPick), '√', '')
+    ( FieldName = isPicked )
+//******************************************************************************
+, if (SpSopr.cVal = 0,
+    if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+    ( FieldName = Valut )
+//******************************************************************************
+, if(SpSopr.cOtpEd = 0, KatEd.Name, if (wGetTune('Doc.BrAbbrEd')=0, KatOtpEd.ABBR, KatOtpEd.Name))
+    ( FieldName = OtpEd )
+//******************************************************************************
+
+
+From
+  KatSopr
+, KatSopr   KatSopr2
+, SpSopr
+, SpSopr    SpSopr2
+, KatOtpEd
+, KatEd
+, KatMC
+, KatUsl
+, KlVal
+, Pick
+, SpecZatr
+
+where
+((
+     pNRec                ==  KatSopr.NRec
+AND  KatSopr.NRec         ==  SpSopr.cSopr 
+AND  word(1)              ==  SpSopr.PrMC
+AND  SpSopr.cMCUsl        ==  KatMC.NRec
+AND  SpSopr.cMCUsl        ==  KatUsl.NRec
+AND  KatMc.cEd            ==  KatEd.NRec
+AND  SpSopr.cOtpEd        ==  KatOtpEd.NRec
+AND  SpSopr.cVal          ==  KlVal.NRec
+AND  wPList               ==  Pick.wList
+AND  SpSopr.NRec          ==  Pick.cRec
+AND  SpSopr.NRec          ==  SpecZatr.cUKS
+))
+
+;
+
+Parameters
+  pNRec
+, wPList
+;
+
+
+Panel pnSpecif
+  Table SpSopr;
+
+Browse brSpecif ('', , sci1EscIns)
+  Show at (, , , )
+Fields
+  {Font = {Color = if (isPicked <> '', ColorMark, 0) }};
+  isPicked         #3''                                 : [ 1], NoAutoSize, Protect;
+  KatMC.Name       #3'Наименование'                     : [25], Protect, NoDel;
+  KatMC.BarKod     #3'Код'                              : [10], Protect, NoDel, NoAutoSize;
+  OtpEd            #3'ЕдИзм'                            : [ 5], Protect, NoDel, NoAutoSize;
+  SpSopr.Kol       #3'Количество'                       : [10], [prSignsInKol], Protect, NoAutoSize;
+  SpSopr.Price     #3'Цена'                             : [12], [brForSopr_RVPrice], Protect, NoAutoSize;
+  Valut            #3'Вал.'                             : [ 5], Protect, NoAutoSize;
+  KolDostupAkt     #3'Остаток'  ('Доступное к выбору количество')
+                                                        : [10.3, '\3p[|-]3666`666`666`666.888'], Protect, NoAutoSize;
+  Pick.PickKol     #3'Выбрано'                          : [10], NoAutoSize, Protect;
+end;
+end;
+
+//******************************************************************************
+
+//******************************************************************************
+
+Procedure KillPick;
+{
+  ResetBounds(#Pick);
+  delete Pick where ((wPList == Pick.wList));
+  SetBounds(#Pick);
+}
+
+//******************************************************************************
+
+Function KolDostupAkt : double;
+var dUsed : double;
+{
+  KolDostupAkt := 0;
+
+  dUsed := 0;
+
+  _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cUKS))
+    if (SpecZatr.coTable = 0)
+      dUsed := dUsed + double(SpecZatr.cSpec);
+
+  dUsed := SpSopr.KolFact - 0.000001 * dUsed / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+  KolDostupAkt := if (dUsed < 0, 0, dUsed);
+}
+
+//******************************************************************************
+
+HandleEvent
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    SetTitle('Выбор спецификации по документу ' + PrintNumber(KatSopr.Descr, KatSopr.NSopr));
+
+    ResetBounds(#Pick);
+    Delete All Pick where ((wPList == Pick.wList));
+    SetBounds(#Pick);
+
+    if (GetFirst SpSopr <> tsOk)
+      {
+        Message('В спецификации распоряжения на прием-отпуск нет позиций для выбора!');
+
+        Abort;
+        Exit;
+      }
+  }
+
+cmOpenSearch:
+  {              
+    if (CurField <> #Pick.PickKol)
+      {
+        Stop;
+        Exit;
+      }
+
+    var Kol_New : double; Kol_New := Pick.PickKol;
+    var OldKol  : double; OldKol  := Kol_New;
+
+    if RunDialog('GetPickKol', Kol_New) <> cmCancel
+      {
+        if (KolDostupAkt + OldKol < Kol_New)
+          Kol_New := KolDostupAkt + OldKol;
+
+        if (IsValid(#Pick))
+          if (Kol_New = 0)
+            delete current Pick;
+          else 
+            update current Pick set Pick.PickKol := Kol_New
+        else
+          if (Kol_New <> 0)
+            {
+              ClearBuffer(#Pick);
+              Pick.cRec    := SpSopr.NRec;
+              Pick.PickKol := Kol_New;
+              Pick.wList   := wPList;
+              if (insert current Pick <> tsOk)
+                { }
+            } 
+      }   
+
+    ReReadRecord(#Pick);
+    ReReadRecord(#SpSopr); 
+  }
+
+cmMarkUnMark:
+  {
+    if (IsValid(#Pick))
+      delete current Pick;
+    else
+      if (KolDostupAkt <> 0)
+        {
+          Pick.wList   := wPList;
+          Pick.cRec    := SpSopr.NRec;
+          Pick.PickKol := KolDostupAkt;
+          insert current Pick;
+        }
+
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+    if (GetNext SpSopr = tsOk)
+      CallToNeighbours(cmPosDown, #SpSopr);
+
+    RescanPanel(#SpSopr);
+#endif
+  }
+
+cmSelectAll:
+  {
+    PushPos(#SpSopr);
+
+    StartNewVisual(vtRotateVisual
+                   , vfTimer+vfBreak+vfConfirm
+                   , 'Помечаю всю спецификацию...'#13#3
+                   , 1);
+
+    KillPick;
+
+    _LOOP SpSopr
+      if (NOT NextVisual)
+        Break;
+      else
+        if (KolDostupAkt <> 0)
+          {
+            Pick.wList   := wPList;
+            Pick.cRec    := SpSopr.NRec;
+            Pick.PickKol := KolDostupAkt;
+            insert current Pick;
+          }
+
+     PopPos(#SpSopr);
+     ReReadRecord;
+     RescanPanel(#SpSopr);
+     StopVisual('', 0);
+   }
+
+cmUnSelectAll:
+  {
+    KillPick;
+    RescanPanel(#SpSopr);
+    ReReadRecord;
+  }
+
+cmDefault:
+  if (UpdateTable)
+    {
+      ResetBounds(#Pick);
+
+      if (GetFirst Pick where ((wPList == Pick.wList)) <> tsOk)
+        if (KolDostupAkt <> 0)
+          {
+            ClearBuffer(#Pick);
+            Pick.wList   := wPList;
+            Pick.cRec    := SpSopr.NRec;
+            Pick.PickKol := KolDostupAkt;
+            insert current Pick;
+          }
+    }
+
+End; // HandleEvent
+End. // interface

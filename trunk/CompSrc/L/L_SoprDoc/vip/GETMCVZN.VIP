@@ -1,0 +1,737 @@
+//------------------------------------------------------------------------------
+//          Выбор матценностей для реестра смонтированного оборудования
+//------------------------------------------------------------------------------
+
+#include GETMCVZ.tbl
+#include oEdIzm.vih
+#include AktRecFun.vih
+#include LinkMTR2Spec.vih       // функции целевого учета
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор матценностей из накладых для возврата
+
+Параметры:
+  TypeSopr   - вид сопроводительного документа
+  OrgParam   - для установки ограничений по организации
+  dForm_nakl - дата создания сопр.документа
+#end
+
+//******************************************************************************
+Interface GetMCVzN 'Выбор МЦ для реестра смонтированного оборудования' EscClose, doAccept, Cyan;
+  Show at ( , , ,30);
+
+#include oEdIzm.var
+
+//******************************************************************************
+
+Table STRUCT mSpSopr
+(
+  cSpSopr : comp
+, kol     : double
+, kolv    : double
+)
+With Index
+(
+  mSpSopr01 = cSpSopr
+);
+
+Table STRUCT mKatSopr
+(
+  cSopr   : comp
+, VidSopr : word
+, dSopr   : date
+)
+With Index
+(
+  mKatSopr01 = VidSopr + dSopr
+, mKatSopr02 = cSopr
+);
+
+//******************************************************************************
+Create View
+
+var
+
+  w1
+, TypeSopr
+                : word;
+//-----------------------
+  orgparam
+, ctemp
+                : comp;
+//-----------------------
+  dForm_nakl
+                : date;
+//-----------------------
+  isFilter
+                : boolean;
+//-----------------------
+
+As Select
+  if( isvalid(tnPickMC),'√','')
+            (FieldName = Picked)
+//------------------------------------------------------------------------------
+, if (KatSopr.cVal = 0,
+    if (sGetTune('NDE.SimvRub')<> '', sGetTune('NDE.SimvRub'), 'Руб.'), KlVal.SimvolV)
+            (FieldName = Valut)
+//------------------------------------------------------------------------------
+, if (KatSopr.VhodNal = 1, 'входят', 'не входят')
+            (FieldName = VhNal)
+//------------------------------------------------------------------------------
+, if (SpSopr.cOtpEd = 0, KatEd.Name, KatOtpEd.Name)
+            (FieldName = OtpEd)
+//------------------------------------------------------------------------------
+, if (vSpSopr.cOtpEd = 0, vKatEd.Name, vKatOtpEd.Name)
+            (FieldName = vOtpEd)
+//------------------------------------------------------------------------------
+, if (IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ' : ' + SmetaStroy.Name, '')
+            (FieldName = SmetaMy)
+//------------------------------------------------------------------------------
+, if (IsValid(tnSmetaSpec), String(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') ' + SmetaSpec.Name, '')
+            (FieldName = SmetaSpMy)
+//------------------------------------------------------------------------------
+
+From
+  KatSopr
+, KatSopr     KatSopr1
+, KatSopr     KatSopr2
+, SpSopr
+, SpSopr      SpSopr1
+, SpSopr      SpSopr2
+, SpSopr      vSpSopr
+, mKatSopr (mKatSopr01)
+, mSpSopr
+, mSpSopr     vmSpSopr
+, KatOrg
+, SklOrder
+, SpOrder
+, KatPodr
+, KatMol
+, KatParty
+, KatMC
+, KatEd
+, KatMC       vKatMC
+, KatEd       vKatEd
+, KatDoc
+, KatOtpEd
+, KatOtpEd    vKatOtpEd
+
+, KatStroy
+, SpecZatr
+, AddSumTune
+, SpDocSmeta
+, SmetaStroy
+, SmetaSpec
+
+, tblGetMcVz
+, tblGetMcVz  tblGetMcVz2
+, KatOtpEd    KatOtpEdUth
+
+, Pick
+, Pick        PickMC
+
+Where
+((
+       w1                   ==  mKatSopr.VidSopr
+       
+//  and  orgparam             ==  KatSopr.cOrgBase
+//  and  w1                   ==  KatSopr.VidSopr
+//  and  dForm_nakl          >>=  KatSopr.dSopr  (NoIndex)
+
+  and  KatSopr.cOrgBase     ==  KatOrg.NRec
+
+  and  KatSopr.nRec         ==  SpSopr.cSopr
+  and  SpSopr.nRec          ==  mSpSopr.cSpSopr
+
+  and  SpSopr1.cSopr        ==  KatSopr1.nRec
+
+  and  word(2)              ==  PickMC.wList
+  and  SpSopr.nRec          ==  PickMC.cRec
+  and  word(2)              ==  Pick.wList
+  and  Pick.cRec            ==  vSpSopr.nRec
+  and  vSpSopr.nRec         ==  vmSpSopr.cSpSopr
+  and  vSpSopr.cOtpED       ==  vKatOtpEd.NRec
+  and  vSpSopr.cMCUsl       ==  vKatMC.nRec
+  and  vKatMc.cEd           ==  vKatEd.NRec
+
+  and  SpSopr.cMCUsl        ==  KatMC.nRec
+  and  KatMc.cEd            ==  KatEd.NRec
+  and  KatSopr.VidSopr      ==  KatDoc.TiDkGal
+  and  SpSopr.cOtpED        ==  KatOtpEd.NRec
+
+  and  KatSopr.cPodrTo      ==  KatPodr.NRec
+  and  KatSopr.cMOLTo       ==  KatMol.NRec
+
+  and  SpSopr.cUKS          ==  KatStroy.Nrec
+  and  SpSopr.nRec          ==  SpecZatr.cSpec
+  and  coSpSopr             ==  SpecZatr.coTable
+  and  SpecZatr.cAddSumTune ==  AddSumTune.nRec
+  and  coSpSopr             ==  SpDocSmeta.coTable
+  and  SpSopr.nRec          ==  SpDocSmeta.cSpec
+  and  SpDocSmeta.cSmeta    ==  SmetaStroy.NRec
+  and  SpDocSmeta.cPosition ==  SmetaSpec.NRec
+
+  and  word(1)              ==  KatOtpEdUth.PrMc
+  and  SpSopr.cMcUsl        ==  KatOtpEdUth.cMcUsl
+  and  KatEd.NRec           ==  KatOtpEdUth.cKatEd
+
+))
+
+bounds FilterBound = mKatSopr.cSopr == KatSopr.nRec
+
+bounds MainBound   = orgparam    == KatSopr.cOrgBase and
+                     w1          == KatSopr.VidSopr  and
+                     dForm_nakl >>= KatSopr.dSopr  (NoIndex)
+
+;
+
+Parameters
+  TypeSopr
+, OrgParam
+, dForm_nakl
+;
+
+//******************************************************************************
+Procedure SetTitle1;
+{
+  var i : integer; 
+  
+  i := 0;
+
+  _loop Pick
+    i := i + 1;
+
+  if isFilter
+    SetTitle('Выбор МЦ для реестра смонтированного оборудования (фильтр по доступным документам), выбрано: ' + string(i))
+  else
+    SetTitle('Выбор МЦ для реестра смонтированного оборудования, выбрано: ' + string(i));
+
+  ReScanPanel(#SpSopr);
+  ReScanPanel(#Pick);
+}
+//******************************************************************************
+Procedure Insert_Pick;
+{
+  Clearbuffer(#Pick);
+  Pick.cRec  := SpSopr.nRec;
+  Pick.wList := 2;
+  Insert current Pick;
+}
+//******************************************************************************
+Procedure Check_mSpSopr;
+{
+  if (GetFirst mSpSopr <> tsOk)
+    _loop SpSopr
+      {
+        mSpSopr.kol := SpSopr.KolFact;
+
+        case SpSopr.VidSopr of
+        //--------------------
+        210:
+          {
+            _loop SpSopr1 where (( SpSopr.nRec == SpSopr1.cSpSopr ))
+              if ( (SpSopr1.VidSopr = 610) or (SpSopr1.VidSopr = 1610) )
+                mSpSopr.kol := mSpSopr.kol - SpSopr1.KolFact;
+          }
+        //--------------------
+        1610:
+          {
+            _loop SpSopr1 where (( SpSopr.nRec == SpSopr1.cSpSopr ))
+              if (SpSopr1.VidSopr = 610)
+                mSpSopr.kol := mSpSopr.kol - SpSopr1.KolFact;
+          }
+        //--------------------
+        end;
+
+        mSpSopr.cSpSopr := SpSopr.nRec;
+        mSpSopr.kolv    := 0;
+        insert current mSpSopr;
+      }
+}
+
+//******************************************************************************
+Procedure Check_mKatSopr (pVidSopr : word);
+var 
+  TmpKol : double;
+{
+  _loop KatSopr2 where ((pVidSopr    == KatSopr2.VidSopr and
+                         dForm_nakl >>= KatSopr2.dSopr))
+    {
+      if (GetFirst mKatSopr where ((KatSopr2.nRec == mKatSopr.cSopr)) = tsOk)
+        Continue;
+
+      _loop SpSopr2 where ((KatSopr2.nRec == SpSopr2.cSopr))
+        {
+          TmpKol := SpSopr2.KolFact;
+
+          case SpSopr2.VidSopr of
+          //--------------------
+          210:
+            {
+              _loop SpSopr1 where (( SpSopr2.nRec == SpSopr1.cSpSopr ))
+                if ( (SpSopr1.VidSopr = 610) or (SpSopr1.VidSopr = 1610) )
+                  TmpKol := TmpKol - SpSopr1.KolFact;
+            }
+          //--------------------
+          1610:
+            {
+              _loop SpSopr1 where (( SpSopr2.nRec == SpSopr1.cSpSopr ))
+                if (SpSopr1.VidSopr = 610)
+                  TmpKol := TmpKol - SpSopr1.KolFact;
+            }
+          //--------------------
+          end;
+
+          if (TmpKol > 0.000001)
+            {
+              mKatSopr.cSopr   := KatSopr2.nRec;
+              mKatSopr.VidSopr := KatSopr2.VidSopr;
+              mKatSopr.dSopr   := KatSopr2.dSopr;
+
+              insert current mKatSopr;
+
+              Break;
+            }
+        }
+    }
+}
+//******************************************************************************
+TabbedSheet TOP tbsmain
+  show at (,,,7)
+
+//------------------------------------------------------------------------------
+Browse brNklList1 'акты передачи оборудования в монтаж' ('',hcGetMCVz,sci1EnEsc)
+  Table KatSopr;
+
+fields
+ KatDoc.Name    #3'Тип документа' ('Тип документа'): [22], Protect, NoAutosize;
+ KatSopr.dSopr  #3'Дата' ('Дата формирования накладной',,):[10], protect, NoAutoSize, Centered;
+ KatSopr.NSopr  #3'Номер' ('Номер накладной',,) : [21], protect;
+ KatSopr.Name   #3'Примечание'('Примечание',,) : [40], protect;
+ VhNal          #3'Вх.налога' ('Входимость налогов в цену позиций матценностей',,):[6], protect, NoAutoSize, Centered;
+ Valut          #3'Вал' ('Валюта документа',,):[4], Skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+end;
+
+//------------------------------------------------------------------------------
+Browse brNklList2 'ведомости оборудования, монтаж которого начат' ('',hcGetMCVz,sci1EnEsc)
+  Table KatSopr;
+
+fields
+ KatDoc.Name    #3'Тип документа' ('Тип документа'): [22], Protect, NoAutosize;
+ KatSopr.dSopr  #3'Дата' ('Дата формирования накладной',,):[10], protect, NoAutoSize, Centered;
+ KatSopr.NSopr  #3'Номер' ('Номер накладной',,) : [21], protect;
+ VhNal          #3'Вх.налога' ('Входимость налогов в цену позиций матценностей',,):[6], protect, NoAutoSize, Centered;
+ Valut          #3'Вал' ('Валюта документа',,):[4], Skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+end;
+
+//------------------------------------------------------------------------------
+Browse brNklList1f 'акты передачи оборудования в монтаж' ('',hcGetMCVz,sci1EnEsc)
+  Table mKatSopr;
+
+fields
+ KatDoc.Name    #3'Тип документа' ('Тип документа'): [22], Protect, NoAutosize;
+ KatSopr.dSopr  #3'Дата' ('Дата формирования накладной',,):[10], protect, NoAutoSize, Centered;
+ KatSopr.NSopr  #3'Номер' ('Номер накладной',,) : [21], protect;
+ KatSopr.Name   #3'Примечание'('Примечание',,) : [40], protect;
+ VhNal          #3'Вх.налога' ('Входимость налогов в цену позиций матценностей',,):[6], protect, NoAutoSize, Centered;
+ Valut          #3'Вал' ('Валюта документа',,):[4], Skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+end;
+
+//------------------------------------------------------------------------------
+Browse brNklList2f 'ведомости оборудования, монтаж которого начат' ('',hcGetMCVz,sci1EnEsc)
+  Table mKatSopr;
+
+fields
+ KatDoc.Name    #3'Тип документа' ('Тип документа'): [22], Protect, NoAutosize;
+ KatSopr.dSopr  #3'Дата' ('Дата формирования накладной',,):[10], protect, NoAutoSize, Centered;
+ KatSopr.NSopr  #3'Номер' ('Номер накладной',,) : [21], protect;
+ VhNal          #3'Вх.налога' ('Входимость налогов в цену позиций матценностей',,):[6], protect, NoAutoSize, Centered;
+ Valut          #3'Вал' ('Валюта документа',,):[4], Skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+end;
+
+end; // TabbedSheet
+
+//------------------------------------------------------------------------------
+Browse brMC1  ('',hcGetMCVz, sci1EscIns)
+  show at (,8,,18)
+
+Table SpSopr;
+
+Fields
+  {Font = {Color = if (Picked <> '', ColorMark, if (ABS(mSpSopr.kol) < 0.000001, ColorGray, 0))}};
+  Picked              ''        : [1],skip;
+  KatMC.name    #3'МЦ'          :[21], protect;
+  KatMC.BarKod  #3'Код'         ('Код МЦ'                        ,,): [12], Protect;
+  SpSopr.KolFact#3'Количество'  ('Количество в ордере в отп.ед.'  ,,): [10.3], Protect;
+  mSpSopr.kol   #3'Доступно'    ('Количество в ордере в отп.ед.'  ,,): [10.3], Protect;
+  mSpSopr.kolv  #3'Выбрано'     ('Выбранное количество'  ,,): [10.3], NoProtect;
+//  KatEd.Name    #3'УчЕд'        ('Учетная единица измерения МЦ'  ,,): [ 6  ], Protect, {Font = {Bold = tblGetMcVz.InOtpEd = 0}};
+  OtpEd         #3'ОтпЕд'       ('Отпускная единица измерения МЦ',,): [6], Protect, {Font = {Bold = tblGetMcVz.InOtpEd = 1}};
+  SpSopr.rPrice #3'Цена'        ('Цена по накладной'             ,,): [12.2], Protect;
+  SmetaMy       #3'Смета'       ('Локальная смета: "Номер" : "Наименование"'): [20], Protect;
+  SmetaSpMy     #3'Спецификация сметы'('Спецификация сметы: "№ п/п" ("Код") "Наименование"'): [20], Protect;
+end;
+
+//------------------------------------------------------------------------------
+Browse brMC2  'Выбрано' ('',hcGetMCVz, sci1Esc)
+  show at (,19,,25)
+
+Table Pick;
+
+Fields
+  vKatMC.name     #3'МЦ'          :[21], protect;
+  vKatMC.BarKod   #3'Код'         ('Код МЦ'                        ,,): [12], Protect;
+  vmSpSopr.kolv   #3'Выбрано'     ('Выбранное количество'  ,,): [10.3], NoProtect;
+  vOtpEd          #3'ОтпЕд'       ('Отпускная единица измерения МЦ'  ,,): [ 6  ], Protect, {Font = {Bold = tblGetMcVz.InOtpEd = 0}};
+  vSpSopr.rPrice  #3'Цена'        ('Цена по накладной'             ,,): [12.2], Protect;
+  vSpSopr.vidsopr #3'ТИП'         :[5], [LIST 210 'АП', 1610 'ВО'], skip;
+end;
+
+//------------------------------------------------------------------------------
+Screen scrOrgName
+  show at ( ,26 , ,);
+
+fields
+ KatOrg.Name    : skip;
+ KatPodr.Name   : skip;
+ KatMol.Name    : skip;
+
+<<
+ Контрагент .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Cклад .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ МОЛ   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen scrOrgName
+
+//------------------------------------------------------------------------------
+Screen scrOrgName2
+  show at ( ,26 , ,);
+
+<<
+
+
+
+>>
+end; // screen scrOrgName
+
+//******************************************************************************
+Tableevent table KatSopr
+
+cmPositionChanged:
+  Check_mSpSopr;
+
+end;
+//******************************************************************************
+Tableevent table mKatSopr
+
+cmPositionChanged:
+  Check_mSpSopr;
+
+end;
+//******************************************************************************
+HandleEvent   // int
+
+cmCheckField:
+  if (CurField = #mSpSopr.Kolv)
+    {
+      if (mSpSopr.Kolv > mSpSopr.Kol)
+        mSpSopr.Kolv := mSpSopr.Kol;
+
+      update current mSpSopr;
+
+      if (ABS(mSpSopr.Kolv) < 0.000001)
+        {
+          if (GetFirst PickMC = tsOK)
+            delete current PickMC;
+        }
+      else
+        {
+          if (GetFirst PickMC <> tsOK)
+            Insert_Pick;
+        }
+
+      ReReadRecord(#Pick);
+      SetTitle1;
+    }
+//------------------------------------------------------------------------------
+cmDefault:
+{
+  if (GetFirst Pick <> tsOk)
+    if (ABS(mSpSopr.Kol) > 0.000001)
+      {
+        Insert_Pick;
+
+        mSpSopr.Kolv := mSpSopr.Kol;
+        update current mSpSopr;
+      }
+}
+//------------------------------------------------------------------------------
+cmMarkUnMark :
+{
+  if (CurTable <> #SpSopr)
+    Exit;
+
+  if (GetFirst PickMC <> tsOk)
+    {
+  //    if (ABS(mSpSopr.Kol) > 0.000001)
+        {
+          Insert_Pick;
+
+          mSpSopr.Kolv := mSpSopr.Kol;
+          update current mSpSopr;
+        }
+    }
+  else
+    {
+      delete current PickMC;
+
+      mSpSopr.Kolv := 0;
+      update current mSpSopr;
+    }
+
+  if (GetNext SpSopr = tsOK)
+    CallToNeighBours(cmPosDown, #SpSopr);
+
+  ReReadRecord(#Pick);
+  SetTitle1;
+}
+//------------------------------------------------------------------------------
+cmSelectAll :
+{
+  PushPos(#SpSopr);
+
+  _loop SpSopr
+    {
+    //  if (ABS(mSpSopr.Kol) > 0.000001)
+        {
+          Insert_Pick;
+
+          mSpSopr.Kolv := mSpSopr.Kol;
+          update current mSpSopr;
+        }
+    }
+
+  PopPos(#SpSopr);
+
+  ReReadRecord(#Pick);
+  SetTitle1;
+}
+//------------------------------------------------------------------------------
+cmUnSelectAll :
+{
+  delete all Pick;
+
+  _loop SpSopr
+    {
+      mSpSopr.Kolv := 0;
+      update current mSpSopr;
+    }
+
+  ReReadRecord(#Pick);
+  SetTitle1;
+}
+//------------------------------------------------------------------------------
+cmInit :
+{
+  PushBounds(tbMainBound);
+  
+  isFilter := false;
+
+  SetTabbedSheetVisible(brNklList1,  true);
+  SetTabbedSheetVisible(brNklList2,  true);
+  SetTabbedSheetVisible(brNklList1f, false);
+  SetTabbedSheetVisible(brNklList2f, false);
+
+  w1 := 210;
+
+  SetFormat(brNklList1);
+
+  SetTitle1;
+
+  Check_mSpSopr;
+
+  delete all Pick;
+
+  if (GetFirst KatSopr <> tsOk)
+    {
+      Message(''#3'Нет актов передачи оборудования в монтаж данному контрагенту',CancelButton);
+      Abort;
+      Exit;
+    }
+}
+//------------------------------------------------------------------------------
+cmDone:
+{
+  delete all tblGetMcVz;
+
+  ResetBounds(#SpSopr);
+
+  _loop Pick
+    if (GetFirst SpSopr where (( Pick.cRec == SpSopr.nRec )) = tsOk)
+      {
+        tblGetMcVz.PickKol    := mSpSopr.Kolv;
+        tblGetMcVz.cOtpEd     := SpSopr.cOtpEd;
+        tblGetMcVz.PickKolUth := fEdIzm.ConvertToUchEd(mSpSopr.Kolv, SpSopr.cOtpEd);
+        tblGetMcVz.VidSopr    := SpSopr.VidSopr;
+        tblGetMcVz.cSpSopr    := SpSopr.nRec;
+        tblGetMcVz.InOtpEd    := 1;
+
+        if (GetFirst KatOtpEdUth = tsOk)
+          tblGetMcVz.cUthEd := KatOtpEdUth.NRec;
+
+        if (GetLast tblGetMcVz2 ordered by tblGetMcVz2.PickNum = tsOk)
+          tblGetMcVz.PickNum := tblGetMcVz2.PickNum + 1;
+
+        if (SpSopr.VidSopr <> 1610)
+          ctemp := SpSopr.NRec
+        else
+          if (GetFirst SpSopr1 where (( SpSopr.cSpSopr == SpSopr1.NRec )) = tsOk)
+            ctemp := SpSopr1.NRec
+          else
+            {
+              Message('Не найдена спецификация акта на передачу оборудования в монтаж!');
+              break;
+            }
+
+        if (GetFirst SpOrder where (( ctemp   == SpOrder.cSpSopr and
+                                      word(0) == SpOrder.VidOrder )) <> tsOk)
+          {
+            Message('Не найдена спецификация ордера!');
+            break;
+          }
+
+        tblGetMcVz.cSpOrder := SpOrder.NRec;
+
+        Insert Current tblGetMcVz;
+      }
+}
+//------------------------------------------------------------------------------
+cmChangeTabbedSheetFormat:
+{
+  if ( (w1 = 210) and ( (Target = brNklList1) or (Target = brNklList1f) ) )
+    {
+      Abort;
+      Exit;
+    }
+
+  if ( (w1 = 1610) and ( (Target = brNklList2) or (Target = brNklList2f) ) )
+    {
+      Abort;
+      Exit;
+    }
+
+  if (w1 = 210)
+    {
+      w1 := 1610;
+//      SetFormat(scrOrgName2);
+      SetFormat(if (isFilter, brNklList2f, brNklList2));
+    }
+  else
+    {
+      w1 := 210;
+//      SetFormat(scrOrgName);
+      SetFormat(if (isFilter, brNklList1f, brNklList1));
+    }
+
+  if isFilter
+    {
+      RereadRecord(#mKatSopr);
+
+      if (GetFirst mKatSopr <> tsOk)
+        {}
+    }
+  else
+    {
+      RereadRecord(#KatSopr);
+
+      if (GetFirst KatSopr <> tsOk)
+        {}
+    }
+
+  ReReadRecord(#SpSopr);
+  check_mSpSopr;
+  ReReadRecord(#SpSopr);
+}
+
+cmHotKeys:
+{
+  if isFilter
+    PutHotCommand(RunMenu('mnuGetMCVzN2'))
+  else
+    PutHotCommand(RunMenu('mnuGetMCVzN'));
+}
+
+cmFilterSave:
+{
+  isFilter := Not isFilter;
+
+  if isFilter
+    {
+    //  MTClear(#mKatSopr, mfNormal);
+
+      Check_mKatSopr(210);
+      Check_mKatSopr(1610);
+
+      PopBounds(tbMainBound);
+      PushBounds(tbFilterBound);
+
+      SetTabbedSheetVisible(brNklList1,  false);
+      SetTabbedSheetVisible(brNklList2,  false);
+      SetTabbedSheetVisible(brNklList1f, true);
+      SetTabbedSheetVisible(brNklList2f, true);
+
+      SetTitle1;
+
+      RereadRecord(#mKatSopr);
+
+      if (GetFirst mKatSopr <> tsOk)
+        {}
+
+      SetFormat(if (w1 = 210, brNklList1f, brNklList2f));
+    }
+  else
+    {
+      PopBounds(tbFilterBound);
+      PushBounds(tbMainBound);
+
+      SetTabbedSheetVisible(brNklList1,  true);
+      SetTabbedSheetVisible(brNklList2,  true);
+      SetTabbedSheetVisible(brNklList1f, false);
+      SetTabbedSheetVisible(brNklList2f, false);
+
+      SetTitle1;
+
+      RereadRecord(#KatSopr);
+
+      if (GetFirst KatSopr <> tsOk)
+        {}
+
+      SetFormat(if (w1 = 210, brNklList1, brNklList2));
+    }
+}
+
+end; // handleEvent Interface
+end.
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZN>L_SOPRDOC::GETMCVZN - Выбор матценностей для  реестра смонтированного оборудования</link>
+#end
+
+mnuGetMCVzN Menu
+{
+- 'Установить фильтр по доступным для выбора документам', cmFilterSave, 'Установить фильтр по доступным для выбора документам', , 'Alt+B', kbAltB, sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZN>L_SOPRDOC::GETMCVZN - Выбор матценностей для  реестра смонтированного оборудования</link>
+#end
+
+mnuGetMCVzN2 Menu
+{
+- 'Снять фильтр по доступным для выбора документам', cmFilterSave, 'Снять фильтр по доступным для выбора документам', , 'Alt+B', kbAltB, sci1Esc;
+}
+
+

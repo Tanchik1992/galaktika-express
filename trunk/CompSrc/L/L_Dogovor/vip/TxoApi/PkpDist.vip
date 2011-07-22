@@ -1,0 +1,577 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,2000 корпорация ГАЛАКТИКА                    ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Бухгалтерский контур                                      ║
+ ║ Версия        : 5.8x                                                      ║
+ ║ Назначение    : Обработка распределения Финансовых ПКП на товарные        ║
+ ║ Ответственный : Ларин Михаил Николаевич (larin@galaktika.by)              ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+//////////////////////////////////////////////////////////////////////////////
+#include TxoApi.vih
+
+VipInterface Txo_PkpDistr
+  Implements ObjTxoIdentPlugin
+  #ifdef Atl51
+  Licensed(Free)
+  #end
+;
+
+//////////////////////////////////////////////////////////////////////////////
+#doc
+Обработка распределения Финансовых ПКП на товарные
+#end
+Interface Txo_PkpDistr (,hcTXOWVIPParam);
+
+type
+TRecParam = record
+  // 1
+  FpkpStatusFlag : Boolean;
+  FpkpStatusMask : string;
+  FpkpStatusName : string;
+  FpkpDirect     : word; // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+                         // для финансов: 1="2->1" 2="1->2"
+  FpkpRunOk      : word;
+  // 2
+  TpkpStatusFlag : Boolean;
+  TpkpStatusMask : string;
+  TpkpStatusName : string;
+  TpkpDirect     : word; // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+                         // для МЦ: 1="1->2" 1="2->1"
+  TpkpRunOk      : word;
+  // 3
+  DogPriznak     : word;
+  LoopMode       : word;
+end;
+
+var
+  Param : TRecParam;
+
+create view
+var
+  // 0
+  CurTiDkGal : word;
+  CurSoprDoc : comp;
+as select
+  *
+from
+  Dogovor
+ ,CalPlan  CalPlanFin
+ ,CalPlan  CalPlanMC
+ ,PlanPays
+ ,PaySchem
+ ,SpDocs
+ ,KatStroy
+ ,KatNotes
+ ,KatMC
+ ,KatUsl
+ ,KauReff  KauReffMC
+ ,FpCO     FpCO_Fin_Otv
+ ,FpCO     FpCO_Fin_Plat
+ ,FpCO     FpCO_MC_Otv
+ ,FpCO     FpCO_MC_Plat
+ ,SpecZatr
+ ,KatOrgDescr
+Where
+((
+  CalPlanFin.Nrec      ==  PlanPays.cCalPlan  and
+  PlanPays.Nrec        ==  PaySchem.cPlanPays and
+  PaySchem.cMcPlan     ==  CalPlanMC.Nrec     and
+  403                  ==  SpDocs.TiDk        and
+  CalPlanMC.Nrec       ==  SpDocs.cDoc        and
+  SpDocs.cMcUsl        ==  KatMC.Nrec         and
+  coKatMC              ==  KauReffMC.coTable  and
+  SpDocs.cMCUsl        ==  KauReffMC.cRec     and
+  SpDocs.cMcUsl        ==  KatUsl.Nrec        and
+  SpDocs.cUKS          ==  KatStroy.Nrec      and
+  SpDocs.Nrec          ==  SpecZatr.cSpec     and
+  coSpDocs             ==  SpecZatr.coTable   and
+  CalPlanFin.cOtvPodr  ==  FpCO_Fin_Otv.Nrec  and
+  CalPlanFin.cPlatPodr ==  FpCO_Fin_Plat.Nrec and
+  CalPlanMC.cOtvPodr   ==  FpCO_MC_Otv.Nrec   and
+  CalPlanMC.cPlatPodr  ==  FpCO_MC_Plat.Nrec
+));
+
+function GetKontragentGroup(cOrg : comp) : comp;
+begin
+  GetKontragentGroup := 0;
+  _loop KatOrgDescr where ((cOrg == KatOrgDescr.cRec))
+     if (KatOrgDescr.cGroup <> 0)
+     {
+       GetKontragentGroup := KatOrgDescr.cGroup;
+       exit;
+     }
+end;
+
+//////////////////////////////////////////////////////////////////////////////
+function GetInfo : string;
+{
+   GetInfo := 'Обработка распределения Финансовых ПКП на товарные';
+}
+
+//////////////////////////////////////////////////////////////////////////////
+procedure PickSomeKatNotes(var Code : string; var Name : string);
+{  var cKatNotes : comp;
+   if (runinterface( GetSomKatNotes, 403,0,0,false, cKatNotes) = cmDefault )
+   {  if (getfirst KatNotes where ((cKatNotes == KatNotes.Nrec)) = tsOk)
+      {  Code := KatNotes.Code;
+         Name := KatNotes.Name;
+      }
+   }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+function ParamGen : string;
+{  var s : String;
+   s := '';
+   // 1
+   PackFields;
+   if (trim(Param.FpkpStatusMask)<>'') s := s+'[СтатФ:"'+trim(Param.FpkpStatusMask)+'"]';
+   // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+   // для финансов: 1="2->1" 2="1->2"
+   case Param.FpkpDirect of
+     1 : s := s+'[НапрФ:21]';
+     2 : s := s+'[НапрФ:12]';
+   end;
+   case Param.FpkpRunOk of
+     1 : s := s+'[ОбязФ:Да]';
+     2 : s := s+'[ОбязФ:Нет]';
+   end;
+   // 2
+   if (trim(Param.TpkpStatusMask)<>'') s := s+'[СтатТ:"'+trim(Param.TpkpStatusMask)+'"]';
+   // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+   // для МЦ: 1="1->2" 1="2->1"
+   case Param.TpkpDirect of
+     1 : s := s+'[НапрТ:12]';
+     2 : s := s+'[НапрТ:21]';
+   end;
+   case Param.TpkpRunOk of
+     1 : s := s+'[ОбязТ:Да]';
+     2 : s := s+'[ОбязТ:Нет]';
+   end;
+   // 3
+   if (Param.DogPriznak<>0) s := s+ '[Приз:'+if( (Param.DogPriznak and 1)<>0,'Д','')+
+                                       if( (Param.DogPriznak and 2)<>0,'У','')+
+                                       if( (Param.DogPriznak and 4)<>0,'О','')+']';
+   case Param.LoopMode of
+     1 : s := s+'[Цикл:МЦ]';
+   end;
+
+   ParamGen := s;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+Window winParam 'Параметры &VIP[Obj:"PkpDistr"]' (,,) EscClose, DoAccept;
+Show at (10,3,100,16);
+
+TabbedSheet tbParam;
+Screen scParam 'Параметры';
+  Bevel b1 { 0, 0, 53,  5, bsRaised, bsFrame};
+  Bevel b2 { 0, 4, 53,  9, bsRaised, bsFrame};
+  Bevel b3 { 0, 8, 53, 11, bsRaised, bsFrame};
+  Bevel b4 {52, 0, 83, 11, bsRaised, bsFrame};
+  Fields
+    Param.FpkpStatusMask ('Маска на код статуса финансового ПКП (#, ?, [abc], [!xyz])',,sci1EnEsc) : noprotect;
+    [ParamFpkpStatusName] string(Param.FpkpStatusName) ('Статус финансового ПКП',,sci13EnEsc) : protect, pickbutton;
+    Param.DogPriznak     ('Признак договор - соглашение',,sci13EnEsc) : noprotect;
+    // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+    // для финансов: 1="2->1" 2="1->2"
+    Param.FpkpDirect     ('Направление финансового ПКП',,sci13EnEsc) :
+      [LIST 0 'Оба направления', 1 'Контрагент 2 -> Контрагент 1', 2 'Контрагент 1 -> Контрагент 2'], protect;
+    Param.FpkpRunOk      ('Обязательность финансового ПКП',,sci13EnEsc) :
+      [LIST 0 'Не учитывать', 1 'Обязательный', 2 'Необязательный'], protect;
+    Param.TpkpStatusMask ('Маска на код статуса товарного ПКП (#, ?, [abc], [!xyz])',,sci1EnEsc) : noprotect;
+    [ParamTpkpStatusName] string(Param.TpkpStatusName) ('Статус товарного ПКП',,sci13EnEsc) : protect, pickbutton;
+    // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+    // для МЦ: 1="1->2" 1="2->1"
+    Param.TpkpDirect     ('Направление товарного ПКП',,sci13EnEsc) :
+      [LIST 0 'Оба направления', 1 'Контрагент 1 -> Контрагент 2', 2 'Контрагент 2 -> Контрагент 1'], protect;
+    Param.TpkpRunOk      ('Обязательность товарного ПКП',,sci13EnEsc) :
+      [LIST 0 'Не учитывать', 1 'Обязательный', 2 'Необязательный'], protect;
+    Param.LoopMode       ('Режим расчета',,sci13EnEsc) :
+      [LIST 0 'Обработать только шапку товарного ПКП',
+            1 'Обработать спецификацию товарного ПКП'] , protect;
+<<
+  Финансовый ПКП                                     `Признак документа`
+ `Статус     `.@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@     [.] договор               `
+ `Направление`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     [.] уточняющее соглашение `
+ `Обязат. ПКП`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     [.] отменяющее соглашение `
+  Товарный ПКП
+ `Статус     `.@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@
+ `Направление`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Обязат. ПКП`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Режим расчета` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+End;
+Screen scInfo 'Информация';
+<<
+  Допустимые режимы формирования значения аналитики:
+  1) Циклическая обработка по организациям:
+    <режим 0 организации> - "Плательщик" из схемы платежей финансового ПКП
+    <режим 1 организации> - "Получатель" из схемы платежей финансового ПКП
+    <режим 2 организации> - "Грузоотправитель" из товарного ПКП
+    <режим 3 организации> - "Грузополучатель" из товарного ПКП
+  2) Циклическая обработка по МЦ, группам МЦ, внешним КАУ из каталога МЦ,
+     услугам, группам услуг, статьям затрат строительства, объектам строительства,
+     типам строительства, видам строительства, отраслям строительства, направлениям инвестиций
+     срабатывает в режиме <Формировать автоматически> только при установленном
+     параметре "Режим расчета" = "Обработать спецификацию товарного ПКП"
+  3) Циклическая обработка по центрам ответственности:
+    <режим 0 центры ответственности> - поле "Центр ответственности" фин. ПКП
+    <режим 1 центры ответственности> - поле "Отнести на центр ответственности" фин. ПКП
+    <режим 2 центры ответственности> - поле "Центр ответственности" тов. ПКП
+    <режим 3 центры ответственности> - поле "Отнести на центр ответственности" тов. ПКП
+  4) Циклическая обработка по организациям:
+    <режим 4 организации> - организация из ЦО поля "Центр ответственности" фин. ПКП
+    <режим 5 организации> - организация из ЦО поля "Отнести на центр ответственности" фин. ПКП
+    <режим 6 организации> - организация из ЦО поля "Центр ответственности" тов. ПКП
+    <режим 7 организации> - организация из ЦО поля "Отнести на центр ответственности" тов. ПКП
+  5) Циклическая обработка по подразделениям:
+    <режим 4 подразделения> - подразделение из ЦО поля "Центр ответственности" фин. ПКП
+    <режим 5 подразделения> - подразделение из ЦО поля "Отнести на центр ответственности" фин. ПКП
+    <режим 6 подразделения> - подразделение из ЦО поля "Центр ответственности" тов. ПКП
+    <режим 7 подразделения> - подразделение из ЦО поля "Отнести на центр ответственности" тов. ПКП
+  6) Циклическая обработка по сотрудникам:
+    <режим 4 сотрудники> - сотрудник из ЦО поля "Центр ответственности" фин. ПКП
+    <режим 5 сотрудники> - сотрудник из ЦО поля "Отнести на центр ответственности" фин. ПКП
+    <режим 6 сотрудники> - сотрудник из ЦО поля "Центр ответственности" тов. ПКП
+    <режим 7 сотрудники> - сотрудник из ЦО поля "Отнести на центр ответственности" тов. ПКП
+  7) Циклическая обработка по группам организаций:
+    <режим 0 группы организаций> - группа организации - "Плательщик" из схемы платежей финансового ПКП
+    <режим 1 группы организаций> - группа организации - "Получатель" из схемы платежей финансового ПКП
+    <режим 2 группы организаций> - группа организации - "Грузоотправитель" из товарного ПКП
+    <режим 3 группы организаций> - группа организации - "Грузополучатель" из товарного ПКП
+    <режим 4 группы организаций> - группа организации из ЦО поля "Центр ответственности" фин. ПКП
+    <режим 5 группы организаций> - группа организации из ЦО поля "Отнести на центр ответственности" фин. ПКП
+    <режим 6 группы организаций> - группа организации из ЦО поля "Центр ответственности" тов. ПКП
+    <режим 7 группы организаций> - группа организации из ЦО поля "Отнести на центр ответственности" тов. ПКП
+>>
+End;
+End; //TabbedSheet
+
+HandleEvent
+  cmInit : ClearAdvRecord(Param);
+  cmSelectField :
+    {  SetWindowTitle(winParam, 'Параметры &VIP[Obj:"PkpDistr"]'+ParamGen);
+    }
+  cmPick :
+    {  case CurField of
+         #ParamFpkpStatusName : { PickSomeKatNotes(Param.FpkpStatusMask,Param.FpkpStatusName);
+                                  Set Param.FpkpStatusMask := Param.FpkpStatusMask;
+                                  SetWindowTitle(winParam, 'Параметры &VIP[Obj:"PkpDistr"]'+ParamGen);
+                                }
+         #ParamTpkpStatusName : { PickSomeKatNotes(Param.TpkpStatusMask,Param.TpkpStatusName);
+                                  Set Param.TpkpStatusMask := Param.TpkpStatusMask;
+                                }
+       end;
+    }
+  cmDelOnprotect:
+    {  case CurField of
+         #ParamFpkpStatusName : { Set Param.FpkpStatusMask:=''; Set Param.FpkpStatusName:=''; }
+         #ParamTpkpStatusName : { Set Param.TpkpStatusMask:=''; Set Param.TpkpStatusName:=''; }
+       end;
+    }
+End;
+End;
+
+//////////////////////////////////////////////////////////////////////////////
+function ParamMaster : string;
+{  ParamMaster := '';
+   if( RunWindowModal(winParam)=cmDefault )
+   {  PackFields;
+      ParamMaster := ParamGen;
+   }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+procedure ParamParser(hTxo : longint);
+{
+   var s : String;
+   var i : Longint;
+   ClearAdvRecord(Param);
+   for(i:=1; i<=TxoParamCount(hTxo); i:=i+1)
+   {  case TxoParamName(hTxo,i) of
+        // 1
+        'СТАТФ': { Param.FpkpStatusFlag := true;
+                   Param.FpkpStatusMask := TxoParamValue(hTxo,i);
+                 }
+        // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+        // для финансов: 1="2->1" 2="1->2"
+        'НАПРФ': case TxoParamValue(hTxo,i) of
+                   '12' : Param.FpkpDirect := 2;
+                   '21' : Param.FpkpDirect := 1;
+                 end;
+        'ОБЯЗФ': case TxoParamValue(hTxo,i) of
+                   'ДА'  : Param.FpkpRunOk := 1;
+                   'НЕТ' : Param.FpkpRunOk := 2;
+                 end;
+        // 2
+        'СТАТТ': { Param.TpkpStatusFlag := true;
+                   Param.TpkpStatusMask := TxoParamValue(hTxo,i);
+                 }
+        // !!! Внимание финансы и МЦ почемуто оказались перевеннуты !!!
+        // для МЦ: 1="1->2" 1="2->1"
+        'НАПРТ': case TxoParamValue(hTxo,i) of
+                   '12' : Param.TpkpDirect := 1;
+                   '21' : Param.TpkpDirect := 2;
+                 end;
+        'ОБЯЗТ': case TxoParamValue(hTxo,i) of
+                   'ДА'  : Param.TpkpRunOk := 1;
+                   'НЕТ' : Param.TpkpRunOk := 2;
+                 end;
+        'ПРИЗ': {  s := TxoParamValue(hTxo,i);
+                   if( Pos('Д',s)>0 ) Param.DogPriznak := Param.DogPriznak or 1;
+                   if( Pos('У',s)>0 ) Param.DogPriznak := Param.DogPriznak or 2;
+                   if( Pos('О',s)>0 ) Param.DogPriznak := Param.DogPriznak or 4;
+                }
+        'ЦИКЛ': case TxoParamValue(hTxo,i) of
+                   'МЦ'  : Param.LoopMode := 1;
+                end;
+      end;
+      TxoDebugMsg(hTxo, 'PkpDist', '['+TxoParamName(hTxo,i)+':'+TxoParamValue(hTxo,i)+'] '+string(i)+' of '+string(TxoParamCount(hTxo)));
+   }
+   /*
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.FpkpStatusFlag = '+string(Param.FpkpStatusFlag));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.FpkpStatusMask = '+string(Param.FpkpStatusMask));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.FpkpStatusName = '+string(Param.FpkpStatusName));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.FpkpDirect     = '+string(Param.FpkpDirect    ));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.FpkpRunOk      = '+string(Param.FpkpRunOk     ));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.TpkpStatusFlag = '+string(Param.TpkpStatusFlag));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.TpkpStatusMask = '+string(Param.TpkpStatusMask));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.TpkpStatusName = '+string(Param.TpkpStatusName));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.TpkpDirect     = '+string(Param.TpkpDirect    ));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.TpkpRunOk      = '+string(Param.TpkpRunOk     ));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.DogPriznak     = '+string(Param.DogPriznak    ));
+   TxoDebugMsg(hTxo, 'PkpDist', 'Param.LoopMode       = '+string(Param.LoopMode      ));
+   */
+}
+
+
+//////////////////////////////////////////////////////////////////////////////
+function TestKatNotes(cKatNotes : comp; flag:boolean; mask : string) : boolean;
+{
+   if(flag)
+   {  if (GetFirst fastfirstrow KatNotes where ((cKatNotes==KatNotes.Nrec)) = tsOk)
+      { TestKatNotes := MatchesMask(KatNotes.Code, mask); }
+      else
+      { TestKatNotes := MatchesMask('', mask); }
+   }
+   else { TestKatNotes := true; }
+}
+
+function TestDogPriznak : boolean;
+{
+   // Проверка признака договор-соглашение [Приз:ДУО]
+   TestDogPriznak := ( (Param.DogPriznak = 0)  // по любому
+   or ( ((Param.DogPriznak and 1)<>0) and (Dogovor.cDogovor=0) )                            // чисто договор
+   or ( ((Param.DogPriznak and 2)<>0) and (Dogovor.cDogovor<>0) and (Dogovor.cZamena=0) )   // уточняющее соглашение
+   or ( ((Param.DogPriznak and 4)<>0) and (Dogovor.cDogovor<>0) and (Dogovor.cZamena<>0) )) // отменяющее соглашение
+}
+
+#declare TestRunOk(theRunOk, theCalPlan)
+   // Проверка обязательность ПКП
+   (( #theRunOk = 0 )                                 // 0 [без разницы]
+   or ( (#theRunOk = 1) and (#theCalPlan.RunOk=1) )   // 1 [Обяз:Да]
+   or ( (#theRunOk = 2) and (#theCalPlan.RunOk=0) ) ) // 2 [Обяз:Нет]
+#end;
+
+#declare TestDirect(theDirectParam, theDirectFld)
+   //направление ПКП [Напр:_Оба_|12|21]
+   ( (#theDirectParam=0) or (#theDirectParam=#theDirectFld) )
+#end;
+
+procedure TxoBodyAddKau1(hTxo : longint);
+{
+    // 2 KAU
+    // центр ответственности, ответственный за выполнение финансового ПКП
+    TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_FpCO, CalPlanFin.cOtvPodr);
+    // центр ответственности, на бюджет которого относятся затраты финансового ПКП
+    TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_FpCO, CalPlanFin.cPlatPodr);
+    // организация, сотрудник, подразделение из ЦО, ответственного за выполнение финансового ПКП
+    if (isValid(tnFpCO_Fin_Otv))
+      case FpCO_Fin_Otv.coTable of
+        cgKau_KatOrg  : {
+                          TxoBodyAddKau(hTxo, wFlKau_Mode4, cgKau_KatOrg,  FpCO_Fin_Otv.cMean);
+                          TxoBodyAddKau(hTxo, wFlKau_Mode4, cgKau_GrOrg,   GetKontragentGroup(FpCO_Fin_Otv.cMean));
+                       }
+        cgKau_KatPodr : TxoBodyAddKau(hTxo, wFlKau_Mode4, cgKau_KatPodr, FpCO_Fin_Otv.cMean);
+        cgKau_Persons : TxoBodyAddKau(hTxo, wFlKau_Mode4, cgKau_Persons, FpCO_Fin_Otv.cMean);
+      end;
+    // организация, сотрудник, подразделение из ЦО, на бюджет которого относятся затраты финансового ПКП
+    if (isValid(tnFpCO_Fin_Plat))
+      case FpCO_Fin_Plat.coTable of
+        cgKau_KatOrg  : {
+                          TxoBodyAddKau(hTxo, wFlKau_Mode5, cgKau_KatOrg,  FpCO_Fin_Plat.cMean);
+                          TxoBodyAddKau(hTxo, wFlKau_Mode5, cgKau_GrOrg,   GetKontragentGroup(FpCO_Fin_Plat.cMean));
+                        }
+        cgKau_KatPodr : TxoBodyAddKau(hTxo, wFlKau_Mode5, cgKau_KatPodr, FpCO_Fin_Plat.cMean);
+        cgKau_Persons : TxoBodyAddKau(hTxo, wFlKau_Mode5, cgKau_Persons, FpCO_Fin_Plat.cMean);
+      end;
+}
+procedure TxoBodyAddKau2(hTxo : longint);
+{
+   // 4 KAU - организация плательщик/получатель из схемы распределения платежей
+   TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_KatOrg, PaySchem.cPlat);
+   TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_KatOrg, PaySchem.cPol);
+   TxoBodyAddKau(hTxo, wFlKau_Mode2, cgKau_KatOrg, CalPlanMC.cGrOtp);
+   TxoBodyAddKau(hTxo, wFlKau_Mode3, cgKau_KatOrg, CalPlanMC.cGrPol);
+   // группы организаций
+   TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_GrOrg, GetKontragentGroup(PaySchem.cPlat));
+   TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_GrOrg, GetKontragentGroup(PaySchem.cPol));
+   TxoBodyAddKau(hTxo, wFlKau_Mode2, cgKau_GrOrg, GetKontragentGroup(CalPlanMC.cGrOtp));
+   TxoBodyAddKau(hTxo, wFlKau_Mode3, cgKau_GrOrg, GetKontragentGroup(CalPlanMC.cGrPol));
+   // 5 KAU
+   // центр ответственности, ответственный за выполнение товарного ПКП
+   TxoBodyAddKau(hTxo, wFlKau_Mode2, cgKau_FpCO, CalPlanMC.cOtvPodr);
+   // центр ответственности, на бюджет которого относятся затраты товарного ПКП
+   TxoBodyAddKau(hTxo, wFlKau_Mode3, cgKau_FpCO, CalPlanMC.cPlatPodr);
+   // организация, сотрудник, подразделение из ЦО, ответственного за выполнение товарного ПКП
+   if (isValid(tnFpCO_MC_Otv))
+     case FpCO_MC_Otv.coTable of
+       cgKau_KatOrg  : {
+                         TxoBodyAddKau(hTxo, wFlKau_Mode6, cgKau_KatOrg,  FpCO_MC_Otv.cMean);
+                         TxoBodyAddKau(hTxo, wFlKau_Mode6, cgKau_GrOrg,   GetKontragentGroup(FpCO_MC_Otv.cMean));
+                       }
+       cgKau_KatPodr : TxoBodyAddKau(hTxo, wFlKau_Mode6, cgKau_KatPodr, FpCO_MC_Otv.cMean);
+       cgKau_Persons : TxoBodyAddKau(hTxo, wFlKau_Mode6, cgKau_Persons, FpCO_MC_Otv.cMean);
+     end;
+   // организация, сотрудник, подразделение из ЦО, на бюджет которого относятся затраты товарного ПКП
+   if (isValid(tnFpCO_MC_Plat))
+     case FpCO_MC_Plat.coTable of
+       cgKau_KatOrg  : {
+                         TxoBodyAddKau(hTxo, wFlKau_Mode7, cgKau_KatOrg,  FpCO_MC_Plat.cMean);
+                         TxoBodyAddKau(hTxo, wFlKau_Mode7, cgKau_GrOrg,   GetKontragentGroup(FpCO_MC_Plat.cMean));
+                       }
+       cgKau_KatPodr : TxoBodyAddKau(hTxo, wFlKau_Mode7, cgKau_KatPodr, FpCO_MC_Plat.cMean);
+       cgKau_Persons : TxoBodyAddKau(hTxo, wFlKau_Mode7, cgKau_Persons, FpCO_MC_Plat.cMean);
+     end;
+}
+procedure  TxoBodyAddKau3(hTxo : longint);
+{
+   // 7 KAU - МЦ и услуги товарного ПКП
+   if ( SpDocs.PrMC = 1 )
+   {  TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_KatMc, SpDocs.cMcUsl);
+      if( getfirst fastfirstrow KatMc = tsOk )
+       TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_GroupMC, KatMc.cGroupMC);
+      _loop KauReffMC
+         TxoBodyAddKau(hTxo, wFlKau_KauReffMC, KauReffMC.wKau, KauReffMC.cKau);
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_KatUsl,   0);
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_GroupUsl, 0);
+   }
+   else
+   {  TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_KatUsl, SpDocs.cMcUsl);
+      if( getfirst fastfirstrow KatUsl = tsOk )
+       TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_GroupUsl, KatUsl.cGroupUsl);
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_KatMC,   0);
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_GroupMC, 0);
+   }
+
+   if( getfirst fastfirstrow SpecZatr = tsOk )
+     TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_StZatr, SpecZatr.cAddSumTune);       // статья затрат строительства
+
+   // Для извлечения SpSopr.Nrec при помощи SoprDoc
+   TxoBodyAddKau(hTxo, wFlKau_Auto , wFlCycle_SpDocs, SpDocs.NRec);
+
+   if( getfirst fastfirstrow KatStroy = tsOk )
+   {
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_ObjBuild,     KatStroy.Nrec);       // Cам Объект строительства
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_TypStroy,     KatStroy.cTypeStroy); // Тип строительства
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_VidStroy,     KatStroy.cVidStroy);  // Вид строительства
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_Otrasl,       KatStroy.cOtrasl);    // Отрасль строительства
+      TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_DirectInvest, KatStroy.cInvest);    // Направления инвестиций
+   }
+}
+procedure LoopForPaySchem(hTxo : longint; buf : TTxoApiInfoDoc);
+{
+    // 1
+    TxoDebugMsg(hTxo, 'PkpDist', 'CalPlanFin.NoDoc='+CalPlanFin.NoDoc);
+
+    // 3 Loop со всякими обработками параметров
+    if (TestKatNotes(CalPlanFin.cNote, Param.FpkpStatusFlag, Param.FpkpStatusMask))
+    if (#TestRunOk(Param.FpkpRunOk, CalPlanFin))
+    if (GetFirst fastfirstrow PlanPays = tsOk)
+    _Loop PaySchem
+    if (#TestDirect(Param.FpkpDirect, PaySchem.Direct))
+    if (GetFirst fastfirstrow CalPlanMC = tsOk)
+    if (TestKatNotes(CalPlanMC.cNote, Param.TpkpStatusFlag, Param.TpkpStatusMask))
+    if (#TestDirect(Param.TpkpDirect, CalPlanMC.DirectMC))
+    if (#TestRunOk(Param.TpkpRunOk, CalPlanMC))
+    {
+       TxoDebugMsg(hTxo, 'PkpDist', ' CalPlanMc.NoDoc='+CalPlanMc.NoDoc);
+
+       case Param.LoopMode of
+         0: {
+               TxoDebugMsg(hTxo, 'PkpDist', '  PaySchem.Summa = '+string(PaySchem.Summa));
+
+               TxoBodyClear(hTxo);
+               TxoBodyAddKau1(hTxo);
+               TxoBodyAddKau2(hTxo);
+               // 6 - закачать суммы
+               TxoBodySetSum(hTxo, PGetAnyCurrency(PaySchem.cVal, PaySchem.Summa, buf.DatOb, 0), 0, 0);
+               TxoBodySetSumVal(hTxo, PaySchem.Summa, PaySchem.cVal);
+               //TxoBodySetSumKol(hTxo, ???.KolFact, ???.cOtpEd);  //Количества нету :(
+                TxoBodyInsert(hTxo);
+            }
+         1: _Loop SpDocs
+            {
+               TxoDebugMsg(hTxo, 'PkpDist', '  PaySchem.Summa*SpDocs.Summa/CalPlanMC.SummaSpec = '+string(PaySchem.Summa)+'*'+string(SpDocs.Summa)+'/'+string(CalPlanMC.SummaSpec));
+
+               TxoBodyClear(hTxo);
+               TxoBodyAddKau1(hTxo);
+               TxoBodyAddKau2(hTxo);
+               TxoBodyAddKau3(hTxo);
+               // 8 - закачать суммы и количество
+               var tmpSum : double;
+
+               if (Dogovor.VhodNal = 1)
+                 tmpSum := PaySchem.Summa*SpDocs.Summa/CalPlanMC.SummaSpec
+               else
+                 tmpSum := PaySchem.Summa*(SpDocs.Summa+SpDocs.SumNDS)/CalPlanMC.SummaSpec;
+
+               TxoBodySetSum(hTxo, PGetAnyCurrency(PaySchem.cVal, tmpSum, buf.DatOb, 0), 0, 0);
+               TxoBodySetSumVal(hTxo, tmpSum, PaySchem.cVal);
+               TxoBodySetSumKol(hTxo, SpDocs.Kol, SpDocs.cOtpEd);  //А так количество есть :)
+               TxoBodyInsert(hTxo);
+            }
+       end;
+    }
+}
+
+procedure LoopForDogovor(hTxo : longint; buf : TTxoApiInfoDoc);
+{  if (GetFirst fastfirstrow Dogovor where (( buf.cSoprDoc == Dogovor.Nrec )) = tsOk)
+   if (TestDogPriznak)
+   _Loop CalPlanFin where ((Dogovor.Nrec == CalPlanFin.cDogovor)) and ( (CalPlanFin.DirectMC=0)and(CalPlanFin.DirectPlat<>0) )
+     LoopForPaySchem(hTxo, buf);
+}
+
+procedure LoopForCalPlan(hTxo : longint; buf : TTxoApiInfoDoc);
+{  if (GetFirst fastfirstrow CalPlanFin where (( buf.cSoprDoc == CalPlanFin.Nrec )) = tsOk)
+   if ((CalPlanFin.DirectMC=0)and(CalPlanFin.DirectPlat<>0))
+   if (GetFirst fastfirstrow Dogovor where (( CalPlanFin.cDogovor == Dogovor.Nrec )) = tsOk)
+   if (TestDogPriznak)
+     LoopForPaySchem(hTxo, buf);
+}
+
+procedure StoreCycles(hTxo : longint; buf : TTxoApiInfoDoc);
+{
+   TxoAllowRecallStoreCycles(hTxo);
+
+   TxoDebugMsg(hTxo, 'PkpDist---', '--------------------------------------');
+   InitGetCur;
+
+   ParamParser(hTxo);
+
+   case buf.TiDkGal of
+    400, 401 : LoopForDogovor(hTxo, buf);
+    403      : LoopForCalPlan(hTxo, buf);
+   end;
+
+   DoneGetCur;
+   TxoDebugMsg(hTxo, 'PkpDist---', '--------------------------------------');
+}
+
+end.

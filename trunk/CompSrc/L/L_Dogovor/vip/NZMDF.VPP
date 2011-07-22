@@ -1,0 +1,161 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Сервисные функции для наряд-заказов                       ║
+ ║ Ответственный : Сидоров Владимир Геннадьевич (VOLOD)                      ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+#INCLUDE docshoz.vpp  //ф-ии регистрации НЗ в SoprHoz (на отдельной логич табл)
+#INCLUDE nzakaz.vpp  //ф-ии проверки и удаления НЗ (на отдельной логич табл)
+
+//-- формирование номера по специальному алгоритму
+procedure MakeSpecNum(var sss:string);
+var s: string;
+   v1,v2,v3,v4,v5,v6,v7,v8 : word;
+   sum : word;
+{
+  s := '';
+  s := SubStr(sss,1,7);
+  LPadCh(s,'0',7);
+  v1 := Word(substr(s,1,1));
+  v2 := Word(substr(s,2,1));
+  v3 := Word(substr(s,3,1));
+  v4 := Word(substr(s,4,1));
+  v5 := Word(substr(s,5,1));
+  v6 := Word(substr(s,6,1));
+  v7 := Word(substr(s,7,1));
+  sum := 1*v1+2*v2+3*v3+4*v4+5*v5+6*v6+7*v7;
+  v8 := sum mod 11;
+  if (v8 >= 10)
+    {
+      sum := 3*v1+4*v2+5*v3+6*v4+7*v5+8*v6+9*v7;
+      v8 := sum mod 11;
+      if (v8 = 10) v8 := 0;
+    }
+  s := s + string(v8);
+  sss := s;
+}
+
+function CheckNZNum(Num:string;var trueNum:string):boolean;
+{
+  CheckNZNum := true;
+  trueNum := Num;
+  if wGetTune('Doc.NZ.FormNum') = 1
+    {
+       MakeSpecNum(trueNum);
+    }
+  if (Num <> trueNum) CheckNZNum := false;
+}
+//-- установить значения полей по умолчанию для н-з
+//--здесь устанавливаются значения полей наряд-заказа обязательные для нового н-з
+procedure SetNZakazDefMainFld;
+{
+  nZakaz.DesGr  := sGetTune('User.DesGr');
+  nZakaz.Descr  := sGetTune('User.Descr');
+  case wGetTune('Doc.NZ.FormNum') of
+    0: NZakaz.NoDoc  := GetLastNumD(440);
+    1:{
+        NZakaz.NoDoc  := GetLastNumD__(440,'',7);
+        MakeSpecNum(NZakaz.NoDoc);
+      }
+    2: NZakaz.NoDoc := '___________';
+  end;
+  NZakaz.Status := 0;
+  NZakaz.cNote  := oNotes.GetFirstNote(440,NZakaz.Status);
+}
+procedure SetNZakazDef;
+{
+  SetNZakazDefMainFld;
+  nZakaz.dInput := cur_date;
+  nZakaz.dDoc   := cur_date;
+  nZakaz.dBeg   := cur_date;
+  nZakaz.IsLeaf := 0;
+  nZakaz.Status := 0;
+  nZakaz.Prior  := 2;
+  nZakaz.cOwner := 0;
+  if (wGetTune('Doc.NZ.TipNz') > 0)
+    nZakaz.TypeDoc:= 1
+  else
+    nZakaz.TypeDoc:= 0;
+}
+
+procedure AbortNewDocument;
+{
+  case wGetTune('Doc.NZ.FormNum') of
+    0: DelLastNumD(440,NZakaz.NoDoc);
+    1: DelLastNumD(440,substr(NZakaz.NoDoc,1,7));
+    2: DelLastNumD_(coNZakaz, SubStr(NZakaz.NoDoc,4,3) + String(Year(NZakaz.dDoc)), SubStr(NZakaz.NoDoc,8,4));
+  end;
+}
+/* уже не используется, но пока закоментировал
+//-- получить следующий номер позиции спецификации
+function GetSpNZakCodeNext:string;
+var ret : Word;
+    tmpN : string;
+    maxN : string;
+{
+  maxN := '';
+  PushPos(#SpDocs);
+  _loop SpDocs
+    if (maxN < SpDocs.Code) maxN := SpDocs.Code;
+
+  if (maxN <> '')
+    {
+      tmpN := maxN;
+    }
+  else
+    tmpN := '0';
+  PopPos(#SpDocs);
+  NextNumStr(tmpN);
+  GetSpNZakCodeNext := tmpN;
+}
+*/
+//-- копирует поля из наряд-заказа с NRec=sourNRec в NZakaz
+function NZ_Up2NZakaz:boolean;
+{
+   NZ_Up2NZakaz := false;
+   if (isValid(#NZakazUp) and isValid(#NZakaz))
+     {
+       NZ_Up2NZakaz := true;
+            set NZakaz.cDogovor := NZakazUp.cDogovor;
+            set NZakaz.cAppDogovor := NZakazUp.cAppDogovor;
+            set NZakaz.cCalPlan := NZakazUp.cCalPlan;
+            set NZakaz.cOrg := NZakazUp.cOrg;
+            set NZakaz.cContrib := NZakazUp.cContrib;
+            set NZakaz.cGrOtp := NZakazUp.cGrOtp;
+            set NZakaz.cPunktP := NZakazUp.cPunktP;
+            set NZakaz.cShipment := NZakazUp.cShipment;
+            set NZakaz.cTipOtg := NZakazUp.cTipOtg;
+            set NZakaz.cWaymove := NZakazUp.cWaymove;
+            set NZakaz.cPodrForm := NZakazUp.cPodrForm;
+            set NZakaz.cGrPol := NZakazUp.cGrPol;
+            set NZakaz.cPunktR := NZakazUp.cPunktR;
+
+            set NZakaz.AddTerms  := NZakazUp.AddTerms;
+            set NZakaz.dBeg      := NZakazUp.dBeg
+            set NZakaz.dDoc      := NZakazUp.dDoc
+            set NZakaz.dEnd      := NZakazUp.dEnd
+            set NZakaz.Otv_FIO   := NZakazUp.Otv_FIO
+            set NZakaz.Otv_Post  := NZakazUp.Otv_Post
+            set NZakaz.Sign_FIO  := NZakazUp.Sign_FIO
+            set NZakaz.Sign_Osn  := NZakazUp.Sign_Osn
+            set NZakaz.Sign_Post := NZakazUp.Sign_Post
+     }
+}
+
+
+//-- вставка нового наряд-заказа
+function Insert_current_NZakaz(myComment:string):word;
+var ret : word;
+{
+  ret := insert current NZakaz;
+  ret := InsDocInSoprHoz(NZakaz.NRec,NZakaz.cDogovor,NZakaz.cAppDogovor,
+                        440,NZakaz.dInput,NZakaz.NoDoc,
+                        NZakaz.Descr,NZakaz.DesGr);
+  ret := oStatlog.StatLog_Insert(440,NZakaz.NRec,myComment);
+  Insert_current_NZakaz := ret;
+}

@@ -1,0 +1,1643 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Функции автоматического формирования пунктов календарного плана
+//********************************************************************************
+
+var Marker, IndNo: longint;
+
+//********************************************************************************
+// Подсчет количества ПКП, которые будут сформированы согласно настройкам
+//********************************************************************************
+Function CalculateQuantity(Tip: word): word;
+var
+  i, k: word;
+  d1  : date;
+{
+  if ( getW3 = 0 )
+    {
+      i := 0;
+
+      _loop CalPlan where (( prmDogovor == CalPlan.cDogovor ))
+        {
+          if not SearchMarker(Marker, CalPlan.nRec, IndNo)
+            Continue;
+
+          if ( getW4 = 1 )
+            if ( ( CalPlan.cCalPlan <> CalPlan1.nRec ) OR ( CalPlan.nRec = CalPlan1.nRec ) )
+              Continue;
+
+          if ( ( CalPlan.DirectPlat = 0 ) AND ( Tip = 0 ) OR ( CalPlan.DirectMC = 0 ) AND ( Tip = 1 ) )
+            i := i + 1;
+        }
+    }
+  else
+    if ( ( getW2 = 4 ) AND ( getDays = 0 ) OR ( getBDate > getEDate ) )
+      i := 0
+    else
+      if ( getBDate = getEDate )
+        i := 1
+      else
+        case getW2 of
+          // с разбиением по годам
+          0:
+            i := Year(getEDate) - Year(getBDate) + 1;
+          // с разбиением по кварталам
+          1:
+            {
+              i := 1 + ((Month(getEDate) - 1) div 3) - ((Month(getBDate) - 1) div 3);
+              i := i + 4*(Year(getEDate) - Year(getBDate));
+            }
+          // с разбиением по месяцам
+          2:
+            i := Months_Between(getBDate, getEDate) + 1;
+          // с разбиением по неделям
+          3:
+            {
+              d1 := getBDate;
+
+              while ( Day_Of_Week(d1) <> 7 ) do
+                d1 := Add_Day(d1, 1);
+
+              if ( d1 < getEDate )
+                {
+                  k := CalcDaysBetweenDates(d1, Sub_Day(getEDate, 1), false);
+                  i := (k div 7) + if((k mod 7) = 0, 0, 1) + 1;
+                }
+              else
+                i := 1;
+            }
+          // с разбиением по дням
+          4:
+            {
+              k := CalcDaysBetweenDates(getBDate, getEDate, false);
+              i := (k div getDays) + if((k mod getDays) = 0, 0, 1);
+            }
+        end;
+
+  CalculateQuantity := i;
+}
+
+var IsDateRange           : boolean;
+var DateRange1, DateRange2: date;
+var DaysRange             : word;
+
+#doc
+Окно параметров автоформирования ПКП
+#end
+Window winPeriodKol 'Автоформирование ПКП' (, hcdgAvtoInputData, sci1Esc) DoAccept, EscClose, Gray;
+  Show at (,, 44, 20);
+
+Panel pAuto
+
+Screen scrPeriodKol1;
+Fields
+  getW4          ('Формирование ПКП на основании договора/соглашения или текущего ПКП'): NoProtect;
+  getW1          ('[x] - формировать ПКП на МЦ/Услуги и/или финансовые') : [LIST 1 'на МЦ/Услуги', 'финансовые'], Protect;
+  getW7          ('вид формируемых финансовых ПКП') : [LIST 'авансовые', 'по факту'], Protect;
+  getD1          ('% от товарных ПКП') : NoProtect;
+  [lgetD1 ''] '%': Skip, left;
+  getW10         : [LIST 'на период ТПКП', 'в течение дней'], Protect;
+  getW8          ('Количество дней для формирования финансовых ПКП') : NoProtect;
+  getW11         : [LIST 'до начала периода ТПКП'
+                       , 'с начала периода ТПКП'
+                       , 'до окончания периода ТПКП'
+                   ], Protect;
+  SummaFrom      ('Формирование на сумму договора или всех товарных ПКП'): [LIST 1 'договора', 'товарных ПКП'], Protect;
+  getW3          ('Разбивать ПКП по периодам/количеству'): NoProtect;
+  PeriodKol      ('Количество создаваемых ПКП'): NoProtect, SpinButton[1, 1, 100],
+    { Font = {BackColor = if(PeriodKol > 0, 0, ColorError) } };
+  RealKol: Skip;
+  getW2          ('Определение периода'):
+                  [LIST 'по годам', 'по кварталам', 'по месяцам', 'по неделям', 'по дням'], Protect;
+  getDays        ('Количество дней в периоде'): NoProtect, SpinButton[1, 1, 365],
+    { Font = {BackColor = if(GetDays > 0, 0, ColorError) } };
+  getBDate       ('Начальная дата интервала',, sci13Esc): NoProtect,
+    { Font = {BackColor = if((getBDate = ZeroDate) or  (getBDate > getEDate), ColorError, 0) } };
+  getEDate       ('Конечная дата интервала',, sci13Esc): NoProtect,
+    { Font = {BackColor = if((getEDate = ZeroDate) or (getBDate > getEDate), ColorError, 0) } };
+  getW5          : NoProtect;
+  getW9          ('Относительно чего распределять количество/цену') : [LIST 0 'количеству периодов', 'дням периода'], Protect;
+  getW6          ('Распределять количество или цену') : [LIST 0 'количество', 'цену'], Protect;
+  KatNotes1.Name ('Статус формируемых ПКП',, sci13Esc): Protect;
+  DirectSpDocs   ('Формирование по позициям с направлением',, sci13Esc): [LIST 1 '1->2', '2->1'], Protect;
+Buttons
+  cmValue1, Default,, 'Формировать ПКП'            ,, sci1Esc;
+  cmValue2,        ,, 'Отмена автоформирования ПКП',, sci1Esc;
+<<
+ `На основании`        `Формировать ПКП`
+  (.) договора/согл.`  .@@@@@@@@@@@@@@@@@@
+  (.) текущего ПКП`    .@@@@@@@@@@@@.@@@@@.@@
+  (.) всех ТПКП`       .@@@@@@@@@@@@@@@.@@
+  На сумму         .@@@@@@@@@@@@@@@@@@@@@@
+  .@@@@@@@@@@@@@
+ `Создание пунктов плана`
+  (.) определенного количества`.@@@@@@
+  (.) с разбиением по периодам`.@@@@@@
+  .@@@@@@@@@@@@@@ .@@@@@
+  Интервал `с`.@@@@@@@@@@ `по`.@@@@@@@@@@@
+
+  [.] не создавать ПКП с нулевой суммой`
+  [.] переформировывать план`
+&`Пропорционально`        &`Распределять`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@
+ `Статус формируемых ПКП`   <.Продолжить.>
+  .@@@@@@@@@@@@@@@@@@@@@@@
+ `С направлением`.@@@@@@@@  <.  Отмена  .>
+>>
+end;
+
+Procedure ChangeDirectSpDocs;
+var boFlag: boolean;
+{
+  boFlag :=
+     (
+      ( getW1 = 1 )
+       AND
+      (
+       ( getW4 = 0 )
+        OR
+       ( getW4 = 1 )
+        AND
+       if(IsValid(#CalPlan1), CalPlan1.DirectPlat = 0, FALSE)
+        AND
+       (
+        ( Dogovor.Direct = 3 )
+         OR
+        ( Dogovor.Direct = 4 )
+       )
+      )
+     );
+
+  SetFieldAndLabelVisible(#DirectSpDocs, boFlag);
+  SetFieldSelectable(#DirectSpDocs, boFlag AND ( getW4 = 0 ));
+
+  boFlag :=
+     (
+      ( ( Dogovor.SpecStatus = 1 ) AND ( Dogovor.VidDog = 12 ) )
+       AND
+      ( getW1 = 1 )
+       AND
+      (
+       ( getW4 = 0 )
+        OR
+       ( getW4 = 1 )
+        AND
+       if(IsValid(#CalPlan1), CalPlan1.DirectPlat = 0, FALSE)
+      )
+     );
+
+  SetFieldAndLabelVisible(#getW6, boFlag);
+}
+
+Procedure ChangeSelectionOn_getW3;
+{
+  SetFieldSelectable(#getBDate, getW3 <> 0);
+  SetFieldSelectable(#getEDate, getW3 <> 0);
+  SetFieldSelectable(#getW2   , getW3 <> 0);
+
+  SetFieldVisible(#PeriodKol, ( getW3 = 0 ) AND ( getW4 < 2 ));
+  SetFieldVisible(#getDays  , ( getW3 > 0 ) AND ( getW2 = 4 ));
+  SetFieldVisible(#RealKol  , getW3 <> 0);
+
+  if ( getW3 > 0 )
+    set RealKol := CalculateQuantity(0);
+}
+
+Procedure ChangeSelectionOn_getW7;
+{
+  if ( getW7 = 1 )
+    set getW10 := 1;
+
+  SetFieldSelectable(#getW10, getW7 <> 1);
+
+  SetFieldVisible(#getW8 , (getW4 = 2) AND (getW10 = 1) AND (getW1 = 2));
+  SetFieldVisible(#getW10, (getW4 = 2) AND (getW1  = 2));
+  SetFieldVisible(#getW11, (getW4 = 2) AND (getW10 = 1) AND (getW7 = 0));
+}
+
+Procedure ChangeSelectionOn_getW4;
+{
+  SetFieldSelectable(#getW3, getW4 <> 2);
+
+  SetFieldVisible(#PeriodKol, getW4 <> 2);
+  SetFieldVisible(#getW7, getW4 = 2);
+  SetFieldVisible(#getD1, getW4 = 2);
+  SetFieldVisible(#lgetD1, getW4 = 2);
+
+  if ( getW4 <> 2 )
+    {
+      SetFieldSelectable(#getW1, getW4 <> 1);
+
+      if ( getW4 = 1 )
+        set getW1 := if(CalPlan1.DirectPlat = 0, 1, 2);
+    }
+
+  ChangeSelectionOn_getW3;
+  ChangeSelectionOn_getW7;
+}
+
+HandleEvent
+
+cmPick:
+  case CurField of
+    #KatNotes1.Name:
+      {
+        RunInterface('GetSomKatNotes', word(403), 0, 0, false, cAutoNote);
+        set cAutoNote := cAutoNote;
+      }
+  end;
+
+cmDelOnProtect:
+  case CurField of
+    #KatNotes1.Name:
+      set cAutoNote := oNotes.GetFirstNote(word(403), word(0));
+  end;
+
+cmCheckField:
+  case CurField of
+    #getW4:
+      {
+        SetFieldSelectable(#KatNotes1.Name, getW4 = 0);
+
+        SetFieldAndLabelVisible(#SummaFrom, ( getW4 = 0 ) AND ( getW1 = 2 ));
+
+        if ( getW4 = 0 )
+          {
+            if ( getW1 = 2 )
+              set DirectSpDocs := if(Dogovor.Direct = 1, 1, 2)
+            else
+              set DirectSpDocs := 2 - (Dogovor.Direct mod 2);
+
+            SetFieldVisible(#getBDate, TRUE);
+            SetFieldVisible(#getEDate, TRUE);
+
+            ClusterDisabledField(#getW3, 0);
+          }
+        else
+          {
+            set cAutoNote := CalPlan1.cNote;
+
+            if ( getW4 = 1 )
+              {
+                if ( CalPlan1.DirectMC = 0 )
+                  {
+                    set DirectSpDocs := CalPlan1.DirectPlat;
+                    set getW1 := 2;
+                    ClusterDisabledField(#getW4, if(CalPlan.DirectMC = 100, 2, 0));
+                  }
+                else
+                  {
+                    set DirectSpDocs := CalPlan1.DirectMC;
+                    set getW1 := 1;
+                    ClusterDisabledField(#getW4, 4+if(CalPlan.DirectMC = 100, 2, 0));
+                  }
+              }
+
+            if IsDateRange
+              {
+                set getBDate := DateRange1;
+                set getEDate := DateRange2;
+              }
+            else
+              {
+                ClusterDisabledField(#getW3, 2);
+                set getW3 := 0;
+              }
+          }
+
+        ClusterDisabledField(#getW5, if(getW4 = 2, 2, 0));
+        ChangeSelectionOn_getW4;
+        ChangeDirectSpDocs;
+      }
+
+    #getW3:
+      ChangeSelectionOn_getW3;
+
+    #getW7:
+      ChangeSelectionOn_getW7;
+
+    #getW2:
+      {
+        SetFieldVisible(#getDays, getW2 = 4);
+
+        set RealKol := CalculateQuantity(0);
+      }
+
+    #getW1:
+      {
+        ClusterDisabledField(#getW4, 4 * (2 - getW1) + if(IsValid(#CalPlan1), if(CalPlan.DirectMC = 100, 2, 0), 2));
+
+        if ( ( getW1 = 1 ) AND ( getW4 = 2 ) )
+          {
+            set getW4 := 0;
+            ChangeSelectionOn_getW4;
+          }
+
+        SetFieldAndLabelVisible(#SummaFrom, ( getW1 = 2 ) AND ( getW4 = 0 ));
+
+        ChangeDirectSpDocs;
+      }
+
+    #getW10:
+      {
+        SetFieldVisible(#getW8 , (getW4 = 2) AND (getW10 = 1) AND (getW1 = 2));
+        SetFieldVisible(#getW11, (getW4 = 2) AND (getW10 = 1) AND (getW7 = 0));
+      }
+
+    #getDays, #getBDate, #getEDate:
+      set RealKol := CalculateQuantity(0);
+  end
+
+end;
+end;
+
+HandleEvent
+
+cmInit:
+  {
+    getBDate := Dogovor.dBeg;
+    getEDate := Dogovor.dEnd;
+
+    set cAutoNote := oNotes.GetFirstNote(word(403), word(0));
+
+    getW1 := 1;
+    getW2 := 0;
+    getW3 := 0;
+    getW4 := 0;
+    getW5 := 0;
+    getW6 := 0;
+    getW7 := 0;
+    getW8 := 0;
+    getW9 := 0;
+    getD1 := 100;
+
+    PeriodKol:= 1; getDays := 1;
+
+    SetFieldVisible(#PeriodKol, TRUE);
+
+    PutCommand(cmValFld1);
+
+    SetFieldVisible(#SummaFrom, FALSE);
+    SetFieldSelectable(#getW2, FALSE);
+
+    ClusterDisabledField(#getW3, 0);
+    ClusterDisabledField(#getW4, 4 + if(IsValid(#CalPlan1), if(CalPlan.DirectMC = 100, 2, 0), 2));
+    ClusterDisabledField(#getW5, 0);
+
+    SetFieldVisible(#getDays, FALSE);
+
+    SetFieldSelectable(#getW4, IsValid(#CalPlan));
+
+    SetFieldSelectable(#getW1, TRUE);
+    SetFieldSelectable(#KatNotes1.Name, TRUE);
+    SetFieldVisible(#RealKol, FALSE);
+    SetFieldVisible(#getW7, FALSE);
+    SetFieldVisible(#getD1, FALSE);
+    SetFieldVisible(#lgetD1, FALSE);
+    SetFieldVisible(#getW8, FALSE);
+    SetFieldVisible(#getW10, FALSE);
+    SetFieldVisible(#getW11, FALSE);
+
+    ChangeDirectSpDocs;
+
+    set DirectSpDocs := 2 - (Dogovor.Direct mod 2);
+
+    SetFieldSelectable(#DirectSpDocs, TRUE);
+
+    SetFieldSelectable(#getW6, ( Dogovor.SpecStatus = 1 ) AND ( Dogovor.VidDog = 12 ));
+  }
+
+cmValFld1:
+{
+  SetFieldAndLabelVisible(#SummaFrom, TRUE);
+}
+
+cmValue1:
+  {
+    if ( IsDateRange OR ( getW4 = 0 ) )
+      {
+        if ( getW4 = 0 )
+          {
+            if ( ( Dogovor.dBeg = ZeroDate ) OR ( Dogovor.dEnd = ZeroDate ) )
+              {
+                message('Задайте период действия договора/соглашения и повторите операцию!', Information);
+                Exit;
+              }
+          }
+        else
+          if ( ( DateRange1 = ZeroDate ) OR ( DateRange2 = ZeroDate ) )
+            {
+              message('Задайте период действия вышестоящего ПКП и повторите операцию!', Information);
+              Exit;
+            }
+
+        if ( getBDate = ZeroDate )
+          {
+            message('Задайте начальную дату интервала!', CancelButton);
+            SelectField(#getBDate);
+            Exit;
+          }
+
+        if ( getEDate = ZeroDate )
+          {
+            message('Задайте конечную дату интервала!', CancelButton);
+            SelectField(#getEDate);
+            Exit;
+          }
+
+        if ( getEDate < getBDate )
+          {
+            message('Ошибка ввода интервала: начальная дата больше конечной!', CancelButton);
+            SelectField(#getBDate);
+            Exit;
+          }
+
+        if ( getW4 = 0 )
+          {
+            if ( ( getBdate < Dogovor.dBeg ) OR ( getEdate > Dogovor.dEnd ) )
+              {
+                message('Период должен быть корректно определен и не должен '
+                      + 'выходить за рамки действия договора/соглашения!'#13
+                      + 'Период действия договора/соглашения -'
+                      + ' c '  + DateToStr(Dogovor.dBeg, 'DD/MM/YYYY')
+                      + ' по ' + DateToStr(Dogovor.dEnd, 'DD/MM/YYYY')
+                      , OkButton);
+
+                SelectField(#getBDate);
+                Exit;
+              }
+          }
+        else
+          if ( ( getBdate < DateRange1 ) OR ( getEdate > DateRange2 ) )
+            {
+              message('Период должен быть корректно определен и не должен '
+                    + 'выходить за рамки действия вышестоящего ПКП!'#13
+                    + 'Период действия ПКП -'
+                    + ' c '  + DateToStr(DateRange1, 'DD/MM/YYYY')
+                    + ' по ' + DateToStr(DateRange2, 'DD/MM/YYYY')
+                    , OkButton);
+
+              SelectField(#getBDate);
+              Exit;
+            }
+      }
+
+    if ( ( getW3 = 0 ) AND ( PeriodKol = 0 ) )
+      {
+        message('Задайте количество!', CancelButton);
+        SelectField(#PeriodKol);
+        Exit;
+      }
+
+    if ( ( getW3 = 1 ) AND ( getW2 = 4 ) AND ( getDays = 0 ) )
+      {
+        message('Задайте количество дней в периоде!', CancelButton);
+        SelectField(#getDays);
+        Exit;
+      }
+
+    if ( ( getW4 = 2 ) AND ( getW1 = 2 ) AND ( getW10 = 1 ) AND ( getW8 = 0 ) )
+      {
+        message('Задайте количество!', CancelButton)
+        SelectField(#getW8);
+        Exit;
+      }
+
+    var Msg: string;
+
+    case getW1 of
+      1: Msg := 'все ПКП на МЦ/Услуги';
+      2: Msg := 'все финансовые ПКП';
+    end;
+
+    case getW4 of
+      0: Msg := Msg + ' с направлением ' + if(DirectSpDocs = 1, '1->2', '2->1');
+      1: Msg := Msg + ' по текущему ПКП';
+    end;
+
+    if ( ( (getW5 and 2) <> 0 ) AND ( getW4 <> 2 ) )
+      if ( message('Внимание!'#13
+                 + 'Перед автоформированием ' + Msg + ' будут удалены.'#13
+                 + 'Продолжить?', Confirmation + YesNo + mfSwapButtons) <> cmYes )
+        {
+          PutCommand(cmCancel);
+          Exit;
+        }
+
+    PutCommand(cmDefault);
+  }
+
+cmValue2:
+  PutCommand(cmCancel);
+
+end; // of HandleEvent Window
+end; // of Window
+
+Procedure SetDaysCalPlan(Tip: word);
+var i, j: word;
+{
+  i := CalculateQuantity(Tip);
+  j := 1;
+
+  _loop CalPlan where (( prmDogovor == CalPlan.cDogovor ))
+    {
+      if not SearchMarker(Marker, CalPlan.nRec, IndNo)
+        Continue;
+
+      if ( getW4 = 1 )
+        if ( ( CalPlan.cCalPlan <> CalPlan1.nRec ) OR ( CalPlan.nRec = CalPlan1.nRec ) )
+        Continue;
+
+      if (
+          ( CalPlan.DirectPlat = 0 ) AND ( Tip = 1 )
+           OR
+          ( CalPlan.DirectMC   = 0 ) AND ( Tip = 0 )
+         )
+        Continue;
+
+      if ( ( CalPlan.DirectMC <> DirectSpDocs ) AND ( Tip = 0 ) )
+        Continue;
+
+      if ( ( Tip = 1 ) AND ( GetFirst fastfirstrow PlanPaysAdd = tsOK ) )
+        {
+          PlanPaysAdd.nDays := if(j = i, DaysRange, j * (DaysRange div i));
+          update current PlanPaysAdd;
+        }
+
+      CalPlan.nDays := if(j = i, DaysRange, j * (DaysRange div i));
+
+      update current CalPlan;
+
+      inc(j);
+    }
+}
+
+Procedure SetDateCalPlan(Tip: word);
+var
+  i, j, k  : word;
+
+  tmpEdate
+, tmpBdate : Date;
+{
+  i := CalculateQuantity(Tip);
+  j := 1;
+
+  tmpBDate := getBDate;
+  tmpEDate := Sub_Day(getBDate, 1);
+
+  if ( ( getW3 = 0 ) AND ( i > 1 ) )
+    k := CalcDaysBetweenDates(getBDate, getEDate, false) div PeriodKol;
+
+  _loop CalPlan where (( prmDogovor == CalPlan.cDogovor ))
+    {
+      if not SearchMarker(Marker, CalPlan.nRec, IndNo)
+        Continue;
+
+      if ( getW4 = 1 )
+        if ( ( CalPlan.cCalPlan <> CalPlan1.nRec ) OR ( CalPlan.nRec = CalPlan1.nRec ) )
+          Continue;
+
+      if ( ( CalPlan.DirectPlat = 0 ) AND ( Tip = 1 ) OR ( CalPlan.DirectMC = 0 ) AND ( Tip = 0 ) )
+        Continue;
+
+      if ( ( CalPlan.DirectMC <> DirectSpDocs ) AND ( Tip = 0 ) )
+        Continue;
+
+      if ( Add_Day(tmpEDate, 1) <= getEDate )
+        tmpBDate := Add_Day(tmpEDate, 1)
+      else
+        tmpBDate := getEDate;
+
+      if ( ( j = i ) OR ( tmpBDate = getEDate ) )
+        tmpEDate := getEDate;
+      else
+        if ( getW3 = 0 )
+          {
+            if ( k > 0 )
+              tmpEDate := Add_Day(tmpBDate, k - 1)
+            else
+              tmpEDate := tmpBDate;
+          }
+        else
+          {
+            case getW2 of
+              0:
+                tmpEDate := Date(1, 1, Year(tmpBDate)+1);
+              1:
+                {
+                  if ( j = 1 )
+                    {
+                      tmpEDate := Date(Day(tmpBDate), 3 * (1 + ((Month(tmpBDate) - 1) div 3)), Year(tmpBDate));
+                      tmpEDate := Add_Months(Date(1, Month(tmpEDate), Year(tmpEDate)), 1);
+                    }
+                  else
+                    tmpEDate := Add_Months(Date(1, Month(tmpBDate), Year(tmpBDate)), 3);
+                }
+
+              2:
+                tmpEDate := Add_Months(Date(1, Month(tmpBDate), Year(tmpBDate)), 1);
+
+              3:
+                {
+                  if ( j = 1 )
+                    {
+                      tmpEDate := tmpBDate;
+
+                      if (Day_Of_Week(tmpBDate) = 1)
+                        tmpEDate := Add_Day(tmpEDate, 7)
+                      else
+                        {
+                          tmpEDate := tmpBDate;
+
+                          while (Day_Of_Week(tmpEDate) <> 1) do
+                            tmpEDate := Add_Day(tmpEDate, 1);
+                        }
+                    }
+                  else
+                    tmpEDate := Add_Day(tmpBDate, 7);
+                 }
+
+              4:
+                tmpEDate := Add_Day(tmpBDate, getDays);
+            end;
+
+            tmpEDate := Sub_Day(tmpEDate, 1);
+          }
+
+      if ( ( Tip = 1 ) AND ( GetFirst fastfirstrow PlanPaysAvan = tsOK ) )
+        {
+          PlanPaysAvan.dFrom := tmpBdate;
+          PlanPaysAvan.dTo   := tmpEDate;
+          update current PlanPaysAvan;
+        }
+
+      CalPlan.dFrom := tmpBdate;
+      CalPlan.dTo   := tmpEDate;
+
+      update current CalPlan;
+
+      inc(j);
+    }
+}
+
+Procedure SetSummaSpec2;
+{
+  iNextVisual('Корректировка спецификации календарных планов');
+
+  _loop CalPlan where (( prmDogovor == CalPlan.cDogovor and DirectSpDocs == CalPlan.DirectMC ))
+    {
+      NextVisual;
+
+      if ( not SearchMarker(Marker, CalPlan.nRec, IndNo) )
+        Continue;
+
+      if ( getW4 = 1 )
+        if ( ( CalPlan.cCalPlan <> CalPlan1.nRec ) OR ( CalPlan.nRec = CalPlan1.nRec ) )
+          Continue;
+
+      if ( CalPlan.DirectMC = 0 )
+        Continue;
+
+      CalPlan.SummaSpec := 0;
+
+      _loop SpDocs
+        {
+          SpDocs.Summa := DogRound(SpDocs.cVal <> 0, SpDocs.Kol*SpDocs.Price);
+
+          update current SpDocs;
+
+          oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+
+          if ( ( SpDocs.PrMC = 4 ) OR ( SpDocs.PrMC = 5 ) )
+            Continue;
+
+          if ( CalPlan.VhodNal = 1 )
+            CalPlan.SummaSpec := CalPlan.SummaSpec + SpDocs.Summa
+          else
+            CalPlan.SummaSpec := CalPlan.SummaSpec + SpDocs.Summa + SpDocs.SumNDS;
+
+          CalPlan.SumNDS := CalPlan.SumNDS + SpDocs.SumNDS;
+        }
+
+      if ( ( CalPlan.SummaSpec < 0.00001 ) AND ( (getW5 mod 2) = 1 ) )
+        DeleteCalPlan
+      else
+        {
+          CalPlan.SummaSpec := CalPlan.SummaSpec - SumDiscount(CalPlan.SummaSpec);
+          CalPlan.SumNDS    := CalPlan.SumNDS    - SumDiscount(CalPlan.SumNDS);
+
+          if UpdateCalPlanSoprHoz
+            update current calplan;
+
+          oChkSchem.CheckSchem(CalPlan.cDogovor, Dogovor.TiDk, CalPlan.nRec, word(403), true);
+        }
+    }
+}
+
+Procedure AutoMakeCalPlanMC;
+var
+  tmpKol   : double;
+  tmpOst   : double;
+  prmOwner : comp;
+  pShipment: comp;
+  pTipOtgr : comp;
+  pWayMove : comp;
+  pFilialNo: longint;
+  i        : word;
+  TiDkSp   : word;
+  OnDate   : boolean;
+{
+  if ( getW4 = 0 )
+    {
+      prmOwner   := prmDogovor;
+      TiDkSp     := Dogovor.TiDk;
+      CalPlanRef := 0;
+      OnDate     := true;
+    }
+  else
+    {
+      prmOwner   := CalPlan1.nRec;
+      TiDkSp     := word(403);
+      CalPlanRef := CalPlan1.nRec;
+      OnDate     := CalPlan1.TermDefBy = 0;
+    }
+
+  DirectMCNewCP   := DirectSpDocs;
+  DirectPlatNewCP := 0;
+
+  iNextVisual('Формирование календарного плана');
+
+  for(i := 1; i <= PeriodKol; inc(i))
+    {
+      NextVisual;
+
+      if ( getW4 = 1 )
+        RereadRecord(#CalPlan);
+
+      SetDefaultCalPlan;
+      CalPlan.cNote  := cAutoNote;
+      CalPlan.Status := KatNotes1.Status;
+      InsertCalPlan(true);
+
+      InsertMarker(Marker, CalPlan.nRec);
+    }
+
+  if OnDate
+    SetDateCalPlan(0)
+  else
+    SetDaysCalPlan(0);
+
+  if ( GetFirst CalPlan where (( prmOwner == CalPlan.cDogovor )) = tsOK )
+    oSpDocs.GetDocInfoOtgr(CalPlan.nRec, 403, pShipment, pTipOtgr, pWayMove, pFilialNo);
+
+  iNextVisual('Формирование спецификации календарного плана');
+
+  ResetBounds(#SpDocs);
+
+  _loop SpDocs where (( TiDkSp       == SpDocs.TiDk
+                    and prmOwner     == SpDocs.cDoc
+                    and DirectSpDocs == SpDocs.Direct ))
+    {
+      if ( getW6 = 0 )
+        tmpOst := SpDocs.Ostatok / fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd)
+      else
+        tmpOst := SpDocs.Price;
+
+      var kk: double;
+
+      kk := tmpOst;
+
+      i := PeriodKol;
+
+      _loop CalPlan where (( prmDogovor == CalPlan.cDogovor and DirectSpDocs == CalPlan.DirectMC ))
+        {
+          NextVisual;
+
+          if ( not SearchMarker(Marker, CalPlan.nRec, IndNo) )
+            Continue;
+
+          if ( getW4 = 1 )
+            if ( ( CalPlan.cCalPlan <> CalPlan1.nRec ) OR ( CalPlan.nRec = CalPlan1.nRec ) )
+              Continue;
+
+          if ( CalPlan.DirectMC = 0 )
+            Continue;
+
+          if ( getW9 = 0 )
+            // количество|цена в ПКП - остаток/количество ПКП
+            tmpKol := tmpOst / i
+          else
+            // количество|цена в ПКП - остаток*количество дней в периоде ПКП/количество дней в периоде формирования
+            tmpKol := kk
+                       *
+                      CalcDaysBetweenDates(CalPlan.dFrom, CalPlan.dTo, false)
+                       /
+                      CalcDaysBetweenDates(getBDate, getEDate, false);
+
+          if ( getW6 = 0 )
+            fEdIzm.CheckKolDiskret(tmpKol, SpDocs.cOtpEd, true, false)
+          else
+            tmpKol := DogRound(SpDocs.cVal <> 0, tmpKol);
+
+          if ( tmpKol > tmpOst )
+            tmpKol := tmpOst;
+
+          if ( (tmpOst - tmpKol) > 0.000001 )
+            {
+              tmpOst := tmpOst - tmpKol;
+              i := i - 1;
+            }
+          else
+             {
+               tmpOst := 0;
+!               Break; // тогда позиции с нулевым количеством создаваться не будут
+             }
+
+          oSpDocs.SpDocs_InsCurentFromUpDoc(SpDocs.nRec
+                                          , CalPlan.nRec
+                                          , 403
+                                          , false
+                                          , if(getW6 = 0, tmpKol, SpDocs.Kol)
+                                          , pShipment
+                                          , pTipOtgr
+                                          , pWayMove
+                                          , pFilialNo
+                                          , CalPlan.DirectMC
+                                          , true
+                                           );
+
+          if ( getW6 = 1 )
+            {
+              var SpDocsPos : #TSpDocsP;
+
+              SpDocsPos := oSpDocs.GetCurrentPositionP;
+
+              SpDocsPos.Price := tmpKol;
+
+              oSpDocs.UpDate_current_SpDocs(SpDocsPos);
+            }
+
+          oSpDocs.SpDocs_CopyZamen(SpDocs.nRec, oSpDocs.GetCurrentPosition.nRec);
+
+          if ( boGetTune('Oper.ExClassKlPl') AND ( getW4 <= 1 ) )
+            {
+                  oExtAtr.CopyAllAttr(word(coSpDocs), SpDocs.nRec, oSpDocs.GetCurrentPosition.nRec);
+              oExtCls.CopyAllClassVal(word(coSpDocs), SpDocs.nRec, oSpDocs.GetCurrentPosition.nRec);
+            }
+        }
+    }
+
+  iNextVisual('Обновление ссылок');
+
+   _loop CalPlan where (( prmDogovor == CalPlan.cDogovor and DirectSpDocs == CalPlan.DirectMC ))
+     {
+       NextVisual;
+       oSpDocs.UpdateUpSpDocsRef(CalPlan.nRec, word(403));
+       DogToObj;
+     }
+
+  SetBounds(#SpDocs);
+
+  SetSummaSpec2;
+}
+
+Procedure GetFinPlanSums(var Sm, SmNDS: double);
+{
+  Sm := 0; SmNDS := 0;
+
+  _loop IerCalPl where (( prmDogovor    == IerCalPl.cDogovor
+                      and word(1)       == IerCalPl.isLeaf
+                      and IerCalPl.cRec == CalPlan.nRec ))
+  {
+    if ( CalPlan.DirectPlat = 0 )
+      Continue;
+
+    if ( getW4 = 1 )
+      {
+        if ( IerCalPl.cRec = CalPlan1.nRec )
+          Continue;
+
+        if (IerCalPl.cUpRec <> CalPlan1.nRec )
+          Continue;
+      }
+
+    Sm    := Sm    + CalPlan.Summa  * if(CalPlan.DirectPlat = (2 - (Dogovor.Direct mod 2)), 1, -1);
+    SmNDS := SmNDS + CalPlan.SumNDS * if(CalPlan.DirectPlat = (2 - (Dogovor.Direct mod 2)), 1, -1);
+  }
+}
+
+Procedure GetDogSums(var Sm, SmNDS: double);
+var tmpSm: double;
+{
+  Sm := 0; SmNDS := 0;
+
+  if ( ( getW4 = 0 ) AND ( SummaFrom = 2 ) )
+    {
+      _loop IerCalPl where (( prmDogovor    == IerCalPl.cDogovor
+                          and word(1)       == IerCalPl.isLeaf
+                          and IerCalPl.cRec == CalPlan.nRec ))
+      {
+        if ( CalPlan.DirectMC = 0 )
+          Continue;
+
+        tmpSm := CalPlan.SummaSpec + if(CalPlan.VhodNal = 1, 0.0, CalPlan.SumNDS);
+        Sm    := Sm + tmpSm * if(CalPlan.DirectMC = (2 - (Dogovor.Direct mod 2)), 1, -1);
+        SmNDS := SmNDS + CalPlan.SumNDS * if(CalPlan.DirectMC = (2 - (Dogovor.Direct mod 2)), 1, -1);
+      }
+    }
+  else
+    {
+      Sm    := Dogovor.Summa + if(Dogovor.VhodNal = 1, 0.0, Dogovor.SumNDS);
+      SmNDS := Dogovor.SumNDS;
+    }
+}
+
+type TCalPlan = record as table CalPlan;
+
+Function GetSumOfSchem(bPlanBuf: TCalPlan): double;
+var Sm: double;
+{
+  Sm := 0;
+
+  _loop PaySchem where (( bPlanBuf.nRec == PaySchem.cMcPlan ))
+    Sm := Sm + if(PaySchem.Direct = bPlanBuf.DirectMC, 1.0, -1.0)
+                *
+               oValFunc.GetAnyCurrency(PaySchem.cVal
+                                     , PaySchem.Summa
+                                     , oSpDocs.GetTrueDateValCurse(bPlanBuf.dValCurse, bPlanBuf.dFrom, bPlanBuf.dInput)
+                                     , bPlanBuf.cVal);
+
+  GetSumOfSchem := Sm;
+}
+
+Procedure AutoMakeCalPlanPlat;
+var
+  DogSm   : double;
+  DogSmNDS: double;
+  Sm      : double;
+  SmNDS   : double;
+  i       : word;
+  OnDate  : boolean;
+  prmOwner: comp;
+{
+  GetDogSums(DogSm, DogSmNDS);
+
+  GetFinPlanSums(Sm, SmNDS);
+
+  DogSm    := DogSm    - Sm   ; DogSm    := if(DogSm    > 0.0, DogSm   , 0.0);
+  DogSmNDS := DogSmNDS - SmNDS; DogSmNDS := if(DogSmNDS > 0.0, DogSmNDS, 0.0);
+
+  case getW4 of
+    0:
+      {
+        if ( ( (getW5 mod 2) = 1 ) AND ( DogSm < 0.00001 ) )
+          Exit;
+
+        prmOwner   := prmDogovor;
+        CalPlanRef := 0;
+        Sm         := DogRound(Dogovor.cVal <> 0, DogSm    / PeriodKol);
+        SmNDS      := DogRound(Dogovor.cVal <> 0, DogSmNDS / PeriodKol);
+        OnDate     := true;
+      }
+
+    1:
+      {
+        if ( ( (getW5 mod 2) = 1 ) AND ( CalPlan1.Summa < 0.00001 ) )
+          Exit;
+
+        prmOwner   := CalPlan1.nRec;
+        CalPlanRef := CalPlan1.nRec;
+        Sm         := DogRound(CalPlan1.cVal <> 0, (CalPlan1.Summa  - Sm   ) / PeriodKol);
+        SmNDS      := DogRound(CalPlan1.cVal <> 0, (CalPlan1.SumNDS - SmNDS) / PeriodKol);
+        OnDate     := (RecordExists PlanPaysAvan = tsOK);
+      }
+
+    2:
+      {
+        if ( RecordExists CalPlan where (( prmDogovor == CalPlan.cDogovor
+                                       and comp(0)    == CalPlan.cCalPlan
+                                       and word(0)    == CalPlan.DirectPlat )) <> tsOK )
+          Exit;
+
+        prmOwner   := prmDogovor;
+        CalPlanRef := 0;
+      }
+  end;
+
+  Sm    := if(Sm    > 0.0, Sm   , 0.0);
+  SmNDS := if(SmNDS > 0.0, SmNDS, 0.0);
+
+  DirectMCNewCP   := 0;
+  DirectPlatNewCP := if(Dogovor.Direct = 1, 1, 2);
+
+  iNextVisual('Формирование календарного плана');
+
+  if ( getW4 = 2 ) // по товарным ПКП
+    {
+      _loop CalPlan_s1 where (( prmDogovor == CalPlan_s1.cDogovor
+                            and comp(0)    == CalPlan_s1.cCalPlan
+                            and word(0)    == CalPlan_s1.DirectPlat ))
+        {
+          DirectPlatNewCP := if(Dogovor.Direct = 1, 1, 2);
+
+          SetDefaultCalPlan;
+
+          CalPlan.cNote     := cAutoNote;
+          CalPlan.Status    := KatNotes1.Status;
+          CalPlan.dValCurse := CalPlan_s1.dValCurse;
+          CalPlan.Summa     := CalPlan_s1.SummaSpec * getD1 / 100 - GetSumOfSchem(TCalPlan(CalPlan_s1.Buffer));
+          CalPlan.SumNDS    := CalPlan_s1.SumNDS * CalPlan.Summa / CalPlan_s1.SummaSpec;
+
+          if ( CalPlan.Summa < 0 )
+            {
+              CalPlan.Summa  := 0;
+              CalPlan.SumNDS := 0;
+            }
+
+          if ( getW7 = 0 ) // формируем авансовые финансовые ПКП
+            {
+              if ( getW10 = 0 ) // 'на период ТПКП'
+                {
+                  CalPlan.dFrom := CalPlan_s1.dFrom;
+                  CalPlan.dTo   := CalPlan_s1.dTo;
+                }
+              else // 'в течение дней'
+                {
+                  case getW11 of
+                  // 'до начала периода ТПКП'
+                    0:
+                      {
+                        CalPlan.dTo   := Sub_Day(CalPlan_s1.dFrom, 1);
+                        CalPlan.dFrom := oCF.SubWorkDay(CalPlan.cDogovor, CalPlan.dTo, getW8 - 1);
+                      }
+                  // 'с начала периода ТПКП'
+                    1:
+                      {
+                        CalPlan.dFrom := CalPlan_s1.dFrom;
+                        CalPlan.dTo   := oCF.AddWorkDay(CalPlan.cDogovor, CalPlan.dFrom, getW8 - 1);
+                      }
+                  // 'до окончания периода ТПКП'
+                    2:
+                      {
+                        CalPlan.dTo   := CalPlan_s1.dTo;
+                        CalPlan.dFrom := oCF.SubWorkDay(CalPlan.cDogovor, CalPlan.dTo, getW8 - 1);
+                      }
+                  end;
+
+                  if ( ( CalPlan.dFrom < Dogovor.dBeg ) OR ( CalPlan.dTo > Dogovor.dEnd ) )
+                    Message('Период созданного ПКП № ' + CalPlan.NoDoc + ' выходит за рамки действия договора/соглашения!', OkButton);
+                }
+            }
+          else
+            {
+              CalPlan.TermDefBy := 1;
+              CalPlan.cPredPlan := CalPlan_s1.nRec;
+              CalPlan.nDays     := getW8;
+              CalPlan.dFrom     := Add_Day(CalPlan_s1.dTo, 1);
+              CalPlan.dTo       := oCF.AddWorkDay(CalPlan.cDogovor
+                                                , CalPlan.dFrom
+                                                , if(CalPlan.nDays = 0, 0, CalPlan.nDays - 1));
+            }
+
+          InsertCalPlan(true);
+          InsertMarker(Marker, CalPlan.nRec);
+
+          ClearBuffer(#PaySchem);
+
+          PaySchem.cMcPlan   := CalPlan_s1.nRec;
+          PaySchem.cCalPlan  := CalPlan.nRec;
+          PaySchem.cPlat     := CalPlan.cPlat;
+          PaySchem.cPlatBank := CalPlan.cPlatBank;
+          PaySchem.cPol      := CalPlan.cPol;
+          PaySchem.cPolBank  := CalPlan.cPolBank;
+          PaySchem.Code      := '0001';
+          PaySchem.cVal      := CalPlan.cVal;
+          PaySchem.Direct    := CalPlan.DirectPlat;
+          PaySchem.Percent   := 100;
+
+          if ( getW7 = 0 ) // формируем авансовые финансовые ПКП
+            {
+              CurPayType := 0;
+              OnSetDefaultPlanPaysAvan;
+
+              PlanPaysAvan.dFrom := CalPlan.dFrom;
+              PlanPaysAvan.dTo   := CalPlan.dTo;
+
+              if ( insert current PlanPaysAvan = tsOK )
+                {}
+
+              PaySchem.PayType   := word(1);
+              PaySchem.cPlanPays := PlanPaysAvan.nRec;
+              PaySchem.Summa     := PlanPaysAvan.Summa;
+            }
+          else
+            {
+              CurPayType := 1;
+              OnSetDefaultPlanPaysAdd;
+
+              PaySchem.PayType  := word(3);
+              PlanPaysAdd.dFrom := CalPlan.dFrom;
+              PlanPaysAdd.dTo   := CalPlan.dTo;
+              PlanPaysAdd.nDays := CalPlan.nDays;
+
+              if ( insert current PlanPaysAdd = tsOK )
+                {}
+
+              PaySchem.cPlanPays := PlanPaysAdd.nRec;
+              PaySchem.Summa     := PlanPaysAdd.Summa;
+            }
+
+          if ( insert current PaySchem = tsOK )
+            {}
+        }
+    }
+  else
+    for(i := 1; i <= PeriodKol; inc(i))
+      {
+        NextVisual;
+
+        if ( getW4 = 1 )
+          RereadRecord(#CalPlan);
+
+        SetDefaultCalPlan;
+        CalPlan.cNote := cAutoNote;
+        CalPlan.Status := KatNotes1.Status;
+
+        if ( i = PeriodKol )
+          {
+            CalPlan.SumNDS := if(getW4 = 0,
+                                // по договору/соглашению
+                                DogSmNDS,
+                                // по текущему ПКП
+                                CalPlan1.SumNDS) - (PeriodKol - 1) * SmNDS;
+
+            CalPlan.Summa := if(getW4 = 0,
+                                // по договору/соглашению
+                                DogSm - if(Dogovor.VhodNal = 1, 0.0, CalPlan.SumNDS),
+                                // по текущему ПКП
+                                CalPlan1.Summa) - (PeriodKol - 1) * Sm;
+          }
+        else
+          {
+            CalPlan.SumNDS := SmNDS;
+            CalPlan.Summa  := Sm - if((Dogovor.VhodNal = 1) or (getW4 = 1), 0.0, CalPlan.SumNDS);
+          }
+
+        InsertCalPlan(true);
+        InsertMarker(Marker, CalPlan.nRec);
+
+        if ( getW4 = 1 )
+          MakePlanPaysOnOwner(CalPlan.nRec)
+        else
+          {
+            CurPayType := 0;
+            OnSetDefaultPlanPaysAvan;
+
+            if ( insert current PlanPaysAvan = tsOK )
+              {}
+          }
+      }
+
+  _loop CalPlan where (( prmDogovor == CalPlan.cDogovor and word(0) == CalPlan.DirectMC ))
+    {
+      NextVisual;
+
+      if ( getW4 = 1 )
+        if ( ( CalPlan.cCalPlan <> CalPlan1.nRec ) OR ( CalPlan.nRec = CalPlan1.nRec ) )
+          Continue;
+
+      if ( GetFirst fastfirstrow PlanPaysAvan = tsOK )
+        update current PlanPaysAvan set PlanPaysAvan.Summa := CalPlan.Summa
+      else
+        if ( GetFirst fastfirstrow PlanPaysAdd = tsOK )
+          update current PlanPaysAdd set PlanPaysAdd.Summa := CalPlan.Summa;
+    }
+
+  if ( getW4 < 2 )
+    if OnDate
+      SetDateCalPlan(1)
+    else
+      SetDaysCalPlan(1);
+}
+
+Procedure AutoMakeCalPlan;
+{
+  if ( Dogovor.cOrg = 0 )
+    {
+      message('В договоре не установлен контрагент!'#13
+            + 'Автоформирование ПКП невозможно', Warning);
+      Exit;
+    }
+
+  if ( GetFirst fastfirstrow CalPlan <> tsOK )
+    IsDateRange := true;
+  else
+    if (CalPlan.DirectPlat = 0)
+      {
+        IsDateRange := (CalPlan.TermDefBy = 0);
+
+        if IsDateRange
+          {
+            DateRange1 := CalPlan.dFrom;
+            DateRange2 := CalPlan.dTo;
+          }
+        else
+          DaysRange := CalPlan.nDays;
+      }
+    else
+      if ( GetFirst fastfirstrow PlanPaysAvan = tsOK )
+        {
+          IsDateRange := true;
+          DateRange1  := PlanPaysAvan.dFrom;
+          DateRange2  := PlanPaysAvan.dTo;
+        }
+      else
+        if ( GetFirst fastfirstrow PlanPaysAdd = tsOK )
+          {
+            IsDateRange := false;
+            DaysRange   := PlanPaysAdd.nDays;
+          }
+
+  if ( RunWindowModal(winPeriodKol) <> cmDefault )
+    Exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Автоформирование ПКП', 1);
+
+  if ( ( (getW5 and 2) <> 0 ) AND ( getW4 <> 2 ) )
+    {
+      if ( BeginConcurrentTransaction(trNoLock) <> 0 )
+        {
+          message('Не могу начать транзакцию!', Error);
+          Exit;
+        }
+
+      iNextVisual('Удаление старых календарных планов');
+
+      if ( getW4 = 1 ) // удаление подчиненных ПКП по текущему ПКП
+        {
+          while ( GetFirst fastfirstrow IerCalPl
+                     where (( prmDogovor    == IerCalPl.cDogovor
+                          and CalPlan1.nRec == IerCalPl.cUpRec
+                          and word(1)       == IerCalPl.isLeaf and (IerCalPl.cRec <> CalPlan1.nRec)
+                          and IerCalPl.cRec == CalPlan.nRec )) = tsOK )
+          do
+            {
+              NextVisual;
+
+              if ( not DeleteCalPlan )
+                {
+                  message('Не все ПКП удалось удалить', Error);
+                  AbortTransaction;
+                  StopVisual('', 0);
+                  Exit;
+                }
+            }
+        }
+      else // удаление всех ПКП определенного типа
+        while ( GetFirst fastfirstrow IerCalPl
+                   where (( prmDogovor  == IerCalPl.cDogovor
+                        and word(1)     == IerCalPl.isLeaf and (
+                                                                ( getW1 = 1 ) AND ( CalPlan.DirectMC = DirectSpDocs )
+                                                                 OR
+                                                                ( getW1 = 2 ) AND ( CalPlan.DirectMC = 0 )
+                                                               )
+                        and IerCalPl.cRec == CalPlan.nRec
+                         )) = tsOK )
+        do
+          {
+            NextVisual;
+            if ( not DeleteCalPlan )
+              {
+                message('Не все ПКП удалось удалить', Error);
+                AbortTransaction;
+                StopVisual('', 0);
+                Exit;
+              }
+          }
+
+      if ( EndTransaction <> 0 )
+        {
+          message('Не могу закончить транзакцию!', Error);
+          StopVisual('', 0);
+          Exit;
+        }
+    }
+
+  Marker := InitMarker('*$*AUTOMAKER*$*', 8, 100, 10);
+  ClearMarker(Marker);
+
+  if ( getW3 = 1 )
+    PeriodKol := CalculateQuantity(0);
+
+  if ( getW1 = 1 )
+    AutoMakeCalPlanMC
+  else
+    AutoMakeCalPlanPlat;
+
+  DoneMarker(Marker, '');
+
+  StopVisual('', 0);
+
+  var c: comp; c := CalPlan.nRec;
+
+  CurGroup := 0;
+
+  TreeJumpToRecord(MainTree, c);
+
+  ReScanPanel(#CalPlan1);
+  ReReadRecord(#CalPlan1);
+  ReReadRecord(#CalPlan);
+  ReReadRecord(#SpDocs);
+
+  message('Автоформирование ПКП завершено!', Information);
+}
+
+//***************************************************************************************
+
+table struct tmpSpDocsPodr
+(
+  nRec      : comp
+, cOtvPodr  : comp
+, cPlatPodr : comp
+, Direct    : word
+)
+With index
+(
+  tmpSpDocsPodr01 = nRec
+, tmpSpDocsPodr02 = Direct + cOtvPodr + cPlatPodr
+);
+
+Create View SpDocs_Podr
+
+From
+  tmpSpDocsPodr
+;
+
+Var wGroupParam : word;
+
+//***************************************************************************************
+Window wndPKPPodr 'Параметры группировки', doAccept;
+  Show at (,, 38, 5)
+
+Screen scrPKPPodr;
+
+Fields
+  wGroupParam : noProtect;
+
+Buttons
+  cmYes, Default;
+  cmCancel;
+<<
+ `Дополнительная группировка:`
+  [.] отнести на центр ответственности`
+
+   <. Продолжить .>      <. Отмена .>
+>>
+end;
+HandleEvent
+
+cmInit:
+  ReadMyDsk(wGroupParam, 'AutoMarker_wGroupParam', true);
+
+cmYes:
+{
+  PutCommand(cmDefault);
+  SaveMyDsk(wGroupParam, 'AutoMarker_wGroupParam');
+}
+end;
+end;
+
+//***************************************************************************************
+procedure InsertPKPAndSp(NeedPKP : boolean);
+{
+  var Buf : type$SpDocs;
+  Buf := SpDocs.Buffer;
+
+  if NeedPKP
+    {
+      SetDefaultCalPlan;
+
+      CalPlan.cNote       := cAutoNote;
+      CalPlan.Status      := 0;
+      CalPlan.cNote       := oNotes.GetFirstNote(word(403), word(0));
+      CalPlan.TipOtvPodr  := Buf.TipOtvPodr;
+      CalPlan.cOtvPodr    := Buf.cOtvPodr;
+      CalPlan.TipPlatPodr := Buf.TipPlatPodr;
+      CalPlan.cPlatPodr   := Buf.cPlatPodr;
+
+      InsertCalPlan(true);
+
+      InsertMarker(Marker, CalPlan.nRec);
+
+      MakeSpGrSch;
+    }
+
+  var NeedClearRef: boolean; NeedClearRef := false;
+
+  if ( Buf.cSpMC <> 0 )
+    if ( GetFirst fastfirstrow SpDocs_s where (( Buf.cSpMC == SpDocs_s.nRec )) = tsOK )
+      NeedClearRef := if(wGroupParam = 0
+                        , (Buf.cOtvPodr <> SpDocs_s.cOtvPodr)
+                        , (Buf.cOtvPodr <> SpDocs_s.cOtvPodr) OR (Buf.cPlatPodr <> SpDocs_s.cPlatPodr));
+    else
+      NeedClearRef := true;
+
+  if ( ( oSpDocs.SpDocs_InsCurentFromUpDoc(Buf.nRec
+                                         , CalPlan.nRec
+                                         , 403
+                                         , false
+                                         , Buf.Ostatok / fEdIzm.GetKoefOtpEd(Buf.cOtpEd)
+                                         , CalPlan.cShipment
+                                         , CalPlan.cTipOtg
+                                         , CalPlan.cWayMove
+                                         , oNotes.Notes_InUseStatus(CalPlan.cNote)
+                                         , CalPlan.DirectMC
+                                         , true
+                                          ) = tsOK ) AND NeedClearRef )
+    {
+      SpDocs_s.BufferP := type$p_SpDocs(oSpDocs.GetCurrentPositionP);
+      if ( (update current SpDocs_s set SpDocs_s.cSpMC := 0) <> tsOK )
+        {}
+    }
+
+  oSpDocs.SpDocs_CopyZamen(Buf.nRec, oSpDocs.GetCurrentPosition.nRec);
+}
+
+Procedure AutoMakeCalPlanOnPodr;
+{
+  if ( Dogovor.cOrg = 0 )
+    {
+      message('В договоре не установлен контрагент!'#13
+            + 'Автоформирование ПКП невозможно', Warning);
+      Exit;
+    }
+
+  if ( message('Внимание!'#13
+             + 'Перед автоформированием все ПКП на МЦ/Услуги будут удалены.'#13
+             + 'Продолжить?', Confirmation + YesNo + mfSwapButtons) <> cmYes )
+    Exit;
+
+  if ( RunWindowModal(wndPKPPodr) = cmCancel )
+    Exit;
+
+  if ( BeginConcurrentTransaction(trNoLock) <> 0 )
+    {
+      message('Не могу начать транзакцию!', Error);
+      Exit;
+    }
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Автоформирование ПКП', 1);
+
+  iNextVisual('Удаление старых календарных планов');
+
+  while ( GetFirst fastfirstrow IerCalPl
+             where (( prmDogovor    == IerCalPl.cDogovor
+                  and word(1)       == IerCalPl.isLeaf and (CalPlan.DirectPlat = 0)
+                  and IerCalPl.cRec == CalPlan.nRec )) = tsOK )
+    do
+      {
+        NextVisual;
+
+        if ( not DeleteCalPlan )
+          {
+            message('Не все ПКП удалось удалить', Error);
+            AbortTransaction;
+            StopVisual('',0 );
+            Exit;
+          }
+      }
+
+  if ( EndTransaction <> 0 )
+    {
+      message('Не могу закончить транзакцию!', Error);
+      StopVisual('', 0);
+      Exit;
+    }
+
+  Marker := InitMarker('*$*AUTOMAKER*$*', 8, 100, 10);
+  ClearMarker(Marker);
+
+  CalPlanRef := 0;
+
+  DirectMCNewCP   := 2 - (Dogovor.Direct mod 2);
+  DirectSpDocs    := DirectMCNewCP;
+  DirectPlatNewCP := 0;
+
+  iNextVisual('Формирование спецификации календарного плана');
+
+  ResetBounds(#SpDocs);
+
+  var CurPodr        : comp;
+  var iCountRepet, i : word;
+
+  iCountRepet := 1;
+
+  if ( KatVidD.VidDog = word(1) )   // договор комиссии
+    iCountRepet := 2;
+
+  SpDocs_Podr.Delete All tmpSpDocsPodr;
+
+  for (i := 1; i <= iCountRepet; i := i + 1)
+    {
+      _loop SpDocs where (( Dogovor.TiDk == SpDocs.TiDk
+                        and Dogovor.nRec == SpDocs.cDoc
+                        and DirectSpDocs == SpDocs.Direct (NoIndex)
+                         )) ordered by index SpDocs09
+        {
+          // для лизинга в ПКП д.б. только услуги из договора
+          if ( ( Dogovor.VidDog = 16 ) AND ( SpDocs.PrMC <> 2 ) )
+            Continue;
+
+          ClearBuffer(#SpDocs_Podr.tmpSpDocsPodr);
+
+          SpDocs_Podr.tmpSpDocsPodr.nRec      := SpDocs.nRec;
+          SpDocs_Podr.tmpSpDocsPodr.cOtvPodr  := SpDocs.cOtvPodr;
+          SpDocs_Podr.tmpSpDocsPodr.cPlatPodr := SpDocs.cPlatPodr;
+          SpDocs_Podr.tmpSpDocsPodr.Direct    := DirectSpDocs;
+
+          SpDocs_Podr.insert current tmpSpDocsPodr;
+        }
+      DirectMCNewCP := if(DirectMCNewCP = 1, 2, 1);
+      DirectSpDocs  := DirectMCNewCP;
+    }
+
+  Var pOtv, pPlat : comp;
+  Var wDir        : word;
+
+  pOtv := pPlat := -1;
+  wDir := -1;
+
+  if (wGroupParam = 0)
+    SpDocs_Podr._loop tmpSpDocsPodr ordered by tmpSpDocsPodr.Direct, tmpSpDocsPodr.cOtvPodr
+      {
+        DirectMCNewCP := DirectSpDocs := SpDocs_Podr.tmpSpDocsPodr.Direct;
+
+        if ( GetFirst FastFirstRow SpDocs where ((SpDocs_Podr.tmpSpDocsPodr.nRec == SpDocs.nRec)) = tsOK )
+          if ( (wDir = DirectMCNewCP) AND
+               (pOtv = SpDocs.cOtvPodr) )
+            InsertPKPAndSp(FALSE);
+          else
+            {
+              InsertPKPAndSp(TRUE);
+              pOtv := SpDocs.cOtvPodr;
+              wDir := SpDocs_Podr.tmpSpDocsPodr.Direct;
+            }
+      }
+  else
+    SpDocs_Podr._loop tmpSpDocsPodr ordered by tmpSpDocsPodr.Direct, tmpSpDocsPodr.cOtvPodr, tmpSpDocsPodr.cPlatPodr
+      {
+        DirectMCNewCP := DirectSpDocs := SpDocs_Podr.tmpSpDocsPodr.Direct;
+
+        if ( GetFirst FastFirstRow SpDocs where ((SpDocs_Podr.tmpSpDocsPodr.nRec == SpDocs.nRec)) = tsOK )
+          if ( (wDir  = DirectMCNewCP)   AND
+               (pOtv  = SpDocs.cOtvPodr) AND
+               (pPlat = SpDocs.cPlatPodr) )
+            InsertPKPAndSp(FALSE);
+          else
+            {
+              InsertPKPAndSp(TRUE);
+              pOtv  := SpDocs.cOtvPodr;
+              pPlat := SpDocs.cPlatPodr;
+              wDir  := SpDocs_Podr.tmpSpDocsPodr.Direct;
+            }
+      }
+
+  DirectMCNewCP := 2 - (Dogovor.Direct mod 2);
+  DirectSpDocs  := DirectMCNewCP;
+
+  SetBounds(#SpDocs);
+
+  iNextVisual('Обновление ссылок');
+
+  _loop CalPlan where (( prmDogovor == CalPlan.cDogovor ))
+    {
+      NextVisual;
+      oSpDocs.UpdateUpSpDocsRef(CalPlan.nRec, word(403));
+    }
+
+  getW4 := 0;
+
+  for (i := 1; i <= iCountRepet; i := i + 1)
+    {
+      SetSummaSpec2;
+
+      DirectMCNewCP := if(DirectMCNewCP = 1, 2, 1);
+      DirectSpDocs  := DirectMCNewCP;
+    }
+
+  DirectMCNewCP := 2 - (Dogovor.Direct mod 2);
+  DirectSpDocs  := DirectMCNewCP;
+
+  StopVisual('', 0);
+
+  DoneMarker(Marker, '');
+
+  TreeGetFirst(MainTree);
+
+  ReScanPanel(#CalPlan1);
+  ReReadRecord(#CalPlan1);
+  ReReadRecord(#SpDocs);
+
+  message('Автоформирование ПКП завершено!', Information);
+}

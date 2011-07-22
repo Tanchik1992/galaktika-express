@@ -1,0 +1,447 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : ПЕРЕСЧЕТ СУММ ПО НАКЛАДНОЙ ПРИ ИЗМЕНЕНИИ ИНФОРМАЦИИ       ║
+!║                 (ПРИХОД)                                                  ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#ifdef _SOPRDOCB_VPP
+
+//_____________________________________________________________________________
+//
+// Сервисная штука для определения суммы стоимости, веса, объема
+// по МЦ в ДО текущей накладной
+// и суммы соп. услуг соответственно
+Function SumTovInDO (
+                      pWhat         : byte;  // Общ. 1=стоимость 2=вес 3=объем МЦ
+                      var SumSopUsl : double // сумма соп.услуг соответственно
+                    ) : double;
+{
+  SumTovInDO   :=0;
+  SumSopUsl    :=0;
+  PushPos(#SpStep);
+  ResetBounds(#SpStep);
+  ResetBounds(#KatMC);
+  _LOOP SpStep
+       where ((KatSopr.cStepDoc == SpStep.cStepDoc ))
+     if (SpStep.PrMc=1)
+       Case pWhat of
+        1:
+           SumTovInDO := SumTovInDO + SpStep.Kol * SpStep.Price;
+        2,
+        3:
+           {
+             if (GetFirst FastFirstRow KatMC
+                          where ((SpStep.cMCUsl == KatMC.NRec)) = tsOk)
+               if (boGetTune('Oper.SoprUslTara') or
+                     (KatMC.kGroupMC <> sGetTune('Tara.KodGrMcTara'))
+                     or (sGetTune('Tara.KodGrMcTara')=''))
+                 SumTovInDO := SumTovInDO + SpStep.Kol * if (pWhat=2, KatMC.Massa, KatMC.Volume);
+           }
+       end;
+     else
+       Case pWhat of
+         1: if (SpStep.PrMc=4) SumSopUsl := SumSopUsl + SpStep.Kol * SpStep.Price;
+         2: if (SpStep.PrMc=5) SumSopUsl := SumSopUsl + SpStep.Kol * SpStep.Price;
+         3: if (SpStep.PrMc=6) SumSopUsl := SumSopUsl + SpStep.Kol * SpStep.Price;
+       end;
+  SetBounds(#KatMC);
+  SetBounds(#SpStep);
+  PushPos(#SpStep);
+}
+
+//_____________________________________________________________________________
+//
+// Сервисная штука для определения суммы стоимости, веса, объема
+// по МЦ в текущей накладной
+Function SumTovInSoprDoc (pWhat: byte) : double;  // Общ. 1=стоимость 2=вес 3=объем МЦ
+{
+  SumTovInSoprDoc:=0;
+  PushPos(#SpSopr);
+  ResetBounds(#SpSopr);
+  ResetBounds(#KatMC);
+ _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+   if (SpSopr.PrMc=1)
+      Case pWhat of
+        1:
+           SumTovInSoprDoc := SumTovInSoprDoc +
+             SpSopr.KolFact * if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice);
+        2,
+        3:
+           if (GetFirst FastFirstRow KatMC
+                    where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk)
+             if (boGetTune('Oper.SoprUslTara') or
+                 (KatMC.kGroupMC <> sGetTune('Tara.KodGrMcTara'))
+                 or (sGetTune('Tara.KodGrMcTara')=''))
+               SumTovInSoprDoc := SumTovInSoprDoc +
+                     SpSopr.KolFact * if (pWhat=2, KatMC.Massa, KatMC.Volume);
+      end;
+  SetBounds(#KatMC);
+  SetBounds(#SpSopr);
+  PopPos(#SpSopr);
+}
+
+//_____________________________________________________________________________
+//
+procedure RecalcSummSrPrices;
+{
+!По аналогии с Rcsum.vpp (в Sopint.vpp вызывается)
+!нужно для сборки Soprdocb.vip
+}
+
+//_____________________________________________________________________________
+//
+function RecalcPriceSopUsl : boolean;
+var
+  sumTovDO_1, sumTovDO_2, sumTovDO_3,
+  sumTovSoprDoc_1, sumTovSoprDoc_2, sumTovSoprDoc_3,
+  sumSopUslDO_1, sumSopUslDO_2, sumSopUslDO_3,
+  SumRaspredSopUsl,Curse
+    : double;
+  Rasch_1, Rasch_2, Rasch_3
+    : boolean;
+
+{
+  RecalcPriceSopUsl:=false;
+  if not boGetTune('Doc.Buy.RasprSopUsl') or ((TypeSopr <> 101) and (TypeSopr <> 108)) or (KatSopr.cStepDoc = 0)
+    exit;
+  //только если установлена настройка "Пропорционально распределять соп.усл."
+  //для приходных накладных по ДО, то
+  //пропорционально пересчитываем соп. услуги
+
+  PushPos(#SpSopr);
+  ResetBounds(#SpStep);
+  ResetBounds(#SpSopr);
+  Curse := GetCursPrice;
+  sumTovSoprDoc_1 :=0;
+  sumTovSoprDoc_2 :=0;
+  sumTovSoprDoc_3 :=0;
+  Rasch_1 := false;
+  Rasch_2 := false;
+  Rasch_3 := false;
+
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr ))  // проход по спецификации приходной накладной
+    if (SpSopr.PrMC > 3)
+      {
+        if (GetFirst SpStep  where
+               ((KatSopr.cStepDoc == SpStep.cStepDoc   and
+                 SpSopr.cMCUsl    == SpStep.cMCUsl     and
+                 SpSopr.PrMC      == SpStep.PrMc )) = tsOk)
+          {
+            case SpStep.PrMC of
+             4:{
+                if (Rasch_1 = false)
+                 {
+                  sumTovDO_1 := SumTovInDO (1, sumSopUslDO_1);
+                  if (sumSopUslDO_1<>0)
+                    sumTovSoprDoc_1 := SumTovInSoprDoc (1);
+                  Rasch_1 := true;
+                 }
+                SumRaspredSopUsl := sumTovSoprDoc_1 * (SpStep.Summa / sumTovDO_1);
+               }
+             5:{
+                if (Rasch_2 = false)
+                 {
+                  sumTovDO_2 := SumTovInDO (2, sumSopUslDO_2);
+                  if (sumSopUslDO_2<>0)
+                    sumTovSoprDoc_2 := SumTovInSoprDoc (2);
+                  Rasch_2 := true;
+                 }
+                SumRaspredSopUsl := sumTovSoprDoc_2 * (SpStep.Summa / sumTovDO_2);
+               }
+             6:{
+                if (Rasch_3 = false)
+                 {
+                  sumTovDO_3 := SumTovInDO (3, sumSopUslDO_3);
+                  if (sumSopUslDO_3<>0)
+                    sumTovSoprDoc_3 := SumTovInSoprDoc (3);
+                  Rasch_3 := true;
+                 }
+                SumRaspredSopUsl := sumTovSoprDoc_3 * (SpStep.Summa / sumTovDO_3);
+               }
+            end; // case
+
+            if (SumRaspredSopUsl > SpStep.Summa)
+              SumRaspredSopUsl := SpStep.Summa;
+
+            Case BaseDoc.TipMoney of
+             1 :
+               {
+                SpSopr.Price  := FSRoundRub(SumRaspredSopUsl);
+                SpSopr.rPrice := SpSopr.Price;
+                SpSopr.VPrice := FSRoundVal(SumRaspredSopUsl / Curse);
+                SpSopr.rVPrice:=SpSopr.VPrice;
+               }
+             2,3 :
+               {
+                SpSopr.Price  := FSRoundRub(SumRaspredSopUsl / Curse);
+                SpSopr.rPrice := SpSopr.Price;
+                SpSopr.VPrice := FSRoundVal(SumRaspredSopUsl);
+                SpSopr.rVPrice:=SpSopr.VPrice;
+               }
+            end;
+
+            if (Update current SpSopr = tsOK)
+              RecalcPriceSopUsl := true;
+          }
+      }
+  SetBounds(#SpStep);
+  SetBounds(#SpSopr);
+  PopPos(#SpSopr);
+
+} // function RecalcPriceSopUsl
+
+!===============================================================================
+
+#end //_SOPRDOCB_VPP
+
+Create view SPSOPR1
+var
+  cKS : comp;
+From
+  Spsopr;
+
+procedure RecalcSumm_P;//надо просто пересчитать общие суммы по документу
+{
+  KatSopr.Summa := 0;
+  KatSopr.SumVal := 0;
+  KatSopr.sNalogs := 0;
+  KatSopr.svNalogs := 0;
+  SPSOPR1.cKS := KatSopr.Nrec;
+
+  SPSOPR1._LOOP SpSopr  where ((cKS == SpSopr.cSopr))
+    {
+      KatSopr.sNalogs := KatSopr.sNalogs + SPSOPR1.SpSopr.SumNDS;
+      KatSopr.svNalogs := KatSopr.svNalogs + SPSOPR1.SpSopr.SumVNDS;
+
+      KatSopr.Summa := KatSopr.Summa + SPSOPR1.SpSopr.Price * If(SPSOPR1.SpSopr.PrMC=1,SPSOPR1.SpSopr.KolOpl,1);
+      KatSopr.SumVal := KatSopr.SumVal + SPSOPR1.SpSopr.VPrice * If(SPSOPR1.SpSopr.PrMC=1,SPSOPR1.SpSopr.KolOpl,1);
+     }
+
+  if (KatSopr.VhodNal <> 1)
+    {
+      KatSopr.Summa := (KatSopr.Summa + KatSopr.sNalogs);
+      KatSopr.SumVal := (KatSopr.SumVal + KatSopr.svNalogs);
+    };
+  RereadRecord(#SpSopr);
+  set KatSopr.Summa := KatSopr.Summa;
+}
+
+
+// Обычный пересчет сумм по накладной
+procedure RecalcSumm(UpdSpSopr : boolean);
+var
+  ProcN, StRn, StVn,
+  OldR, OldV,
+  SumTR, SumTV,
+  SumNTR, SumNTV,
+  SumTR1, SumTV1,           // переменные для накопления сумм для
+  SumNTR1, SumNTV1: double; // расчета стоимости сопутствующих услуг
+  SpSCor: boolean;
+{
+#ifdef _SOPRDOCB_VIP
+  case KatSopr.VidSopr of
+     101,//Накладная на прием МЦ
+     102,//Накладная на возврат МЦ от консигнатора
+     103,//Накладная на прием МЦ от консигнанта
+     108,//Накладная на прием молочного сырья
+     1411://Дневник на приемки работ
+       {
+         RecalcSumm_P; //ПИР102.44881 надо просто пересчитать общие суммы по документу
+         Exit;
+       }
+  end;
+#end
+  if (not UpdSpSopr)
+    if (not UpdateTable)
+      Exit;
+
+  PushPos(#SpSopr);
+  ProcN  := 0;
+  StRN   := 0;
+  StVN   := 0;
+  SumTR  := 0;
+  SumTV  := 0;
+  SumNTR := 0;
+  SumNTV := 0;
+  KatSopr.Summa := 0;
+  KatSopr.SumVal := 0;
+  KatSopr.sNalogs := 0;
+  KatSopr.svNalogs := 0;
+  SumTR1 := 0;
+  SumTV1 := 0; SumNTR1 := 0; SumNTV1 := 0;
+  ResetBounds(#SpSopr);
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr)) ordered by SpSopr.PRMC
+    {
+      if (UpdSpSopr)
+        SpSCor := (KatSopr.dOpr = SpSopr.dOprTTN)
+              and (KatSopr.VidSopr = SpSopr.VidSopr)
+              and (KatSopr.dSopr = SpSopr.dSopr)
+              and (KatSopr.cValut = SpSopr.cVal);
+      else
+        SpSCor := true;
+
+      case SpSopr.PrMC of
+        1:
+          {
+             if (pos(upcase(trim(sGetTune('Tara.KodGrMcTara'))), upcase(KatMC.kGroupMC)) <> 1)
+               {
+                 SumTR1  := SumTR1 + SpSopr.Price * SpSopr.KolOpl;
+                 SumTV1  := SumTV1 + SpSopr.VPrice * SpSopr.KolOpl;
+                 SumNTR1 := SumNTR1 + SpSopr.SumNDS;
+                 SumNTV1 := SumNTV1 + SpSopr.SumVNDS;
+               }
+             SumTR := SumTR + SpSopr.Price * SpSopr.KolOpl;
+             SumTV := SumTV + SpSopr.VPrice * SpSopr.KolOpl;
+             SumNTR := SumNTR + SpSopr.SumNDS;
+             SumNTV := SumNTV + SpSopr.SumVNDS;
+
+          }
+        2,
+        3:
+          {
+            OldR := SpSopr.Price;
+            OldV := SpSopr.VPrice;
+            if (KatSopr.VhodNal = 0)
+              {
+                if boGetTune('Oper.SoprUslTara')
+                 {
+                  SpSopr.Price := FSRoundRub((SumTR + SumNTR) * SpSopr.Kol / 100);
+                  SpSopr.rPrice := SpSopr.Price;
+                  SpSopr.VPrice := FSRoundVal((SumTV + SumNTV) * SpSopr.kol / 100);
+                  SpSopr.rVPrice:=SpSopr.VPrice;
+                 }
+                else
+                 {
+                  SpSopr.Price := FSRoundRub((SumTR1 + SumNTR1) * SpSopr.Kol / 100);
+                  SpSopr.rPrice := SpSopr.Price;
+                  SpSopr.VPrice := FSRoundVal((SumTV1 + SumNTV1) * SpSopr.kol / 100);
+                  SpSopr.rVPrice:=SpSopr.VPrice;
+                 }
+              }
+            else
+              {
+                if boGetTune('Oper.SoprUslTara')
+                 {
+                  SpSopr.Price := FSRoundRub(SumTR * SpSopr.Kol / 100);
+                  SpSopr.rPrice := SpSopr.Price;
+                  SpSopr.VPrice := FSRoundVal(SumTV * SpSopr.kol / 100);
+                  SpSopr.rVPrice:=SpSopr.VPrice;
+                 }
+                else
+                 {
+                  SpSopr.Price := FSRoundRub(SumTR1 * SpSopr.Kol / 100);
+                  SpSopr.rPrice := SpSopr.Price;
+                  SpSopr.VPrice := FSRoundVal(SumTV1 * SpSopr.kol / 100);
+                  SpSopr.rVPrice:=SpSopr.VPrice;
+                 }
+              }
+            if ((SpSopr.Price <> OldR) or (SpSopr.VPrice <> oldV))
+              {
+                SumSopUslChanged(SpSopr.NRec);
+                SpSCor := false;
+              }
+          }
+        4,
+        5,
+        6:
+          {
+            OldR := SpSopr.Kol;
+            if (KatSopr.cVal <> 0)
+              SpSopr.Kol := if (SumTV1 <> 0,if (KatSopr.VhodNal <> 1,SpSopr.VPrice+SpSopr.SumVNDS,SpSopr.VPrice) / if (KatSopr.VhodNal <> 1, SumTV1 + SumNTV1, SumTV1) * 100,0)
+            else
+              SpSopr.kol := if (SumTR1 <> 0,if (KatSopr.VhodNal <> 1,SpSopr.Price+SpSopr.SumNDS,SpSopr.Price) / if (KatSopr.VhodNal <> 1, SumTR1 + SumNTR1, SumTR1) * 100,0);
+            SpSopr.KolFact := 1;
+            SpSopr.KolOpl := 1;
+            if (SpSopr.Kol <> OldR) SpSCor := false;
+          }
+      end; //case
+
+      if (SpSopr.PrMC > 1)
+        {
+          StRn := StRn + SpSopr.Price;
+          StVn := StVn + SpSopr.VPrice;
+        }
+
+      if (not SpSCor)
+        if (SpSopr.dSopr   <> KatSopr.dSopr  ) and
+           (SpSopr.cVal    <> KatSopr.cValut ) and
+           (SpSopr.dOprTTN <> KatSopr.dSopr  ) and
+           (SpSopr.VidSopr <> KatSopr.VidSopr)
+          {
+            SpSopr.dSopr   := KatSopr.dSopr;
+            SpSopr.cVal    := KatSopr.cValut;
+            SpSopr.dOprTTN := KatSopr.dSopr;
+            SpSopr.VidSopr := KatSopr.VidSopr;
+            Update current SpSopr;
+          }
+      KatSopr.sNalogs := KatSopr.sNalogs + SpSopr.SumNDS;
+      KatSopr.svNalogs := KatSopr.svNalogs + SpSopr.SumVNDS;
+    } // _LOOP
+
+  KatSopr.Summa := FSRoundRub(SumTR + StRn + if (KatSopr.VhodNal <> 1,KatSopr.sNalogs,0));
+  set KatSopr.SumVal := FSRoundVal(SumTV + StVn + if (KatSopr.VhodNal <> 1,KatSopr.svNalogs,0));
+
+  SetBounds(#SpSopr);
+  PopPos(#SpSopr);
+
+  RedrawPanel(CurTable);
+
+  RereadRecord(#SpSopr);
+  RereadRecord(#SpSopUsl);
+}
+
+//====================================================================================
+// Специальный пересчет сумм по накладной по клавише
+procedure RecalcSumm2(var newsumR: double;
+                      var newsumV: double;
+                      var newRN  : double;
+                          newVN  : double;
+                      var koltov : word);
+var
+  ProcN, StRn, StVn : double;
+{
+  KolTov := 0;
+  newsumR := 0;
+  newsumV := 0;
+  ProcN := 0;
+  StRN := 0;
+  StVN := 0;
+  NewRN := 0;
+  NewVN := 0;
+  ResetBounds(#SpSopr);
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+    {
+      NewRN := NewRN + SpSopr.SumNDS;
+      NewVN := NewVN + SpSopr.SumVNDS;
+      case SpSopr.PrMC of
+        1: {
+             KolTov := KolTov + 1;
+             newsumR := newsumR + SpSopr.Price * SpSopr.KolOpl;
+             newsumV := newsumV + SpSopr.VPrice * SpSopr.KolOpl;
+            }
+
+        2,
+        3: if (TMCUSL <> 2)
+             ProcN := ProcN + SpSopr.Kol
+           else
+             {
+               newsumR := newsumR + SpSopr.Price * SpSopr.KolOpl;
+               newsumV := newsumV + SpSopr.VPrice * SpSopr.KolOpl;
+             }
+
+        4,
+        5,
+        6: {
+             StRN := StRN + spsopr.price;
+             StVN := StVN + spsopr.vprice;
+           }
+      end; //case
+    }
+  if (KatSopr.VhodNal <> 1)
+    {
+      StRN := StRn + NewRN;
+      StVN := StVn + NewVN;
+    }
+  newsumR := FSRoundRub(newsumR * (1 + ProcN / 100) + StRN);
+  newsumV := FSRoundVal(newsumV * (1 + ProcN / 100) + StVN);
+  SetBounds(#SpSopr);
+}

@@ -1,0 +1,544 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Обработка таблицы распределения МЦ по складам
+//********************************************************************************
+
+/*
+  Перед подключеием данного модуля должны быть определены процедуры:
+----------------------------------------------------------------------------
+ Function OnInitNalServ: boolean;
+  Возвращает значение необходимости инициализации налогов
+----------------------------------------------------------------------------
+ Procedure OnDoneNalServ; - вызывается если OnInitNalServ = TRUE;
+----------------------------------------------------------------------------
+  Получения наценок:
+    Procedure GetProcNac(var KoefR: double; var KoefV: double;
+                         var SumR: double;   var SumV: double;
+                         var SumPoslR: double; var SumPoslV: double);
+ koefr и koefv      - коэффициенты наценок на соп. услуги до определения
+                      таможенной стоимости МЦ
+ SumR, SumV         - стоимость позиций
+ SumPoslR, SumPoslV - стоимость сопутсвующих услуг не входящих в таможенную
+                      стоимость накладной
+----------------------------------------------------------------------------
+   А так же формирования цены для SoprOrdB:
+     Procedure SetSoprOrdBPrice(koefr: double;   koefv: double;
+                                SumTovR: double; SumTovV: double;
+                                SumPoslR: double; SumPoslV: double;
+                                CanNalog: boolean;
+                                var bnPrice: double;var bnVPrice: double);
+  На входе:
+     koefr, koefv    - коэффициенты наценок на соп. услуги до определения
+                       таможенной стоимости МЦ
+                      (koefr, koefv - из GetProcNac)
+     SumTovR, SumTovV - стоимости позиций МЦ накладной
+                      (SumR, SumV - из GetProcNac)
+     SumPoslR, SumPoslV - (SumPoaslR, SumPoslV - из GetProcNac)
+     CanNalog        - применяются ли налоги к накладной (значение OnInitNalServ);
+  На выходе:
+     bnPrice, bnVPrice - цены для SoprDocB
+
+*/
+
+Form frmAutoParty('AutoParty.OUT', 'AutoParty') with novisual;
+#include getmolsk.vpp
+//для работы с заводской ценой
+ #ifdef _SOPRDOCB_VIP
+ #include soprc18.vpp
+ #end
+
+// Установка значений полей по умолчанию для SoprOrdB
+#include soprc43.vpp
+!
+! Установка склада и МОЛ для позиции распределения
+!
+function SoprOrdBSklMol(var setPodr  : comp;
+                        var setmol   : comp;
+                        var molch    : boolean;
+                            CheckMOL: boolean): boolean;
+var Res: boolean;
+{
+  var c_CurPodr, c_CurMol: comp;
+  var b_AvtoMol: boolean;
+
+  c_CurPodr := coGetTune('User.cCurSklad');
+  c_CurMol  := coGetTune('Doc.cMol');
+  b_AvtoMol := boGetTune('Pick.AvtoMol');
+
+  Res := TRUE;
+  SoprOrdBSklMol := FALSE;
+  if (SoprOrdB.cPodr = 0)
+    {
+    if (setPodr = 0)
+      {
+      if (c_CurPodr = 0)
+        {
+        if ( (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 102) or (KatSopr.VidSopr = 103 ) 
+          or (KatSopr.VidSopr = 108 ) or (KatSopr.VidSopr = 202) or (KatSopr.VidSopr = 203)
+          or (KatSopr.VidSopr = 1411) )
+          Res := RunInterface(GetAnyPodr, setPodr, 3) <> cmCancel;
+        else
+          Res := RunInterface(GetSklad, setPodr) <> cmCancel;
+        }
+      else
+        setPodr := c_CurPodr;
+      if (not Res) Exit;
+      setmol := 0;
+      SoprOrdB.cMol := 0;
+      }
+    SoprOrdB.cPodr := setPodr;
+    }
+
+  if (SoprOrdB.cPodr <> 0)
+    if GetFirst KatPodr where ((SoprOrdB.cPodr == KatPodr.nRec)) = tsOk
+      if (KatPodr.cResHr <> 0) AND (KatMC.cResHr <> 0)
+          if (KatMC.cResHr <> KatPodr.cResHr)
+            { if Message('Не совпадают ресурсы хранения склада ("'+KatPodr.Name+
+                         '") и МЦ ("'+KatMC.Name+'"). Продолжить ?', warning+YesNo) <>cmYes
+                Exit;
+            }
+
+  if (NOT b_AvtoMol) AND (NOT boGetTune('Oper.NeedMOL')) //нет Автоматический выбор МОЛ в документах и нет При оприходовании обязательно указывать МОЛ
+    {
+      if (SoprOrdB.cMol = 0)
+        SoprOrdB.cMol := setmol;
+
+      SoprOrdBSklMol := Res;
+      Exit;
+    }
+
+  if (SoprOrdB.cMol = 0)
+    {
+      if (SetMol = 0)
+        if (c_CurMol <> 0) //AND b_AvtoMol
+          setMol := c_CurMol;
+        else
+          {
+            setmol := getMOL2Sklad(setpodr);
+            if (setmol = 0)
+              if ( (not molch) AND CheckMOL )
+                {
+                  molch := TRUE;
+                  ResetBounds(#KatMol);
+                  While TRUE
+                  {
+                    if (GetFirst KatMol = tsOk)
+                      RunInterface(GetMol, setmol, setpodr)
+
+                    if setMOL = 0 and boGetTune('Oper.NeedMOL')
+                      {
+                        message('Установлена настройка Складской учёт - При оприходовании обязательно указывать МОЛ. '+
+                                'Необходимо выбрать МОЛ');
+                        if GetFirst KatMol where ((SoprOrdB.cPodr == KatMOL.cSkl)) <> tsOk
+                          {
+                            res:= FALSE;
+                            break;
+                          }
+                      }
+                    else
+                      break;
+                  }//W
+                  SetBounds(#KatMol);
+                }
+          }
+      SoprOrdB.cMol := setMol;
+    }
+
+  SoprOrdBSklMol := Res;
+}
+
+!
+!
+!
+procedure SetupSoprOrdBPriceValue(bnPrice: double; bnVPrice: double;
+                                   nPrice: double;  nVPrice: double;
+       aTekPodr: comp; var aCurPrice: double; var aCurVPrice: double);
+{
+  var w_FormUch: word;
+
+  w_FormUch := wGetTune('Oper.FormUch');
+
+ if (GetFirst KatPodr where ((aTekPodr == KatPodr.NRec)) = tsOk)
+   {
+     Case KatPodr.UchPrc of
+       1: {  aCurPrice := nPrice;    aCurVPrice := nVPrice;   }
+       2: {  aCurPrice := bnPrice;   aCurVPrice := bnVPrice;  }
+      else if (w_FormUch <> 1)
+             {
+               aCurPrice := bnPrice;
+               aCurVPrice := bnVPrice;
+             }
+           else
+             {
+               aCurPrice := nPrice;
+               aCurVPrice := nVPrice;
+             }
+     end; // case
+   }
+ else
+   {
+     Message('В каталоге подразделений не найден склад, на который было произведено распределение.'#13#3
+           + 'Цены при оприходовании будут установлены согласно настройке.', OkButton);
+
+     if (w_FormUch <> 1)
+       {
+         aCurPrice := bnPrice;
+         aCurVPrice := bnVPrice;
+       }
+     else
+       {
+         aCurPrice := nPrice;
+         aCurVPrice := nVPrice;
+       }
+   }
+}
+
+!
+! Проверка корректности распределенеия по складам и установка
+! цены себестоимости МЦ в накладной
+!
+
+Form prot0kol('prot0kol.OUT', 'ERRR') with novisual;
+var isProt0kol: boolean;
+
+
+function CheckSoprOrdB(var aSPodr: comp;
+                       var aSMol: comp;
+                       CheckMOL: boolean // FALSE - не запрашивать МОЛ при его отсутствии
+                      ): boolean;
+var
+  setSkl, setMol: comp;
+  SumDRb, SumDVb, SumDRn, SumDVn: double; // Суммы услуг до таможни
+  SumTRb, SumTVb, SumTRn, SumTVn: double; // Суммы позиций матценностей
+  SumPRb, SumPVb, SumPRn, SumPVn: double; // Суммы услуг после таможни
+  bnPrice, bnVPrice, nPrice, nVPrice: double; // Цены для позиции
+  SetKol: double;
+  molch: boolean;
+  LastPodr: comp;              // Код последнего склада
+  CurPrice, CurVPrice: double; // Текущие цены для склада
+  SumVRb, SumVVb: double;  // Cумма соп. услуг по весу без налогов
+  SumVRn, SumVVn: double;  // Cумма соп. услуг по весу с налогами
+  SumORb, SumOVb: double;  // Суммы соп. усулг по объему без налогов
+  SumORn, SumOVn: double;  // Сумма соп. услуг по объему с налогами
+  SumKolRb, SumKolVb: double;  // Суммы соп. усулг по количеству без налогов
+  SumKolRn, SumKolVn: double;  // Сумма соп. услуг по количеству с налогами
+  Sum_KP_Rb, Sum_KP_Vb: double;  // Суммы соп. усулг по количеству позиций без налогов
+  Sum_KP_Rn, Sum_KP_Vn: double;  // Суммы соп. усулг по количеству позиций с налогами
+  CommonKol: double;
+  VesTov, ObTov  : double;   // Сумма веса и объема МЦ
+  chPart: comp;              // Генерируемая партия позиций накладной
+  dif_podr: word;
+  onlyPodr, onlyMol: comp;
+  wProtParty, wAutoSetParty: word
+  var frstProt0: boolean;
+{
+  CheckSoprOrdB := TRUE;
+  var b_MultiCurrReg, b_McUslAvtoParty, b_PartyMaskOrd: boolean;
+  var w_AvtoFormParty, w_OperMethodOrd: word;
+
+  b_MultiCurrReg   := boGetTune('Oper.MultiCurrReg');
+  w_AvtoFormParty  := wGetTune ('Party.AvtoForm');
+
+  if (KatSopr.VidSopr <> 630) and (KatSopr.VidSopr <> 611)
+    b_McUslAvtoParty := boGetTune('McUsl.AvtoParty');
+  else
+    b_McUslAvtoParty := boGetTune('Sklad.SoprDoc.AvtoParty');
+
+  b_PartyMaskOrd   := boGetTune('Party.Mask.OrdPrice') or
+                      boGetTune('Party.Mask.OrdVal');
+  w_OperMethodOrd  := wGetTune ('Oper.L_F');
+
+#ifdef _prihod_
+  wProtParty    := ProtParty;
+  wAutoSetParty := AutoSetParty;
+#else
+  wProtParty    := 0;
+  if (KatSopr.VidSopr <> 630) and (KatSopr.VidSopr <> 611)
+  {
+    if (wGetTune('Party.AvtoForm') = 0) or (boGetTune('McUsl.AvtoParty') = FALSE)
+      wAutoSetParty := 0
+    else
+      wAutoSetParty := 1
+  }
+  else
+  {
+    if (wGetTune('Party.AvtoForm') = 0) or (boGetTune('Sklad.SoprDoc.AvtoParty') = FALSE)
+      wAutoSetParty := 0
+    else
+      wAutoSetParty := 1
+  }
+#end
+
+  GetProcNac(SumDRb, SumDVb, SumDRn, SumDVn, SumTRb, SumTVb, SumTRn, SumTVn,
+             SumPRb, SumPVb, SumPRn, SumPVn, SumVRb, SumVVb, SumVRn, SumVVn,
+             SumORb, SumOVb, SumORn, SumOVn,
+             SumKolRb, SumKolVb, SumKolRn, SumKolVn,
+             Sum_KP_Rb, Sum_KP_Vb, Sum_KP_Rn, Sum_KP_Vn,
+             CommonKol,
+             VesTov, ObTov);
+
+  if (Longint(KatSopr.dPrice) = 0)
+    KatSopr.dPrice := KatSopr.dSopr;
+
+  setSkl := aSPodr;
+  setMol := aSMol;
+  molch  := FALSE;
+  dif_podr := 0;
+  onlyPodr := 0;
+  onlyMol  := 0;
+  frstProt0 := TRUE;
+  isProt0kol := FALSE;
+
+!  var OldMC: comp;
+!  OldMC := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer,
+                        'Проверка распределения по складам', 1);
+  ResetBounds(#KatPodr);
+
+  KSopr_NRec := 0; // Нужна для функции SetSoprOrdBPrice
+  //обработка позиций
+
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+  {
+    chPart := 0;
+
+    if ((SpSopr.PrMC <> 1) AND (KatSopr.VidSopr <> 508))
+    {
+!      if (GetFirst SoprOrdB where ((SpSopr.NRec == SoprOrdB.cSpSopr)) = tsOk)
+      if (delete SoprOrdB where((SpSopr.NRec == SoprOrdB.cSpSopr)) <> tsOk) {};
+      Continue;
+    }
+    //формирование партии по позиции
+    if b_MultiCurrReg OR (b_McUslAvtoParty AND (w_AvtoFormParty <> 0))
+       if (not b_PartyMaskOrd)
+         if not (oMakeParty.OnCheckPosParty(chPart, SpSopr.NRec, wProtParty, wAutoSetParty))
+         {
+           CheckSoprOrdB := FALSE;
+           Break;
+         }
+
+    if SpSopr.kolFact = 0
+     {
+       if frstProt0
+         { if isProt0kol
+             prot0kol.write('');
+           prot0kol.write('Накладная №' + KatSopr.nSopr + ' от ' + string(KatSopr.dSopr));
+           prot0kol.write('  Обнаружены позиции с нулевым количеством: ');
+         }
+       frstProt0 := FALSE;
+       prot0kol.write('   Позиция  №'+string(SpSopr.npp) + ' "'+KatMC.Name+'"');
+       isProt0kol := TRUE;
+     }
+
+    LastPodr := 0;
+
+    // Расчет цены в для позиции накладной
+    SetSoprOrdBPrice(SumDRb, SumDVb, SumDRn, SumDVn,
+                     SumTRb, SumTVb, SumTRn, SumTVn,
+                     SumPRb, SumPVb, SumPRn, SumPVn,
+                     SumVRb, SumVVb, SumVRn, SumVVn,
+                     SumORb, SumOVb, SumORn, SumOVn,
+                     SumKolRb, SumKolVb, SumKolRn, SumKolVn,
+                     Sum_KP_Rb, Sum_KP_Vb, Sum_KP_Rn, Sum_KP_Vn,
+                     CommonKol,
+                     VesTov, ObTov,
+                     bnPrice, bnVPrice, nPrice, nVPrice);
+
+    //кол-во по позиции
+    #ifdef _RETTARA_
+    SetKol := SpSopr.KolFact-SpSopr.KolPov;
+    #else
+    SetKol := SpSopr.KolFact;
+    #end
+
+    //заполнение разноски по складским ордерам - иначе - создание новой
+    //----------------------------------------------------------------
+  if GetFirst SoprOrdB where ((SpSopr.NRec == SoprOrdB.cSpSopr)) = tsOk
+    _LOOP SoprOrdB where ((SpSopr.NRec == SoprOrdB.cSpSopr))
+    {
+      if (SetKol <= 0) AND (w_OperMethodOrd <> 0)
+        Delete current SoprOrdB
+      else
+        {
+          if (abs(SetKol) < abs(SoprOrdB.kol))
+            SoprOrdB.kol := SetKol;
+
+          SetKol := SetKol - SoprOrdB.Kol;
+          //установка склада, мол-а
+          if (not SoprOrdBSklMol(setskl, setmol, molch, CheckMOL))
+          {
+            CheckSoprOrdB := FALSE;
+            SetBounds(#KatPodr);
+            RereadRecord(#SpSopr);
+            StopVisual('', 0);
+            Exit;
+          }
+
+          SoprOrdB.cParty := if(chPart = 0, SpSopr.cParty, chPart);
+          SoprOrdB.cMc    := SpSopr.cMcUsl;
+          SoprOrdB.cOtpEd := Spsopr.cOtpEd;
+          SoprOrdB.cVal   := SpSopr.cVal;
+          SoprOrdB.cUKS   := SpSopr.cUKS;
+
+          case (dif_podr) of
+            0: {
+                onlyPodr := SoprOrdB.cPodr;
+                onlyMol  := SoprOrdB.cMol;
+                dif_podr := 1;
+              }
+            1: {
+                if (onlyPodr <> SoprOrdB.cPodr) or
+                   (onlyMol <> SoprOrdB.cMol)
+                {
+                  dif_podr := 2;
+                  onlyPodr := 0;
+                  onlyMol  := 0;
+                }
+              }
+          end;
+
+          // Установка цены для складского ордера
+          if (LastPodr <> SoprOrdB.cPodr)
+          {
+             LastPodr := SoprOrdB.cPodr;
+             SetupSoprOrdBPriceValue(bnPrice,  bnVPrice, nPrice,  nVPrice,
+                                     LastPodr, CurPrice, CurVPrice);
+          }
+
+          SoprOrdB.Price  := CurPrice;
+          SoprOrdB.VPrice := CurVPrice;
+
+#ifndef __MTR_TO_SPEC__
+          SoprOrdB.cUKS := SpSopr.cUKS;
+          var cz: comp;
+              cz := 0;
+          if (GetFirst SpecZatr where ((coSpSopr    == SpecZatr.coTable AND
+                                        SpSopr.nRec == SpecZatr.cSpec)) = tsOk)
+            cz := SpecZatr.cAddSumTune;
+          if (cz <> 0)
+            if (GetFirst SpecZatr where ((coSoprOrdB    == SpecZatr.coTable AND
+                                          SoprOrdB.nRec == SpecZatr.cSpec)) = tsOk)
+              update current SpecZatr Set SpecZatr.cAddSumTune := cz
+            else
+            {
+              ClearBuffer(#SpecZatr);
+              SpecZatr.coTable     := coSoprOrdB;
+              SpecZatr.cSpec       := SoprOrdB.nRec;
+              SpecZatr.cUKS        := SoprOrdB.cUKS;
+              SpecZatr.cAddSumTune := cz;
+              insert current SpecZatr;
+            }
+            else
+              if (GetFirst SpecZatr where ((coSoprOrdB    == SpecZatr.coTable AND
+                                            SoprOrdB.nRec == SpecZatr.cSpec)) = tsOk)
+                  delete current SpecZatr;
+#else
+            oMTRFun.CopySpecMTR(coSpSopr, SpSopr.nRec, coSoprOrdB, SoprOrdB.nRec);
+#end
+
+  #ifdef __SMETA__
+         RunInterface('CopySpDocSmeta', word(coSpSopr), SpSopr.nRec, word(coSoprOrdB), SoprOrdB.nRec);
+  #end
+
+          Update current SoprOrdB;
+
+          //формирование партии по позиции
+          //(если в название партии включены ВАЛЮТА или ЦЕНА складского ордера
+          if (b_MultiCurrReg) OR
+             (b_McUslAvtoParty AND (w_AvtoFormParty <> 0) AND b_PartyMaskOrd)
+              if ( (SpSopr.VidSopr <> 522) and (SpSopr.VidSopr <> 523) )
+                if (oMakeParty.OnCheckPosParty(chPart, SpSopr.NRec, wProtParty, wAutoSetParty))
+                {
+                  SoprOrdB.cParty := if(chPart = 0, SpSopr.cParty, chPart);
+                  Update current SoprOrdB
+                }
+                else
+                {
+                  CheckSoprOrdB := FALSE;
+                  Break;
+                }
+        }//else
+    }
+    //формирование разноски по складским ордерам
+    //----------------------------------------------------------------
+  else
+  {
+     if (abs(SetKol) >= GetPresision_forKol)
+     {
+       DefaultSoprOrdB;
+       if (not SoprOrdBSklMol(setskl, setmol, molch, CheckMOL))
+       {
+         CheckSoprOrdB := FALSE;
+         Break;
+       }
+       else
+         LastPodr := setSkl;
+
+       SetupSoprOrdBPriceValue(bnPrice, bnVPrice, nPrice, nVPrice,
+                                LastPodr, CurPrice, CurVPrice);
+       SoprOrdB.cParty := if(chPart = 0, SpSopr.cParty, chPart);
+       SoprOrdB.Price  := CurPrice;
+       SoprOrdB.VPrice := CurVPrice;
+       SoprOrdB.kol    := setkol;
+       SoprOrdB.cUKS   := SpSopr.cUKS;
+       insert current SoprOrdB;
+#ifndef __MTR_TO_SPEC__
+       var cz: comp;
+       cz := 0;
+       if (GetFirst SpecZatr where ((coSpSopr    == SpecZatr.coTable AND
+                                     SpSopr.nRec == SpecZatr.cSpec)) = tsOk)
+         cz := SpecZatr.cAddSumTune;
+       if (cz <> 0)
+       {
+         ClearBuffer(#SpecZatr);
+         SpecZatr.coTable     := coSoprOrdB;
+         SpecZatr.cSpec       := SoprOrdB.nRec;
+         SpecZatr.cUKS        := SoprOrdB.cUKS;
+         SpecZatr.cAddSumTune := cz;
+         if (insert current SpecZatr = tsOk) {};
+       }
+#else
+       oMTRFun.CopySpecMTR(coSpSopr, SpSopr.nRec, coSoprOrdB, SoprOrdB.nRec);
+#end
+#ifdef __SMETA__
+       RunInterface('CopySpDocSmeta', word(coSpSopr), SpSopr.nRec, word(coSoprOrdB), SoprOrdB.nRec);
+#end
+      //формирование партии по позиции
+      //(если в название партии включены ВАЛЮТА или ЦЕНА складского ордера
+      if (b_MultiCurrReg) OR
+         (b_McUslAvtoParty AND (w_AvtoFormParty <> 0) AND b_PartyMaskOrd)
+          if ( (SpSopr.VidSopr <> 522) and (SpSopr.VidSopr <> 523) )
+            if (oMakeParty.OnCheckPosParty(chPart, SpSopr.NRec, wProtParty, wAutoSetParty))
+            {
+              SoprOrdB.cParty := if(chPart = 0, SpSopr.cParty, chPart);
+              Update current SoprOrdB;
+            }
+            else
+            {
+              CheckSoprOrdB := FALSE;
+              Break;
+            }
+     }
+  }//else
+  //----------------------------------------------------------------
+
+    NextVisual;
+  }
+
+  StopVisual('', 0);
+  KatSopr.cPodrTo := if (setskl<>0, setSkl, onlyPodr);
+  KatSopr.cMolTo  := if (setmol<>0, setmol, onlyMol);
+  update current KatSopr;
+  aSPodr := setSkl;
+  aSMol  := setMol;
+  SetBounds(#KatPodr);
+  RereadRecord(#KatSopr);
+  RereadRecord(#SpSopr);
+
+  #ifNdef _s2o_
+  if frstProt0 = FALSE
+    prot0kol.ShowFile('Протокол позиций накладных с нулевым количеством МЦ');
+  #end
+}

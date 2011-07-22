@@ -1,0 +1,90 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+!╔════════════════════════════════════════════════════════════╗
+!║ процедуры/функции для работы в сопроводительных документах ║
+!╚════════════════════════════════════════════════════════════╝
+
+#ifNdef _soprc03_VPP
+#define _soprc03_VPP
+
+Function CheckDocument: boolean;
+{
+  CheckDocument := FALSE;
+  if (not boGetTune('Oper.AutoCalcBalance'))
+    if (wGetTune('Oper.SoprInBalans') = 0)
+      Delete NoVisual Kontras
+           where ((KatSopr.cOrg == Kontras.cOrg AND
+                   KatSopr.dSopr <<= Kontras.dKonSal))
+    else
+      if (longint(KatSopr.dOpr) <> 0)
+         Delete NoVisual Kontras
+           where ((KatSopr.cOrg == Kontras.cOrg AND
+                   KatSopr.dOpr <<= Kontras.dKonSal));
+  CheckDocument := TRUE;
+}
+
+// дополнительная логическая таблица
+Create view loAktUsl
+from
+  KatSopr,
+  Pick;
+
+Function AktSopUslForm(pNakl: comp; WithCheck: boolean): boolean;
+{
+  AktSopUslForm := FALSE;
+
+  if WithCheck
+    if (loAktUsl.RecordExists KatSopr where ((pNakl == KatSopr.cKatSopr)) = tsOk)
+      {
+        AktSopUslForm := TRUE;
+        Exit;
+      }
+    else
+      if (message('Акты к документу не привязаны.'#13+
+                'Выбрать из уже сформированных?', YesNo) <> Yes)
+       { //пир 102.47329
+         AktSopUslForm := TRUE;
+         Exit;
+       }
+
+  loAktUsl.delete Pick where (( word(22) == Pick.wList ));
+
+  if (RunInterface('GetSomeKatSopr', word(111),
+                                    Date(1, 1, 1900),
+                                    Date(1, 1, 2100), 1, 1) = cmCancel)
+    Exit;
+
+  loAktUsl._LOOP Pick where (( word(22) == Pick.wList ))
+    if (loAktUsl.GetFirst FastFirstRow KatSopr
+             where ((loAktUsl.Pick.cRec == KatSopr.nRec)) = tsOk)
+      if (loAktUsl.KatSopr.VidSopr = 111)
+        {
+          loAktUsl.KatSopr.cKatSopr := pNakl;
+          loAktUsl.update current KatSopr;
+        }
+
+  loAktUsl.delete Pick where ((word(22) == Pick.wList));
+
+  AktSopUslForm := TRUE;
+
+  //для налогового учета надо рассчитать налоговую цену для каждой позиции
+  if boGetTune('Oper.NalUch')
+    {
+      StartNewVisual(vtNumericVisual, vfTimer, 'Пересчет спецификации для налогового учета', 1);
+      loAktUsl._LOOP SpSopr where (( pNakl == SpSopr.cSopr ))
+        {
+          NextVisual;
+          RunInterface(ViewNalUch, loAktUsl.SpSopr.nRec, sumNalUch, sumNalUchUsl, FALSE);
+          loAktUsl.SpSopr.priceN  := sumNalUch   /loAktUsl.SpSopr.kolFact;
+          loAktUsl.SpSopr.vPriceN := sumNalUchUsl/loAktUsl.SpSopr.kolFact;
+          loAktUsl.update current SpSopr;
+        }//_LOOP
+      StopVisual('', 0);
+    }
+}
+
+#end //_03_vpp

@@ -1,0 +1,219 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+#ifNdef __SDfuns_vip__
+#error Вместо #include KatSopr.VPP  следует использовать методы из SDfuns.vih
+#end
+
+//******************************************************************************
+
+#ifNdef _KATSOPR_VPP
+#define _KATSOPR_VPP
+
+#ifNdef __SDfuns_vip__
+#include SDfuns.var
+#end
+
+Create view loDelKatSopr
+
+Var
+  pKatSopr: comp;
+
+From
+  KatSopr
+, SpSopr
+, DocInfo
+, SoprHoz
+, Filial
+, DogRelat LnkTbl
+, BookPrZk Bk
+, RsvReg
+Where
+((
+    pKatSopr      ==  KatSopr.NRec
+and KatSopr.NRec  ==  SpSopr.cSopr
+and KatSopr.NRec  ==  DocInfo.cDoc
+and word(1109)    ==  DocInfo.DocType
+))
+;
+
+//******************************************************************************
+// удаление KatSopr
+
+Procedure KatSopr_Message_Error(s: string);
+{
+  Message('Для накладной № ' + KatSopr.nSopr
+        + ' от ' + DateToStr(KatSopr.dSopr, 'DD/MM/YYYY') + ' '#13 + s + '!'#3#13#13
+        + 'Операция удаления отменена...', CancelButton + Warning);
+}
+
+//******************************************************************************
+//удаление налоговых актов для регистрации ГТД
+
+Function CanDeleteKS_GTD(_NRec: comp; IsWarning: boolean): boolean;
+{
+  CanDeleteKS_GTD := FALSE;
+  loDelKatSopr.pKatSopr := _NRec;
+  if (loDelKatSopr.GetFirst FastFirstRow KatSopr <> tsOk)
+    {
+      CanDeleteKS_GTD := TRUE;
+      Exit;
+    }
+
+  //удаление связующей записи для "налоговых актов" и приходной накладной
+  var _LnkRec: comp;
+
+  if ((loDelKatSopr.KatSopr.wADoc = cgCustomAkt) AND
+      (loDelKatSopr.KatSopr.cADoc<>comp(0)))
+    {
+      _LnkRec := loDelKatSopr.KatSopr.cADoc;
+      if (loDelKatSopr.KatSopr.VidSopr = word(111)) // это налоговый акт
+        {
+          // есть ли записи регистрации ГТД в книге покупок
+          if (loDelKatSopr.RecordExists Bk where ((KatSopr.NRec == Bk.cSopr)) = tsOk)
+            {
+              if (IsWarning)
+                KatSopr_Message_Error('есть записи регистрации ГТД в книге покупок');
+
+              Exit;
+            }
+        }
+      else
+        { // есть ли налоговые акты для регистрации ГТД, связанные с накладной _NRec
+          loDelKatSopr.ReSetBounds(loDelKatSopr.tnKatSopr);
+          if (loDelKatSopr.RecordExists KatSopr where ((_LnkRec     == KatSopr.cADoc AND
+                                                        cgCustomAkt == KatSopr.wADoc AND
+                                                          word(111) == KatSopr.VidSopr (NoIndex)
+                                                      )) = tsOk)
+            {
+              loDelKatSopr.SetBounds(loDelKatSopr.tnKatSopr);
+              if (IsWarning)
+                KatSopr_Message_Error('есть налоговые акты для регистрации ГТД');
+
+              Exit;
+            }
+
+          loDelKatSopr.SetBounds(loDelKatSopr.tnKatSopr);
+        }
+    }
+
+  CanDeleteKS_GTD := TRUE;
+};
+
+//******************************************************************************
+
+Function KatSopr_Delete(_NRec: comp): word;
+var
+  iGrPl: LinkToGrPl;
+{
+  KatSopr_Delete := 1;
+
+  loDelKatSopr.pKatSopr := _NRec;
+
+  if ( loDelKatSopr.GetFirst FastFirstRow KatSopr <> tsOk )
+    {
+      KatSopr_Delete := tsOk;
+      Exit;
+    }
+
+  if ( loDelKatSopr.RecordExists SpSopr = tsOk )
+    {
+      KatSopr_Message_Error('есть спецификация');
+      Exit;
+    }
+
+#ifNdef __SDfuns_vip__
+  if ( oSDfuns.TTNDoc_Delete(coKatSopr, _NRec) <> tsOk )
+#else
+  if ( TTNDoc_Delete(coKatSopr, _NRec) <> tsOk )
+#end
+    {
+      KatSopr_Message_Error('не удалось удалить транспортный раздел');
+      Exit;
+    }
+   //-- удаляем примечание DocInfo
+  if ( loDelKatSopr.RecordExists DocInfo = tsOk )
+    loDelKatSopr.delete safe DocInfo;
+
+  iGrPl.DelDocfromSpGrPlD(loDelKatSopr.KatSopr.VidSopr, // тип документа системный
+                          loDelKatSopr.KatSopr.NRec     //ссылка на документ
+                         );
+
+  //удаление связующей записи для "налоговых актов" и приходной накладной
+  var _LnkRec: comp;
+  if ((loDelKatSopr.KatSopr.wADoc = cgCustomAkt) AND
+      (loDelKatSopr.KatSopr.cADoc<>comp(0)))
+    {
+      _LnkRec := loDelKatSopr.KatSopr.cADoc;
+
+      if (loDelKatSopr.KatSopr.VidSopr = word(111)) // это налоговый акт
+        {
+          var _boIsDelLnkRec: boolean; _boIsDelLnkRec := TRUE;
+
+          loDelKatSopr.ReSetBounds(loDelKatSopr.tnKatSopr);
+          loDelKatSopr._LOOP KatSopr where ((_LnkRec     == KatSopr.cADoc AND
+                                             cgCustomAkt == KatSopr.wADoc
+                                           ))
+            {
+               if (loDelKatSopr.KatSopr.VidSopr = word(111))
+                 if (loDelKatSopr.KatSopr.NRec <> _NRec)
+                   {
+                     _boIsDelLnkRec := FALSE;
+                     Break;
+                   }
+            }
+
+          if ( _boIsDelLnkRec )
+            {
+              While (loDelKatSopr.GetFirst FastFirstRow KatSopr
+                                  where ((_LnkRec     == KatSopr.cADoc AND
+                                          cgCustomAkt == KatSopr.wADoc AND
+                                          (word(111) <> KatSopr.VidSopr)
+                                        )) = tsOk) do
+                {
+                  loDelKatSopr.KatSopr.cADoc := comp(0);
+                  loDelKatSopr.KatSopr.wADoc := word(0);
+                  loDelKatSopr.UpDate Current KatSopr;
+                }
+
+              if (loDelKatSopr.GetFirst FastFirstRow LnkTbl where ((_LnkRec == LnkTbl.NRec)) = tsOk)
+                loDelKatSopr.Delete Current LnkTbl;
+            }
+
+          loDelKatSopr.SetBounds(loDelKatSopr.tnKatSopr);
+          loDelKatSopr.GetFirst FastFirstRow KatSopr; // where ((_curKS == KatSopr.NRec));
+        }
+      else
+        {
+          loDelKatSopr.ReSetBounds(loDelKatSopr.tnKatSopr);
+          if (loDelKatSopr.RecordExists KatSopr where ((_LnkRec     == KatSopr.cADoc AND
+                                                        cgCustomAkt == KatSopr.wADoc AND
+                                                        word(111)   == KatSopr.VidSopr (NoIndex)
+                                                      )) <> tsOk)
+            {
+              if (loDelKatSopr.GetFirst FastFirstRow LnkTbl where ((_LnkRec == LnkTbl.NRec)) = tsOk)
+                loDelKatSopr.Delete Current LnkTbl;
+            }
+
+          loDelKatSopr.SetBounds(loDelKatSopr.tnKatSopr);
+          loDelKatSopr.GetFirst FastFirstRow KatSopr;
+        }
+    }
+
+  // обработка связей с "Журналом резервирования"
+#ifdef __RsvReg__
+  ipRsvRegObj.DelRsvRegByDoc(toKatSopr,loDelKatSopr.KatSopr.nRec);
+#endif
+
+  KatSopr_Delete := loDelKatSopr.delete safe KatSopr;
+}
+
+//******************************************************************************
+// Function Update_current_KatSopr: word;
+// см. VIP\OPER\NAKL\SoprAll.vpp
+//******************************************************************************
+
+#end //_KATSOPR_VPP

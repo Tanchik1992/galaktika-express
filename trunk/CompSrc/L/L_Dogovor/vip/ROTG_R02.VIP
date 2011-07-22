@@ -1,0 +1,486 @@
+/*
+ ╔════════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) Корпорация ГАЛАКТИКА, 1997,98                      ║
+ ║ Проект        : ГАЛАКТИКА                                                  ║
+ ║ Система       : Оперативный контур                                         ║
+ ║ Версия        : 5.70                                                       ║
+ ║ Назначение    : Печать распоряжения на отгрузку                            ║
+ ║ Ответственный : Славко Александр Анатольевич(SLAVKO)                       ║
+ ╚════════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Печать распоряжения на отгрузку
+#end
+Interface ROtg_R02 'Печать распоряжения на отгрузку' EscClose; //
+  Show At (,,,);
+
+//********************************************************************************
+// Таблицы для распоряжений на отгрузку на FastReport (разнарядки)
+
+//Шапка с данными по договоре
+table struct FRPoMC
+(
+  NRec	              : longint //номер
+, NZakazNoDoc         : string  //Н/З
+, KatMCName           : string  //МЦ
+, RoundKol            : string  //количество
+, KatOtpEdName        : string  //единица измерения
+, GrPolName           : string  //наименование грузополучателя
+, GrPolAddr           : string  //почтовый адрес грузополучателя
+, GrPolCode           : string  //код грузополучателя
+, MarPunktSyn_RName   : string  //наименование станции назначения
+, MarPunktSyn_RCode   : string  //код станции назначения
+)
+with index
+(
+  indextPoMC = NRec
+);
+
+//*******************************************************************************
+
+Create View
+Var
+  varTbl      : LongInt;
+  OldPrMC     : Byte;
+  OldMCName   : String;
+  parNRec,
+  OldMCnRec,
+  varNZakaz,
+  varSpDocs   : Comp;
+  varInt      : LongInt;
+  varSummKol  : Double;
+  TblPrMC,
+  TblMCName,
+  TblMCnRec,
+  TblNZnRec,
+  TblSpNZnRec,
+  TblKolFact : Byte;
+  RoundKolfromNastr,
+  VidReport         : word;
+
+  FR_Nrec           : longint;
+From
+  OtgOrder ,
+  SpOtgOrd ,
+  NZakaz   ,
+  synonym  NZakaz FirstNZakaz ,
+  Dogovor  ,
+  SpDocs   ,
+  synonym  SpDocs SpDocsSyn ,
+  synonym  SpDocs FirstSpNZakaz ,
+  synonym  MarPunkt MarPunktSyn_P ,
+  synonym  MarPunkt MarPunktSyn_R ,
+  KatMC    ,
+  synonym  KatMC KatMCSyn ,
+  GroupMC ,
+  synonym  GroupMC GroupMCSyn ,
+  synonym  KatOrg OrgForm ,
+  synonym  KatOrg GrOtp ,
+  synonym  KatOrg GrPol ,
+  WayMove  ,
+  KatOtpEd ,
+  ResOtgr,
+  FRPoMC
+Where
+((
+      parNRec                 == OtgOrder.NRec // это для 1-го док. хватит, а так м.б. TmpRO.сOtgOrder ==
+  and OtgOrder.cPunktP        == MarPunktSyn_P.NRec
+  and OtgOrder.cOrgForm       == OrgForm.NRec
+  and OtgOrder.cGrOtp         == GrOtp.NRec
+
+  and OtgOrder.NRec           == SpOtgOrd.cOtgOrder
+
+  and SpOtgOrd.NRec           == SpNZRasp.cSpOtgOrd
+  and SpNZRasp.cSpNZak        == SpDocsSyn.NRec
+  and SpDocsSyn.cMCUsl        == KatMCSyn.NRec
+  and SpDocsSyn.cGrMCUsl      == GroupMCSyn.NRec
+
+  and FirstNZakaz.cDogovor    == Dogovor.NRec
+  and FirstNZakaz.cWayMove    == WayMove.NRec
+  and FirstSpNZakaz.cResOtgr  == ResOtgr.NRec
+
+  and NZakaz.cPunktR          == MarPunktSyn_R.NRec
+  and NZakaz.cGrPol           == GrPol.NRec
+
+  and SpDocs.cMCUsl           == KatMC.NRec
+  and SpDocs.cOtpEd           == KatOtpEd.NRec
+  and SpDocs.cGrMCUsl         == GroupMC.NRec
+));
+
+Parameters
+  parNRec;
+
+Form FrmRO('ROtg_R02.out', 'ROtg_R02') With NoVisual;
+
+//******************************************************************************
+
+#ifdef ATL51
+DataStream FRRotg_R
+(
+  [cfh] CommonFormHeader;
+  
+  [OtgOrderNoDoc]  OtgOrder.NoDoc;   //номер распоряжения на отгрузку (разнарядки)
+  [OtgOrderdDoc]   DateToStr(OtgOrder.dDoc,'DD/MM/YYYY'); //дата распоряжения на отгрузку (разнарядки) 
+  [GrOtpName]      GrOtp.Name;       //грузоотправитель  
+  [CurDateMonth]   DateToStr(Cur_Date,'month');
+  [WayMoveName]    WayMove.Name;     //транспорт
+  [Oplata]         '';
+
+  [FirstNZakazOtv_FIO]  FirstNZakaz.Otv_FIO; //испольнитель   
+  [ResOtgrName]         ResOtgr.Name;        //ресурсовладелец
+  [DogovorNoDoc]        Dogovor.NoDoc;       //номер договора 
+  [DogovordInput]       DateToStr(Dogovor.dInput,'DD/MM/YYYY');    //дата договора  
+  [OrgFormName]         OrgForm.Name;        //контрагент     
+
+  table FRPoMC   
+  (                            
+    [NRec]	          FRPoMC.NRec;     
+    [NZakazNoDoc]         FRPoMC.NZakazNoDoc;       
+    [KatMCName]           FRPoMC.KatMCName;
+    [RoundKol]            FRPoMC.RoundKol;
+    [KatOtpEdName]        FRPoMC.KatOtpEdName;      
+    [GrPolName]           FRPoMC.GrPolName;         
+    [GrPolAddr]           FRPoMC.GrPolAddr;         
+    [GrPolCode]           FRPoMC.GrPolCode;         
+    [MarPunktSyn_RName]   FRPoMC.MarPunktSyn_RName;
+    [MarPunktSyn_RCode]   FRPoMC.MarPunktSyn_RCode;
+  );                                     
+)
+end;
+#end
+
+//******************************************************************************
+
+Procedure Init_Tbl;
+{
+  varTbl    := TblInitNew(50,50);
+  TblPrMC := TblNewField( varTbl, ftByte );
+  TblMCName := TblNewField( varTbl, ftString );
+  TblMCnRec := TblNewField( varTbl, ftComp );
+  TblEndKey(varTbl);
+  TblNZnRec := TblNewField( varTbl, ftComp );
+  TblSpNZnRec := TblNewField( varTbl, ftComp );
+  TblKolFact := TblNewField( varTbl, ftDouble );
+  TblSetDuplicate( varTbl, True );
+
+  if (varTbl = 0)
+     Message(''#3'Ошибка создания виртуальной таблицы', Error);
+}; // procedure Init_Tbl
+
+Procedure Done_Tbl;
+{
+  TblDeleteTable(varTbl);
+}; // procedure Done_Tbl
+
+Procedure MakeReport;
+{
+ if (GetFirst OtgOrder = tsOk) {};
+ if (GetFirst SpOtgOrd = tsOk)
+ {
+   if ( GetFirst FirstNZakaz where ((SpOtgOrd.cNZakaz == FirstNZakaz.NRec)) = tsOk ) {}
+   _loop SpOtgOrd
+   {
+     _loop SpNZRasp
+      {
+       if (GetFirst SpDocsSyn = tsOk)
+         {
+          if (SpDocsSyn.PrMC <> 1) // МЦ
+            Continue;
+          //для договора, транспорта, исполнителя
+          if ( GetFirst FirstSpNZakaz where ((SpNZRasp.cSpNZak == FirstSpNZakaz.NRec)) = tsOk ) {}
+          TblClearBuffer(varTbl);
+          TblSfByte(varTbl, TblPrMC, if(SpDocsSyn.cMCUsl <> Comp(0),Byte(0),Byte(1)));
+          TblSfString(varTbl, TblMCName, if(SpDocsSyn.cMCUsl <> Comp(0),substr(KatMCSyn.Name,1,10),substr(GroupMCSyn.Name,1,10)));
+          TblSfComp(varTbl, TblMCnRec, if(SpDocsSyn.cMCUsl <> Comp(0),KatMCSyn.NRec,GroupMCSyn.NRec));
+          TblSfComp(varTbl, TblNZnRec, SpOtgOrd.cNZakaz);
+          TblSfComp(varTbl, TblSpNZnRec, SpDocsSyn.NRec);
+          TblSfDouble(varTbl, TblKolFact, SpNZRasp.KolFact );
+
+          if (TblInsertCurrent(varTbl) <> tsOk)
+            Message('Ошибка при вставке в виртуальную таблицу', Error);
+         };
+      }
+   }
+ }
+}; // procedure MakeReport
+
+Procedure Print_Line;
+Var
+  varByte : Byte;
+  varSum  : Double;
+{
+  varNZakaz := TblGfComp(varTbl, TblNZnRec);
+  varSpDocs := TblGfComp(varTbl, TblSpNZnRec);
+  varSum    := TblGfDouble(varTbl, TblKolFact);
+  if (GetFirst NZakaz where ((varNZakaz == NZakaz.NRec)) <> tsOk )
+    {
+    if (VidReport = 0)
+     FrmRO.SkipFormat(9);
+     Exit;
+    };
+
+  if (GetFirst SpDocs where ((varSpDocs == SpDocs.NRec)) <> tsOk )
+    {
+    if (VidReport = 0)
+     FrmRO.SkipFormat(9);
+     Exit;
+    };
+
+  if (VidReport = 0)
+  {
+  FrmRO.Write(NZakaz.NRec);
+  FrmRO.Write(NZakaz.NoDoc);
+  FrmRO.Write(Trim(String(varSum,18,RoundKolfromNastr)));
+  }
+  else
+  {
+    FRPoMC.NZakazNoDoc := NZakaz.NoDoc;       
+    FRPoMC.RoundKol    := Trim(String(varSum,18,RoundKolfromNastr));
+  }
+
+  varByte := TblGfByte(varTbl, TblPrMC);
+  if (varByte = Byte(0)) // МЦ
+    {
+    if (VidReport = 0)
+    {
+     FrmRO.Write(KatMC.Name);
+     FrmRO.Write(KatOtpEd.Name);
+    }
+  else
+    {
+      FRPoMC.KatMCName    := KatMC.Name;
+      FRPoMC.KatOtpEdName := KatOtpEd.Name;      
+    }
+  }
+  else
+  {
+    if (VidReport = 0)
+    {
+     FrmRO.Write(GroupMC.Name);
+     FrmRO.SkipFormat(1);
+    }
+    else
+      FRPoMC.KatMCName := KatMC.Name;
+    };
+
+  if (GetFirst GrPol = tsOk)
+    {
+    if (VidReport = 0)
+    {
+     FrmRO.Write(GrPol.Name);
+     FrmRO.Write(GrPol.Addr);
+     FrmRO.Write(GrPol.Code);
+    }
+  else
+    {
+      FRPoMC.GrPolName := GrPol.Name;         
+      FRPoMC.GrPolAddr := GrPol.Addr;         
+      FRPoMC.GrPolCode := GrPol.Code;         
+    }
+  }
+  else
+    if (VidReport = 0)
+    FrmRO.SkipFormat(3);
+
+  if (GetFirst MarPunktSyn_R = tsOk)
+    {
+    if (VidReport = 0)
+    {
+     FrmRO.Write(MarPunktSyn_R.Name);
+     FrmRO.Write(MarPunktSyn_R.Code);
+    }
+  else
+    {
+      FRPoMC.MarPunktSyn_RName := MarPunktSyn_R.Name;
+      FRPoMC.MarPunktSyn_RCode := MarPunktSyn_R.Code;
+    }
+  }
+  else
+    if (VidReport = 0)
+    FrmRO.SkipFormat(2);
+
+  varSummKol := varSummKol + varSum;
+  OldPrMC := TblGfByte(varTbl, TblPrMC);
+  OldMCName := TblGfString(varTbl, TblMCName);
+  OldMCnRec := TblGfComp(varTbl, TblMCnRec);
+}; // Procedure Print_Line
+
+Procedure PrintReport;
+Var
+  varBreak  : Boolean;
+  NewPrMC   : Byte;
+  NewMCName : String;
+  NewMCnRec : Comp;
+{
+  StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,''#3'Формирую отчет...',1);
+
+  ReadMyDsk(VidReport,'VidReport',False);
+
+  FR_Nrec  := 0;
+
+  if (VidReport = 0)
+  {
+  FrmRO.Write(OtgOrder.NRec);
+  FrmRO.Write(OtgOrder.NoDoc);
+  FrmRO.Write(OtgOrder.dDoc);
+  FrmRO.Write(GrOtp.Name);
+  FrmRO.Write(DateToStr(Cur_Date,'month'));
+  FrmRO.Write(WayMove.Name);        // Транспорт
+  FrmRO.Write(FirstNZakaz.Otv_FIO); // Исполнитель
+  FrmRO.Write(ResOtgr.Name);        // Ресурсовладелец
+  FrmRO.Write(Dogovor.NoDoc);       // Договор
+  FrmRO.Write(Dogovor.dInput);      // Договор_Дата
+  FrmRO.Write(OrgForm.Name);
+  FrmRO.Write('');                  // Вид оплаты
+  }
+  
+  OldPrMC  := Byte(255);
+  varBreak := False;
+
+  if (TblGetFirst(varTbl))
+    {
+     do
+       {
+        if (not NextVisual)
+          {
+           varBreak := True;
+           Break;
+          };
+
+      ClearBuffer(#FRPoMC);
+
+        NewPrMC := TblGfByte(varTbl, TblPrMC);
+        NewMCName := TblGfString(varTbl, TblMCName);
+        NewMCnRec := TblGfComp(varTbl, TblMCnRec);
+
+        if ((OldPrMC = NewPrMC) and (OldMCName = NewMCName) and (OldMCnRec = NewMCnRec)) // The_Same
+          {
+           Print_Line
+          }
+        else // The_New
+          {
+           if (OldPrMC <> Byte(255))
+             {
+          if (VidReport = 0)
+              FrmRO.PutEvent(feBreak);
+
+              if (OldPrMC = Byte(0)) // МЦ
+               {
+            if (VidReport = 0)
+            {
+                FrmRO.Write(KatMC.Name);
+                FrmRO.Write(Trim(String(varSummKol,18,RoundKolfromNastr)));
+                FrmRO.Write(KatOtpEd.Name);
+               }
+              else
+               {
+              FRPoMC.KatMCName    := KatMC.Name;
+              FRPoMC.RoundKol     := Trim(String(varSummKol,18,RoundKolfromNastr));
+              FRPoMC.KatOtpEdName := KatOtpEd.Name;      
+            }
+          }
+          else
+          {
+            if (VidReport = 0)
+            {
+                FrmRO.Write(GroupMC.Name);
+                FrmRO.Write(Trim(String(varSummKol,18,RoundKolfromNastr)));
+                FrmRO.SkipFormat(1);
+            }
+            else
+            {
+              FRPoMC.KatMCName := KatMC.Name;
+              FRPoMC.RoundKol  := Trim(String(varSummKol,18,RoundKolfromNastr));
+            }
+               };
+
+              varSummKol := Double(0);
+             };
+
+           Print_Line;
+          };
+
+      insert current FRPoMC;
+       }
+     while (TblGetNext(varTbl));
+
+    if (VidReport = 0)
+     FrmRO.PutEvent(feBreak);
+
+     if (OldPrMC = Byte(0)) // МЦ
+      {
+      if (VidReport = 0)
+      {
+       FrmRO.Write(KatMC.Name);
+       FrmRO.Write(Trim(String(varSummKol,18,RoundKolfromNastr)));
+       FrmRO.Write(KatOtpEd.Name);
+      }
+     else
+      {
+        FRPoMC.KatMCName    := KatMC.Name;
+        FRPoMC.RoundKol     := Trim(String(varSummKol,18,RoundKolfromNastr));
+        FRPoMC.KatOtpEdName := KatOtpEd.Name;      
+      }
+
+    }
+    else
+    {
+      if (VidReport = 0)
+      {
+       FrmRO.Write(GroupMC.Name);
+       FrmRO.Write(Trim(String(varSummKol,18,RoundKolfromNastr)));
+       FrmRO.SkipFormat(1);
+      }
+      else
+      {
+        FRPoMC.KatMCName := KatMC.Name;
+        FRPoMC.RoundKol  := Trim(String(varSummKol,18,RoundKolfromNastr));
+      }
+      };
+
+    if (VidReport = 0)
+     FrmRO.PutEvent(feBreak);
+    }
+  else
+    {
+     varBreak := True;
+     Message('Нет позиций для печати.', Information);
+    };
+
+  StopVisual('',0);
+  if (VidReport = 0)
+  {
+  if (FrmRO.Error or varBreak)
+    FrmRO.AbortForm
+  else
+    FrmRO.ShowFile('');
+  }
+
+  if (TblGetFirst(varTbl))
+  #ifdef ATL51
+    if (VidReport = 1)
+    {
+      RunFReport(FRRotg_R, '', false);
+      ResetBounds(#FRPoMC);
+      Delete All FRPoMC;
+      SetBounds(#FRPoMC);
+    }
+  #end
+
+  SaveMyDsk(0,'VidReport');
+}; // procedure PrintReport
+
+HandleEvent
+cmInit :
+{
+  RoundKolfromNastr := wGetTune('Round.KolSign');
+  Init_Tbl;
+  MakeReport;
+  PrintReport;
+  Done_Tbl;
+  Abort;
+};
+
+End; // HandleEvent
+END. // Interface

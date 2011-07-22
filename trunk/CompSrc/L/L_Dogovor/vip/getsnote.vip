@@ -1,0 +1,1015 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Групповой выбор статусов договоров с исп. маркера         ║
+ ║ Ответственный : Глушаков Дмитрий Сергеевич                                ║
+ ║ Параметры     : есть                                                      ║
+ ║    pVidDoc    // фильтр вида документа ( 0 - фильтр не задан )            ║
+ ║    pSysNum    // системная группа / работает если pVidDoc = 0 (см. ниже)  ║
+ ║    pStatus    // 0 - выбирать все, иначе битовая маска запрещенных        ║
+ ║    OkOne      // TRUE - групповой выбор FALSE - только один               ║
+ ║    pKatNotes  // входной-выходной - KatNotes.nRec                         ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include PickDoc.vih
+#include ExtAttr.vih
+
+#doc
+Интерфейс выбора статуса договора
+#end
+Interface GetSomKatNotes 'Выберите статус договора' (,,sci178Esc)
+  doAccept,
+  EscClose;
+  Show at (2,5,77,15);
+
+#include GetCurTunes.vpp
+
+Create View
+Var
+//--параметры
+  pVidDoc,
+  pVidDoc0,
+  pSysNum,
+  pStatus      : word;
+  OkOne        : boolean;
+  pKatNotes    : comp;
+//--
+  Node         : comp;
+  NewNRec      : comp;
+  sVidDoc      : string;
+  curFormat,
+  nStatus      : word ; // 0 - protect, 1 - edit ;
+  KreateLevel,
+  MultiVidDoc  : boolean;
+  MarkerVidD,
+  IndexVidD,
+  nControl     : longint;
+
+  User_st      : boolean;
+  UserSt1,
+  UserSt2      : boolean;
+  isKassDocs,               // все кассовые документы
+  isPlatDocs,               // все платежные документы
+  isTaxeDocs   : boolean;   // все платежные документы для налогового учета
+
+  (
+  User_St2,
+  Us_Descr,
+  isMrk,
+  recColor,
+  picked,
+  IspR
+  )
+As select
+!  if( SearchMarker(MarkerVidD,KatNotes.NRec,IndexVidD),
+!      if (curFormat=0,'[√] '+KatNotes.Name,'  '+KatNotes.Name),
+!      if (curFormat=1,'[√]','') )
+
+// -- User_St2 -------------------------------------
+   if(UserSt2,
+    if(isValid(tnStatUserD),true,false),
+    if(isValid(tnStatUserV),true,false)),
+// -- Us_Descr -------------------------------------
+  if(not User_st,true,
+   if(not UserSt1,
+    if(User_St2,true,false),
+    if(pKatNotes <> 0,
+     if(isValid(tnStatUserP) and User_St2,true,false),
+     if(User_St2,true,false)))),
+// -- isMrk ----------------------------------------
+  (OkOne and SearchMarker(MarkerVidD, KatNotes.NRec, IndexVidD)),
+// -- recColor -------------------------------------
+  if( isMrk, ColorMark,
+   if(not Us_Descr,ColorGray,0)),
+
+  if (OkOne and SearchMarker(MarkerVidD,KatNotes.NRec,IndexVidD),'[√]','' ),
+  if (KatNotes.FilialNo = 1, '   Да' , '   Нет'),  // Контроль (0-нет, 1-да, 2-нет всегда)
+// -- sKatDocName ----------------------------------
+  if(isKassDocs, 'Кассовые документы',
+   if(isPlatDocs, 'Платежные документы',
+    if(isTaxeDocs, 'Платежные документы для налогового учета',
+     if(pVidDoc = 1207,   'Производственный отчет (баланс)',
+      if(pVidDoc = 1210,  'Операционные сметы',
+       if(pVidDoc = 1400, 'Заявки на затраты, Распределение затрат и ресурсов', KatDoc.Name)))))) (FieldName =  sKatDocName)
+From
+    KatNotes
+   ,KatDoc
+   ,StatUser
+   ,synonym KatNotes KatNotes2
+   ,Synonym StatUser StatUserP
+   ,Synonym StatUser StatUserD
+   ,Synonym StatUser StatUserV
+Where
+  ((
+        pVidDoc           ==  KatNotes.VidDoc
+    and Node              ==  KatNotes.cOwner
+    and pVidDoc0          ==  KatDoc.TiDkGal
+    and KatNotes.cOwner   ==  KatNotes2.NRec
+
+    and
+//------------------------------------------------------
+    pVidDoc0        ==  StatUserP.TipDoc  and
+    word(1)         ==  StatUserP.SysOper and
+    pKatNotes       ==  StatUserP.cStat2  and
+    KatNotes.Nrec   ==  StatUserP.cStat1  and
+
+    pVidDoc0        ==  StatUserD.TipDoc  and
+    word(2)         ==  StatUserD.SysOper and
+    CurDescr        ==  StatUserD.Descr   and
+    KatNotes.Nrec   ==  StatUserD.cStat1  and
+
+    pVidDoc0        ==  StatUserV.TipDoc  and
+    word(2)         ==  StatUserV.SysOper and
+    'Прочие'        ==  StatUserV.Descr   and
+    KatNotes.Nrec   ==  StatUserV.cStat1
+  ))
+
+
+bounds byTip = pVidDoc ==  KatNotes.VidDoc
+
+// условие что бы все состояния которые выбирать нельзя из дерева пропадали
+
+Condition Status =
+   ( (pStatus and word(1 shl KatNotes.Status)) = 0 )
+
+order by KatNotes.Code
+
+;
+
+Parameters
+  pVidDoc,   // фильтр вида документа ( 0 - фильтр не задан )
+  pSysNum,   // системная группа: нужна для выбора статусов из нескольких видов документов (VidDoc)
+             // word(1)  - платежные документы
+             // word(7)  - кассовые документы
+             // word(37) - налоговый учет
+  pStatus,   // 0 - выбирать все, иначе битовая маска запрещенных
+  OkOne,     // TRUE - груповой выбор FALSE - только один
+  pKatNotes  // входной-выходной - KatNotes.nRec
+  ;
+
+!-------------------------------------------------------------------------------
+
+#include PickDoc.var
+
+//-- Установить заголовок окна
+Procedure SetMyTitle;
+  {
+  if (curFormat=0)
+    {
+    if (OkOne)
+      SetTitle('Выбор статусов документов (помечено: ' + string(GetMarkerCount(MarkerVidD)) + ')');
+    else
+      SetTitle('Выбор статуса документа');
+    }
+  else
+    SetTitle('Редактирование статусов документов');
+  }
+
+//-- Отменить выделение
+Procedure KillPick;
+  {
+  ClearMarker(MarkerVidD);
+  SetMyTitle;
+  }
+
+//-- пометить одну позицию
+procedure OneMarkPick;
+  {
+  InsertMarker(MarkerVidD,KatNotes.NRec);
+  }
+
+!------------------------------------------------------------------------------
+
+Screen ScrViewSelectedKatHozD;
+  Show at(,,,3);
+  Table KatDoc
+Fields
+  sKatDocName : skip;
+<<
+
+ Хозяйственный документ:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+>>
+end; // screen
+
+Tree 1 trKatNotes ('Выберите статус и нажмите Enter',,sci14EnInsTree) ;
+  Show at(,4);
+  Table KatNotes;
+Fields
+  {Font = {Color = if ((picked='[√]') and (curFormat=0),
+                        ColorMark,
+                        recColor
+                      )
+          }
+  };
+  picked         #3''             ('',,) : [3], skip;
+  KatNotes.Name  #3'Наименование' ('',,) : [20], noprotect;
+  KatNotes.sName #3'Кратко'       ('',,) : [ 6], noprotect;
+  KatNotes.Code  #3'Код'          ('',,) : [ 6], noprotect;
+  IspR           #3'Контроль'     ('Контролировать или нет количество при создании подчиненных документов',,) : [8], protect;
+end;
+
+!-------------------------------------------------------------------------------
+procedure SetMyFormat (_format: word ); // 0 - protect; 1 - edit
+  {
+  curFormat := _format ;
+  if ( _format = 0 )
+    {
+#ifdef Atl52
+    Var EnabledEdit : boolean;
+
+    EnabledEdit := not boGetTune('RghTbl.NoUpdate.KatNotes');
+
+    SetHelpAndStatusContext(trKatNotes,-1,
+                            if(OkOne, if(EnabledEdit, sci14EnInsTree, sci1EnInsTree),
+                                      If(EnabledEdit, sci14EnEscTree, sci1EnEscTree)),
+                            'DogDocStatus');
+    SetHelpAndStatusContext(trKatNotes,#IspR,
+                            if(OkOne, if(EnabledEdit, sci14EnInsTree, sci1EnInsTree),
+                                      If(EnabledEdit, sci14EnEscTree, sci1EnEscTree)),
+                            'DogDocStatus');
+#else
+    SetHelpAndStatusContext(trKatNotes,-1,
+                            if (OkOne,sci14EnInsTree,sci14EnEscTree),
+                            hcDogDocStatus);
+    SetHelpAndStatusContext(trKatNotes,#IspR,
+                            if (OkOne,sci14EnInsTree,sci14EnEscTree),
+                            hcDogDocStatus);
+#end
+    }
+  else
+    {
+#ifdef Atl52
+    SetHelpAndStatusContext(trKatNotes,-1,
+                            sci178EscExTree,
+                            'DogoviEditStatusWindow');
+    SetHelpAndStatusContext(trKatNotes,#IspR,
+                            sci1378EscExTree,
+                            'DogoviEditStatusWindow');
+#else
+    SetHelpAndStatusContext(trKatNotes,-1,
+                            sci178EscExTree,
+                            hcDogoviEditStatusWindow);
+    SetHelpAndStatusContext(trKatNotes,#IspR,
+                            sci1378EscExTree,
+                            hcDogoviEditStatusWindow);
+#end
+    }
+  SetInterfaceOptions(opDoAccept or
+                      opEscClose or
+                      if (CurFormat=0,opCyanInterface,0) );
+  SetMyTitle;
+  }
+
+//--  Пометить группу
+procedure MarkGroup;
+var LevelClosed: boolean;
+    n          : word;
+    i          : word;
+    SaveNrec   : Comp;
+  {
+  OneMarkPick;
+  if TreeCloseNode(trKatNotes)
+    LevelClosed:=true
+  else
+    LevelClosed:=false;
+  PushPos(#KatNotes);
+  n:=0;
+  if TreeGetNext(trKatNotes)
+    {
+    SaveNrec := KatNotes.NRec;
+    TreeGetPrev(trKatNotes);
+    }
+  if TreeOpenNode(trKatNotes)
+    {
+    n:=n+1;
+    PushPos(#KatNotes);
+    }
+  if TreeGetNext(trKatNotes)
+    do
+      {
+      if (KatNotes.NRec = SaveNrec)
+        Break;
+      OneMarkPick;
+      if TreeOpenNode(trKatNotes)
+        {
+        n:=n+1;
+        PushPos(#KatNotes);
+        }
+      }
+    while TreeGetNext(trKatNotes);
+  FOR( i:=1; i<=n; i:=i+1 )
+    {
+    PopPos(#KatNotes);
+    TreeCloseNode(trKatNotes);
+    }
+  PopPos(#KatNotes);
+  if (LevelClosed)
+    TreeOpenNode(trKatNotes);
+  TreeJumpToRecord (trKatNotes,KatNotes.nRec);
+  RescanPanel(#KatNotes);
+  }
+
+//--  Отменить пометку группы
+procedure UnMarkGroup;
+var LevelClosed: boolean;
+    n          : word;
+    i          : word;
+    SaveNrec   : Comp;
+  {
+  DeleteMarker(MarkerVidD,KatNotes.NRec);
+  if TreeCloseNode(trKatNotes)
+    LevelClosed:=true
+  else
+    LevelClosed:=false;
+  PushPos(#KatNotes);
+  n:=0;
+  if TreeGetNext(trKatNotes)
+    {
+    SaveNrec := KatNotes.NRec;
+    TreeGetPrev(trKatNotes);
+    }
+  if TreeOpenNode(trKatNotes)
+    {
+    n:=n+1;
+    PushPos(#KatNotes);
+    }
+  if TreeGetNext(trKatNotes)
+    do
+      {
+      if (KatNotes.NRec = SaveNrec)
+        Break;
+      DeleteMarker(MarkerVidD,KatNotes.NRec);
+      if TreeOpenNode(trKatNotes)
+        {
+        n:=n+1;
+        PushPos(#KatNotes);
+        }
+      }
+    while TreeGetNext(trKatNotes);
+  FOR ( i:=1; i<=n; i:=i+1 )
+    {
+    PopPos(#KatNotes);
+    TreeCloseNode(trKatNotes);
+    }
+  PopPos(#KatNotes);
+  if (LevelClosed)
+    TreeOpenNode(trKatNotes);
+  TreeJumpToRecord (trKatNotes,KatNotes.nRec);
+  RescanPanel(#KatNotes);
+  }
+
+//--  Если группа, то пустая (true) или нет (false)
+function LeafIsEmpty : boolean ;
+var LevelClosed: boolean;
+    SaveNrec   : Comp;
+  {
+  LeafIsEmpty := true;
+  if (KatNotes.isLeaf <> 0)
+    EXIT;
+  PushPos(#KatNotes);
+  if TreeCloseNode(trKatNotes)
+    LevelClosed:=true;
+  else
+    LevelClosed:=false;
+  if TreeGetNext(trKatNotes)
+    {
+    SaveNrec := KatNotes.NRec;
+    TreeGetPrev(trKatNotes);
+    }
+  else
+    SaveNrec := KatNotes.NRec;
+  if TreeOpenNode(trKatNotes) {};
+  if TreeGetNext(trKatNotes)
+    {
+    if (SaveNrec <> KatNotes.NRec)
+      LeafIsEmpty := false;
+    TreeGetPrev(trKatNotes);
+    }
+  else
+    if (SaveNrec <> KatNotes.NRec)
+      LeafIsEmpty := false;
+  if LevelClosed
+    TreeOpenNode(trKatNotes);
+  else
+    TreeCloseNode(trKatNotes);
+  PopPos(#KatNotes);
+  TreeJumpToRecord (trKatNotes,KatNotes.nRec);
+  RescanPanel(#KatNotes);
+  }
+
+procedure Set_Position;  // Определяет новую запись и возвращается на исходную
+  {
+  if TreeGetNext(trKatNotes)
+    {
+    NewNRec := KatNotes.nRec;
+    TreeGetPrev(trKatNotes);
+    }
+  else
+    {
+    NewNRec := comp(0);
+    if TreeGetPrev(trKatNotes)
+      {
+      NewNRec := KatNotes.nRec;
+      TreeGetNext(trKatNotes);
+      }
+    }
+  }
+
+//*******************************************************************
+// можем ли поменять папку для статуса
+function CanChangeFolder(_pVidDoc: word; _isLeaf: word): boolean;
+{
+  // статус - лист и документ - платежный
+  CanChangeFolder :=
+     (_isLeaf = 1) and (IsPlatDoc(_pVidDoc) or isTaxesDoc(_pVidDoc));
+}
+
+//*******************************************************************
+// для документов, использующих одинаковые наборы статусов
+procedure ModVidDoc;
+{
+  case pVidDoc of
+    37..39 :
+    {
+      pVidDoc  := 37;
+    }
+  61, 509 :
+    {
+      pVidDoc  := 40;
+    }
+    cgDoc_1082,
+    cgDoc_1083,
+    cgDoc_1084,
+    cgDoc_1085 :
+    {
+      pVidDoc  := cgDoc_1082;
+    }
+    cgDoc_1087,
+    cgDoc_1088 :
+    {
+      pVidDoc  := cgDoc_1087;
+    }
+  41, 43, 51, 53 :
+    {
+      pVidDoc  := 40;
+    }
+  201, 202, 203, 206, 211, 101, 102, 103, 106, 108, 110, 111, 112, 113, 114, 210, 229, 629, 631, 610, 1610 :
+    {
+#ifdef __SKYSHOP__
+      if pVidDoc <> 202
+#end
+      pVidDoc  := 100;
+    }
+  501, 502, 503, 504, 505, 506, 507, 508:
+    {
+      pVidDoc  := 100;
+    }
+  else
+    {
+      if isPlatDocs or (IsPlatDoc(pVidDoc) and (not IsKassaDoc(pVidDoc)))
+         pVidDoc := 1;
+      else
+         if isKassDocs or IsKassaDoc(pVidDoc)
+            pVidDoc := 7;
+         else
+            if isTaxeDocs
+               pVidDoc := 37;
+    }
+  end; // case
+}
+
+Function GetDocTreeType : byte;
+{
+  if ( KatNotes.IsLeaf = 1 )
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(trKatNotes), ntfOpen, ntfClose);
+}
+
+#define SHOW_NOTES_ICONS
+#include dogIcons.vpp
+
+//*******************************************************************
+Panel panKatNotes;
+ Table KatNotes;
+
+!-------------------------------------------------------------------------------
+
+HandleEvent
+
+cmTreeTop       : Node := 0;
+cmTreeUp        : Node := KatNotes.cOwner;
+cmTreeDown :
+  {
+  Node     := KatNotes.NRec;
+  pVidDoc  := KatNotes.VidDoc;
+  }
+cmTreeNodeType  : TreeSetNodeType(trKatNotes, GetDocTreeType, GetDocTreeIconEx(pVidDoc, KatNotes.Status, ntfText, KatNotes.nRec));
+
+cmTreeNeedOwner : TreeJumpToRecord (trKatNotes,KatNotes.cOwner);
+
+cmSetDefault :
+  {
+  SetFieldProtected(#KatNotes.Name , FALSE);
+  SetFieldProtected(#KatNotes.sName, FALSE);
+  SetFieldProtected(#KatNotes.Code , FALSE);
+  ClearBuffer(#KatNotes);
+  if (KreateLevel)
+    KatNotes.isLeaf := 0;
+  else
+    KatNotes.isLeaf := 1;
+!  set KatNotes.nRec := comp(0);
+  KatNotes.cOwner := Node;
+  KatNotes.VidDoc := pVidDoc;
+  KatNotes.Name   := sVidDoc;
+  KatNotes.Status := nStatus;
+  KatNotes.FilialNo := nControl;
+  KreateLevel := false;
+  insert current KatNotes;
+  NewNRec := KatNotes.nRec;
+  PutCommand(cmValFld1);
+  Abort;
+  }
+
+cmValFld1:
+  {
+  TreeJumpToRecord(trKatNotes, NewNRec);
+  RescanPanel(#KatNotes);
+  }
+
+!cmCheckRecord :  // пример CheckRecord'а
+!  if (OtgOrder.NoDoc = '')
+!    {
+!    Message(''#3'Номер документа не задан.',Information);
+!    SelectField(#OtgOrder.NoDoc);
+!    Abort;
+!    Exit;
+!    }
+!
+!cmInsertRecord :
+!  {
+!  insert current KatNotes;
+!  TreeJumpToRecord(trKatNotes,KatNotes.NRec);
+!  }
+
+cmUpdateRecord :
+  update current KatNotes;
+
+cmDeleteRecord :
+  if ( (KatNotes.isLeaf <> 0) or
+       (LeafIsEmpty and (not((KatNotes.cOwner = 0) and (KatNotes.isLeaf = 0)))) )
+    {
+    if (Message(''#3'Удалить позицию ?',YesNo) = Yes)
+      {
+      Set_Position;
+      DeleteMarker(MarkerVidD,KatNotes.NRec);
+      delete current KatNotes;
+      TreeJumpToRecord (trKatNotes,NewNRec);
+      SetMyTitle;
+      RescanPanel(#KatNotes);
+      }
+    }
+  else
+    Message('Запись нельзя удалять!'#3,OkButton+Warning);
+
+cmPositionChanged :
+  {
+    SetFieldProtected(#KatNotes.Name , (CurFormat = 0) OR (KatNotes.cOwner = 0) AND (KatNotes.isLeaf = 0) );
+    SetFieldProtected(#KatNotes.sName,  CurFormat = 0);
+    SetFieldProtected(#KatNotes.Code , (CurFormat = 0) OR (KatNotes.cOwner = 0) AND (KatNotes.isLeaf = 0) );
+  }
+
+cmOpenSearch :
+  if (CurFormat = 1) Abort;
+
+end; // HandleEvent
+
+end; // Panel
+
+HandleEvent // Interface
+
+cmInit :
+  {
+  pVidDoc0 := pVidDoc;
+// бит 1024 в pSysNum отвечает за: включать настройку доступа к документам
+//                                 от статуса или нет
+  User_st  := ((pSysNum and 1024) = 1024);
+  if User_st
+    pSysNum := pSysNum xor 1024;
+
+  isPlatDocs := (pVidDoc = 0) and (pSysNum = 1);
+  isKassDocs := (pVidDoc = 0) and (pSysNum = 7);
+  isTaxeDocs := (pVidDoc = 0) and (pSysNum = 37);
+  ModVidDoc;
+
+  if User_st
+    { if GetFirst StatUser where
+                  ((pVidDoc0 ==  StatUser.TipDoc   and
+                    word(1)  ==  StatUser.SysOper)) = tsOk
+         UserSt1 := true;
+      else
+         UserSt1 := false;
+
+      if GetFirst StatUser where
+                  ((pVidDoc0 == StatUser.TipDoc   and
+                    word(2)  == StatUser.SysOper  and
+                    CurDescr == StatUser.Descr)) = tsOk
+         UserSt2 := true;
+      else
+         UserSt2 := false;
+    }
+
+  MultiVidDoc := false;
+  if (pVidDoc = 0)
+    {
+    if OkOne
+      {
+      MultiVidDoc := true;
+      if (not iPickDoc.PickSingle('Хозяйственные документы', pVidDoc))
+        {
+        Abort ;
+        Exit ;
+        }
+      else
+        ModVidDoc;
+      }
+    else
+      {
+      Message(''#3'Не задан вид документа...',Cancel);
+      Abort;
+      EXIT;
+      }
+    }
+  if ( GetFirst KatNotes <> tsOk )
+    ProcessCommand(cmSaveDoc)
+  else
+    RunInterface(ChkKatNotes1); // этот интерфейс вызывает функцию
+                                // проверки корректности признака "Контроль"
+                                // в статусе
+
+  MarkerVidD := InitMarker('MKatNotes',8,100,10);
+  var MarkerCount,i : longint; // счетчики записей в маркере
+  var pickrec       : comp;
+  MarkerCount:=GetMarkerCount(MarkerVidD);
+  PushCondition (tcStatus);
+  FOR ( i:=0; i<MarkerCount; i:=i+1 )
+    {
+    if GetMarker(MarkerVidD,i,pickrec)
+      if (GetFirst KatNotes where ((pickrec == KatNotes.NRec)) <> tsOk)
+        {
+        AtDeleteMarker(MarkerVidD,i);
+        dec(i);
+        dec(MarkerCount);
+        }
+    }
+  ReSetBounds(#KatNotes);
+  PushCondition (tcStatus);
+  if ( GetFirst KatNotes where ((pKatNotes == KatNotes.NRec)) <> tsOk )
+    {
+    if ( GetFirst KatNotes <> tsOk )
+      {
+      Message(''#3'Нет ни одного разрешенного статуса...');
+      Abort;
+      EXIT;
+      }
+    Node := 0;
+    }
+  else
+    Node := KatNotes.cOwner;
+  SetBounds(#KatNotes);
+  SetMyFormat(0);
+  PutCommand(cmValue1);
+  KreateLevel := false;
+  }
+
+cmValue1 :
+  {
+  SetFieldVisible(#picked, OkOne);
+  TreeJumpToRecord (trKatNotes,KatNotes.nRec);
+  ReReadRecord(#KatDoc);
+  ReReadRecord(#KatNotes);
+  ReScanPanel(#KatNotes);
+  }
+
+cmPick :
+  if ( (CurField = #IspR) and (curFormat = 1) )
+    {
+    if (KatNotes.FilialNo = 2)
+      Message('Для данного статуса менять контроль нельзя!',Information);
+    else
+      set KatNotes.FilialNo := if (KatNotes.FilialNo = 1, 0, 1);
+    }
+
+cmInsert :
+  {
+  if (curFormat = 0) SetMyFormat(1);
+  if (KatNotes.cOwner = 0)
+    {
+    TreeOpenNode(trKatNotes);
+    Node     := KatNotes.nRec;
+    }
+
+  var OpenLevel : boolean; OpenLevel := false;
+
+  if (KatNotes.isLeaf = 0)
+    if TreeCloseNode(trKatNotes)
+      {
+      OpenLevel := true;
+      TreeOpenNode(trKatNotes);
+      }
+
+  if ( OpenLevel or // создаем внутрь папки
+       (GetFirst KatNotes2 <> tsOk) )
+    {
+    pVidDoc  := KatNotes.VidDoc;
+    sVidDoc  := KatNotes.Name;
+    nStatus  := KatNotes.Status;
+    nControl := KatNotes.FilialNo;
+    }
+  else
+    {
+    pVidDoc  := KatNotes2.VidDoc;
+    sVidDoc  := KatNotes2.Name;
+    nStatus  := KatNotes2.Status;
+    nControl := KatNotes2.FilialNo;
+    }
+  }
+
+cmInsLevel :
+  {
+  KreateLevel := true;
+  PutCommand(cmInsert);
+  }
+
+cmCancel :
+  if ((curFormat = 1) and UpDateTable)
+    {
+    SetMyFormat (0);
+    Abort;
+    }
+
+cmDefault :
+  {
+  if (curFormat = 1)
+    {
+    Abort;
+    Exit;
+    }
+  if Us_Descr
+    {
+      if (OkOne and (GetMarkerCount(MarkerVidD) = 0) )
+        {
+        if (KatNotes.isLeaf=0)
+          MarkGroup;
+        else
+          OneMarkPick ;
+        }
+      pVidDoc   := KatNotes.VidDoc;
+      pStatus   := KatNotes.Status;
+      pKatNotes := KatNotes.NRec;
+    }
+  else
+    { message(''#3'Вам не разрешено переводить документ'+
+              ''#13#3'в данный статус.',CancelButton);
+      Abort;
+    }
+  } // cmDefault
+
+cmDone :
+  DoneMarker(MarkerVidD,'MKatNotes');
+
+cmEdit :
+  {
+!  if (KatNotes.isLeaf = 0)
+!    {
+!    TreeOpenNode(trKatNotes);
+!    Node    := KatNotes.nRec;
+!    pVidDoc := KatNotes.VidDoc;
+!    sVidDoc := KatNotes.Name;
+!    }
+  SetMyFormat(1);
+  ProcessCommand(cmPositionChanged);
+  }
+
+cmPickClass:
+  if ((UpdateTable) and (KatNotes.NRec <> 0))
+    RunInterface('ExClassifier', word(CurTableCode), KatNotes.NRec);
+
+cmPickAttr:
+  if ((UpdateTable) and (KatNotes.NRec <> 0))
+    RunInterface('Attribute', word(CurTableCode), KatNotes.NRec);
+
+cmMarkUnMark : // Если на группу то выбирать все из группы
+  {
+  if SearchMarker(MarkerVidD,KatNotes.NRec,IndexVidD)
+    {
+    if (KatNotes.isLeaf = 1)
+      DeleteMarker(MarkerVidD,KatNotes.NRec);
+    else
+      UnMarkGroup;
+    }
+  else
+    {
+    if (KatNotes.isLeaf = 1)
+      OneMarkPick;
+    else
+      MarkGroup;
+    }
+  if (not TreeCloseNode(trKatNotes) )
+    {
+    TreeGetNext(trKatNotes);
+    TreeJumpToRecord (trKatNotes,KatNotes.nRec);
+    }
+  else
+    TreeOpenNode(trKatNotes);
+  SetMyTitle;
+  RescanPanel(#KatNotes);
+  }
+
+cmSelectAll :
+  {
+  PushPos(#KatNotes);
+  KillPick;
+  var ret  : word;
+  ResetBounds(#KatNotes);
+  if (pVidDoc<>0) AddBounds(tbbyTip);
+  _loop KatNotes
+    {
+    if (KatNotes.NRec <> 0)
+      OneMarkPick;
+    }
+  if (pVidDoc<>0) SubBounds(tbbyTip);
+  SetBounds(#KatNotes);
+  SetMyTitle;
+  PopPos(#KatNotes);
+  ReReadRecord;
+  RescanPanel(#KatNotes);
+  }
+
+cmUnSelectAll :
+  {
+  KillPick;
+  RescanPanel(#KatNotes);
+  ReReadRecord;
+  }
+
+cmShowAll:
+  {
+  MarkGroup;
+  SetMyTitle;
+  RescanPanel(#KatNotes);
+  }
+
+cmHideAll:
+  {
+  UnMarkGroup;
+  SetMyTitle;
+  RescanPanel(#KatNotes);
+  }
+
+cmHotKeys :
+{
+  var MnuName : String;
+
+  // если можем поменять папку - доп.функция
+  if CanChangeFolder(pVidDoc, KatNotes.isLeaf)
+   {
+     if (MultiVidDoc)
+       MnuName := #AddComp('L_DOGOVOR')'mnuGetMultyKatNotesFolder';
+     else
+       MnuName := #AddComp('L_DOGOVOR')'mnuGetSingleKatNotesFolder';
+   }
+  else
+   {
+     if (MultiVidDoc)
+       MnuName := #AddComp('L_DOGOVOR')'mnuGetMultyKatNotes';
+     else
+       MnuName := #AddComp('L_DOGOVOR')'mnuGetSingleKatNotes';
+   }
+
+  if ( boGetTune('Dog.ShowUserIcons') AND
+     ( (pVidDoc = word(400)) OR (pVidDoc = word(401)) OR (pVidDoc = word(403))) )
+    MnuName += ';SEPARATOR;' + #AddComp('L_DOGOVOR')'mnuSetKatNotesIcons';
+
+  PutHotCommand(RunDynMenu(MnuName));
+}
+
+cmSaveDoc :
+  {
+  var SaveRec : comp;
+  SaveRec := KatNotes.NRec;
+  RunInterface('CheckKatNotes',pVidDoc);
+  if (GetFirst KatNotes where((SaveRec == KatNotes.NRec)) <> tsOk)
+    if (GetFirst KatNotes = tsOk) {};
+  ReReadRecord(#KatNotes);
+  message (''#3'Проведена проверка целостности');
+  }
+
+cmAccording : // Alt+S
+  {
+  if (MultiVidDoc)
+    {
+    if (pSysNum = 0)
+      {
+      Message(''#3'Ошибка прикладного программиста - не задан номер системной группы!',Warning);
+      Exit;
+      }
+      if (iPickDoc.PickSingle('Хозяйственные документы', pVidDoc))
+      {
+        ModVidDoc;
+      if ( GetFirst KatNotes <> tsOk )
+        ProcessCommand(cmSaveDoc);
+      ReReadRecord(#KatDoc);
+      ReScanPanel(#KatNotes);
+      }
+    }
+  }
+
+cmInsertEditKN:  // Alt+K - смена папки
+{
+  // если можем поменять папку статусу
+  if CanChangeFolder(pVidDoc, KatNotes.isLeaf)
+   {
+     var retNewNode: comp; // новая папка
+     if RunInterface('GetStFolder', pVidDoc, KatNotes.cOwner, retNewNode) <> cmCancel
+      {
+        ResetBounds(#KatNotes);
+        set KatNotes.cOwner := retNewNode;
+        UpdateTable;
+        Node := retNewNode;
+        retNewNode := KatNotes.nRec;
+        SetBounds(#KatNotes);
+        TreeJumpToRecord (trKatNotes,retNewNode);
+        RescanPanel(#KatNotes);
+      }
+   }
+}
+
+cmValue2:
+{  
+  RunInterface('SetDogIcons', pVidDoc, KatNotes.nRec, KatNotes.Status, KatNotes.Name);
+  ReReadRecord(#KatNotes);
+}
+
+end; // HandleEvent Interface
+
+end. // Interface
+
+///////////////////////// ЛОКАЛЬНЫЕ МЕНЮ ////////////////////////////
+//*******************************************************************
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetSomKatNotes>L_Dogovor::GetSomKatNotes - Выбор статуса договора</link>
+#end
+mnuGetMultyKatNotes Menu
+{
+- 'Выбор типа документа',cmAccording,'Для какого типа документа показывать статусы',,'Alt+S',kbAltS,sci1Esc;
+-----------;
+- 'Проверка целостности таблицы',cmSaveDoc,'Проверка целостности таблицы',hcDogMStatusCorrect,'Ctrl+F2',kbCtrlF2,sci1Esc;
+}
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetSomKatNotes>L_Dogovor::GetSomKatNotes - Выбор статуса договора</link>
+#end
+mnuGetSingleKatNotes Menu
+{
+- 'Проверка целостности таблицы',cmSaveDoc,'Проверка целостности таблицы',hcDogMStatusCorrect,'Ctrl+F2',kbCtrlF2,sci1Esc;
+-----------;
+- 'Внешняя классификация',cmPickClass,'Внешняя классификация',hcGkatalM1ExtClass,'Alt+C',kbAltC,sci1Esc;
+- 'Внешние атрибуты',cmPickAttr,'Внешние атрибуты',hcGkatalM1Attr,'Alt+A',kbAltA,sci1Esc;
+}
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetSomKatNotes>L_Dogovor::GetSomKatNotes - Выбор статуса договора</link>
+#end
+mnuGetMultyKatNotesFolder Menu
+{
+- 'Выбор типа документа',cmAccording,'Для какого типа документа показывать статусы',,'Alt+S',kbAltS,sci1Esc;
+-----------;
+- 'Проверка целостности таблицы',cmSaveDoc,'Проверка целостности таблицы',hcDogMStatusCorrect,'Ctrl+F2',kbCtrlF2,sci1Esc;
+-----------;
+- 'Смена папки',cmInsertEditKN,'Смена папки для статуса',,'Alt+K',kbAltK,sci1Esc;
+
+}
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetSomKatNotes>L_Dogovor::GetSomKatNotes - Выбор статуса договора</link>
+#end
+mnuGetSingleKatNotesFolder Menu
+{
+- 'Проверка целостности таблицы',cmSaveDoc,'Проверка целостности таблицы',hcDogMStatusCorrect,'Ctrl+F2',kbCtrlF2,sci1Esc;
+-----------;
+- 'Смена папки',cmInsertEditKN,'Смена папки для статуса',,'Alt+K',kbAltK,sci1Esc;
+}
+//*******************************************************************
+#doc
+Установка пользовательских иконок <link Interface L_Dogovor::GetSomKatNotes>L_Dogovor::GetSomKatNotes - Выбор статуса договора</link>
+#end
+mnuSetKatNotesIcons Menu
+{
+- 'Настройки отображения пользовательских иконок',cmValue2,'Настройки отображения пользовательских иконок',,'',,sci1Esc;
+}

@@ -1,0 +1,610 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+#include pMarkFun.vih  // Функции для работы с маркерами и Pick-таблицами
+#include xlReport.Vih  //Excel
+//******************************************************************************
+
+Interface iNastRep 'Параметры отчета' ( , hcBCTO_Param_Otch_Akt, )DoAccept, EscClose, Cyan;
+  Show at (,,70,15);
+
+Create View
+Var
+  pNRec     : comp;
+
+  NumPick
+, NReport   : Word;
+
+  sShabl
+, sTitle
+, sPorSort
+, ID        : string;
+
+As select
+  if ( UserDeskRep.ResComp[40] = 0, '', RepGrLst.Name)
+    ( FieldName = fGrLstName )
+//------------------------------------------------------------------------
+, if (UserDeskRep.ResComp[7] <> 0, KatOrg.Name,
+    if (UserDeskRep.ResWord[17] <> 0, 'множественный выбор (' + String(UserDeskRep.ResWord[27]) + ')', ''))
+    ( FieldName = fKontr )
+//------------------------------------------------------------------------
+, if (UserDeskRep.ResComp[5] <> 0, KatMol.Name,
+    if (UserDeskRep.ResWord[15] <> 0, 'множественный выбор (' + String(UserDeskRep.ResWord[25]) + ')', ''))
+    ( FieldName = fMol )
+//------------------------------------------------------------------------
+, if (UserDeskRep.ResComp[6] <> 0, KatPodr.Name,
+    if (UserDeskRep.ResWord[16] <> 0, 'множественный выбор (' + String(UserDeskRep.ResWord[26]) + ')', ''))
+    (FieldName = fPodr)
+//------------------------------------------------------------------------
+, if (UserDeskRep.ResComp[8] <> 0, 'Договор № ' + Dogovor.NoDoc + DateToStr(Dogovor.dDoc, ' от DD/MM/YYYY'),
+    if (UserDeskRep.ResWord[18] <> 0, 'множественный выбор (' + String(UserDeskRep.ResWord[28]) + ')', ''))
+    (FieldName = fDogovor)
+//------------------------------------------------------------------------
+, if (UserDeskRep.ResComp[9] <> 0, 'Договор № ' + DogovorP.NoDoc + DateToStr(DogovorP.dDoc, ' от DD/MM/YYYY'),
+    if (UserDeskRep.ResWord[19] <> 0, 'множественный выбор (' + String(UserDeskRep.ResWord[29]) + ')', ''))
+    ( FieldName = fDogPut )
+//------------------------------------------------------------------------
+, *
+from
+
+  UserDeskRep
+, KatOrg
+, KatPodr
+, KatMOL
+, PickRep
+, Dogovor
+, Dogovor DogovorP
+, RepGrOne
+, RepGroup
+where
+((
+      UserName                == UserDeskRep.OwnName
+  AND word(NReport)           == UserDeskRep.nRep
+  AND UserDeskRep.ResComp[5]  == KatMol.NRec
+  AND UserDeskRep.ResComp[6]  == KatPodr.NRec
+  AND UserDeskRep.ResComp[7]  == KatOrg.NRec
+  AND UserDeskRep.ResComp[8]  == Dogovor.NRec
+  AND UserDeskRep.ResComp[9]  == DogovorP.NRec
+  AND UserDeskRep.ResComp[40] == RepGrLst.NRec
+  AND RepGrLst.nRec           == RepGrOne.cRepGrLst
+  AND RepGrOne.cRec           == RepGroup.nRec
+))
+
+;
+
+Parameters
+  NReport
+, pNRec
+;
+
+//******************************************************************************
+Var pxlrepsetup : xlrepsetup;
+//******************************************************************************
+
+Procedure GetPorSort;
+{
+  sPorSort := '';
+
+  _LOOP RepGrOne
+    {
+      if ( sPorSort <> '' )
+        sPorSort := sPorSort + ' / ';
+
+      sPorSort := sPorSort + RepGroup.Name;
+    }
+}
+
+
+var
+  iMarkFuncs : pMarkFun;       // Объект для работы с маркерами и Pick'ами
+
+//************************************************************************
+//************************************************************************
+// Окно редактирования настройки
+
+Window wFilterEdit 'Редактирование настройки' (, , sci1Esc) EscClose, Gray;
+  Show at (10,,75,14);
+
+Screen scrNakl ( , hcBCTO_Otch_Sost_Nakl, sci178Esc);
+  Table UserDeskRep;
+Fields
+  UserDeskRep.RepName     ('Наименование отчета',,)                               : NoProtect;
+  UserDeskRep.ResDate[1]  ('Укажите начальную дату формирования отчета',,sci1Esc) : [,'DD/MM/YYYY'], NoProtect;
+  UserDeskRep.ResDate[2]  ('Укажите конечную дату формирования отчета' ,,sci1Esc) : [,'DD/MM/YYYY'], NoProtect;
+  UserDeskRep.ResWord[3]  ('Установите фильтры',,sci1Esc)                         : NoProtect;
+  fKontr                  ('Установите фильтр по контрагенту',,sci1378Esc)        : PickButton, Protect;
+  fDogovor                ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fPodr                   ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fMol                    ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fGrLstName              ('Выберите порядок группировки',,sci13Esc)              : PickButton, Protect;
+  sPorSort                : Skip, Protect;
+  fDogPut                 ('Выберите договоры с товарами в пути',,sci1378Esc)     : PickButton, Protect;
+
+Buttons
+  cmValue2, , ,'Настройка Excel', , sci1Esc;
+<<
+
+  Наименование .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  `за период с` .@@@@@@@@@@ `по`.@@@@@@@@@@ <.Настройка шаблона.>
+
+  Фильтр:
+  [.] контрагент        ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] договор/соглашение` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] склад             ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] МОЛ               ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  Порядок группировки документов     .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Договоры "МТР в пути"  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+>>
+end;
+
+Screen scrAkt (, hcBCTO_Window_Red_NastrOtch, sci178Esc);
+  Table UserDeskRep;
+Fields
+  UserDeskRep.RepName     ('Наименование отчета',,)                               : NoProtect;
+  UserDeskRep.ResDate[1]  ('Укажите начальную дату формирования отчета',,sci1Esc) : [,'DD/MM/YYYY'], NoProtect;
+  UserDeskRep.ResDate[2]  ('Укажите конечную дату формирования отчета' ,,sci1Esc) : [,'DD/MM/YYYY'], NoProtect;
+  UserDeskRep.ResWord[3]  ('Установите фильтры',,sci1Esc)                         : NoProtect;
+  fKontr                  ('Установите фильтр по контрагенту',,sci1378Esc)        : PickButton, Protect;
+  fDogovor                ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fPodr                   ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fMol                    ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fGrLstName              ('Выберите порядок группировки',,sci13Esc) : PickButton, Protect;
+  sPorSort                : Skip, Protect;
+Buttons
+  cmValue2, , ,'Настройка Excel', , sci1Esc;
+<<
+
+  Наименование .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  `за период с` .@@@@@@@@@@ `по`.@@@@@@@@@@ <.Настройка шаблона.>
+
+  Фильтр:
+  [.] контрагент        ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] договор\соглашение` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] склад             ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] МОЛ               ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  Порядок группировки документов     .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Screen scrNU ( , hcBCTO_Window_Red_NastrOtch, sci178Esc);
+  Table UserDeskRep;
+Fields
+  UserDeskRep.RepName     ('Наименование отчета',,)                               : NoProtect;
+  UserDeskRep.ResDate[1]  ('Укажите начальную дату формирования отчета',,sci1Esc) : [,'DD/MM/YYYY'], NoProtect;
+  UserDeskRep.ResDate[2]  ('Укажите конечную дату формирования отчета' ,,sci1Esc) : [,'DD/MM/YYYY'], NoProtect;
+  UserDeskRep.ResWord[3]  ('Установите фильтры',,sci1Esc)                         : NoProtect;
+  fKontr                  ('Установите фильтр по контрагенту',,sci1378Esc)        : PickButton, Protect;
+  fDogovor                ('Установите фильтр',,sci1378Esc)                       : PickButton, Protect;
+  fDogPut                 ('Выберите договоры с товарами в пути',,sci1378Esc)     : PickButton, Protect;
+
+Buttons
+  cmValue2, , ,'Настройка Excel', , sci1Esc;
+<<
+
+  Наименование .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  `за период с` .@@@@@@@@@@ `по`.@@@@@@@@@@ <.Настройка шаблона.>
+
+  Фильтр:
+  [.] контрагент        ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] договор\соглашение` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  Договоры "МТР в пути" .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+>>
+end;
+
+HandleEvent
+
+cmValue2:
+  runinterface('xlrepsetup', 1, ID, UserDeskRep.ResName[5]);
+
+cmInit:
+  {
+    case NReport of
+      cgReport_4101: SetFormat(scrNakl);
+      cgReport_4102: SetFormat(scrNU);
+      cgReport_4115: SetFormat(scrAkt);
+    end;
+  }
+
+cmCheckRecord:
+  {
+    if ( UserDeskRep.ResDate[2] < UserDeskRep.ResDate[1] )
+      {
+        Message('Даты указаны некорректно!', Warning);
+        Abort;
+        Exit;
+      }
+
+    GetPorSort;
+  }
+
+cmPick:
+  {
+    var  tmpComp, tmpComp1 : comp;
+
+    Case CurField of
+      #fGrLstName:
+        {
+          if (RunInterface(GetRepGruppa, NReport, UserDeskRep.ResComp[40], '') <> cmCancel)
+            Set UserDeskRep.ResComp[40] := UserDeskRep.ResComp[40];
+
+          GetPorSort;
+        }
+      //------------
+      #fKontr:
+        {
+          iMarkFuncs.PickRep2Marker('KatOrg', NReport*10+7, UserDeskRep.ResComp[7], UserDeskRep.NRec);
+          if (RunInterface('GetSomeKontrPrim', True) <> cmCancel)
+            {
+              iMarkFuncs.DelPickRep(NReport*10+7, UserDeskRep.NRec);
+              iMarkFuncs.Marker2PickRep('KatOrg', NReport*10+7, UserDeskRep.ResComp[7], NumPick,
+                                        UserDeskRep.NRec);
+              if (NumPick > 1)
+                {
+                  Set UserDeskRep.ResWord[17] := NReport*10+7;
+                  Set UserDeskRep.ResWord[27] := NumPick;
+                }
+              else
+                {
+                  Set UserDeskRep.ResWord[17] := 0;
+                  Set UserDeskRep.ResComp[7]  := UserDeskRep.ResComp[7];
+                  Set UserDeskRep.ResWord[27] := NumPick;
+                }
+
+            }
+        }
+      //------------
+      #fDogovor :
+        {
+          tmpComp  := UserDeskRep.ResComp[8];
+          tmpComp1 := Comp(0);
+
+          iMarkFuncs.PickRep2Marker('MDogovor', NReport*10+8, UserDeskRep.ResComp[8], UserDeskRep.NRec);
+
+          if (RunInterface('GetSomeDogovor',
+                            Word(0),            // pVidDog,    вид документа - если задан будет установлен фильтр
+                            Word(0FFFFh),       // pStatus,    0-все документы, иначе маска РАЗРЕШЕННЫХ статусов
+                            Word(0),            // pDirect,    0-все документы, 1-продажа, 2-закупка
+                            Word(1),            // pAttach,    0-выбирать соглашения нельзя, 1-можно, 2-только соглашения
+                            True,               // OkOne,      TRUE - груповой выбор FALSE - только один
+                            tmpComp,            // prmDogovor, возвращаемый указатель на договор
+                            False,              // OneLevel,   показывать записи одного уровня (True), False - нет
+                            tmpComp1            // pOwn        ссылка на владельца уровня (действует если OneLevel = True) - ВОЗВРАЩАЕМЫЙ!
+                           ) <> cmCancel)
+            {
+              iMarkFuncs.DelPickRep(NReport*10+8, UserDeskRep.NRec);
+              iMarkFuncs.Marker2PickRep('MDogovor', NReport*10+8, UserDeskRep.ResComp[8], NumPick,
+                                        UserDeskRep.NRec)
+              if (NumPick > 1)
+                {
+                  Set UserDeskRep.ResWord[18] := NReport*10+8;
+                  Set UserDeskRep.ResWord[28] := NumPick;
+                }
+              else
+                {
+                  Set UserDeskRep.ResWord[18] := 0;
+                  Set UserDeskRep.ResComp[8]  := UserDeskRep.ResComp[8];
+                  Set UserDeskRep.ResWord[28] := NumPick;
+                }
+            }
+        }
+      //-------------
+      #fMOL:
+        {
+          iMarkFuncs.DelPick(Word(8));
+          iMarkFuncs.PickRep2Pick(NReport*10+5, Word(8), UserDeskRep.ResComp[5], UserDeskRep.NRec);
+
+          if (RunInterface('GetSomeMOL') <> cmCancel)
+            {
+              iMarkFuncs.DelPickRep(NReport*10+5, UserDeskRep.NRec);
+              iMarkFuncs.Pick2PickRep(word(8), NReport*10+5, UserDeskRep.ResComp[5], NumPick, UserDeskRep.NRec);
+
+              if (NumPick > 1)
+                {
+                  Set UserDeskRep.ResWord[15] := NReport*10+5;
+                  Set UserDeskRep.ResWord[25] := NumPick;
+                }
+              else
+                {
+                  Set UserDeskRep.ResWord[15] := 0;
+                  Set UserDeskRep.ResComp[5]  := UserDeskRep.ResComp[5];
+                  Set UserDeskRep.ResWord[25] := NumPick;
+                }
+            }
+        }
+      //-------------
+      #fPodr:
+        {
+          iMarkFuncs.DelPick(Word(11));
+          iMarkFuncs.PickRep2Pick(NReport*10+6, Word(11), UserDeskRep.ResComp[6], UserDeskRep.NRec);
+
+          if (RunInterface('GetSomeSklad') <> cmCancel)
+            {
+              iMarkFuncs.DelPickRep(NReport*10+6, UserDeskRep.NRec);
+              iMarkFuncs.Pick2PickRep(word(11), NReport*10+6, UserDeskRep.ResComp[6], NumPick, UserDeskRep.NRec);
+
+              if (NumPick > 1)
+                {
+                  Set UserDeskRep.ResWord[16] := NReport*10+6;
+                  Set UserDeskRep.ResWord[26] := NumPick;
+                }
+              else
+                {
+                  Set UserDeskRep.ResWord[16] := 0;
+                  Set UserDeskRep.ResComp[6]  := UserDeskRep.ResComp[6];
+                  Set UserDeskRep.ResWord[26] := NumPick;
+                }
+
+            }
+        }
+      //-------------
+      #fDogPut :
+        {
+          tmpComp  := UserDeskRep.ResComp[9];
+          tmpComp1 := Comp(0);
+
+          iMarkFuncs.PickRep2Marker('MDogovor', NReport*10+9, UserDeskRep.ResComp[9], UserDeskRep.NRec);
+
+          if (RunInterface('GetSomeDogovor',
+                            Word(0),            // pVidDog,    вид документа - если задан будет установлен фильтр
+                            Word(0FFFFh),       // pStatus,    0-все документы, иначе маска РАЗРЕШЕННЫХ статусов
+                            Word(0),            // pDirect,    0-все документы, 1-продажа, 2-закупка
+                            Word(1),            // pAttach,    0-выбирать соглашения нельзя, 1-можно, 2-только соглашения
+                            True,               // OkOne,      TRUE - груповой выбор FALSE - только один
+                            tmpComp,            // prmDogovor, возвращаемый указатель на договор
+                            False,              // OneLevel,   показывать записи одного уровня (True), False - нет
+                            tmpComp1            // pOwn        ссылка на владельца уровня (действует если OneLevel = True) - ВОЗВРАЩАЕМЫЙ!
+                           ) <> cmCancel)
+            {
+              iMarkFuncs.DelPickRep(NReport*10+9, UserDeskRep.NRec);
+              iMarkFuncs.Marker2PickRep('MDogovor', NReport*10+9, UserDeskRep.ResComp[9], NumPick,
+                                        UserDeskRep.NRec)
+              if (NumPick > 1)
+                {
+                  Set UserDeskRep.ResWord[19] := NReport*10+9;
+                  Set UserDeskRep.ResWord[29] := NumPick;
+                }
+              else
+                {
+                  Set UserDeskRep.ResWord[19] := 0;
+                  Set UserDeskRep.ResComp[9]  := UserDeskRep.ResComp[9];
+                  Set UserDeskRep.ResWord[29] := NumPick;
+                }
+            }
+        }
+    end;
+
+    ReScanPanel(#UserDeskRep);
+  }
+
+end;
+end;
+
+//*****************************************************************************
+
+Panel pOptLst;
+  Table UserDeskRep;
+
+Browse SelFilter('Enter - сформировать отчет', , sci1478Esc);
+  Show  at (,,,12);
+  Table UserDeskRep;
+
+Fields
+   UserDeskRep.RepName                    #3'Наименование отчета', '' : [30], Protect;
+   UserDeskRep.dRep                       #3'Дата',                '' : [10,'DD/MM/YYYY'], Protect, noAutoSize;
+   if(UserDeskRep.ResWord[40]=0, '', 'V')                             : [1], Skip, noAutoSize;
+end; // Browse
+
+Screen scrButton('',,sci1Esc);
+  Show at (, 13, , );
+Buttons
+  cmOk    , Default,,'Печать',,sci1Esc;
+  cmValue1,         ,, 'Настройка отчета',, sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+   <. Сформировать .>   <.  Настройка   .>   <.    Отмена    .>
+>>
+end; // Screen
+end;
+
+HandleEvent
+
+cmValue1 :
+  PutCommand(cmEdit);
+
+cmSetDefault:
+  {
+    SelectPanel(#UserDeskRep);
+    UserDeskRep.RepName := 'Без имени';
+    UserDeskRep.dRep    := Cur_Date;
+    UserDeskRep.nRep    := nReport;
+    UserDeskRep.OwnName := UserName;
+
+    ID := 'L_SoprDoc\' + sShabl;
+
+    UserDeskRep.ResName[5] := TranslatePath('%ClientStartPath%XLS\'+ ID + '.xlt');
+
+    PutCommand(cmEdit);
+  }
+
+cmEdit: // Редактирование настройки
+  {
+    RunWindow(WFilterEdit);
+    RescanPanel(#UserDeskRep);
+  }
+
+cmPositionChanged:
+  GetPorSort;
+
+cmDelOnProtect:
+  case CurField of
+    #fGrLstName:
+      {
+        set UserDeskRep.ResComp[40] := 0;
+        GetPorSort;
+      }
+    #fMol :
+       {
+         if (fMol <> '')
+           if (Message(''#3'Удалить выбор?', YesNo + mfSwapButtons) = cmYes)
+             {
+               iMarkFuncs.DelPickRep(NReport*10+5, UserDeskRep.NRec);
+               Set UserDeskRep.ResComp[5]  := Comp(0);
+               Set UserDeskRep.ResWord[15] := 0;
+               Set UserDeskRep.ResWord[25] := 0;
+               RescanPanel(#UserDeskRep);
+               Set UserDeskRep.ResWord[3] := UserDeskRep.ResWord[3] and not 8;
+             }
+
+         Stop;
+       }
+     #fPodr :
+       {
+         if (fPodr <> '')
+           if (Message(''#3'Удалить выбор?', YesNo + mfSwapButtons) = cmYes)
+             {
+               iMarkFuncs.DelPickRep(NReport*10+6, UserDeskRep.NRec);
+               Set UserDeskRep.ResComp[6]  := Comp(0);
+               Set UserDeskRep.ResWord[16] := 0;
+               Set UserDeskRep.ResWord[26] := 0;
+               RescanPanel(#UserDeskRep);
+               Set UserDeskRep.ResWord[3] := UserDeskRep.ResWord[3] and not 4;
+             }
+
+         Stop;
+       }
+     #fKontr :
+       {
+         if (fKontr <> '')
+           if (Message(''#3'Удалить выбор?', YesNo + mfSwapButtons) = cmYes)
+             {
+               iMarkFuncs.DelPickRep(NReport*10+7, UserDeskRep.NRec);
+               Set UserDeskRep.ResComp[7]  := Comp(0);
+               Set UserDeskRep.ResWord[17] := 0;
+               Set UserDeskRep.ResWord[27] := 0;
+               RescanPanel(#UserDeskRep);
+               Set UserDeskRep.ResWord[3] := UserDeskRep.ResWord[3] and not 1;
+             }
+
+         Stop;
+       }
+     #fDogovor :
+       {
+         if ((UserDeskRep.ResWord[18] <> Word(0)) or (UserDeskRep.ResComp[8] <> Comp(0)))
+           if (Message(''#3'Удалить выбор?', YesNo + mfSwapButtons) = cmYes)
+             {
+               iMarkFuncs.DelPickRep(NReport*10+8, UserDeskRep.NRec);
+               Set UserDeskRep.ResWord[18] := 0;
+               Set UserDeskRep.ResComp[8]  := 0;
+               Set UserDeskRep.ResWord[28] := 0;
+               RescanPanel(#UserDeskRep);
+               Set UserDeskRep.ResWord[3] := UserDeskRep.ResWord[3] and not 2;
+             }
+
+         Stop;
+       }
+     #fDogPut :
+       {
+         if ((UserDeskRep.ResWord[19] <> Word(0)) or (UserDeskRep.ResComp[9] <> Comp(0)))
+           if (Message(''#3'Удалить выбор?', YesNo + mfSwapButtons) = cmYes)
+             {
+               iMarkFuncs.DelPickRep(NReport*10+9, UserDeskRep.NRec);
+               Set UserDeskRep.ResWord[19] := 0;
+               Set UserDeskRep.ResComp[9]  := 0;
+               Set UserDeskRep.ResWord[29] := 0;
+               RescanPanel(#UserDeskRep);
+             }
+
+         Stop;
+       }
+  end;
+
+cmInit :
+  {
+    SelectPanel(#UserDeskRep);
+    SelectField(#UserDeskRep.RepName);
+
+    case NReport of
+      cgReport_4101:
+        {
+          sShabl := 'OtchNakl';
+          sTitle := '"Отчет по состоянию накладных на получение МЦ"';
+          SetHelpAndStatusContext(SelFilter, -1, -1, 'BCTO_Otch_Sost_Nakl');
+          SetHelpAndStatusContext(scrButton, -1, -1, 'BCTO_Otch_Sost_Nakl');
+          SetHelpAndStatusContext(scrButton, -1, -1, 'BCTO_Otch_Sost_Nakl');
+        }
+      cgReport_4102:
+        {
+          sShabl := 'OtchUN';
+          sTitle := '"Отчет о поставках за период"';
+        }
+      cgReport_4115:
+        {
+          sShabl := 'OtchAkt';
+          sTitle := '"Отчет по состоянию актов о приемке материалов"';
+        }
+    end;
+
+    ID := 'L_SoprDoc\' + sShabl;
+
+    SetTitle('Параметры отчета ' + sTitle);
+  }
+
+cmInsertRecord :
+  Insert current UserDeskRep;
+
+cmDeleteRecord :
+  if (Message(''#3'Удалить текущую запись?', YesNo + mfSwapButtons) <> cmYes)
+    Abort;
+  else
+    Delete current UserDeskRep;
+
+cmUpdateRecord :
+  Update current UserDeskRep;
+
+cmOk:
+  PutCommand(cmDefault);
+
+cmDefault:
+  {
+    if (NOT UpdateTable)
+      Exit;
+
+    if not pxlrepsetup.checkParam(0, ID, UserDeskRep.ResName[5])
+      Exit;
+
+    pNRec := UserDeskRep.NRec;
+
+    Update UserDeskRep Set ResWord[40] := 0;
+
+    if (GetFirst UserDeskRep where ((pNRec == UserDeskRep.NRec)) = tsOk)
+      {
+        Set UserDeskRep.ResWord[40] := 1;
+
+        if (Update current UserDeskRep <> tsOk)
+          Exit;
+      }
+
+    RescanPanel(#UserDeskRep);
+  }
+
+cmClose:
+  pNRec := Comp(0);
+
+cmCancel:
+  pNRec := Comp(0);
+
+
+End; // HandleEvent
+end.

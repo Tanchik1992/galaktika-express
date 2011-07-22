@@ -1,0 +1,431 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// внутренние функции формирование партий
+//******************************************************************************
+
+/*
+ здесь находятся функции формирования названия партии (GetnameP)
+ и создания новой записи в KatParty (MakeNewParty_2).
+
+ Для доступа из других интерфейсов реализована функция MakeNewParty_2
+ Она работает независимо от таблиц. Передача данны осуществляется через параметр tNewPartyRec
+ Изменить его структуру можно в MkParty.vih
+
+ Для накладных - заполнение записи tNewPartyRec осуществляется в функции MakeNewParty(MkParty.vip)
+*/
+
+//формирование названия партии
+Function GetNameP(
+          sTune    : string;            // 1. системная настройка + параметры константы
+                                        // Например: &&Партия&D8&K10.....
+                                        // где & и DNKUTRMB - параметры
+                                        //     цифра        - количество выводимых символов
+                                        //     &&ХХХХХ      - строка константа
+          DataD    : Date;              // 2. D - Дата документа
+          NomD     : tDocNumber;        // 3. N - номер документа
+          NameK    : tNameOrg;          // 4. K - название контрагента
+          KodK     : s20;               // 5. U - код контрагента
+          CodeK    : s20;               // 5.1. C - внутренний номер контрагента
+          NameN    : tName;             // 6. T - название накладной
+          cValDoc  : comp;
+          NomR     : string[20];        // 7. R - уникальный номер
+          nameM    : tName;             // 8. M - название МЦ
+          kodM     : tBarKod;           // 9. B - бар код
+          DocPrice : double;            // 10. PD - цена документа
+          DocVal   : string[7];         // 11. VD - символ валюты документа
+          OrdPrice : double;            // 12. PO - цена ордера
+          OrdVal   : string[7];         // 13. VO - символ валюты ордера
+          mask     : word;              // 14. маска вывода ( 111111111111 - первый бит слева дата... 12 бит - валюта ордера
+          FactoryPrice  : string;
+          FactoryProcNac: string
+                 ): string;
+
+{
+  if sTune = ''
+    sTune := '&D[10] &N[40] &K[80] &U[20] &C[20] &T[80] &R[20] &M[80] &B[30] &PD[20] &VD[7] &PO[20] &VO[7] &ZC[20] &PN[10]';
+
+  var sRes    : tName;       sRes    := '';             // Возвращаемое название партии
+  var i       : word;        i       := 0;              // указатель на символ в настройке
+  var endstr  : word;        endstr  := Length(sTune);
+  var boPar   : boolean;     boPar   := FALSE;
+  var boStr   : boolean;     boStr   := FALSE;
+  var key     : word;        key     := 0;
+  var param   : word;        param   := 0;
+  var param_1 : byte;        param_1 := 0;
+  var param_2 : byte;        param_2 := 0;
+  var sTmp    : tName;       sTmp    := '';
+  var sFormatDate: string;   sFormatDate := sGetTune('Party.FormatDate');
+  var sShortDate : string;   Replace(sFormatDate, 'YYYY', 'YY');
+
+  if InStr('&', sTune) > 1
+    sRes := sRes + SubStr(sTune, 1, InStr('&', sTune)-1);
+
+  do
+    {
+      i := i + 1;
+
+      if (SubStr(sTune, i, 1) = '&')
+        {
+          sTmp := '';
+          key := key + 1;
+          if ( 1 = ((key+2) mod 2) )            // один & - параметр
+            boPar := TRUE;
+          else
+            {                                   // два && - &
+              boPar := FALSE;
+              sRes := sRes + '&';
+              key := 0;
+            }
+        }
+      else
+        {
+           key := 0;
+           if not ((i > endstr) OR (SubStr(sTune, i+1, 1) = '&'))
+             sTmp := sTmp + SubStr(sTune, i, 1);
+           else
+             {
+               // образование строки
+               if boPar
+                 {                       // параметр
+                   param_1 := InStr('[', sTmp + SubStr(sTune, i, 1));
+                   param_2 := InStr(']', sTmp + SubStr(sTune, i, 1));
+
+                   if ((param_1 <> 0) AND (param_2 <> 0))
+                     boStr := FALSE;
+                   else
+                     {
+                       param_1 := 0;
+                       param_2 := 0;
+                       boStr := TRUE;
+                     }
+
+                   param := integer(SubStr(sTmp+ SubStr(sTune, i, 1), param_1+1, param_2-param_1-1));
+
+                   var sTPT: string;  sTPT := sTmp + SubStr(sTune, i, 1);
+                   var wTPT: word;    wTPT := Length(sTPT);
+                   var wS1: word;     wS1 := 2;
+                   var wS2: word;     wS2 := param_2+1;
+                   var wL1: word;     wL1 := wTPT-1;
+                   var wL2: word;     wL2 := wTPT-param_2;
+                   var sSub: string;  sSub := SubStr(sTPT, if(boStr, wS1, wS2), if(boStr, wL1, wL2));
+                   var wDecT: word;   wDecT := if (boGetTune('Oper.MultiCurrReg'),
+                                                        GetPrecisionGroup('brForSopr_VPrice'),
+                                                        GetPrecisionGroup('brForSopr_Price'));
+                   var wDecV: word;   wDecV := if (cValDoc = 0,
+                                                        GetPrecisionGroup('brForSopr_Price'),
+                                                        GetPrecisionGroup('brForSopr_VPrice'));
+
+                   case Upcase(SubStr(sTPT, 1, 1)) of
+                   //---------------------------------------------------------
+                     'D':
+                       {
+                         if (mask AND 1) <> 0
+                           case param of
+                           //***********
+                             0:
+                               sRes := sRes + SubStr(DateToStr(DataD, sFormatDate), 1, 10);
+                           //***********
+                             1..7:
+                               sRes := sRes + SubStr(DateToStr(DataD, sShortDate), 1, param);
+                           //***********
+                             8:
+                               sRes := sRes + DateToStr(DataD, sShortDate);
+                           //***********
+                             9:
+                               sRes := sRes + SubStr(DateToStr(DataD, sFormatDate), 1, param);
+                           //***********
+                             10:
+                               sRes := sRes + DateToStr(DataD, sFormatDate);
+                           //***********
+                             else
+                               sRes := sRes + SubStr(DateToStr(DataD, sFormatDate), 1, 10);
+                           //***********
+                           end;
+
+                         sRes := sRes + sSub;
+                       }
+                   //---------------------------------------------------------
+                     'N':
+                       sRes := sRes + if ((mask AND    2) = 0, '', SubStr(NomD,  1, if(boStr, 40, param))) + sSub;
+                   //---------------------------------------------------------
+                     'K':
+                       sRes := sRes + if ((mask AND    4) = 0, '', SubStr(NameK, 1, if(boStr, 20, param))) + sSub;
+                   //---------------------------------------------------------
+                     'U':
+                       sRes := sRes + if ((mask AND    8) = 0, '', SubStr(KodK,  1, if(boStr, 20, param))) + sSub;
+                   //---------------------------------------------------------
+                     'T':
+                       sRes := sRes + if ((mask AND   16) = 0, '', SubStr(NameN, 1, if(boStr, 80, param))) + sSub;
+                   //---------------------------------------------------------
+                     'R':
+                       sRes := sRes + if ((mask AND   32) = 0, '', SubStr(NomR,  1, if(boStr, 20, param))) + sSub;
+                   //---------------------------------------------------------
+                     'M':
+                       sRes := sRes + if ((mask AND   64) = 0, '', SubStr(NameM, 1, if(boStr, 80, param))) + sSub;
+                   //---------------------------------------------------------
+                     'B':
+                       sRes := sRes + if ((mask AND  128) = 0, '', SubStr(KodM,  1, if(boStr, 30, param))) + sSub;
+                   //---------------------------------------------------------
+                     'C':
+                       sRes := sRes + if ((mask AND 8192) = 0, '', SubStr(CodeK, 1, if(boStr, 20, param))) + sSub;
+                   //---------------------------------------------------------
+                   end;
+
+                   case Upcase(SubStr(sTPT, 1, 2)) of
+                   //---------------------------------------------------------
+                     'PD':
+                       if (mask AND 256) = 0
+                         sRes := sRes + sSub;
+                       else
+                         if boStr
+                           sRes := sRes + trim(String(DocPrice, 15, if (cValDoc = 0,
+                                                                        GetPrecisionGroup('brForSopr_Price'),
+                                                                        GetPrecisionGroup('brForSopr_VPrice'))))
+                                          + SubStr(sTPT, wS1, Length(sTmp+SubStr(sTune, i, 2))-1);
+                         else
+                           sRes := sRes + trim(String(DocPrice, param,
+                                                                if (cValDoc = 0,
+                                                                        GetPrecisionGroup('brForSopr_Price'),
+                                                                        GetPrecisionGroup('brForSopr_VPrice'))))
+                                          + SubStr(sTPT, wS2, Length(sTmp+SubStr(sTune, i, 2))-param_2);
+                   //---------------------------------------------------------
+                     'VD':
+                       sRes := sRes + if ((mask AND  512) = 0, '', SubStr(DocVal, 1, if(boStr, 7, param))) + sSub;
+                   //---------------------------------------------------------
+                     'PO':
+                       sRes := sRes + if ((mask AND 1024) = 0, '', trim(String(OrdPrice, if(boStr, 15, param), wDecT))) + sSub;
+                   //---------------------------------------------------------
+                     'VO':
+                       sRes := sRes + if ((mask AND 2048) = 0, '', SubStr(OrdVal, 1, if(boStr, 7, param))) + sSub;
+                   //---------------------------------------------------------
+                     'ZC':
+                        if (mask AND 4096) = 0
+                          sRes := sRes + sSub;
+                        else
+                          if boStr
+                            sRes := sRes + trim(String(FactoryPrice, 20, wDecV))
+                                         + SubStr(sTPT, wS1, Length(sTmp+SubStr(sTune, i, 2))-1);
+                          else
+                            sRes := sRes + trim(String(FactoryPrice, param, wDecV))
+                                         + SubStr(sTPT, wS2, Length(sTmp+SubStr(sTune, i, 2))-param_2);
+                   //---------------------------------------------------------
+                     'PN':
+                       sRes := sRes + if ((mask AND 16384) = 0, '', SubStr(FactoryProcNac, 1, if(boStr, 10, param))) + sSub;
+                   //---------------------------------------------------------
+                   end;
+                 }
+             }
+        }
+    }
+  While (i <= endstr);
+
+  getnamep := lTrim(sRes, ' ');
+}
+
+//******************************************************************************
+
+#include soprgen2.vpp
+
+//******************************************************************************
+
+//формирование партии
+Function GetNewPartyName(NewPartyRec : tNewPartyRec;
+                         ProtParty
+                       , AutoSetParty: word;
+                     var isNakl      : boolean;
+                     var Kode
+                       , sNewParty   : string
+                        ): boolean;
+var
+  NewMask: word;
+{
+  case NewPartyRec.KatSopr_VidSopr of
+  //---------------------------------
+    101..103, 1411:
+      isNakl := TRUE;
+  //---------------------------------
+    else
+      isNakl := FALSE;
+  //---------------------------------
+  end;
+
+  Result := FALSE;
+
+  NewMask := 0;
+
+  if ( boGetTune('Party.NeedLink2UKS') AND ( NewPartyRec.Sopr_cUKS = 0 ) )
+    {
+      if isNakl
+        if (ProtParty = 1)
+          {
+            frmAutoParty.write (NewPartyRec.KatMC_Name);
+            frmAutoParty.SkipFormat (1);
+            frmAutoParty.write ('не создана (не указан объект строительства)');
+          }
+
+      Exit;
+    }
+
+  if boGetTune ('Party.Mask.DataSopr')        NewMask := NewMask +     1;
+  if boGetTune ('Party.Mask.NumSopr')         NewMask := NewMask +     2;
+  if boGetTune ('Party.Mask.NameKontr')       NewMask := NewMask +     4;
+  if boGetTune ('Party.Mask.KodKontr')        NewMask := NewMask +     8;
+  if boGetTune ('Party.Mask.NameSopr')        NewMask := NewMask +    16;
+  if boGetTune ('Party.Mask.KodParty')        NewMask := NewMask +    32;
+  if boGetTune ('Party.Mask.NameMC')          NewMask := NewMask +    64;
+  if boGetTune ('Party.Mask.BarKod')          NewMask := NewMask +   128;
+  if boGetTune ('Party.Mask.DocPrice')        NewMask := NewMask +   256;
+  if boGetTune ('Party.Mask.DocVal')          NewMask := NewMask +   512;
+  if boGetTune ('Party.Mask.OrdPrice')        NewMask := NewMask +  1024;
+  if boGetTune ('Party.Mask.OrdVal')          NewMask := NewMask +  2048;
+  if boGetTune ('Party.Mask.FactoryPrice')    NewMask := NewMask +  4096;
+  if boGetTune ('Party.Mask.CodeKontr')       NewMask := NewMask +  8192;
+  if boGetTune ('Party.Mask.FactoryProcNac')  NewMask := NewMask + 16384;
+
+  if NewMask = 0
+    {
+      Message('Не настроено автоматическое формирование названия партии.'#13+
+              'Установите параметры генерации названия партии и маску названия партии в настройке.', CancelButton);
+      Exit;
+    }
+
+  if (Not ReadMyDsk(kode, '_KatPartyCode_', TRUE) OR (kode = ''))
+    if (wGetTune('FN.AvtoNum') = 0)
+      {
+        kode := GetLastNumD(60);
+
+        if (Length(sGetTune('Party.BKod')) <> 0)
+          kode := sGetTune('Party.BKod') + kode;
+      }
+    else
+      if (sGetTune('Party.BKod') <> 0)
+        {
+          if (GetLast FastFirstRow KatParty where ((sGetTune('Party.BKod')                    <<= KatParty.kod  AND
+                                                    padch(sGetTune('Party.BKod'), ''#255, 20) >>= KatParty.kod)) = tsOk)
+            kode := sGetTune('Party.BKod') + NextNumStr(SubStr(KatParty.Kod, Length(sGetTune('Party.BKod')) + 1,  Length(KatParty.kod) -  Length(sGetTune('Party.BKod'))));
+          else
+            kode := sGetTune('Party.BKod')  + '000001';
+        }
+      else
+        {
+          if (GetLast FastFirstRow KatParty ordered by KatParty.Kod = tsOk)
+            kode := NextNumStr(KatParty.Kod);
+          else
+            kode := '000001';
+        }
+
+  SaveMyDsk('', '_KatPartyCode_');
+
+  SetRoundFormat(NewPartyRec.KatSopr_VidSopr); //для формирования имени партии с ценой из ордера
+
+  sNewParty := GetNameP(
+                   sGetTune('Party.SnParty'),
+                   NewPartyRec.KatSopr_DSopr,
+                   NewPartyRec.KatSopr_NSopr,
+                   NewPartyRec.KatOrg_Name,
+                   NewPartyRec.KatOrg_UNN,
+                   NewPartyRec.KatOrg_Code,
+                   NewPartyRec.KatSopr_Name,
+                   NewPartyRec.KatSopr_cVal,
+                   Kode,
+                   NewPartyRec.KatMC_Name,
+                   NewPartyRec.KatMC_BarKod,
+                   NewPartyRec.Sopr_Cena,
+                   NewPartyRec.Sopr_Valuta,
+                   NewPartyRec.OrdB_Cena,
+                   NewPartyRec.OrdB_Valuta,
+                   NewMask,
+                   NewPartyRec.FactoryPrice,
+                   NewPartyRec.FactoryProcNac
+                 );
+
+  Result := TRUE;
+}
+
+Function MakeNewParty_2 (NewPartyRec: tNewPartyRec; ProtParty, AutoSetParty: word): comp;
+var
+  NameP, Kode: string;
+  isNakl: boolean;
+{
+  MakeNewParty_2 := 0;
+
+  if not GetNewPartyName(NewPartyRec, ProtParty, AutoSetParty, isNakl, Kode, NameP)
+    Exit;
+
+  if (NameP = '')
+    NameP := if(NewPartyRec.SpSopr_nSertif <> '', NewPartyRec.SpSopr_nSertif + '.', '') + Kode;
+
+  if isNakl
+    {
+      var flag: boolean;
+      if (ReadMyDsk(flag, '_FlagKatPartyName_', TRUE))
+        if flag
+          {
+            if GetFirst FastFirstRow KParty where ((NameP                 ==  KParty.Name  AND
+                                                    NewPartyRec.Tip_kons  ==  KParty.kons)) = tsOk
+              {
+                SaveMyDsk(if(NewPartyRec.SpSopr_nSertif='', '',
+                                NewPartyRec.SpSopr_nSertif+'.') + NameP + Kode, '_KatPartyName_');
+                Exit;
+              }
+
+            SaveMyDsk(if(NewPartyRec.SpSopr_nSertif<>'', NewPartyRec.SpSopr_nSertif+'.', '')+NameP, '_KatPartyName_');
+            Exit;
+          }
+    }
+
+  if (GetFirst FastFirstRow KParty where ((NameP                 ==  KParty.Name AND
+                                           NewPartyRec.Tip_kons  ==  KParty.kons)) = tsOk)
+    {
+      MakeNewParty_2 := KParty.NRec;
+
+      if isNakl
+        if (ProtParty = 1)
+          {
+            frmAutoParty.write (NewPartyRec.KatMC_Name);
+            frmAutoParty.write (KParty.Name);
+            frmAutoParty.write ('существовала');
+          }
+
+        Exit;
+    }
+
+  NameP := if(NewPartyRec.SpSopr_nSertif<>'', NewPartyRec.SpSopr_nSertif+'.', '')+NameP;
+
+  ClearBuffer(#KParty);
+  KParty.Kod     := Kode;
+  KParty.nSertif := NewPartyRec.SpSopr_nSertif;
+  KParty.Name    := NameP;
+  KParty.cOrgPar := NewPartyRec.KatSopr_cOrgBase;
+  KParty.cValPar := NewPartyRec.KatSopr_cVal;
+
+  var dParGodn: date;
+  dParGodn := dGetTune('Party.KatPartydGodn');
+
+  if (dParGodn = ZeroDate)
+    dParGodn := Date(31, 12, Year(Cur_Date) + 1);
+
+  KParty.dGodn          := dParGodn;
+  KParty.cMC            := NewPartyRec.KatMC_NRec;
+  KParty.kons           := NewPartyRec.Tip_kons;
+  KParty.CreateDateTime := _CurDateTime;
+  KParty.GodenDateTime  := _DateTime1(dParGodn, Time(23,59,0,0));
+
+  KParty.cGroupParty := coGetTune('Party.DefGrParty');
+
+  if ((insert current KParty) = tsOk)
+    {
+      MakeNewParty_2 := KParty.NRec;
+
+      if isNakl
+        if (ProtParty = 1)
+          {
+            frmAutoParty.write (NewPartyRec.KatMC_Name);
+            frmAutoParty.write (KParty.Name);
+            frmAutoParty.write ('создана');
+          }
+    }
+}
+
+//******************************************************************************

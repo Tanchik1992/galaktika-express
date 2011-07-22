@@ -1,0 +1,834 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// _
+//********************************************************************************
+
+#include soprc45t.vpp
+#include SHManager.vih
+#include SpNext.vih
+#include oEdIzm.vih
+#include SDfuns.vih
+#include SoprDoc.vih
+#include KontrBal.vih
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.vih           // функции целевого учета
+#end
+
+#ifdef ATL51
+  #include akt_spis.vih
+  #include sopinmov.vih
+  #include KARTSTOR.vih
+#end
+
+//********************************************************************************
+
+#doc
+Назначение:
+  Отфактуровка МЦ
+
+Параметры:
+  c1 - ссылка на сопроводительный документ
+#end
+
+//********************************************************************************
+
+Interface MakePos201fromKN;//, cacheable;
+
+#include SpNext.var
+#include oEdIzm.var
+#include SDfuns.var
+#include KontrBal.var
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+#end
+
+Create view
+var
+  c1                : comp;//KatSopr.NRec
+  s_SimvRub, BNSopr,
+  BNSopr3, BNSopr4   : string;
+  ShowRep            : boolean;
+  begdate, enddate   : Date;
+  NN_KN, p1, wTune   : word;
+  Curse              : double;
+(
+  Valut,
+  Valut3,
+  Valut4,
+  picked,
+  picked3,
+  picked4
+ )
+
+As select
+  if(MTabReestrforKN.KatSoprcVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV),
+  if(KatSopr32.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal3.SimVolV),
+  if(KatSopr42.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal4.SimVolV),
+  if(MTabReestrforKN.Pick<>0, '√', ' '),
+  if(MTabReestrforKN2.Pick<>0, '√', ' '),
+  if(MTabReestrforKN3.Pick<>0, '√', ' ')
+
+from
+  KatSopr, SpSopr, KatMC, KatUsl, Katparty, KatOrg, KlVal, SpDocNal, CursVal,
+  MTabReestrforKN, MTabOtchet, MTabKatSopr, SoprOrdB, KatPodr, KatMol,
+  SklOrder, SpOrder, BaseDoc, SpStep, DoRes,
+  KatMC    KatMC2,
+  KatMC    KatMC3,
+  KatParty KatParty3,
+  KlVal    KlVal3,
+  KatNotes KatNotes3,
+  KatMC    KatMC4,
+  KatParty KatParty4,
+  KlVal    KlVal4,
+  SpSopr   SpSopr2,  //накладные на отпуск
+  SpSopr   SpSopr3,  //внутреннее перемещение
+  SpSopr   SpSopr4,  //акт на списание
+  katSopr  KatSopr2,
+  katSopr  KatSopr3,
+  katSopr  KatSopr32,
+  katSopr  KatSopr4,
+  katSopr  KatSopr42,
+  SoprOrdB SoprOrdB3,
+  SoprOrdB SoprOrdB4,
+  KatPodr  KatPodr3,
+  KatPodr  KatPodr4,
+  KatMOL   KatMol3,
+  KatMOL   KatMol4,
+  KatPodr  PodrTo3,
+  KatMOL   MolTo3,
+  KatPodr  PodrFrom2,
+  KatMOL   MolFrom2,
+  KatPodr  PodrFrom3,
+  KatMOL   MolFrom3,
+  KatPodr  PodrFrom4,
+  KatMOL   MolFrom4
+, X$Users
+, StepDoc
+, Oborot
+, ActSaldo
+, SoprHoz
+, MTabReestrforKN2
+, MTabReestrforKN3
+, SpecZatr
+
+where
+ ((
+   c1                             == KatSopr.NRec      AND
+   KatSopr.NRec                   == SpSopr.cSopr      AND
+   word(1)                        == SpSopr.PrMC       AND
+   SpSopr.cMCUSL                  == KatMC.NRec        AND
+   SpSopr.NRec                    == SoprOrdB.cSpSopr  AND
+   SoprOrdB.cPodr                 == KatPodr.NRec      AND
+   SoprOrdB.cMol                  == KatMol.NRec       AND
+   word(201)                      == SpSopr2.VidSopr   AND
+   SpSopr.cParty                  == SpSopr2.cParty    AND
+   SpSopr2.cSopr                  == KatSopr2.NRec     AND
+   SpSopr2.cMCUSL                 == KatMC2.NRec       AND
+   SpSopr2.cParty                 == Katparty.NRec     AND
+   KatSopr2.cOrgBase              == KatOrg.NRec       AND
+   KatSopr2.cPodrFrom             == PodrFrom2.NRec    AND
+   KatSopr2.cMolFrom              == MolFrom2.NRec     AND
+   MTabReestrforKN.KatSoprcVal    == KlVal.NRec        AND
+   coSpSopr                       == SpecZatr.coTable  AND
+   SpSopr.nRec                    == SpecZatr.cSpec    AND
+
+   word(600)                      == SpSopr3.VidSopr   AND
+   SpSopr.cParty                  == SpSopr3.cParty    AND
+   SpSopr.NRec                    == SoprOrdB3.cSpSopr AND
+   SoprOrdB3.cPodr                == KatPodr3.NRec     AND
+   SoprOrdB3.cMol                 == KatMol3.NRec      AND
+   SpSopr3.cMCUSL                 == KatMC3.NRec       AND
+   SpSopr3.cParty                 == Katparty3.NRec    AND
+   SpSopr3.cSopr                  == KatSopr3.NRec     AND
+   KatSopr3.cPodrFrom             == PodrFrom3.NRec    AND
+   KatSopr3.cMolFrom              == MolFrom3.NRec     AND
+   KatSopr3.cPodrTo               == PodrTo3.NRec      AND
+   KatSopr3.cMolTo                == MolTo3.NRec       AND
+   MTabReestrforKN2.KatSopr2nRec  == KatSopr32.NRec    AND
+   KatSopr32.cNote                == KatNotes3.NRec    AND
+   KatSopr32.cVal                 == KlVal3.NRec       AND
+
+   word(204)                      == SpSopr4.VidSopr   AND
+   SpSopr.cParty                  == SpSopr4.cParty    AND
+   SpSopr.NRec                    == SoprOrdB4.cSpSopr AND
+   SoprOrdB4.cPodr                == KatPodr4.NRec     AND
+   SoprOrdB4.cMol                 == KatMol4.NRec      AND
+   SpSopr4.cMCUSL                 == KatMC4.NRec       AND
+   SpSopr4.cParty                 == Katparty4.NRec    AND
+   SpSopr4.cSopr                  == KatSopr4.NRec     AND
+   KatSopr4.cPodrFrom             == PodrFrom4.NRec    AND
+   KatSopr4.cMolFrom              == MolFrom4.NRec     AND
+   MTabReestrforKN3.KatSopr3nRec  == KatSopr42.NRec    AND
+   KatSopr42.cVal                 == KlVal4.NRec
+  ))
+
+ Order mem01 by MTabReestrforKN.KatSoprnSopr
+ Order mem02 by MTabReestrforKN.KatSoprdSopr
+ Order mem03 by MTabReestrforKN.KatMCName
+ Order mem04 by MTabReestrforKN.KatPartyName//+MTabReestrforKN.KatPodrName+MTabReestrforKN.KatMolName
+ Order mem05 by MTabReestrforKN.KatOrgName
+ Order mem06 by MTabReestrforKN.oldPrice
+ Order mem07 by MTabReestrforKN.NewPrice
+ Order mem08 by MTabReestrforKN.Pick
+ Order mem09 by MTabReestrforKN.KatSoprdOpr
+ Order mem10 by MTabReestrforKN.KatPodrName//+MTabReestrforKN.KatMolName+MTabReestrforKN.KatPartyName
+ Order mem11 by MTabReestrforKN.KatMolName//+MTabReestrforKN.KatPodrName+MTabReestrforKN.KatPartyName
+
+ Order mem31 by MTabReestrforKN2.KatSopr2nSopr
+ Order mem32 by MTabReestrforKN2.KatSopr2dSopr
+ Order mem33 by MTabReestrforKN2.KatMCname
+ Order mem34 by MTabReestrforKN2.KatPartyname
+ Order mem35 by MTabReestrforKN2.PodrFrom
+ Order mem36 by MTabReestrforKN2.PodrTo
+ Order mem37 by MTabReestrforKN2.KatSopr2dOpr
+
+ Order mem38 by MTabReestrforKN3.KatSopr3nSopr
+ Order mem39 by MTabReestrforKN3.KatSopr3dSopr
+ Order mem40 by MTabReestrforKN3.KatMCname
+ Order mem41 by MTabReestrforKN3.KatPartyname
+ Order mem42 by MTabReestrforKN3.PodrFrom
+ Order mem43 by MTabReestrforKN3.KatSopr3dOpr
+ Order mem71 by MTabReestrforKN3.oldPrice
+ Order mem72 by MTabReestrforKN3.NewPrice
+
+
+ bounds MainBound  = Date(0, 0, 0) <<= MTabReestrforKN.KatSoprdSopr
+ bounds dMainBound = begdate <<= MTabReestrforKN.KatSoprdSopr AND
+                     enddate >>= MTabReestrforKN.KatSoprdSopr
+ bounds MainBound2  = Date(0, 0, 0) <<= MTabReestrforKN.KatSoprdOpr
+ bounds dMainBound2 = begdate <<= MTabReestrforKN.KatSoprdOpr AND
+                      enddate >>= MTabReestrforKN.KatSoprdOpr
+ bounds nSoprBound  = BNSopr == MTabReestrforKN.KatSoprnSopr
+//== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
+
+ bounds MainBound3  = Date(0, 0, 0) <<= MTabReestrforKN2.KatSopr2dSopr
+ bounds dMainBound3 = begdate <<= MTabReestrforKN2.KatSopr2dSopr AND
+                      enddate >>= MTabReestrforKN2.KatSopr2dSopr
+ bounds MainBound23  = Date(0, 0, 0) <<= MTabReestrforKN2.KatSopr2dOpr
+ bounds dMainBound23 = begdate <<= MTabReestrforKN2.KatSopr2dOpr AND
+                       enddate >>= MTabReestrforKN2.KatSopr2dOpr
+ bounds nSoprBound3  = BNSopr3 == MTabReestrforKN2.KatSopr2nSopr
+//== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
+
+ bounds MainBound4  = Date(0, 0, 0) <<= MTabReestrforKN3.KatSopr3dSopr
+ bounds dMainBound4 = begdate <<= MTabReestrforKN3.KatSopr3dSopr AND
+                      enddate >>= MTabReestrforKN3.KatSopr3dSopr
+ bounds MainBound24  = Date(0, 0, 0) <<= MTabReestrforKN3.KatSopr3dOpr
+ bounds dMainBound24 = begdate <<= MTabReestrforKN3.KatSopr3dOpr AND
+                       enddate >>= MTabReestrforKN3.KatSopr3dOpr
+ bounds nSoprBound4  = BNSopr4 == MTabReestrforKN3.KatSopr3nSopr
+//== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
+
+;
+
+parameters
+c1;
+
+Form errr('errr.OUT', 'ERRR') with novisual;
+Form soprc45f('soprc45f.out', 'soprc45f') with novisual;
+
+
+
+#include SoprAll.vpp  // общие функции сопроводительных документов
+
+//******************************************************************************
+
+Procedure WriteERRRMessage;
+{
+  ERRR.write('Создан документ №'+KatSopr.nSopr);
+  ShowRep := TRUE;
+}
+
+#include fsround.vpp
+#include soprn00.vpp
+
+//******************************************************************************
+
+Function GetCursPrice: double;
+{
+  var res: double; res := 1;
+  if (KatSopr.cValut <> 0)
+    {
+      var _dPrice   : Date;   _dPrice := if(Longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+
+      if (Longint(_dPrice) = 0)
+        if (RunInterface(GetDCurse, Date(0, 0, 0), KatSopr.cValut, _dPrice) <> cmCancel)
+          { }
+
+      oValFunc.GetCurse(KatSopr.cValut, _dPrice, res);
+    }
+
+  GetCursPrice := res;
+}
+
+//******************************************************************************
+
+Function GetDefNalogGroupKN: comp;
+{
+  GetDefNalogGroupKN := 0;
+
+  if (SpSopr.PrMC = 1)
+    {
+      if (GetFirst FastFirstRow KatMC where((SpSopr.cMCUSL == KatMC.NRec)) = tsOk)
+        GetDefNalogGroupKN := KatMC.cGrNal;
+    }
+  else
+    if (GetFirst FastFirstRow KatUsl where((SpSopr.cMCUSL == KatUsl.NRec)) = tsOk)
+      GetDefNalogGroupKN := KatUsl.cGrNal;
+}
+
+//******************************************************************************
+
+Procedure CheckSummaNalog;
+{
+  if (SpSopr.ManualTax = 0)
+    RecalcNalogs(GetDefNalogGroupKN, SpSopr.cGrNal)
+  else
+    CalcSumNalogs;
+}
+
+//******************************************************************************
+
+Create view SPSOP1
+Var
+  cKS: comp;
+From
+  Spsopr;
+
+//******************************************************************************
+
+Procedure RecalcSumm;
+{
+  //чтобы ей пользоваться надо еще рассчитывать налоги...
+  KatSopr.Summa := 0;
+  KatSopr.SumVal := 0;
+  KatSopr.sNalogs := 0;
+  KatSopr.svNalogs := 0;
+  SPSOP1.cKS := KatSopr.NRec;
+
+  if (SPSOP1.GetFirst SpSopr  where ((cKS == SpSopr.cSopr)) = tsOk)
+    {
+      SPSOP1._LOOP SpSopr where ((cKS == SpSopr.cSopr))
+        {
+          KatSopr.sNalogs  := KatSopr.sNalogs  + SPSOP1.SpSopr.SumNDS;
+          KatSopr.svNalogs := KatSopr.svNalogs + SPSOP1.SpSopr.SumVNDS;
+          KatSopr.Summa    := KatSopr.Summa    + SPSOP1.SpSopr.Price  * SPSOP1.SpSopr.KolOpl;
+          KatSopr.SumVal   := KatSopr.SumVal   + SPSOP1.SpSopr.VPrice * SPSOP1.SpSopr.KolOpl;
+        }
+
+      if (KatSopr.VhodNal <> 1)
+        {
+          KatSopr.Summa := (KatSopr.Summa + KatSopr.sNalogs);
+          KatSopr.SumVal := (KatSopr.SumVal + KatSopr.svNalogs);
+        }
+    }
+
+  Update_Current_KatSopr;
+}
+
+//******************************************************************************
+
+#include soprc451.vpp
+#include soprc452.vpp
+#include soprc453.vpp
+#include soprc45f.vpp
+//------------------------------------------------------------------------------
+
+#doc
+  Отфактуровка отпуска МЦ
+#end
+
+Window  winTune 'Параметры формирования' escClose, Gray;
+  Show at (10, 2, 60, 8 );
+
+Screen scrTune ''(, hcm_zakup_Lok_Otfaktyrovka, sci1EnEsc) noTableNavigation;
+Fields
+  wTune  ('Параметры формирования'): NoProtect;
+Buttons
+  cmCancel,        ,,'Применить'    ,,sci1Esc;
+<<
+
+  [.] формировать ордера по сторнирующей накладной`
+  [.] формировать ордера по корректирующей накладной`
+
+              <.   Применить   .>
+>>
+end;
+
+end;
+//******************************************************************************
+
+#doc
+  Отфактуровка отпуска МЦ
+#end
+
+Window  w1 'Отфактуровка отпуска МЦ' escClose, Cyan;
+  Show at (, , 159, 25);
+
+//******************************************************************************
+
+Panel p1
+TabbedSheet BOTTOM tsh1
+
+Browse br1 'Накладные на отпуск'(, hcm_zakup_Lok_Otfaktyrovka, sci14InsPMEnEsc);
+  Table MTabReestrforKN;
+
+Fields {Font = {Color = if (MTabReestrforKN.Pick<>0, ColorMark, 0)}};
+  picked                       #3'V'                          : [1]   , Protect, NoAutoSize;
+  MTabReestrforKN.KatSoprnSopr #3'Номер'     ,#3'документа'   : [9]   , NoAutoSize, Protect, {Font = {Bold = TRUE}};
+  MTabReestrforKN.KatSoprdSopr #3'Дата'      ,#3'документа'   : [10, 'DD/MM/YYYY'], Protect, NoAutoSize;
+  MTabReestrforKN.KatSoprdOpr  #3'Дата'      ,#3'списания'    : [10, 'DD/MM/YYYY'], Protect, NoAutoSize;
+  MTabReestrforKN.KatMCName    #3'Наименова-',#3'ние МЦ'      : [10]  , Protect;
+  MTabReestrforKN.KatPodrName  #3'Склад'     ,#3'в снабжении' : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN.Pick <> 0, ColorMark, ColorSysPurple)}};
+  MTabReestrforKN.KatMolName   #3'МОЛ'       ,#3'в снабжении' : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN.Pick <> 0, ColorMark, ColorSysPurple)}};
+  MTabReestrforKN.KatPartyName #3'Партия'                     : [10]  , Protect;
+  MTabReestrforKN.PodrFrom     #3'Склад'     ,#3'в сбыте'     : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN.MOLFrom      #3'МОЛ'       ,#3'в сбыте'     : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN.KatOrgName   #3'Контрагент',#3'в снабжении' : [10]  , Protect;
+  MTabReestrforKN.oldPrice     #3'Цена'      ,#3'в сбыте'     : [10.2], Protect,   {Font = {Bold = TRUE}};
+  MTabReestrforKN.KatSoprSkid  #3'% скидки-' ,#3'надбавки'    : [5.3] , NoProtect, {Font = {Bold = TRUE}};
+  MTabReestrforKN.NewPrice     #3'Цена'      ,#3'в снабжении' : [10.2], NoProtect, {Font = {Bold = TRUE}};
+  MTabReestrforKN.KolOpl       #3'Количество'                 : [10.3], Protect;
+  Valut                        #3'Вал.'                       : [4]   , Protect;
+end; // Browse
+
+//******************************************************************************
+Browse br2 'Накладные на внутреннеe перемещение'(, hcm_zakup_Lok_Otfaktyrovka, sci14InsPMEnEsc);
+  Table MTabReestrforKN2;
+
+Fields {Font = {Color = if (MTabReestrforKN2.Pick<>0, ColorMark, 0)}};
+  picked3                        #3'V'                            : [1]   , Protect, NoAutoSize;
+  MTabReestrforKN2.KatSopr2nSopr #3'Номер'       ,#3'документа'   : [10]  , Protect, {Font = {Bold = TRUE}};
+  KatSopr32.Descr                #3'Дескр.'                       : [5]   ,  Protect;
+  MTabReestrforKN2.KatSopr2dSopr #3'Дата'        ,#3'документа'   : [10, 'DD/MM/YYYY'], Protect;
+  MTabReestrforKN2.KatSopr2dOpr  #3'Дата'        ,#3'проведения'  : [10, 'DD/MM/YYYY'], Protect;
+  KatNotes3.Name                 #3'Статус'                       : [10]  , Protect;
+  MTabReestrforKN2.KatMCName     #3'Наименова-'  ,#3'ние МЦ'      : [10]  , Protect;
+  MTabReestrforKN2.KatPodrName   #3'Cклад'       ,#3'в снабжении' : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN2.Pick <> 0, ColorMark, ColorSysPurple)}};
+  MTabReestrforKN2.KatMolName    #3'МОЛ'         ,#3'в снабжении' : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN2.Pick <> 0, ColorMark, ColorSysPurple)}};
+  MTabReestrforKN2.KatPartyName  #3'Партия'                       : [10]  , Protect;
+  MTabReestrforKN2.PodrFrom      #3'Cклад откуда',#3'НВП'         : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN2.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN2.MOLFrom       #3'МОЛ откуда'  ,#3'НВП'         : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN2.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN2.PodrTo        #3'Склад куда'  ,#3'НВП'         : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN2.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN2.MOLTo         #3'МОЛ куда'    ,#3'НВП'         : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN2.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN2.KolOpl        #3'Количество'                   : [10.3], Protect;
+  MTabReestrforKN2.oldPrice      #3'Цена'        ,#3'в накладной' : [11.2], Protect,   {Font = {Bold = TRUE}};
+  if (KatSopr32.cVal = 0,
+    KatSopr32.Summa,
+    KatSopr32.SumVal)            #3'Сумма'                        : [10.2], Protect;
+  if (longint(KatSopr32.dOpr) = 0,
+    '-', '+')                    #3'О'                            : [1]   , Skip;
+  Valut3                         #3'Вал.'                         : [5]   , Skip;
+end; // Browse
+
+//******************************************************************************
+Browse br3 'Акты на списание МЦ'(, hcm_zakup_Lok_Otfaktyrovka, sci14InsPMEnEsc);
+  Table MTabReestrforKN3;
+
+Fields {Font = {Color = if (MTabReestrforKN3.Pick<>0, ColorMark, 0)}};
+  picked4                        #3'V'                            : [1]   , Protect, NoAutoSize;
+  MTabReestrforKN3.KatSopr3nSopr #3'Номер'       ,#3'документа'   : [10]  , Protect, {Font = {Bold = TRUE}};
+  KatSopr42.Descr                #3'Дескр.'                       : [5]   ,  Protect;
+  MTabReestrforKN3.KatSopr3dSopr #3'Дата'        ,#3'документа'   : [10, 'DD/MM/YYYY'], Protect;
+  MTabReestrforKN3.KatSopr3dOpr  #3'Дата'        ,#3'списания'    : [10, 'DD/MM/YYYY'], Protect;
+  MTabReestrforKN3.KatMCName     #3'Наименова-'  ,#3'ние МЦ'      : [10]  , Protect;
+  MTabReestrforKN3.KatPodrName   #3'Склад'       ,#3'в снабжении' : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN3.Pick <> 0, ColorMark, ColorSysPurple)}};
+  MTabReestrforKN3.KatMolName    #3'МОЛ'         ,#3'в снабжении' : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN3.Pick <> 0, ColorMark, ColorSysPurple)}};
+  MTabReestrforKN3.KatPartyName  #3'Партия'                       : [10]  , Protect;
+  MTabReestrforKN3.PodrFrom      #3'Склад'       ,#3'в Акте'      : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN3.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN3.MOLFrom       #3'МОЛ'         ,#3'в Акте'      : [10]  , Protect,
+    {Font = {Color = if (MTabReestrforKN3.Pick <> 0, ColorMark, ColorSysMaroon)}};
+  MTabReestrforKN3.KolOpl         #3'Количество'                  : [10.3], Protect;
+  MTabReestrforKN3.oldPrice      #3'Цена'        ,#3'в акте'      : [10.2], Protect,   {Font = {Bold = TRUE}};
+  MTabReestrforKN3.NewPrice      #3'Цена'        ,#3'в снабжении' : [10.2], NoProtect, {Font = {Bold = TRUE}};
+  if (KatSopr42.cVal = 0,
+    KatSopr42.Summa,
+    KatSopr42.SumVal)            #3'Сумма'                        : [10.2], Protect;
+  if (longint(KatSopr42.dOpr) = 0,
+    '-', '+')                    #3'О'                            : [1]   , Skip;
+  Valut4                         #3'Вал.'                         : [5]   , Skip;
+end; // Browse
+
+end; // TabbedSheet tsh1
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmSetTabbedSheetFormat:
+{
+//сортировка по Номеру при переходе по закладкам
+  if (CurFormatInArea(br1) = br1)
+    {
+      SetOrder(timem01);
+      SetTableBackOrderIn (tnMTabReestrforKN, FALSE);
+      RereadRecord(#MTabReestrforKN);
+    }
+
+  if (CurFormatInArea(br2) = br2)
+    {
+      SetOrder(timem31);
+      SetTableBackOrderIn (tnMTabReestrforKN2, FALSE);
+      RereadRecord(#MTabReestrforKN2);
+    }
+
+  if (CurFormatInArea(br3) = br3)
+    {
+      SetOrder(timem38);
+      SetTableBackOrderIn (tnMTabReestrforKN3, FALSE);
+      RereadRecord(#MTabReestrforKN3);
+    }
+}
+
+cmColumnClicked:
+{
+  case GetColumnSorting(br1, Target) of
+  //-----------------------------------
+    0:
+      {
+        SetColumnSorting(br1, Target, -1);
+
+        case Target of
+          #MTabReestrforKN.KatSoprnSopr  : SetOrder(timem01);
+          #MTabReestrforKN.KatSoprdSopr  : SetOrder(timem02);
+          #MTabReestrforKN.KatMCName     : SetOrder(timem03);
+          #MTabReestrforKN.KatPartyName  : SetOrder(timem04);
+          #MTabReestrforKN.KatOrgName    : SetOrder(timem05);
+          #MTabReestrforKN.oldPrice      : SetOrder(timem06);
+          #MTabReestrforKN.NewPrice      : SetOrder(timem07);
+          #picked                        : SetOrder(timem08);
+          #MTabReestrforKN.KatSoprdOpr   : SetOrder(timem09);
+          #MTabReestrforKN.KatPodrName   : SetOrder(timem10);
+          #MTabReestrforKN.KatMolName    : SetOrder(timem11);
+        end;
+
+        SetTableBackOrderIn (tnMTabReestrforKN, FALSE);
+      }
+  //-----------------------------------
+   -1:
+      {
+        SetColumnSorting(br1, Target, 1);
+        SetTableBackOrderIn (tnMTabReestrforKN, TRUE);
+      }
+  //-----------------------------------
+    1:
+      {
+        SetColumnSorting(br1, Target, -1);
+        SetTableBackOrderIn (tnMTabReestrforKN, FALSE);
+      }
+  //-----------------------------------
+  end;
+
+  case GetColumnSorting(br2, Target) of
+  //-----------------------------------
+    0:
+      {
+        SetColumnSorting(br2, Target, -1);
+          case Target of
+            #MTabReestrforKN2.KatSopr2nSopr  : SetOrder(timem31);
+            #MTabReestrforKN2.KatSopr2dSopr  : SetOrder(timem32);
+            #MTabReestrforKN2.KatMCname      : SetOrder(timem33);
+            #MTabReestrforKN2.KatPartyname   : SetOrder(timem34);
+            #MTabReestrforKN2.PodrFrom       : SetOrder(timem35);
+            #MTabReestrforKN2.PodrTo         : SetOrder(timem36);
+            #MTabReestrforKN2.KatSopr2dOpr   : SetOrder(timem37);
+          end;
+        SetTableBackOrderIn (tnMTabReestrforKN2, FALSE);
+      }
+  //-----------------------------------
+   -1:
+      {
+        SetColumnSorting(br2, Target, 1);
+        SetTableBackOrderIn (tnMTabReestrforKN2, TRUE);
+      }
+  //-----------------------------------
+    1:
+      {
+        SetColumnSorting(br2, Target, -1);
+        SetTableBackOrderIn (tnMTabReestrforKN2, FALSE);
+      }
+  //-----------------------------------
+  end;
+
+  case GetColumnSorting(br3, Target) of
+  //-----------------------------------
+    0:
+      {
+        SetColumnSorting(br3, Target, -1);
+          case Target of
+            #MTabReestrforKN3.KatSopr3nSopr : SetOrder(timem38);
+            #MTabReestrforKN3.KatSopr3dSopr : SetOrder(timem39);
+            #MTabReestrforKN3.KatMCname     : SetOrder(timem40);
+            #MTabReestrforKN3.KatPartyname  : SetOrder(timem41);
+            #MTabReestrforKN3.PodrFrom      : SetOrder(timem42);
+            #MTabReestrforKN3.KatSopr3dOpr  : SetOrder(timem43);
+            #MTabReestrforKN3.OldPrice      : SetOrder(timem71);
+            #MTabReestrforKN3.NewPrice      : SetOrder(timem72);
+          end;
+
+        SetTableBackOrderIn (tnMTabReestrforKN3, FALSE);
+      }
+  //-----------------------------------
+   -1:
+      {
+        SetColumnSorting(br3, Target, 1);
+        SetTableBackOrderIn (tnMTabReestrforKN3, TRUE);
+      }
+  //-----------------------------------
+    1:
+      {
+        SetColumnSorting(br3, Target, -1);
+        SetTableBackOrderIn (tnMTabReestrforKN3, FALSE);
+      }
+  //-----------------------------------
+  end;
+
+  case CurTable of
+    #MTabReestrforKN   : RereadRecord(#MTabReestrforKN);
+    #MTabReestrforKN2  : RereadRecord(#MTabReestrforKN2);
+    #MTabReestrforKN3  : RereadRecord(#MTabReestrforKN3);
+  end;
+}
+
+cmEdit:
+  case CurTable of
+    #MTabReestrforKN: RunInterface('SoprDoc' , word(201), MTabReestrforKN.KatSoprNRec);
+    #MTabReestrforKN2: RunInterface('SopInMov' , word(600), MTabReestrforKN2.KatSopr2NRec);
+    #MTabReestrforKN3: RunInterface('Akt_spis' , word(204), MTabReestrforKN3.KatSopr3NRec);
+  end;
+
+cmDefault:
+  case CurTable of
+    #MTabReestrforKN: RunInterface('SoprDoc' , word(201), MTabReestrforKN.KatSoprNRec);
+    #MTabReestrforKN2: RunInterface('SopInMov' , word(600), MTabReestrforKN2.KatSopr2NRec);
+    #MTabReestrforKN3: RunInterface('Akt_spis' , word(204), MTabReestrforKN3.KatSopr3NRec);
+  end;
+
+cmhotkeys:
+  case CurTable of
+    #MTabReestrforKN: PutHotCommand(RunMenu('mnuMakePos201fromKN'));
+    #MTabReestrforKN2: PutHotCommand(RunMenu('mnuMakePos600fromKN'));
+    #MTabReestrforKN3: PutHotCommand(RunMenu('mnuMakePos204fromKN'));
+  end;
+
+cmMarkUnMark:
+  case CurTable of
+    #MTabReestrforKN: MTabReestrforKNcmMarkUnMark;
+    #MTabReestrforKN2: MTabReestrforKN2cmMarkUnMark;
+    #MTabReestrforKN3: MTabReestrforKN3cmMarkUnMark;
+  end;
+
+cmSelectAll:
+   case CurTable of
+     #MTabReestrforKN: MTabReestrforKNcmSelectAll;
+     #MTabReestrforKN2: MTabReestrforKN2cmSelectAll;
+     #MTabReestrforKN3: MTabReestrforKN3cmSelectAll;
+   end;
+
+cmUnselectAll:
+  case CurTable of
+    #MTabReestrforKN: MTabReestrforKNcmUnselectAll;
+    #MTabReestrforKN2: MTabReestrforKN2cmUnselectAll;
+    #MTabReestrforKN3: MTabReestrforKN3cmUnselectAll;
+  end;
+
+cmFilterSave:
+  case CurTable of
+    #MTabReestrforKN: SetSoprFlt;
+    #MTabReestrforKN2: SetSoprFlt2;
+    #MTabReestrforKN3: SetSoprFlt3;
+  end;
+
+
+cmAlt1:
+  case CurTable of
+    #MTabReestrforKN: MTabReestrforKNcmAlt1;
+    #MTabReestrforKN2: MTabReestrforKN2cmAlt1;
+    #MTabReestrforKN3: MTabReestrforKN3cmAlt1;
+  end;
+
+cmAlt2:
+  {
+    case CurTable of
+      #MTabReestrforKN: MakeNewMTabReestrforKN;
+      #MTabReestrforKN2: MakeNewMTabReestrforKN2;
+      #MTabReestrforKN3: MakeNewMTabReestrforKN3;
+    end;
+
+    RereadRecord;
+  }
+
+cmAlt3:
+  case CurTable of
+    #MTabReestrforKN: SetFltBNSopr;
+    #MTabReestrforKN2: SetFltBNSopr2;
+    #MTabReestrforKN3: SetFltBNSopr3;
+  end;
+
+cmAlt4:
+  case CurTable of
+    #MTabReestrforKN: ProccmAlt4;
+    #MTabReestrforKN2: ProccmAlt4;
+    #MTabReestrforKN3: ProccmAlt4;
+  end;
+
+cmPrintDoc:
+  PrintDocument;
+
+cmValue1:
+{
+  RunWindowModal(winTune);
+}
+
+cmInit:
+{
+  if (NOT ReadMyDsk(wTune, 'MakePos201fromKN_wTune', FALSE))
+    wTune := 0;
+}
+
+cmDone:
+{
+  SaveMyDsk(wTune, 'MakePos201fromKN_wTune');
+}
+
+end;//HandleEvent
+
+end; // Window
+
+//******************************************************************************
+
+HandleEvent
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    MakeNewMTabReestrforKN;
+    MakeNewMTabReestrforKN2;
+    MakeNewMTabReestrforKN3;
+    SetOrder(timem01);
+    RunWindowModal(w1);
+    Abort;
+  }
+
+cmCheckField:
+  case CurTable of
+    #MTabReestrforKN: update current MTabReestrforKN;
+    #MTabReestrforKN2: update current MTabReestrforKN2;
+    #MTabReestrforKN3: update current MTabReestrforKN3;
+  end;
+
+end;
+End.
+
+//******************************************************************************
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::MAKEPOS201FROMKN>L_SOPRDOC::MAKEPOS201FROMKN - Отфактуровка МЦ</link>
+#end
+
+mnuMakePos201fromKN Menu
+{
+-'Фильтр по дате', cmFilterSave, 'Установить по диапазону дат', hcm_zakup_Lok_Otfaktyrovka, 'Alt+B', kbAltb, sci1Esc;
+-'Фильтр по номеру', cmAlt3, 'Установить фильтр по номеру', hcm_zakup_Lok_Otfaktyrovka, 'Alt+3', kbAlt3, sci1Esc;
+-----------------;
+-'Создать корректирующие документы(-КН/КН)', cmAlt1, 'Создать корректирующие документы по помеченным позициям', hcm_zakup_Lok_Otfaktyrovka, 'Alt+1', kbAlt1, sci1Esc;
+-'Обновить записи на экране', cmAlt2, 'Функция позволяет обновить видимые записи на экране', hcm_zakup_Lok_Otfaktyrovka, 'Alt+2', kbAlt2, sci1Esc;
+-'Параметры формирования', cmValue1, 'Параметры формирования корректирующих документов', hcm_zakup_Lok_Otfaktyrovka, '', , sci1Esc;
+-----------------;
+-'Карточки складского учета', cmAlt4, 'Карточки складского учета', hcm_zakup_Lok_Otfaktyrovka, 'Alt+4', kbAlt4, sci1Esc;
+-'Печать документа', cmPrintDoc, 'Печать документа', hcm_zakup_Lok_Otfaktyrovka, 'Сtrl+P', kbCtrlP, sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::MAKEPOS201FROMKN>L_SOPRDOC::MAKEPOS201FROMKN - Отфактуровка МЦ</link>
+#end
+
+mnuMakePos600fromKN Menu
+{
+-'Фильтр по дате', cmFilterSave, 'Установить по диапазону дат', hcm_zakup_Lok_Otfaktyrovka, 'Alt+B', kbAltb, sci1Esc;
+-'Фильтр по номеру', cmAlt3, 'Установить фильтр по номеру', hcm_zakup_Lok_Otfaktyrovka, 'Alt+3', kbAlt3, sci1Esc;
+-----------------;
+-'Создать корректирующие документы(-КН/КН)', cmAlt1, 'Создать корректирующие документы по помеченным позициям', hcm_zakup_Lok_Otfaktyrovka, 'Alt+1', kbAlt1, sci1Esc;
+-'Обновить записи на экране', cmAlt2, 'Функция позволяет обновить видимые записи на экране', hcm_zakup_Lok_Otfaktyrovka, 'Alt+2', kbAlt2, sci1Esc;
+-----------------;
+-'Карточки складского учета', cmAlt4, 'Карточки складского учета', hcm_zakup_Lok_Otfaktyrovka, 'Alt+4', kbAlt4, sci1Esc;
+-'Печать документа', cmPrintDoc, 'Печать документа', hcm_zakup_Lok_Otfaktyrovka, 'Сtrl+P', kbCtrlP, sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::MAKEPOS201FROMKN>L_SOPRDOC::MAKEPOS201FROMKN - Отфактуровка МЦ</link>
+#end
+
+mnuMakePos204fromKN Menu
+{
+-'Фильтр по дате', cmFilterSave, 'Установить по диапазону дат', hcm_zakup_Lok_Otfaktyrovka, 'Alt+B', kbAltb, sci1Esc;
+-'Фильтр по номеру', cmAlt3, 'Установить фильтр по номеру', hcm_zakup_Lok_Otfaktyrovka, 'Alt+3', kbAlt3, sci1Esc;
+-----------------;
+-'Создать корректирующие документы(-КН/КН)', cmAlt1, 'Создать корректирующие документы по помеченным позициям', hcm_zakup_Lok_Otfaktyrovka, 'Alt+1', kbAlt1, sci1Esc;
+-'Обновить записи на экране', cmAlt2, 'Функция позволяет обновить видимые записи на экране', hcm_zakup_Lok_Otfaktyrovka, 'Alt+2', kbAlt2, sci1Esc;
+-----------------;
+-'Карточки складского учета', cmAlt4, 'Карточки складского учета', hcm_zakup_Lok_Otfaktyrovka, 'Alt+4', kbAlt4, sci1Esc;
+-'Печать документа', cmPrintDoc, 'Печать документа', hcm_zakup_Lok_Otfaktyrovka, 'Сtrl+P', kbCtrlP, sci1Esc;
+}
+
+mnuSoprc45 Menu
+{
+-'Отфактуровка отпуска МЦ(-КН/КН)', cmValue14, 'Отфактуровка отпуска МЦ(-КН/КН)', hcm_zakup_Lok_Otfaktyrovka, '', , sci1Esc;
+}
+
+//******************************************************************************
+
+DlgSetFltBNSopr DIALOG
+Size 45, 5
+HELPLINE 'Фильтр по номеру документа'
+Fields
+  strnsopr   ('Введите номер документа'): string[20];
+
+Buttons
+  cmOk, Default, , 'Ввод';
+  cmCancel, , , 'Отмена';
+
+<<'Фильтр по номеру документа'
+
+`Введите номер`.@@@@@@@@@@@@@@@@@@@@
+
+    <.~П~родолжить.>  <. Отмена .>
+>>
+
+//******************************************************************************
+
+DlgSetTypeWork DIALOG
+Fields
+  p1   ('Пробел - выбрать режим работы'): word;
+
+Buttons
+  cmOk, Default, , 'Ввод';
+  cmCancel, , , 'Отмена';
+<<'Выберите режим работы'
+
+┌────────  Склад - Мол заполнять  ─────────────┐
+│                                              │
+│     (.)  из текущего документа`              │
+│     (.)  из приходной(КН) накладной`         │
+│                                              │
+└──────────────────────────────────────────────┘
+
+      <.~П~родолжить.>     <. Отмена .>
+>>
+
+//******************************************************************************

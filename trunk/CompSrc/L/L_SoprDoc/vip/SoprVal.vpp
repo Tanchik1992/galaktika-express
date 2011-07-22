@@ -1,0 +1,515 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+// Модуль работы с валютой в накладной
+//******************************************************************************
+
+// для определения типа по валюте(руб, вал-руб, вал), т.е. к какому ДО относится
+Create view loV_RKS
+Var
+  _cRec: comp;
+From
+  KatSopr
+, StepDoc
+, BaseDoc
+
+Where
+((
+              _cRec    ==  KatSopr.NRec
+AND  KatSopr.cStepDoc  ==  StepDoc.NRec
+AND  StepDoc.cBaseDoc  ==  BaseDoc.NRec
+))
+;
+
+//******************************************************************************
+// Пересчитывать суммы в валюте в документах по текущему курсу
+// 1 - нет, 0 - да, 2 - по запросу
+Function GetValRubCalc(wTypeSopr: word): word;
+var
+  tRes: word;
+{
+  case wTypeSopr of
+    101, 108, 111, 115, 206, 442:
+    {
+      tRes := wGetTune('Doc.Buy.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    102, 103:
+    {
+      tRes := wGetTune('Doc.PrCons.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    1411:
+    {
+      tRes := wGetTune('Doc.Wood.Journ.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    203, 203:
+    {
+      tRes := wGetTune('Doc.OtpCons.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    106, 114, 201, 211:
+    {
+      tRes := wGetTune('Doc.Sell.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    1421:
+    {
+      tRes := wGetTune('Doc.Wood.Nakl.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    204, 600..625, 630, 632:
+    {
+      tRes := wGetTune('Sklad.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    110, 210, 229, 629, 610, 1610:
+    {
+      tRes := wGetTune('UKS.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    501..508:
+    {
+      tRes := If(  ExistTune('Manuf.Doc.ValRubCalc')
+                ,  wGetTune('Manuf.Doc.ValRubCalc')
+                ,  Word(0)
+                );
+    }
+    551..553, 554, 557:
+    {
+      tRes := wGetTune('Remont.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    else
+    {
+      tRes := wGetTune('Doc.ValRubCalc');
+    }
+  end;
+
+  GetValRubCalc := tRes;
+}
+
+//******************************************************************************
+
+Function Val_Rub_KatSopr(_cRecKS: comp): word; // накладная создана по: 1 - рублевому ДО, 2 - вал.-рублевому ДО, 3 - валютному ДО
+{
+  Val_Rub_KatSopr := 1; // рублев.
+  loV_RKS._cRec := _cRecKS;
+  if (loV_RKS.GetFirst KatSopr = tsOk)
+    if (loV_RKS.GetFirst BaseDoc = tsOk)
+      Val_Rub_KatSopr := loV_RKS.BaseDoc.TipMoney
+    else
+      Val_Rub_KatSopr := if(loV_RKS.KatSopr.cVal <> 0, 3, 1);
+}
+
+//******************************************************************************
+// Получение курса валюты для спецификации накладной
+Function GetCursPriceSpecif: double;
+{
+  var res: double; res := 1;
+
+  if (SpSopr.cVal <> 0)
+    {
+
+      if (Longint(SpSopr.dSopr) = 0)
+        if (RunInterface(GetDCurse, Date(0, 0, 0), SpSopr.cVal, SpSopr.dSopr) <> cmCancel)
+          { }
+
+      oValFunc.GetCurse(SpSopr.cVal, SpSopr.dSopr, res);
+    }
+
+  GetCursPriceSpecif := res;
+}
+
+//******************************************************************************
+// Получение курса валюты для накладной
+Function GetCursPrice: double;
+{
+  var res: double; res := 1;
+
+  if (KatSopr.cValut <> 0)
+    {
+      if (Longint(KatSopr.dPrice) = 0)
+        if (RunInterface(GetDCurse, Date(0, 0, 0), KatSopr.cValut, KatSopr.dPrice) <> cmCancel)
+          set KatSopr.dPrice := KatSopr.dPrice;
+        else
+          set KatSopr.dPrice := KatSopr.dSopr;
+
+      oValFunc.GetCurse(KatSopr.cValut, KatSopr.dPrice, res);
+    }
+
+  GetCursPrice := res;
+}
+
+//******************************************************************************
+// Расчет цены по курсу при выборе валюты
+Procedure SetPriceByCurse(CanChange: boolean; PrCurse: double);
+{
+  if ((SpSopr.Price = 0) AND (SpSopr.VPrice <> 0))
+    {
+      SpSopr.Price   := SpSopr.VPrice   * PrCurse;
+      SpSopr.rPrice  := SpSopr.rVPrice  * PrCurse;
+    }
+  else
+    if (SpSopr.VPrice = 0) OR (canChange)
+      if (KatSopr.cValut <> 0)
+        {
+          SpSopr.VPrice   := SpSopr.Price   / PrCurse;
+          SpSopr.rVPrice  := SpSopr.rPrice  / PrCurse;
+        }
+      else
+        {
+          SpSopr.VPrice := 0;
+          SpSopr.rVPrice := 0;
+        }
+
+  if (KatSopr.vidSopr>= 600 AND KatSopr.vidSopr<= 625) OR (KatSopr.vidSopr = 204)//склад
+    {
+      SpSopr.Price := FRoundRubOrd(1, SpSopr.rPrice * SpSopr.kolFact)/SpSopr.kolFact;
+      SpSopr.vPrice := FRoundValOrd(1, SpSopr.rVPrice * SpSopr.kolFact)/SpSopr.kolFact;
+      if wGetTune('Round.OrderPriceSum') = 1
+        {
+          set SpSopr.rPrice  := FRoundRubOrd(1, SpSopr.rPrice);
+          set SpSopr.rVPrice := FRoundValOrd(1, SpSopr.rVPrice);
+          set SpSopr.price  := SpSopr.rPrice;
+          set SpSopr.vPrice := SpSopr.rVPrice;
+        }
+    }
+
+  SpSopr.cVal := KatSopr.cValut;
+}
+
+//******************************************************************************
+// Выбор валюты в спецификации накладной
+Procedure ChangeSpSoprVal;
+var NewVal: comp;
+var ChAll  : boolean;
+var PrCurse: double;
+var Res: word;
+var DatCurs: Date;
+{
+  if (KatSopr.cVal <> 0)
+    {
+      Message('Уже установлена валюта в шапке накладной', CancelButton);
+      Exit;
+    }
+
+  NewVal  := KatSopr.cValut;
+  DatCurs := KatSopr.dPrice;
+  PrCurse := 0;
+
+  if (LongInt(KatSopr.dPrice) <> 0)
+    Res := RunInterface(GetValKod, NewVal);
+  else
+    Res := RunInterface(GetDCCurse, KatSopr.dSopr, NewVal, DatCurs, PrCurse);
+
+  if (Res = cmCancel)
+    Exit;
+
+  if ((NewVal = KatSopr.cValut) AND (DatCurs = KatSopr.dPrice))
+    Exit;
+
+  if (Message('Изменить валюту во всей спецификации накладной?', YesNo) <> cmYes)
+    Exit;
+
+  KatSopr.dPrice := DatCurs;
+  set KatSopr.cValut := NewVal;
+
+  chAll := GetValRubCalc(KatSopr.VidSopr) <> 1;
+  chAll := Message('Пересчитать все валютные цены во всей спецификации накладной по курсу на '+
+                   string(KatSopr.dPrice) + ' для выбранной валюты?', YesNo) = cmYes;
+
+  if (PrCurse = 0)
+    PrCurse := GetCursPrice;
+
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+    {
+      SetPriceByCurse(chAll, PrCurse);
+      Update Current SpSopr;
+    }
+
+  PopPos(#SpSopr);
+  SetPriceByCurse(chAll, PrCurse);
+  set SpSopr.cVal := KatSopr.cValut;
+  RereadRecord(#SpSopr);
+}
+
+//******************************************************************************
+// Проверка изменения валютной или рублевой цены в накладной
+// Должно вызываться cmCheckField при редактировании позиции накладной
+Procedure CheckPrice(iField: integer);
+{
+  case katsopr.vidsopr of
+    110,
+    114,
+    101, 108, 201, 1411, 1421,//накладные
+    111, 211, 513, 204, //акты
+    102, 103, 202, 203, //консигнация
+    106, 206:           //накладные на возврат по рекл.
+      Exit;
+  end;
+
+  case iField of
+  //------------
+    #SpSopr.VPrice:
+      if (SpSopr.cVal = 0)
+        ChangeSpSoprVal;
+      else
+        {
+          case GetValRubCalc(KatSopr.VidSopr) of
+          //--------------------------------
+            1: if (SpSopr.Price <> 0)
+                  Exit;
+          //--------------------------------
+            2: if (SpSopr.Price <> 0)
+                  if (Message('Пересчитать цену в НДЕ по курсу на '+ string(KatSopr.dPrice)+'?', YesNo) <> cmYes)
+                    Exit;
+          //--------------------------------
+          end;
+
+          set SpSopr.Price := (SpSopr.VPrice * GetCursPriceSpecif);
+          set SpSopr.rPrice := SpSopr.Price;
+        }
+  //------------
+    #SpSopr.Price:
+      if (KatSopr.cValut <> 0)
+        {
+          case GetValRubCalc(KatSopr.VidSopr) of
+           1: if (SpSopr.VPrice <> 0)
+                 Exit;
+           2: if (SpSopr.VPrice <> 0)
+                 if (Message('Пересчитать цену в валюте по курсу на '+
+                              string(KatSopr.dPrice)+ '?', YesNo) <> cmYes)
+                    Exit;
+          end;
+
+          set SpSopr.VPrice := (SpSopr.Price / GetCursPriceSpecif);
+          set SpSopr.rVPrice := SpSopr.VPrice;
+        }
+  //------------
+  end;
+}
+
+//******************************************************************************
+
+Procedure rCheckPrice(iField: integer);
+{
+  case katsopr.vidsopr of
+  //---------------------
+    110,
+    114,
+    101, 108, 201, 1411, 1421, //накладные
+    111, 211, 513,     //акты
+    204, 600..625:   //склад
+      {
+        SpSopr.Price := FRoundRubOrd(1, SpSopr.rPrice * SpSopr.kolFact)/SpSopr.kolFact;
+        SpSopr.vPrice := FRoundValOrd(1, SpSopr.rVPrice * SpSopr.kolFact)/SpSopr.kolFact;
+        if wGetTune('Round.OrderPriceSum') = 1
+          {
+            SpSopr.rPrice  := FRoundRubOrd(1, SpSopr.rPrice);
+            SpSopr.rVPrice := FRoundValOrd(1, SpSopr.rVPrice);
+            SpSopr.price  := SpSopr.rPrice;
+            set SpSopr.vPrice := SpSopr.rVPrice;
+          }
+      }
+  //---------------------
+    102, 103, 202, 203, //консигнация
+    106, 206:   //накладные на возврат по рекл.
+      Exit;
+  //---------------------
+  end;
+
+  case iField of
+  //------------
+    #SpSopr.rvPrice:
+  //------------
+      if (SpSopr.cVal = 0)
+        ChangeSpSoprVal;
+      else
+        {
+          case GetValRubCalc(KatSopr.VidSopr) of
+          //********************************
+            1: if (SpSopr.rPrice <> 0)
+                  Exit;
+          //********************************
+            2: if (SpSopr.rPrice <> 0)
+                  if (Message('Пересчитать цену в НДЕ по курсу на '+
+                           string(KatSopr.dPrice)+'?', YesNo) <> cmYes)
+                    Exit;
+          //********************************
+          end;
+
+          set SpSopr.rPrice := (SpSopr.rvPrice * GetCursPriceSpecif);
+        }
+  //------------
+    #SpSopr.rPrice:
+      if (KatSopr.cValut <> 0)
+        {
+          case GetValRubCalc(KatSopr.VidSopr) of
+          //********************************
+           1: if (SpSopr.rvPrice <> 0)
+                 Exit;
+          //********************************
+           2: if (SpSopr.rvPrice <> 0)
+                 if (Message('Пересчитать цену в валюте по курсу на '+
+                              string(KatSopr.dPrice)+ '?', YesNo) <> cmYes)
+                    Exit;
+          //********************************
+          end;
+
+          set SpSopr.rvPrice := (SpSopr.rPrice / GetCursPriceSpecif);
+        }
+  //------------
+  end;
+
+  if (KatSopr.vidSopr>= 600 AND KatSopr.vidSopr<= 625) OR (KatSopr.vidSopr = 204)//склад
+    {
+      SpSopr.Price := FRoundRubOrd(1, SpSopr.rPrice * SpSopr.kolFact)/SpSopr.kolFact;
+      SpSopr.vPrice := FRoundValOrd(1, SpSopr.rVPrice * SpSopr.kolFact)/SpSopr.kolFact;
+      if wGetTune('Round.OrderPriceSum') = 1
+        {
+          set SpSopr.rPrice  := FRoundRubOrd(1, SpSopr.rPrice);
+          set SpSopr.rVPrice := FRoundValOrd(1, SpSopr.rVPrice);
+          set SpSopr.price  := SpSopr.rPrice;
+          set SpSopr.vPrice := SpSopr.rVPrice;
+        }
+    }
+}
+
+
+//******************************************************************************
+
+Function CheckPriceMethod (iField: integer): word;
+{
+  //Пересчет суммы в валюте по текущему курсу
+  CheckPriceMethod := GetValRubCalc(KatSopr.VidSopr);
+
+  case CheckPriceMethod of
+  //**********************
+    0: //Да
+       case iField of
+       //------------
+         #ifdef _SOPRDOCB_VIP
+         #SpSopUsl.Price,
+         #SpSopUsl.rPrice,
+         #end
+         #SpSopr.Price,
+         #SpSopr.rPrice:
+           CheckPriceMethod := 10;
+       //------------
+         #ifdef _SOPRDOCB_VIP
+         #SpSopUsl.VPrice,
+         #SpSopUsl.rVPrice,
+         #end
+         #SpSopr.VPrice,
+         #SpSopr.rVPrice:
+           CheckPriceMethod := 20;
+       //------------
+         else //case CurField of
+           CheckPriceMethod := if (KatSopr.cVal = 0, 10, 20);
+       //------------
+       end;
+  //**********************
+    2: //По запросу
+      case iField of
+       //------------
+        #ifdef _SOPRDOCB_VIP
+        #SpSopUsl.Price,
+        #SpSopUsl.rPrice,
+        #end
+        #SpSopr.Price,
+        #SpSopr.rPrice:
+          {
+            if (Message('Пересчитать цену в валюте по курсу на '+
+                         string(KatSopr.dPrice)+' для док-та №'+string(Katsopr.NSopr)+ '?', YesNo) = cmYes)
+              CheckPriceMethod := 10;
+            else
+              CheckPriceMethod := 11;
+          }
+       //------------
+        #ifdef _SOPRDOCB_VIP
+        #SpSopUsl.VPrice,
+        #SpSopUsl.rVPrice,
+        #end
+        #SpSopr.VPrice,
+        #SpSopr.rVPrice:
+          {
+            if (Message('Пересчитать цену в НДЕ по курсу на '+
+                        string(KatSopr.dPrice)+' для документа №'+string(Katsopr.NSopr)+'?', YesNo) = cmYes)
+              CheckPriceMethod := 20;
+            else
+              CheckPriceMethod := 21;
+          }
+       //------------
+        else //case CurField of
+          {
+            if KatSopr.cVal = 0
+              {
+                if (Message('Пересчитать цену в валюте по курсу на '+
+                           string(KatSopr.dPrice)+' для документа №'+string(Katsopr.NSopr)+ '?', YesNo) = cmYes)
+                   CheckPriceMethod := 10;
+                else
+                   CheckPriceMethod := 11;
+              }
+            else
+              {
+                if (Message('Пересчитать цену в НДЕ по курсу на '+
+                        string(KatSopr.dPrice)+' для документа №'+string(Katsopr.NSopr)+'?', YesNo) = cmYes)
+                   CheckPriceMethod := 20;
+                else
+                   CheckPriceMethod := 21;
+
+              }
+          }
+       //------------
+      end;
+  //**********************
+  end;//case
+}
+
+//******************************************************************************
+// Изменение даты цен для накладной
+Function ChangeSpSoprCurse: boolean;
+{
+  ChangeSpSoprCurse := FALSE;
+  if (Message('Пересчитать цены по новому курсу?', YesNo) <> cmYes)
+    Exit;
+
+  var DatCurs: Date;    DatCurs := KatSopr.dPrice;
+  var PrCurse: double;  PrCurse := 0;
+  var ChAll: boolean;   ChAll   := TRUE;
+
+  if (PrCurse = 0)
+    PrCurse := GetCursPrice;
+
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+    {
+      if ((KatSopr.cVal <> 0) OR (Val_Rub_KatSopr(KatSopr.NRec) > 1))
+        {
+          SpSopr.Price := SpSopr.VPrice * PrCurse;
+          SpSopr.rPrice := SpSopr.Price;
+        }
+      else
+        {
+          SpSopr.VPrice := SpSopr.Price / PrCurse;
+          SpSopr.rVPrice := SpSopr.VPrice;
+        }
+
+      if (KatSopr.cVal <> 0 OR (Val_Rub_KatSopr(KatSopr.NRec) > 1))
+        SpSopr.rPrice := SpSopr.rVPrice * PrCurse;
+      else
+        SpSopr.rVPrice := SpSopr.rPrice / PrCurse;
+
+      Update Current SpSopr;
+    }
+
+  PopPos(#SpSopr);
+  ChangeSpSoprCurse := TRUE;
+}
+
+//******************************************************************************

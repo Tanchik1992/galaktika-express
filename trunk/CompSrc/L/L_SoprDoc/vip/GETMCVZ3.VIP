@@ -1,0 +1,549 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Выбор услуг из накладых для возврата                      ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#include GETMCVZ.tbl
+
+Table STRUCT MEMTMakeVozvratUsl "Таблица в памяти"
+(
+  cSpSopr      :comp,
+  cSpOrder     :comp,
+  cVal         :comp,
+  VhodNal      :word,
+  dSopr        :date,
+  NSopr        :string,
+  KatPartyName :string,
+  wADoc        :word,
+  KatPodrName  :string,
+  KatMOLName   :string,
+  KatUslName   :string,
+  KatUslKod    :string
+)
+With Index
+(
+  TMP00indexmem = VhodNal+cVal,
+  TMP01indexmem = dSopr,
+  TMP02indexmem = NSopr,
+  TMP03indexmem = KatPartyName,
+  TMP04indexmem = KatPodrName,
+  TMP05indexmem = KatMOLName,
+  TMP06indexmem = KatUslName,
+  TMP07indexmem = KatUslKod
+)
+;
+
+#include oEdIzm.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор услуг из накладых для возврата
+
+Параметры:
+  TypeSopr   - вид сопроводительного документа
+  OrgParam   - для установки ограничений по организации
+  dForm_nakl - дата создания сопр.документа
+#end
+
+//******************************************************************************
+
+Interface iMakeVozvratUsl 'Выбор услуг для возврата' DoAccept, EscClose, Cyan;
+
+#include oEdIzm.var
+
+var TypeSopr  : word;
+     orgparam  : comp;
+     dForm_nakl,begdate,enddate: date;
+     s_SimvRub :string;
+     isFilter,isFilterVhodNalcVal:boolean;
+     DSK_cVal:comp;
+     DSK_VhodNal:comp;
+
+create view
+
+As Select
+  if (SpSopr2.cOtpEd = 0, 'не указана', KatOtpEd.Name)
+         (FieldName = otped)
+//------------------------------------------------------------------------------
+, if (MEMTMakeVozvratUsl.cVal = 0,
+    if (s_SimvRub <> '', s_SimvRub, 'РУБ.'), KlVal.SimvolV)
+         (FieldName = Valut)
+//------------------------------------------------------------------------------
+, if (MEMTMakeVozvratUsl.VhodNal = 1, 'входят', 'не входят')
+         (FieldName = VhNal)
+//------------------------------------------------------------------------------
+, *
+
+From
+  MEMTMakeVozvratUsl
+, KatSopr
+, SpSopr
+, SpOrder
+, KatUsl
+, KatOtpEd
+, KatParty
+, KatEd
+, Pick
+, KlVal
+, SpSopr SpSopr2
+, KatUsl KatUsl2
+, KatPodr
+, KatMol
+, tblGetMcVz
+, tblGetMcVz tblGetMcVz2
+
+where
+((
+       orgparam                   ==  KatSopr.cOrgBase
+  AND  word(201)                  ==  KatSopr.VidSopr
+  AND  dForm_nakl                >>=  KatSopr.dSopr (NoIndex)
+  AND  KatSopr.NRec               ==  SpSopr.cSopr
+  AND  word(2)                    ==  SpSopr.PrMC
+  AND  KatSopr.cMolFrom           ==  KatMol.NRec
+  AND  KatSopr.cPodrFrom          ==  KatPodr.NRec
+  AND  SpSopr.cParty              ==  KatParty.NRec
+  AND  SpSopr.cMcUsl              ==  KatUsl.NRec
+  AND  SpSopr2.NRec               ==  tblGetMcVz.cSpOrder
+
+  AND  MEMTMakeVozvratUsl.cSpSopr ==  SpSopr2.NRec
+  AND  SpSopr2.cOtpED             ==  KatOtpEd.NRec
+  AND  SpSopr2.cMcUsl             ==  KatUsl2.NRec
+  AND  KatUsl2.cEd                ==  KatEd.NRec
+  AND  MEMTMakeVozvratUsl.cVal    ==  KlVal.NRec
+))
+
+ bounds dMainBound =      begdate <<= MEMTMakeVozvratUsl.dSopr and
+                          enddate >>= MEMTMakeVozvratUsl.dSopr
+
+ condition VhodNal_cVal  =   (DSK_VhodNal = MEMTMakeVozvratUsl.VhodNal) and
+                                (DSK_cVal = MEMTMakeVozvratUsl.cVal)
+
+ Order mem01 by MEMTMakeVozvratUsl.dSopr
+ Order mem02 by MEMTMakeVozvratUsl.NSopr
+ Order mem03 by MEMTMakeVozvratUsl.KatPartyName
+ Order mem04 by MEMTMakeVozvratUsl.KatPodrName
+ Order mem05 by MEMTMakeVozvratUsl.KatMOLName
+ Order mem06 by MEMTMakeVozvratUsl.KatUslName
+ Order mem07 by MEMTMakeVozvratUsl.KatUslKod
+;
+
+Parameters
+  TypeSopr
+, OrgParam
+, dForm_nakl
+;
+
+//******************************************************************************
+
+function PreviursKolUsl : double;
+var
+  dd: double;
+{
+  RunInterface('iRasNeotgReklUsl', comp(0), SpSopr2.NRec, dd);
+  PreviursKolUsl := dd / fEdIzm.GetKoefOtpEd(SpSopr2.cOtpEd);
+
+  if PreviursKolUsl > SpSopr2.KolOpl
+    PreviursKolUsl := SpSopr2.KolOpl;
+}
+
+Procedure MakePickTable555(KOL:double);
+{
+  tblGetMcVz.PickKol    := KOL;
+  tblGetMcVz.cOtpEd     := SpSopr2.cOtpEd;
+
+  if (NOT isValid(tntblGetMcVz))
+  {
+    tblGetMcVz.cSpOrder := SpSopr2.NRec;
+
+    if ( GetLast tblGetMcVz2 ordered by tblGetMcVz2.PickNum = tsOk )
+      tblGetMcVz.PickNum := tblGetMcVz2.PickNum + 1;
+
+    if (tblGetMcVz.PickKol <> 0)
+      Insert Current tblGetMcVz;
+  }
+  else
+  {
+    if (tblGetMcVz.PickKol <> 0)
+      Update Current tblGetMcVz;
+    else
+      Delete Current tblGetMcVz;
+  }
+}
+
+Procedure SetSoprFlt;
+var aBegDate, aEndDate: date;
+{
+  ReadMyDsk(aBEGdate,'aBEGdate_iMakeVozvratUsl',false);
+  ReadMyDsk(aENDdate,'aENDdate_iMakeVozvratUsl',false);
+
+  if (RunDialog(GetInterval,abegdate,aenddate) <> cmCancel)
+    {
+      if (abegdate > aenddate)
+        {
+          Message(''#3'Начальная дата фильтра больше конечной. Фильтр не изменен...',Information);
+          Exit;
+        }
+      begdate := abegdate;
+      enddate := aenddate;
+      PushBounds(tbdMainBound);
+      isFilter:=true;
+    }
+  else
+    if (isFilter)
+      if (Message(''#3'Снять установленный фильтр ?',YesNo) = cmYes)
+        {
+          PopBounds(tbdMainBound);
+          isFilter := false;
+        };
+
+  SaveMyDSK(aBEGdate,'aBEGdate_iMakeVozvratUsl');
+  SaveMyDSK(aENDdate,'aENDdate_iMakeVozvratUsl');
+
+  Delete All tblGetMcVz2;
+
+  RereadRecord(#MEMTMakeVozvratUsl);
+}
+
+//******************************************************************************
+
+Panel pnSelect
+  Table MEMTMakeVozvratUsl;
+Browse brSelectNakl ('',hcm_sell_MC_vozvrat, sci1InsPM);
+Fields {Font = {Color = if (tblGetMcVz.PickKol <> 0, ColorMark, 0)}};
+  tblGetMcVz.PickKol              #3'Выбор'          ('Укажите количество услуги'          ,,): [ 9.3], NoProtect;
+  SpSopr2.KolOpl                  #3'Количество'     ('Количество по накладной'            ,,): [10.3], Protect;
+  OtpEd                           #3'ОтпЕд'          ('Отпускная единица измерения услуги' ,,): [ 6  ], Protect;
+  MEMTMakeVozvratUsl.nSopr        #3'Номер накладной'('Номер накладной'                    ,,): [10  ], Protect;
+  MEMTMakeVozvratUsl.dSopr        #3'Дата'           ('Дата формирования накладной'        ,,): [10  ], Protect;
+  MEMTMakeVozvratUsl.KatUslKod    #3'Код'            ('Код услуги'                         ,,): [14  ], Protect;
+  MEMTMakeVozvratUsl.KatUslName   #3'Наименование'   ('Название услуги'                    ,,): [20  ], Protect;
+  SpSopr2.rPrice                  #3'Цена'           ('Цена по накладной'                  ,,): [12.2], Protect;
+  Valut                           #3'Валюта'         ('Валюта накладной'                   ,,): [ 6  ], Protect;
+  MEMTMakeVozvratUsl.KatPodrName  #3'Склад'          ('Наименование склада'                ,,): [10  ], Protect;
+  MEMTMakeVozvratUsl.KatMolName   #3'МОЛ'            ('ФИО материально ответственного лица',,): [10  ], Protect;
+  MEMTMakeVozvratUsl.KatPartyName #3'Партия'         ('Наименование партии'                ,,): [10  ], Protect;
+  VhNal                           #3'Вх.налогов'     ('Входимость налогов накладной'       ,,): [ 6  ], Protect;
+end; // browse
+end; // panel
+Handleevent
+cmFilterSave:
+{
+  SetSoprFlt;
+}
+
+cmHotkeys:
+{
+  PutHotCommand(RunMenu('mnuiMakeVozvratUsl'));
+}
+
+cmColumnClicked:
+{
+  case GetColumnSorting(brSelectNakl, Target) of
+    0: {
+      SetColumnSorting(brSelectNakl, Target,-1);
+
+      Case Target of
+        #MEMTMakeVozvratUsl.dSopr:
+        {
+          SetOrder(timem01);
+          SaveMyDSK(word(1),'_MEMTMakeVozvratUslSetOrder_');
+        }
+
+        #MEMTMakeVozvratUsl.NSopr:
+        {
+          SetOrder(timem02);
+          SaveMyDSK(word(2),'_MEMTMakeVozvratUslSetOrder_');
+        }
+
+        #MEMTMakeVozvratUsl.KatPartyName:
+        {
+          SetOrder(timem03);
+          SaveMyDSK(word(3),'_MEMTMakeVozvratUslSetOrder_');
+        }
+
+        #MEMTMakeVozvratUsl.KatPodrName:
+        {
+          SetOrder(timem04);
+          SaveMyDSK(word(4),'_MEMTMakeVozvratUslSetOrder_');
+        }
+
+        #MEMTMakeVozvratUsl.KatMOLName:
+        {
+          SetOrder(timem05);
+          SaveMyDSK(word(5),'_MEMTMakeVozvratUslSetOrder_');
+        }
+
+        #MEMTMakeVozvratUsl.KatUslName:
+        {
+          SetOrder(timem06);
+          SaveMyDSK(word(6),'_MEMTMakeVozvratUslSetOrder_');
+        }
+
+        #MEMTMakeVozvratUsl.KatUslKod:
+        {
+          SetOrder(timem07);
+          SaveMyDSK(word(7),'_MEMTMakeVozvratUslSetOrder_');
+        }
+      end;
+
+      SetTableBackOrderIn (tnMEMTMakeVozvratUsl, False);
+    }
+
+    -1: {
+      SetColumnSorting(brSelectNakl, Target, 1);
+      SetTableBackOrderIn (tnMEMTMakeVozvratUsl, True);
+     }
+
+     1: {
+       SetColumnSorting(brSelectNakl, Target, -1);
+       SetTableBackOrderIn (tnMEMTMakeVozvratUsl, False);
+     }
+  end;
+
+  RescanPanel(#MEMTMakeVozvratUsl);
+}
+
+cmAlt1:
+{
+  MakePickTable555(SpSopr2.KolOpl-PreviursKolUsl);
+
+  if (NOT isValid(#tblGetMcVz))
+    Message('Нет доступного для выбора количества.');
+
+  RereadRecord;
+  Stop;
+}
+
+cmMarkUnMark :
+{
+  SelectField(#tblGetMcVz.PickKol);
+
+  var TmpPickKol: double;
+
+  TmpPickKol := SpSopr2.KolOpl - PreviursKolUsl;
+
+  if (isValid(#tblGetMcVz))
+    Delete Current tblGetMcVz
+  else
+  {
+    if (TmpPickKol > 0)
+    {
+      tblGetMcVz.cSpOrder := SpSopr2.NRec;
+      tblGetMcVz.PickKol  := SpSopr2.KolOpl - PreviursKolUsl;
+
+      tblGetMcVz.InOtpEd := 1;
+
+      Insert Current tblGetMcVz;
+
+      if (NOT isFilterVhodNalcVal)
+      {
+        DSK_VhodNal := MEMTMakeVozvratUsl.VhodNal;
+        DSK_cVal    := MEMTMakeVozvratUsl.cVal;
+
+        PushCondition(tcVhodNal_cVal);
+
+        isFilterVhodNalcVal := TRUE;
+
+        ReReadRecord;
+      }
+    }
+    else
+      Message('Нет доступного для выбора кол-ва.');
+  }
+
+  RedrawCurrentAndGo (GetCurrentFormat,true);
+}
+
+cmSelectAll:
+{
+  if (NOT isFilterVhodNalcVal)
+  {
+    Message('Необходимо выбрать по <Ins> один документ, '+
+            'чтобы определиться с валютой и входимостью налогов.');
+    Exit;
+  }
+
+  var TmpPickKol: double;
+
+  PushPos(#MEMTMakeVozvratUsl);
+
+  _LOOP MEMTMakeVozvratUsl
+  {
+    TmpPickKol := SpSopr2.KolOpl-PreviursKolUsl;
+
+    if NOT isValid(#tblGetMcVz) AND TmpPickKol>0
+    {
+     tblGetMcVz.cSpOrder := SpOrder.NRec;
+     tblGetMcVz.PickKol  := TmpPickKol;
+
+     tblGetMcVz.InOtpEd := 1;
+
+     Insert Current tblGetMcVz;
+    }
+  }//_LOOP MEMTMakeVozvrat
+
+  PopPos(#MEMTMakeVozvratUsl);
+
+  RereadRecord;
+}
+
+cmUnSelectAll:
+{
+  Delete All tblGetMcVz2;
+  RereadRecord;
+}
+
+cmCheckField:
+{
+  case CurField of
+    #tblGetMcVz.PickKol:
+    {
+      var TmpPickKol: double;
+      TmpPickKol := SpSopr2.KolOpl - PreviursKolUsl;
+
+      if (tblGetMcVz.PickKol > TmpPickKol)
+        tblGetMcVz.PickKol := TmpPickKol;
+      else
+        fEdIzm.CheckKolDiskret(tblGetMcVz.PickKol, SpSopr2.cOtpEd, TRUE, TRUE);
+
+      tblGetMcVz.InOtpEd := 1;
+      MakePickTable555(tblGetMcVz.PickKol);
+
+      if NOT isFilterVhodNalcVal//убрать записи с разной валютой и входимостью налогов
+      {
+        DSK_VhodNal := MEMTMakeVozvratUsl.VhodNal;
+        DSK_cVal    := MEMTMakeVozvratUsl.cVal;
+
+        PushCondition(tcVhodNal_cVal);
+
+        isFilterVhodNalcVal := TRUE;
+      }
+
+      RereadRecord;
+    }
+  end;
+}
+
+cmInit:
+{
+  isFilterVhodNalcVal:=false;
+  ReadMyDsk(DSK_cVal,'cValFromAktRec',false);
+  ReadMyDsk(DSK_VhodNal,'VhodNalFromAktRec',false);
+
+  s_SimvRub := sGetTune('NDE.SimvRub');
+  delete all MEMTMakeVozvratUsl;
+  delete all tblGetMcVz2;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm,
+                 'Создание временной таблицы',1);
+
+  _LOOP KatSopr
+    _LOOP SpSopr
+    {
+      if (KatSopr.dOpr = date(0,0,0))
+        Continue;
+
+      if (not NextVisual)
+        break;
+
+      ClearBuffer(#MEMTMakeVozvratUsl);
+      MEMTMakeVozvratUsl.KatPodrName   := KatPodr.Name;
+      MEMTMakeVozvratUsl.KatMolName    := KatMol.Name;
+      MEMTMakeVozvratUsl.cSpSopr       := SpSopr.nRec;
+  //    MEMTMakeVozvratUsl.cSpOrder    := SpOrder2.nRec;
+      MEMTMakeVozvratUsl.cVal          := KatSopr.cVal ;
+      MEMTMakeVozvratUsl.VhodNal       := KatSopr.VhodNal;
+      MEMTMakeVozvratUsl.dSopr         := KatSopr.dSopr;
+      MEMTMakeVozvratUsl.NSopr         := KatSopr.NSopr;
+      MEMTMakeVozvratUsl.wADoc         := KatSopr.wADoc;
+
+      if (GetFirst KatParty = tsOk)
+        MEMTMakeVozvratUsl.KatPartyName := KatParty.Name;
+
+      if (GetFirst KatUsl = tsOk)
+      {
+        MEMTMakeVozvratUsl.KatUslKod   := KatUsl.Kod;
+        MEMTMakeVozvratUsl.KatUslName  := KatUsl.Name;
+      }
+
+      Insert Current MEMTMakeVozvratUsl;
+    }//_LOOP SpSopr
+
+    if (DSK_cVal <> -1)
+    {
+      PushCondition(tcVhodNal_cVal);
+      isFilterVhodNalcVal:=true;
+    }
+
+    StopVisual('',0);//'Создание временной таблицы'
+
+    if (GetFirst MEMTMakeVozvratUsl <> tsOk)
+    {
+      Message('Нет данных для возврата по выбранному контрагенту на указанную дату.');
+    }
+    else
+    {
+      var OrdTmp:word;
+
+      if readmydsk(OrdTmp,'_MEMTMakeVozvratUslSetOrder_',false)
+      {
+        case OrdTmp of
+          1: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.dSopr,-1);
+            SetOrder(timem01);
+          }
+
+          2: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.NSopr,-1);
+            SetOrder(timem02);
+          }
+
+          3: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.KatPartyName,-1);
+            SetOrder(timem03);
+          }
+
+          4: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.KatPodrName,-1);
+            SetOrder(timem04);
+          }
+
+          5: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.KatMOLName,-1);
+            SetOrder(timem05);
+          }
+
+          6: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.KatUslName,-1);
+            SetOrder(timem06);
+          }
+
+          7: {
+            SetColumnSorting(brSelectNakl,#MEMTMakeVozvratUsl.KatUslKod,-1);
+            SetOrder(timem07);
+          }
+        end;
+      }
+    }
+}
+
+cmDefault:
+{
+  if (GetFirst tblGetMcVz2 = tsOK)
+    if (Message('Добавить выбранные позиции в документ?', YesNO) <> cmYes)
+      delete all tblGetMcVz2;
+}
+
+end;
+end.
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::IMAKEVOZVRATUSL>L_SOPRDOC::IMAKEVOZVRATUSL - Выбор услуг для возврата</link>
+#end
+
+mnuiMakeVozvratUsl Menu
+{
+-'Фильтр по датам',cmFilterSave,'Установить/снять фильтр по датам',hcm_sell_Filtr_Dat,'Alt+B',kbAltB,sci1Esc;
+-'Расчет доcтупного для выбора количества',cmAlt1,'Расчет доступного для выбора количества для текущей позиции',hcm_sell_Rach_Dost_kol,'Alt+1',kbAlt1,sci1Esc;
+}

@@ -1,0 +1,187 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Выбор услуги/соп.услуги по документу-основанию.           ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор услуги/соп.услуги по документу-основанию
+
+Параметры:
+  Cod - ссылка на этап ДО
+#end
+
+#include RasNeotg.vih
+//******************************************************************************
+
+Interface GetSpUSL 'Выбор услуг по документу-основанию' doAccept, EscClose, Cyan;
+  Show at (, 4, 110, 19);
+
+#include RasNeotg.var
+
+Create view
+Var Cod : comp;
+    Curse : double;
+(
+  Nam,
+  kods,
+  Picked,
+  prsopusl
+)
+As select
+  if (SpStep.PrMC = 1, KatMC.Name, KatUSL.Name),
+  if (SpStep.PrMC = 1, KatMC.BarKod, KatUsl.Kod),
+  if (not isValid(tnPick),' ','√'),
+  //PrSopUsl
+  if (spstep.PrMC = 2,'У',            //просто услуга
+   if (spstep.PrMC = 3,'%',           //соп.услуга процент к стоимости
+    if (spstep.PrMC = 4,'С',          //соп.услуга сумма к стоимости
+     if (spstep.PrMC = 5,'В',         //соп.услуга распр.по весу
+      if (spstep.PrMC = 6,'О',        //соп.услуга распр.по обьему
+       if (spstep.PrMC = 7,'К',       //соп.услуга распр.по количеству
+      '?')))))),
+
+   KatMC.*, SpStep.*,
+   BaseDoc.Skidka,BaseDoc.VhodNal,BaseDoc.cNalog,BaseDoc.TipMoney,
+   BaseDoc.cVal, BaseDoc.DopProc
+From
+  KatMC,
+  SpStep,
+  KatUsl,
+  Pick,
+  SPSOPR,
+  BASEDOC,
+  KatParty
+
+Where
+((
+  Cod              == SpStep.cStepDoc and
+  (word(1)          < SpStep.PrMC)    and
+  SpStep.cMCUSL    == KatMC.NRec      and
+  SpStep.cMCUSL    == KatUSL.NRec     and
+  SpStep.cStepDoc  == StepDoc.Nrec    and
+  SpStep.cParty    == KatParty.NRec   and
+  StepDoc.cBaseDoc == BaseDoc.NRec    and
+  BaseDoc.cNalog   == KatNalog.Nrec   and
+  SpStep.Nrec      == Pick.cRec       and
+  word(555)        == Pick.wList
+));
+
+Parameters
+  Cod;
+
+
+
+
+function PreviursKolSopr:double;
+{
+  var dd:double;
+  dd := oRasNeotg.RecalcNeotgr(SpStep.nRec, comp(0));
+  PreviursKolSopr:=dd;
+  If PreviursKolSopr > SpStep.KolSkl
+     PreviursKolSopr := SpStep.KolSkl;
+}
+
+
+Procedure MakePickTable555(KOL:double);
+{
+  Pick.PickKol := KOL;
+
+  if not isValid(tnPick)
+    {
+      Pick.wList := 555;
+      Pick.cRec := SpStep.NRec;
+      Pick.nRec := 0;
+      if Pick.PickKol>0
+        Insert Current Pick;
+    }
+  else
+    if Pick.PickKol>0
+      Update current Pick;
+    else
+      delete current Pick;
+}
+
+
+Procedure KillPick;
+{
+  delete Pick
+    where ((555 == Pick.wList));
+}
+
+Browse brGetMCSopr ('Сделайте выбор и нажмите <Enter>',hcAllVPick,sci1EnIns);
+fields
+    {Font = {Color = if (Picked = '√',ColorMark,0)}};
+  PrSopUsl ('Признак услуги')     : [1],  protect,Centered,NoAutoSize;
+  Picked        '√'               : [1],  skip,Centered,NoAutoSize;
+  Pick.PickKol  'Выбор'           : [9],  [prSignsInKol], noprotect,Right,NoAutoSize;
+  Nam           'Наименование'    : [38], protect;
+  kods          'Код'             : [14], Protect,NoAutoSize;
+  SpStep.Price  'Цена'#13#3'по ДО': [10], [brForSopr_RVPrice], protect, NoAutoSize;
+  SpStep.KolSkl 'Количество'#13#3'по ДО' : [10], [prSignsInKol],protect,NoAutoSize;
+  KatParty.Name 'Партия'          : [15], protect;
+end; // browse
+
+HandleEvent
+
+cmMarkUnMark :
+  {
+    if (isValid(#Pick))
+      delete current Pick
+    else
+      {
+        MakePickTable555(SpStep.KolSkl-PreviursKolSopr);
+        #ifdef ATL51
+        RedrawCurrentAndGo (GetCurrentFormat,true);
+        #else
+        if (GetNext SpStep = tsOk)
+          CallToNeighBours(cmPosDown,#SpStep);
+        #end
+      }
+    rescanpanel(#SpStep);
+  }
+
+cmSelectAll :
+  {
+    PushPos(#SpStep);
+    KillPick;
+    StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,'Расчет доступного количества: ',1);
+    _loop SpStep
+       if not NextVisual break;
+        MakePickTable555(SpStep.KolSkl-PreviursKolSopr);
+    StopVisual('',0);
+    PopPos(#SpStep);
+    rereadrecord;
+  }
+
+cmUnSelectAll :
+  {
+    KillPick;
+    rescanpanel(#SpStep);
+  }
+
+cmCheckField:
+  case Curfield of
+   #Pick.PickKol:
+    {
+      MakePickTable555(Pick.PickKol);
+      rescanpanel(#SpStep);
+    }
+  end;
+
+cmDefault :
+  if (GetFirst Pick  where ((word(555) == Pick.wList))<> tsOk)
+    MakePickTable555(SpStep.KolSkl-PreviursKolSopr);
+
+cmInit :
+  if (GetFirst SpStep <> tsOk)
+    {
+      if (BaseDoc.VidDoc <> 550)
+        Message(''#3'В выбранном документе-основании нет услуг.',CancelButton);
+
+      Abort;
+    }
+
+end; // handleevent
+end. // interface

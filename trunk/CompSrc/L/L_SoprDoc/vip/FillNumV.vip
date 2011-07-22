@@ -1,0 +1,179 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 2000,   корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.73                                                      ║
+ ║ Назначение    : Интерфейс наполнения каталога номеров ед.подв. состава    ║
+ ║ Ответственный : Полежай Алексей Геннадьевич                               ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#ifdef __NUMVAGON__
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Интерфейс наполнения каталога номеров ед.подв. состава
+
+Параметры:
+  Параметров нет
+#end
+
+//******************************************************************************
+
+Interface FillNumV '' EscClose;
+  show at (,,,);
+Create View vFillNumV
+var
+  sNumber: string[20];
+  cMoveCell: comp;
+From
+  Vagon,
+  KatSopr,
+  SpSopr,
+  BaseDoc,
+  StepDoc,
+  SpStep,
+  MoveCell
+where
+((
+  KatSopr.nRec == SpSopr.cSopr     and
+  BaseDoc.nRec == StepDoc.cBaseDoc and
+  StepDoc.nRec == SpStep.cStepDoc
+))
+;
+
+procedure NewVagon(wTypeTbl: word);
+{
+  if (GetFirst Vagon
+        where (( cMoveCell == Vagon.cMoveCell and
+                 sNumber   == Vagon.Num
+              )) = tsOK)
+  {
+    exit;
+  }
+  if ((insert Vagon set Vagon.cMoveCell := cMoveCell,
+                        Vagon.Num := sNumber) <> tsOK){};
+
+  case (wTypeTbl) of
+  0:
+  {
+    set KatSopr.cNMoveCell := Vagon.nRec;
+    if ( update current KatSopr = tsOK ) {};
+  }
+  1:
+  {
+    set SpSopr.cNMoveCell := Vagon.nRec;
+    if ( update current SpSopr = tsOK ) {};
+  }
+  2:
+  {
+    set BaseDoc.cNMoveCell := Vagon.nRec;
+    if ( update current BaseDoc = tsOK ) {};
+  }
+  3:
+  {
+    set SpStep.cNMoveCell := Vagon.nRec;
+    if ( update current SpStep = tsOK ) {};
+  }
+  end;
+}
+
+function ValidNumber: boolean;
+{
+  ValidNumber := ((trim(sNumber) <> '') and
+                  (GetFirst MoveCell
+                     where (( cMoveCell == MoveCell.nRec )) = tsOK)
+                 )
+}
+
+procedure FillVagon;
+{
+  var k: longint;
+  k := 0;
+  StartNewVisual(vtIndicatorVisual, vfTimer + vfConfirm + vfBreak,
+                 ''#3'Наполнение каталога номеров единиц подвижного состава',
+                 100 * ( RecordsInTable(#KatSopr) + RecordsInTable(#BaseDoc) )
+                );
+
+  // по накладным
+  if (GetFirst KatSopr = tsOK)
+    do
+    {
+      sNumber := KatSopr.nVagon;
+      cMoveCell := KatSopr.cCellVal;
+      if (ValidNumber) NewVagon(0)
+      else
+        if (GetFirst SpSopr = tsOK)
+          do
+          {
+            sNumber := SpSopr.nVagon;
+            cMoveCell := SpSopr.cCellVal;
+            if (ValidNumber) NewVagon(1);
+          }
+          while (GetNext SpSopr = tsOK);
+      k := k + 1;
+      if (not nNextVisual(100 * k))
+      {
+        StopVisual('', 0);
+        exit;
+      }
+    }
+    while (GetNext KatSopr = tsOK);
+
+  // по ДО
+  if (GetFirst BaseDoc = tsOK)
+    do
+    {
+      sNumber := BaseDoc.nVagon;
+      cMoveCell := BaseDoc.cCellVal;
+      if (ValidNumber) NewVagon(2)
+      else
+        if (GetFirst SpStep = tsOK)
+          do
+          {
+            sNumber := SpStep.nVagon;
+            cMoveCell := SpStep.cCellVal;
+            if (ValidNumber) NewVagon(3);
+          }
+          while (GetNext SpStep = tsOK);
+      k := k + 1;
+      if (not nNextVisual(100 * k))
+      {
+        StopVisual('', 0);
+        exit;
+      }
+    }
+    while (GetNext BaseDoc = tsOK);
+
+  StopVisual('', 0);
+  SaveMyDsk(True, 'bAlreadyRun_FNUM');
+}
+
+HandleEvent
+
+cmInit:
+{
+  var b, b1: boolean;
+  if (ReadMyDsk(b, 'bAlreadyRun_FNUM', b1))
+  {
+    if (message('Данная функция уже выполнялась ранее. Продолжить наполнение?',
+                YesNo + Warning) <> Yes)
+    {
+      abort;
+      exit;
+    }
+  }
+  FillVagon;
+  abort;
+  exit;
+}
+
+end;
+
+end.
+
+#end

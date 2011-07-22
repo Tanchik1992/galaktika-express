@@ -1,0 +1,213 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Интерфейс выбора акта о приемке материалов (М-7)
+//******************************************************************************
+
+//******************************************************************************
+
+#include oEdIzm.vih
+#include EditDoc.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор накладных для копирования спецификации
+
+Параметры:
+  pNRec    - ссылка на выбранный сопр.документ
+  pOrgBase - ссылка на контрагента
+#end
+
+//******************************************************************************
+
+Interface GetAktM7 'Выбор акта о приемке материалов' DoAccept, EscClose, Cyan;
+  Show at (,,,16);
+
+#include EditDoc.var
+
+Table STRUCT mKatSopr
+(
+  nRec    : comp
+, SortName: string
+)
+With Index
+(
+  mKatSopr01 = SortName
+, mKatSopr02 = nRec
+);
+
+Create view
+
+Var
+  pNRec, pDogovor, pOrgBase: comp;
+  bOtvHran, prOst: boolean;
+  s_SimvRub: string;
+  KolOst: double;
+    
+As select
+
+//--------------------------------------------------------------------------------
+  if(KatSopr.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб'), KlVal.SimVolV)
+    ( FieldName = Valut )
+//--------------------------------------------------------------------------------
+, bCase(KatSopr.Reserved = 0: 'Неотф. пост.',
+        KatSopr.Reserved = 1: 'Отв. хранение',
+        KatSopr.Reserved = 2: 'Снятие с ОХ'; '')
+    ( FieldName = SostAkt )
+//--------------------------------------------------------------------------------
+
+, *
+
+From
+  mKatSopr
+, KatSopr
+, SpSopr
+, KatPodr
+, KlVal
+, SpecZatr
+
+Where
+((
+    mKatSopr.nRec    == KatSopr.nRec
+AND KatSopr.cNote    == KatNotes.nRec
+AND KatSopr.cOrgBase == KatOrg.nRec
+AND KatSopr.cPodrTo  == KatPodr.nRec
+AND KatSopr.cVal     == KlVal.nRec
+))
+;
+
+Parameters
+  pNRec
+, pOrgBase
+, pDogovor
+, bOtvHran
+;
+
+Browse brAktM7 ('', hcIGetSopr, sci14EnEsc);
+  Table mKatSopr;
+
+Fields
+//*****************************************************************************
+  KatSopr.DesGr     #3'Группа'     ('Код группы пользователей')
+        : [5], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  KatSopr.Descr     #3'Дескр.'     ('Дескриптор(идентификатор) пользователя')
+        : [5], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  KatSopr.nSopr     #3'Номер', #3'документа'
+        : [ 8], Protect;
+//*****************************************************************************
+  KatSopr.dSopr     #3'Дата', #3'создания'
+        : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  KatSopr.dOpr      #3'Дата', #3'оприход.'
+        : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  KatNotes.sName    #3'Статус'
+        : [ 8], Skip, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  KatOrg.Name       #3'Контрагент'
+        : [20], Protect;
+//*****************************************************************************
+  KatPodr.Name      #3'Подразделение'
+        : [15], Protect;
+//*****************************************************************************
+  KatSopr.Summa     #3'Сумма'
+        : [18 , '\2p[|-]3666`666`666`666.88'], Protect, LessNull, NoAutoSize;
+//*****************************************************************************
+  Valut             #3'Вал.'
+        : [ 3], skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  SostAkt           #3'Состояние'
+        : [13], skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+end;
+
+HandleEvent
+
+cmInit:
+{
+  s_SimvRub := sGetTune('NDE.SimvRub');
+
+  _LOOP KatSopr where (( word(115) == KatSopr.VidSopr and
+                         ZeroDate  << KatSopr.dOpr ))
+    if (
+        ( KatSopr.Status = 1 )
+         AND
+        ( ( KatSopr.cDogovor = pDogovor ) OR ( pDogovor = 0 ) )
+         AND
+        ( ( KatSopr.cOrgBase = pOrgBase ) OR ( pOrgBase = 0 ) )
+         AND
+        (
+         ( KatSopr.Reserved  = 1 ) AND     bOtvHran
+          OR
+         ( KatSopr.Reserved <> 1 ) AND not bOtvHran
+        )
+       )
+      {
+        prOst := FALSE;
+
+        _LOOP SpSopr where (( KatSopr.NRec == SpSopr.cSopr ))
+          {
+            KolOst := 0;
+
+            if bOtvHran
+              {
+                _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cAddSumTune))
+                  if (SpecZatr.coTable = 1)
+                    KolOst := KolOst + double(SpecZatr.cSpec);
+              }
+            else
+              {
+                _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cUKS))
+                  if (SpecZatr.coTable = 0)
+                    KolOst := KolOst + double(SpecZatr.cSpec);
+              }
+
+            if ( SpSopr.KolFact > 0.000001 * KolOst / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) )
+              {
+                prOst := TRUE;
+
+                Break;
+              }
+          }
+
+        if prOst
+          insert mKatSopr
+            set mKatSopr.nRec     := KatSopr.nRec
+              , mKatSopr.SortName := DateToStr(KatSopr.dOpr, 'YYYYMMDD') + KatSopr.NSopr;
+      }
+
+  if ( GetLast mKatSopr <> tsOk )
+    {
+      message('Не найдено ни одного документа'#13'Акт о приемке материалов', Information);
+      Abort;
+      Exit;
+    }
+
+  if ( pNRec <> 0 )
+    if ( GetFirst mKatSopr where (( pNRec == mKatSopr.nRec )) = tsOk )
+      if ( GetLast KatSopr <> tsOk )
+        {}
+
+  SetTitle('Выбор документа. Акт о приемке материалов');
+}
+
+cmDefault:
+  pNRec := KatSopr.NRec;
+
+cmEdit:
+{
+  if not IsValid(#KatSopr)
+    Exit;
+
+  iEditDoc.RunEditHozDoc(coKatSopr, KatSopr.VidSopr, KatSopr.VidSopr, KatSopr.nRec);
+
+  RescanPanel(#mKatSopr);
+}
+
+end;
+
+End.

@@ -1,0 +1,477 @@
+/*
+ ╔════════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) Корпорация ГАЛАКТИКА, 1997,98                      ║
+ ║ Проект        : ГАЛАКТИКА                                                  ║
+ ║ Система       : Оперативный контур                                         ║
+ ║ Версия        : 5.70                                                       ║
+ ║ Назначение    : Печать акта сверки                                         ║
+ ║ Ответственный : Кратович Сергей Леонидович (SK)                            ║
+ ╚════════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Интерфейс печати акта сверки
+#end
+Interface AktSverP 'Печать акта сверки' EscClose; //
+  Show At (,,,);
+Create View
+Var
+  AktNRec  : comp;
+  PrMC : Word;
+  GroupNRec : Comp;
+  GroupCode : String;
+  PlanTable   : Longint;
+  PlanNRec, PlanDate1, PlanDate2, PlanRes, PlanKol, PlanPrice, PlanSumma : Word;
+  GPTable : Longint;
+  GPNo, GPNRec, GPLevel, GPName : Word;
+From
+  AktSver                            ,
+  Synonym DocSver PlDocSver          ,
+  Dogovor                            ,
+  CalPlan                            ,
+  Synonym SpDocs SpCalPlan           ,
+  BaseDoc,
+  StepDoc,
+  SpStep,
+  KatUSL,
+  KatMC,
+  GrPlat,
+  IerGrPl,
+  Synonym BaseDoc RepBaseDoc         ,
+  SpDocs                             ,
+  Synonym StepDoc RepStepDoc         ,
+  Synonym SpStep RepSpStep           ,
+  SoprHoz                            ,
+  Synonym SoprHoz PlSoprHoz          ,
+  SpGrPlD,
+  KatVidD                            ,
+  KatOrg                             ,
+  synonym KatOrg KatOrg1             ,
+  synonym KatOrg GrPol               ,
+  synonym KatUsl RepKatUsl           ,
+  synonym GroupUsl RepGroupUsl       ,
+  synonym GroupUsl PlanGroup         ,
+  synonym KatMC RepKatMC             ,
+  KlVal                              ,
+  CursVal
+ ,AttrNam
+ ,AttrVal
+ ,ResOtgr
+where
+((
+  AktNRec             ==   AktSver.NRec         and
+  AktSver.cDogovor    ==   Dogovor.nRec         and
+  Dogovor.NRec        ==   CalPlan.cDogovor     and
+  CalPlan.nRec        ==   SpCalPlan.cDoc       and
+  word(403)           ==   SpCalPlan.TiDk       and
+  word(2)             ==   SpCalPlan.prMC       and
+  SpCalPlan.cGrMCUSL  ==   PlanGroup.NRec       and
+  Dogovor.cMyOrg      ==   KatOrg.nRec          and
+  Dogovor.cOrg        ==   KatOrg1.nRec         and
+  Dogovor.cGrPol      ==   GrPol.nRec           and
+  Dogovor.cValRas     ==   KlVal.nRec           and
+  AktSver.nRec        ==   DocSver.cAktSver     and
+  word(12)            ==   DocSver.TiDkSver     and //ДО
+  AktSver.nRec        ==   PlDocSver.cAktSver   and
+  word(23)            ==   PlDocSver.TiDkSver   and
+  PlDocSver.cSoprHoz  ==   PlSoprHoz.nRec       and //платежи
+  PlSoprHoz.cSoprDoc  ==   SpGrPlD.cPlat        and
+  PlSoprHoz.TiDkGal   ==   SpGrPlD.TiDkGal      and
+  DocSver.cSoprHoz    ==   SoprHoz.nRec         and
+  SoprHoz.cSoprDoc    ==   RepBaseDoc.nRec      and
+  SoprHoz.cSoprDoc    ==   BaseDoc.nRec         and
+  CalPlan.NRec        ==   BaseDoc.cCalPlan(noindex)     and
+
+  BaseDoc.nRec        ==   StepDoc.cBaseDoc     and
+  StepDoc.nRec        ==   SpStep.cStepDoc      and
+  word(2)             ==   SpStep.prMC          and
+  SpStep.cMCUSL       ==   KatUSL.NRec          and
+  RepBaseDoc.nRec     ==   RepStepDoc.cBaseDoc  and
+  RepStepDoc.nRec     ==   RepSpStep.cStepDoc   and
+  word(2)             ==   RepSpStep.PrMC       and
+  RepSpStep.cMCUSL    ==   RepKatUSL.NRec       and
+  RepKatUsl.cGroupUsl ==   RepGroupUsl.NRec
+))
+;
+
+Parameters
+ AktNRec;
+
+form frm_AktSverP('AktSverP.OUT','AktSverP');
+
+//****************************************************************************
+// Определяет разницу в днях между двумя датами
+//****************************************************************************
+Function Days_Between( _Date1 : Date; _Date2 : Date) : Longint;
+{
+   Days_Between := Longint(Abs(To_Days(_Date1)-To_Days(_Date2)));
+} // function Days_Between
+
+//****************************************************************************
+// Функция возвращает строковое значение внешнего аттрибута
+//****************************************************************************
+Function GetAttrStr( _wTable : Word; _nRec : Comp; _Name : String ) : String;
+{
+  GetAttrStr := '';
+  if ( GetFirst AttrNam where (( word(_wTable) == AttrNam.wTable and
+                                  _Name        == AttrNam.Name )) =tsOk )
+     if ( GetFirst AttrVal where (( word(_wTable) == AttrVal.wTable and
+                                     _nRec        == AttrVal.cRec and
+                                     AttrNam.nRec == AttrVal.cAttrNam  )) = tsOk )
+        GetAttrStr := AttrVal.vString;
+} // function GetAttrStr
+
+//****************************************************************************
+// Функция переводит строку вида YYYYMMDD в DD/MM/YYYY
+//****************************************************************************
+Function Str2Date( _strdate : String ) : String;
+{
+  var y,m,d : String;
+  y := SubStr( _strdate,1,4);
+  m := Substr( _strdate,5,2);
+  d := Substr( _strdate,7,2);
+  Str2Date := d+'/'+m+'/'+y;
+} // function Str2Date
+
+//****************************************************************************
+//занесение в маркер групп услуг
+//****************************************************************************
+Procedure FillGrMarker;
+{
+  var Marker : Longint;
+  Marker := InitMarker('AktSverPMarker',8,100,10);
+  ClearMarker(Marker);
+  //заносим в маркер все группы услуг из спецификации ДО, входящих в акт сверки
+  _loop DocSver
+    _loop RepStepDoc
+      _loop RepSpStep
+        {
+           InsertMarker(Marker, RepKatUsl.cGroupUsl);
+        }
+  DoneMarker(Marker,'AktSverPMarker');
+} // procedure FillGrMarker
+
+//*****************************************************************************
+//создание временной таблицы для вывода значений по пунктам плана
+//*****************************************************************************
+Function CreatePlanTable : boolean;
+{
+   CreatePlanTable := True;
+   PlanTable  := TblInitNew(100,10);
+   if ( PlanTable = 0 )
+   {
+     Message(''#3'Ошибка создания временной таблицы PlanTable', Error);
+     CreatePlanTable := False;
+     Exit;
+   }
+   PlanDate1  := TblNewField( PlanTable, ftString );
+   PlanDate2  := TblNewField( PlanTable, ftString );
+   PlanNRec   := TblNewField( PlanTable, ftComp   );
+   TblEndKey( PlanTable );
+   PlanRes    := TblNewField( PlanTable, ftComp   );
+   PlanPrice  := TblNewField( PlanTable, ftDouble );
+   PlanKol    := TblNewField( PlanTable, ftDouble );
+   PlanSumma  := TblNewField( PlanTable, ftDouble );
+   TblSetDuplicate( PlanTable, True);
+} // function CreatePlanTable
+
+Function FillPlan : boolean;
+{
+  var i,j : Longint;
+  var Kol, Price, Summa, OldKol, OldSumma : double;
+  var PlanBegin, PlanEnd : date;
+  var IsInGroup : Boolean;
+  FillPlan := True;
+
+  _loop CalPlan
+  {
+    //заносим во временную таблицу только пункты плана с внешним атрибутом
+    //"Период"="месяц"
+    //if ( GetAttrStr(coCalPlan, CalPlan.NRec, 'Период') != 'месяц' )  Continue;
+   PlanBegin := if ( CalPlan.TermDefBy=0, CalPlan.DFrom, CalPlan.dCond );
+   PlanEnd   := if ( CalPlan.TermDefBy=0, CalPlan.DTo, Add_Day(CalPlan.dCond, LongInt(CalPlan.nDays)) );
+   //пункт плана - месяц ?
+   if ( Days_Between(PlanBegin,PlanEnd) > 31 ) Continue;
+
+   IsInGroup := False;
+   _loop SpCalPlan
+    {
+       if ( Instr(PlanGroup.Kod,GroupCode) > 0 )
+        {
+          IsInGroup := True;
+          Break;
+        }
+    }
+
+   if ( not IsInGroup ) Continue;
+
+   //проверяем, попадает ли пункт плана в интервал акта сверки
+   if ( AktSver.dBeg < PlanBegin )and( AktSver.dEnd < PlanEnd )and( AktSver.dEnd < PlanBegin ) Continue;
+   if ( PlanBegin < AktSver.dBeg )and( PlanEnd < AktSver.dEnd )and( PlanEnd < AktSver.dBeg ) Continue;
+
+   Kol   := 0;
+   Price := 0;
+   Summa := 0;
+
+   var PrcNal : Double;
+    //пробегаем по всем ДО, входящим в акт сверки и относящимся к
+    //пункту плана
+   _loop DocSver
+    _loop StepDoc
+    {
+      _loop SpStep
+        {
+          if ( KatUsl.cGroupUsl != GroupNRec  ) Continue;
+          if ((BaseDoc.VhodNal != 1) and (SpStep.Kol > 0))
+          {
+            PrcNal  := oValFunc.GetAnyCurrency(SpStep.cVal, SpStep.NDS, SpStep.dDoc, AktSver.cVal) / SpStep.Kol;
+          }
+          Price := oValFunc.GetAnyCurrency(SpStep.cVal, SpStep.Price, SpStep.dDoc, AktSver.cVal);
+          Summa := SpStep.Kol*(Price+PrcNal);
+          Kol   := SpStep.Kol;
+          //проверяем, есть ли для пункта плана запись с такой ценой и ресурсом
+          /*TblSFComp   ( PlanTable, PlanNRec,  CalPlan.NRec );
+          TblSFString ( PlanTable, PlanDate1, DateToStr(PlanBegin,'YYYYMMDD'));
+          TblSFString ( PlanTable, PlanDate2, DateToStr(PlanEnd  ,'YYYYMMDD'));
+          TblSFComp   ( PlanTable, PlanRes,   SpStep.cResOtgr );
+          TblSFDouble ( PlanTable, PlanPrice, Price );
+          if ( TblGetEqual(PlanTable) )
+          {
+            OldKol   := TblGFDouble( PlanTable, PlanKol   );
+            OldSumma := TblGFDouble( PlanTable, PlanSumma );
+            TblSFDouble ( PlanTable, PlanKol, Kol + OldKol );
+            TblSFdouble ( PlanTable, PlanSumma, Summa + OldSumma );
+            if ( TblUpDateCurrent( PlanTable ) != tsOk )
+            {
+               TblDeleteTable(PlanTable);
+               Message(''#3'Ошибка обновления временной таблицы PlanTable', Error);
+               Exit;
+            }*/
+          TblClearBuffer( PlanTable );
+          TblSFComp   ( PlanTable, PlanNRec,  CalPlan.NRec );
+          TblSFString ( PlanTable, PlanDate1, DateToStr(PlanBegin,'YYYYMMDD'));
+          TblSFString ( PlanTable, PlanDate2, DateToStr(PlanEnd  ,'YYYYMMDD'));
+          TblSFComp   ( PlanTable, PlanRes,   SpStep.cResOtgr );
+          TblSFDouble ( PlanTable, PlanPrice, Price );
+          TblSFDouble ( PlanTable, PlanKol,   Kol   );
+          TblSFdouble ( PlanTable, PlanSumma, Summa );
+          if ( TblInsertCurrent( PlanTable ) != tsOk )
+          {
+             TblDeleteTable(PlanTable);
+             Message(''#3'Ошибка заполнения временной таблицы PlanTable', Error);
+             Exit;
+          }
+        }
+    }
+  }
+} // function FillPlan
+
+//*****************************************************************************
+//создание временной таблицы для вывода иерархии платежных средств
+//*****************************************************************************
+ Function CreateGPTable : boolean;
+ {
+   CreateGPTable := True;
+   GPTable  := TblInitNew(100,10);
+
+   if ( GPTable = 0 )
+   {
+     Message(''#3'Ошибка создания временной таблицы GPTable', Error);
+     CreateGPTable := False;
+     Exit;
+   }
+   GPNo     := TblNewField( GPTable, ftString );
+   TblEndKey( GPTable );
+   GPNRec   := TblNewField( GPTable, ftComp    );
+   GPLevel  := TblNewField( GPTable, ftLongInt );
+   GPName   := TblNewField( GPTable, ftString  );
+} // function CreateGPTable
+
+Function FillNextGPTable( _nRec : Comp; _SortName : String; _Level : LongInt ) : Boolean;
+{
+  var i, N : LongInt;
+  Var StrHierar   : String;
+
+  FillNextGPTable := True;
+  N := 0;
+  StrHierar := '.                                    ';
+  _loop GrPlat where (( _nRec == GrPlat.cGroup ))
+   {
+     N := N + 1;
+     TblClearBuffer( GPTable );
+     TblSFString ( GPTable, GPNo,  _SortName+DoubleToStr( Double(N),'77'));
+     TblSFComp   ( GPTable, GPNRec, GrPlat.NRec );
+     TblSFLongInt( GPTable, GPLevel, _Level + 1 );
+     TblSFString ( GPTable, GPName, Substr(StrHierar,1,(_Level+1)*4+4)+GrPlat.Name );
+     if ( TblInsertCurrent( GPTable ) != tsOk )
+      {
+        TblDeleteTable( GPTable);
+        Message(''#3'Ошибка заполнения временной таблицы GPTable', Error);
+        FillNextGPTable := False;
+        Exit;
+      }
+   }
+} // Function FillNextGPTable
+
+//заносим во временную таблицу иерархию платежных средств
+Function FillGPTable : Boolean;
+{
+  var i, N : LongInt;
+
+  FillGPTable := True;
+  if ( Not CreateGPTable )
+  {
+    FillGPTable := False;
+    Exit;
+  }
+  N := 0;
+  //вначале заносим корневые записи
+  _loop GrPlat where (( Comp(0) == GrPlat.cGroup ))
+   {
+     N := N + 1;
+     TblClearBuffer( GPTable );
+     TblSFString ( GPTable, GPNo,  DoubleToStr( Double(N),'77'));
+     TblSFComp   ( GPTable, GPNRec, GrPlat.NRec );
+     TblSFLongInt( GPTable, GPLevel, 0 );
+     TblSFString ( GPTable, GPName, '.   '+GrPlat.Name );
+     if ( TblInsertCurrent( GPTable ) != tsOk )
+      {
+        TblDeleteTable( GPTable);
+        Message(''#3'Ошибка заполнения временной таблицы GPTable', Error);
+        FillGPTable := False;
+        Exit;
+      }
+   }
+   //просматриваем записи и для каждой заносим подчиненные
+   N := 0;
+   while ( TblGetIndex(GPTable,N)) Do
+    {
+      N := N + 1;
+      if ( Not FillNextGPTable( TblGFComp(GPTable,GPNRec),
+                                TblGFString(GPTable,GPNo),
+                                TblGFLongInt(GPTable,GPLevel) ) )
+      {
+        FillGPTable := False;
+        Exit;
+      }
+    }
+} // function FillGPTable
+
+//****************************************************************************
+// сумма по платежам акта взаимозачета
+// если _GrPlat=0 то по всем платежам
+// если _GrPlat <>0 то по платежам группы
+//****************************************************************************
+Function GetOpl( _GrPlat : Comp ): double;
+var
+  dtmp : double;
+{
+  dtmp := 0 ;
+  _loop PlDocSver
+    {
+      if ( _GrPlat = 0 )        //по всем платежам
+        dtmp := dtmp + PlDocSver.SumVal ;
+      else                      //по группе платежей
+      {
+        _loop SpGrPlD // платеж принадлежит группе
+        {
+          if ( SpGrPlD.cGroupPlat = _GrPlat )
+             dtmp := dtmp + PlDocSver.SumVal ;
+          else                  //платеж принадлежит группе, входящей в иерархию
+            if ( GetFirst IerGrPl where (( _GrPlat            == IerGrPl.cGroup and
+                                           SpGrPlD.cGroupPlat == IerGrPl.cRecDs     )) =tsOk )
+              dtmp := dtmp + PlDocSver.SumVal ;
+        }
+      }
+    }
+ GetOpl := dTmp;
+}
+
+Procedure MakeReport;
+{
+    var Kol, Price, Summa : double;
+    var i, Marker, MarkerCount : LongInt;
+    if (  not CreatePlanTable )  Exit;
+    FillGrMarker;
+
+    frm_AktSverP.write ( AktSver.nRec );
+    frm_AktSverP.write ( AktSver.NoDoc );
+    frm_AktSverP.write ( AktSver.dDoc );
+    frm_AktSverP.write ( KatOrg.Name );
+    frm_AktSverP.write ( KatOrg1.Name );
+    frm_AktSverP.write ( GrPol.Name );
+    frm_AktSverP.write ( Dogovor.NoDoc );
+    frm_AktSverP.write ( Dogovor.dDoc );
+    frm_AktSverP.write ( if (Dogovor.cValRas=0,sGetTune('NDE.SimvRub'),KlVal.SimvolV) );
+    frm_AktSverP.write ( AktSver.dBeg );
+    frm_AktSverP.write ( AktSver.dEnd );
+    frm_AktSverP.write ( AktSver.SaldoIn );
+    frm_AktSverP.write ( GetOpl(0) );
+    frm_AktSverP.write ( AktSver.SaldoOut );
+    oValFunc.InitVal;
+    Marker := InitMarker('AktSverPMarker',8,100,10);
+    MarkerCount := GetMarkerCount(Marker);
+    for(i:=0;i<MarkerCount;i:=i+1)
+    {
+      GetMarker(Marker,i,GroupNRec);
+      if ( GetFirst RepGroupUsl where ((GroupNRec==RepGroupUsl.NRec))=tsOK )
+        GroupCode := RepGroupUsl.Kod;
+      frm_AktSverP.PutEventById( feDoLoop, fcASMCLoop );
+      frm_AktSverP.write ( RepGroupUsl.Name );
+      if ( not FillPlan )
+       {
+         oValFunc.DoneVal;
+         DoneMarker(Marker,'AktSverPMarker');
+         Exit;
+       }
+      while ( TblGetFirst( PlanTable )) do
+      {
+        Kol   := TblGFDouble( PlanTable, PlanKol   );
+        Price := TblGFDouble( PlanTable, PlanPrice );
+        Summa := TblGFDouble( PlanTable, PlanSumma );
+
+        frm_AktSverP.PutEventById( feDoLoop, fcASPlanLoop );
+        frm_AktSverP.write ( Str2Date( TblGFString( PlanTable, PlanDate1 )));
+        frm_AktSverP.write ( Str2Date( TblGFString( PlanTable, PlanDate2 )));
+        frm_AktSverP.write ( Kol );
+        frm_AktSverP.write ( Price );
+        frm_AktSverP.write ( Summa );
+        if ( GetFirst ResOtgr where (( TblGFComp(PlanTable,PlanRes)==ResOtgr.nRec)) = tsOK )
+          frm_AktSverP.write ( ResOtgr.Name );
+        else
+          frm_AktSverP.SkipFormat(1);
+        TblDeleteCurrent( PlanTable );
+      }
+    }
+    DoneMarker(Marker,'AktSverPMarker');
+    if ( Not FillGPTable )
+    {
+      oValFunc.DoneVal;
+      Exit;
+    }
+    while ( TblGetFirst( GPTable )) do
+    {
+      frm_AktSverP.PutEventById( feDoLoop, fcASPlatLoop );
+      frm_AktSverP.write ( TblGFString( GPTable, GPName) );
+      frm_AktSverP.write ( GetOpl(TblGFComp( GPTable, GPNRec)) );
+      TblDeleteCurrent( GPTable );
+    }
+    frm_AktSverP.PutEvent(feBreak);
+    frm_AktSverP.ShowFile ( 'Акт сверки для потребителя' );
+    oValFunc.DoneVal;
+  } // procedure MakeReport
+
+HandleEvent // Interface GetAktSver
+cmInit :
+  {
+    if (AktNRec = 0)
+    {
+      message('Документ еще не оформлен');
+      Abort;
+      Exit;
+    }
+    MakeReport;
+    Abort;
+  }
+end ; // HandleEvent Interface GetAktSver
+end. // Interface GetAktSver

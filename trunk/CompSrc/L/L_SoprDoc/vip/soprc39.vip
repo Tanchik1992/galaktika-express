@@ -1,0 +1,132 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#doc
+Назначение:
+  показывает окно со всеми налогами по док-ту
+
+Параметры:
+  c1 - ссылка на сопр.документ
+#end
+
+//******************************************************************************
+
+Interface iwDocNal, cacheable;
+
+Table STRUCT TmpDocNal "Таблица в памяти"
+(
+  NalogName     : string,
+  SumNalDoc     : double,
+  SumNalNDE     : double,
+  SumNalVal     : double
+)
+With Index
+(
+  TmpDocNal01 = NalogName
+);
+
+Create view
+var
+  c1       : comp;    //KatSopr.nRec
+  s_SimvRub: string;  //символ НДЕ
+  DocInNDE: boolean; //документ в валюте
+(
+  Valut
+)
+As select
+  if(DocInNDE, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+
+from
+  KatSopr,
+  SpSopr,
+  KatNalog,
+  SpDocNal,
+  KlVal,
+  TmpDocNal
+
+where
+((
+  c1              == KatSopr.NRec      AND
+  KatSopr.NRec    == SpSopr.cSopr      AND
+  SpSopr.NRec     == SpDocNal.cSpDoc   AND
+  KatSopr.VidSopr == SpDocNal.TipDoc   AND
+  SpDocNal.cNalog == KatNalog.NRec     AND
+  KatSopr.cValut  == KlVal.NRec
+))
+;
+
+parameters
+  c1;
+
+Window  wDocNal 'Налоги по документу' escClose;
+  Show at (22, 8, 90, 14);
+Panel p1
+  Table TmpDocNal;
+browse scwDocNal (, hcSellM1DocNal, sci1Esc);
+Fields
+  TmpDocNal.NalogName 'Налог'            : Protect, [14], {Font = {Bold   = TRUE}};
+  TmpDocNal.SumNalDoc 'Сумма в вал.док.': Protect, [12], [brForSopr_RVPrice];
+  Valut               'Вал.'             : Skip,   [4] , {Font = {Italic = TRUE}};
+  TmpDocNal.SumNalNDE 'Сумма в НДЕ'      : Protect, [12], [brForSopr_Price];
+  TmpDocNal.SumNalVal 'Сумма в вал.'     : Protect, [12], [brForSopr_VPrice];
+  KlVal.SimVolV       'Вал.'             : Skip,   [4] , {Font = {Italic = TRUE}};
+end; // Browse
+end; // panel
+end; // window
+
+Procedure MakeKatSoprNal;
+{
+  Delete ALL TmpDocNal;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm,
+                 'Просмотр налогов по документу: ', 1);
+  _LOOP SpSopr
+    _LOOP SpDocNal
+    {
+      if (GetFirst TmpDocNal where ((KatNalog.Name == TmpDocNal.NalogName)) = tsOk)
+      {
+        TmpDocNal.SumNalDoc := TmpDocNal.SumNalDoc + if (DocInNDE, SpDocNal.Summa, SpDocNal.SumVal);
+        TmpDocNal.SumNalVal := TmpDocNal.SumNalVal + SpDocNal.SumVal;
+        TmpDocNal.SumNalNDE := TmpDocNal.SumNalNDE + SpDocNal.Summa;
+        update current TmpDocNal;
+      }
+      else
+      {
+        ClearBuffer(#TmpDocNal);
+        TmpDocNal.NalogName := KatNalog.Name;
+        TmpDocNal.SumNalDoc := if (DocInNDE, SpDocNal.Summa, SpDocNal.SumVal);
+        TmpDocNal.SumNalVal := SpDocNal.SumVal;
+        TmpDocNal.SumNalNDE := SpDocNal.Summa;
+        Insert current TmpDocNal;
+      }
+
+      if (not NextVisual)
+      {
+        StopVisual('', 0);
+        Exit;
+      }
+    }//_LOOP SpDocNal
+
+  StopVisual('', 0);
+
+  If (GetFirst TmpDocNal <> tsOk)
+    Message('В данном документе нет налогов.', Information);
+  else
+    RunWindowModal(wDocNal);
+}
+
+
+HandleEvent
+cmInit:
+{
+  s_SimvRub := sGetTune ('NDE.SimvRub');
+  DocInNDE  := KatSopr.cVal = 0;
+
+  MakeKatSoprNal;
+  Abort;
+}
+end;
+End.

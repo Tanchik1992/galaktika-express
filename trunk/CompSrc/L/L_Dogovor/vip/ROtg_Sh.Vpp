@@ -1,0 +1,162 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Общие функщии для Распоряжений на отгрузку                ║
+ ║ Ответственный : Славко Александр Анатольевич (SLAVKO)                     ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+Create View LoOtgOrder
+From
+  OtgOrder,
+  SpOtgOrd,
+  SpNZRasp
+;
+
+Procedure ROtg_Sh_NoDoc_Del(_NoDoc : string;
+                            _dDoc  : date);
+{
+  DelLastNumD(word(441), _NoDoc);
+  DelLastNumD_(word(441), SubStr(_NoDoc,5,1) + String(Year(_dDoc)) + SubStr(_NoDoc,7,2), SubStr(_NoDoc,9,3));
+  DelLastNumD_(word(441), '30/P',SubStr(_NoDoc,6,5));
+}; // Procedure ROtg_Sh_NoDoc_Del
+
+Procedure ROtg_Sh_NoDoc(_DesGr         : string;
+                        _MarPunkt_Code : string;
+                        _dDoc          : date;
+                        _Status        : word;
+                        var _NoDoc : string);
+{
+  ROtg_Sh_NoDoc_Del(_NoDoc,_dDoc);
+  if ((wGetTune('Doc.NZ.RotgrFormNum') > 0) and (_Status = word(1)))
+    {
+     _DesGr := SubStr(_DesGr,1,3);
+     case Length(_DesGr) of
+       0: _DesGr := '___';
+       1: _DesGr := '__' + _DesGr;
+       2: _DesGr := '_'  + _DesGr;
+     end; // case
+      _MarPunkt_Code := SubStr(_MarPunkt_Code,1,1);
+     case Length(_MarPunkt_Code) of
+       0: _MarPunkt_Code := '_';
+     end;
+     _NoDoc :=   _DesGr + '/'
+               + _MarPunkt_Code + '-'
+               + if((Month(_dDoc) > 9),String(Month(_dDoc)), '0' + String(Month(_dDoc)) )
+               + GetLastNumD__(word(441), _MarPunkt_Code + String(Year(_dDoc))
+               + if((Month(_dDoc) > 9),String(Month(_dDoc)), '0' + String(Month(_dDoc)) ), 3);
+    }
+  else
+    {
+      if ( LoOtgOrder.GetLast OtgOrder ordered by index OtgOrder02 = tsOk )
+      {
+        if ( SubStr(LoOtgOrder.OtgOrder.NoDoc,1,4)='30/P')
+        {
+          if (wGetTune('FN.AvtoNum') = 0)
+          { //по таблице
+             _NoDoc := '30/P-'+GetLastNumD__(word(441),'30/P',5)+'C';
+          }
+          else
+          { //по последнему номеру
+          var s : string;
+          var len : byte;
+          len := Instr('C',LoOtgOrder.OtgOrder.NoDoc);
+          len := if ( len >=6 , len-6, 0);
+          s := SubStr(LoOtgOrder.OtgOrder.NoDoc, 6, len);
+          if ( s = '' ) s:='00000';
+          s:= NextNumStr(s);
+          _NoDoc := '30/P-'+s+'C';
+          }
+        }
+       else
+        {
+          _NoDoc := GetLastNumD(word(441));
+        }
+     }
+    else
+     {
+       _NoDoc := GetLastNumD(word(441));
+     }
+   }
+}; // Procedure ROtg_Sh_NoDoc
+
+
+// удаление SpOtgOrd
+Function Delete_SpOtgOrd(varcSpOtgOrd : comp) : boolean;
+{
+  var piKatDopEd2 :iKatDEI;
+  Delete_SpOtgOrd := False;
+  // удаление позиций: SpNZRasp
+  if (LoOtgOrder.GetFirst SpOtgOrd where ((varcSpOtgOrd == SpOtgOrd.NRec)) = tsOk) {};
+// shaf  if (LoOtgOrder.GetFirst SpNZRasp where ((SpOtgOrd.NRec == SpNZRasp.cSpOtgOrd)) = tsOk)
+// shaf    do
+   LoOtgOrder.EXTERNAL _LOOP SpNZRasp where ((SpOtgOrd.NRec == SpNZRasp.cSpOtgOrd))
+    {
+      piKatDopEd2.SpDopEd_Delete(coSpNZRasp, loOtgOrder.SpNZRasp.NRec,word(441));
+      LoOtgOrder.delete current SpNZRasp;
+    }
+// shaf   while (LoOtgOrder.GetNext SpNZRasp where ((SpOtgOrd.NRec == SpNZRasp.cSpOtgOrd)) = tsOk);
+  LoOtgOrder.delete current SpOtgOrd;
+  Delete_SpOtgOrd := True;
+}; // function Delete_SpOtgOrd
+
+// удаление OtgOrder
+Function Delete_OtgOrder(varcOtgOrder : comp) : boolean; // удаление OtgOrder
+Var
+  varcOwner
+     : comp;
+{
+  Delete_OtgOrder := False;
+  if (OtgOrder.IsLeaf <> 1)
+    {
+     Message(''#3'Имеются подчиненные документы для распоряжения на отгузку.'#13#3+
+                 'Документ № ' + string(OtgOrder.NoDoc) + ' не удален.',Information);
+     Exit;
+    };
+  if (LoOtgOrder.GetFirst OtgOrder where ((varcOtgOrder == OtgOrder.NRec)) = tsOk) {};
+  // удаление позиций: SpOtgOrd
+// shaf  if (LoOtgOrder.GetFirst SpOtgOrd where ((varcOtgOrder == SpOtgOrd.cOtgOrder)) = tsOk)
+// shaf    do
+  LoOtgOrder.EXTERNAL _LOOP SpOtgOrd where ((varcOtgOrder == SpOtgOrd.cOtgOrder))
+    {
+      Delete_SpOtgOrd(LoOtgOrder.SpOtgOrd.NRec);
+    }
+// shaf    while (LoOtgOrder.GetNext SpOtgOrd where ((varcOtgOrder == SpOtgOrd.cOtgOrder)) = tsOk);
+  oStatlog.StatLog_Delete( word(441), LoOtgOrder.OtgOrder.NRec);
+  ROtg_Sh_NoDoc_Del(LoOtgOrder.OtgOrder.NoDoc,LoOtgOrder.OtgOrder.dDoc);
+  DelDocInSoprHoz( word(441), LoOtgOrder.OtgOrder.NRec);
+  varcOwner := LoOtgOrder.OtgOrder.cOwner;
+  LoOtgOrder.delete current OtgOrder;
+  if (LoOtgOrder.GetFirst OtgOrder where ((varcOwner == OtgOrder.cOwner)) <> tsOk)
+    if (LoOtgOrder.GetFirst OtgOrder where ((varcOwner == OtgOrder.NRec)) = tsOk)
+    {
+     LoOtgOrder.OtgOrder.IsLeaf := 1;
+     LoOtgOrder.update current OtgOrder;
+    };
+  Delete_OtgOrder := True;
+}; // function Delete_OtgOrder
+
+// Возвращает все что есть по данному разрезу SpDocs в SpNZRasp.KolFact "Количество к отгрузке"
+// varcSpDocs  - SpDocs.NRec
+// varMask - маска какие статусы(OtgOrder.Status) включать см. WSTATDOG.VIP
+// varcSpNZRasp - исключая обработку этой позиции,если comp(0) то все
+Function KolFact_OtgOrder( varcSpDocs : comp;varMask : word;varcSpNZRasp : comp) : double;
+var varNRec : comp;
+    varSumm : double;
+{
+ varSumm := 0;
+ varNRec := 0;
+ LoOtgOrder._loop SpNZRasp where ((varcSpDocs == SpNZRasp.cSpNZak))
+ {
+  if (LoOtgOrder.SpNZRasp.NRec <> varcSpNZRasp)
+    if (LoOtgOrder.GetFirst SpOtgOrd where ((SpNZRasp.cSpOtgOrd == SpOtgOrd.NRec)) = tsOk)
+      if (LoOtgOrder.GetFirst OtgOrder where ((SpOtgOrd.cOtgOrder == OtgOrder.NRec)) = tsOk)
+        if ((varMask and word(1 shl LoOtgOrder.OtgOrder.Status)) <> 0)
+           varSumm := varSumm + LoOtgOrder.SpNZRasp.KolFact;
+ }
+ KolFact_OtgOrder := varSumm;
+}; // procedure KolFact_OtgOrder

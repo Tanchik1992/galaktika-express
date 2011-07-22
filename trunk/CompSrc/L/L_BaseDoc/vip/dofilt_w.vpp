@@ -1,0 +1,791 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Установка фильтров в ДО (Alt+B)
+//********************************************************************************
+
+Procedure ResetAllFilters;
+{
+  if ( BoundActive(tbdMainBound)
+        OR
+       BoundActive(tbdVscBound)
+        OR
+       BoundActive(tbdVscGrBound)
+        OR
+       BoundActive(tbdKontrBound)
+        OR
+       BoundActive(tbKontrBound)
+        OR
+       BoundActive(tbdDescrBound)
+        OR
+       BoundActive(tbDescrBound)
+        OR
+       BoundActive(tbdGrDesBound)
+        OR
+       BoundActive(tbGrDesBound)
+        OR
+       BoundActive(tbdDogBound)
+        OR
+       BoundActive(tbDogBound)
+        OR
+       BoundActive(tbdStatusBound)
+        OR
+       BoundActive(tbStatusBound)
+        OR
+       BoundActive(tbKontrBoundNI)
+        OR
+       BoundActive(tbDescrBoundNI)
+        OR
+       BoundActive(tbGrDesBoundNI)
+        OR
+       BoundActive(tbDogBoundNI)
+     )
+    {
+      _wFltBaseDoc := 0;
+      cFltRecOrg   := comp(0);
+      cFltRecDog   := comp(0);
+      sFltDescr    := '';
+      sFltGrDes    := '';
+      wFltStatus   := 0;
+
+      ReSetBounds(#BaseDoc);
+
+      case CurVisib of
+       //***************************
+       dcOwnOnly:
+         PushBounds(tbVscBound);
+       //***************************
+       dcGrpRead
+     , dcGrpModif:
+         PushBounds(tbVscGrBound);
+       //***************************
+       else
+         {
+           if ( wSortField = 1 )
+             PushBounds(tbMainBoundONoDoc);
+           else
+             PushBounds(tbMainBoundOdDoc);
+         }
+      end; //case
+
+      ReReadRecord;
+
+      bFilterOD := FALSE;
+      SetWindowTitle(wnMainWindow, GetVidBaseDocName(tipDo));
+
+      SetDescrBounds;
+    }
+}
+
+#doc
+Окно установки фильтров на документы-основания
+#end
+Window winFilterDO 'Ограничения на документы-основания' EscClose;
+  Show at(, , 71, 13);
+
+var _wClusterDisable: word;
+
+Panel  paFilterDO;
+  Table BaseDoc;
+
+Screen scFilterDO ('', hcLok_Filtr_doc, sci13Esc);
+Fields
+//********************************************************************************
+  _NewFltBaseDoc ('Фильтры на документы-основания', , sci1Esc): NoProtect;
+//********************************************************************************
+  dNewBeg        ('Дата начала периода' )   : [, 'DD/MM/YYYY'], NoProtect;
+//********************************************************************************
+  dNewEnd        ('Дата окончания периода' ): [, 'DD/MM/YYYY'], NoProtect;
+//********************************************************************************
+  [fKontr '']
+  if (IsValid(tnFltKatOrg), FltKatOrg.Name, '- = Фильтр не установлен = -')
+                 ('Выберите контрагента'        , , sci13Esc): Protect;
+//********************************************************************************
+  _NewFltDescr   ('Выберите дескриптор'         , , sci13Esc): Protect;
+//********************************************************************************
+  _NewFltGrDes   ('Выберите группу дескрипторов', , sci13Esc): Protect;
+//********************************************************************************
+  [fDog '']
+  if (IsValid(tnFltDogovor), '№' + FltDogovor.NoDoc + DateToStr(FltDogovor.dDoc, 'от DD/MM/YYYYг.')
+                           , '- = Фильтр не установлен = -')
+                 ('Выберите договор'            , , sci13Esc): Protect;
+//********************************************************************************
+  _Status        ('Выберите статус ДО', , sci13Esc): [LIST  ' ', 'оформляемый', 'исполняемый', 'закрытый'], Protect;
+//********************************************************************************
+Buttons
+  cmBDF1, default, , 'Установить ограничения';
+  cmBDF2,        , , 'Снять ограничения';
+<<
+
+ `Фильтр на документы-основания по`
+  [.] периоду            ` `c`.@@@@@@@@@@`по`.@@@@@@@@@@
+  [.] контрагенту        ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] дескриптору        ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группе дескрипторов` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] договору`            .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] статус             ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+             <.~У~становить.>    <. ~С~нять .>
+>>
+end;
+
+//******************************************************************************
+
+Procedure SaveFiltrDSK;
+{
+
+  SaveMyDsk(bFilterOD      , 'Filtr_DO_bFilterOD_'     + sType);
+
+  if (bFilterOD)
+    SaveMyDsk(_NewFltBaseDoc , 'Filtr_DO_NewFltBaseDoc_' + sType)
+  else
+    SaveMyDsk(0 , 'Filtr_DO_NewFltBaseDoc_' + sType)
+
+  SaveMyDsk(dNewBeg        , 'Filtr_DO_dFltBeg_'       + sType);
+  SaveMyDsk(dNewEnd        , 'Filtr_DO_dFltEnd_'       + sType);
+  SaveMyDsk(_NewRecOrg     , 'Filtr_DO_cFltRecOrg_'    + sType);
+  SaveMyDsk(_NewFltDescr   , 'Filtr_DO_sFltDescr_'     + sType);
+  SaveMyDsk(_NewFltGrDes   , 'Filtr_DO_sFltGrDes_'     + sType);
+  SaveMyDsk(_NewRecDog     , 'Filtr_DO_cFltRecDog_'    + sType);
+  SaveMyDsk(_Status        , 'Filtr_DO_wFltStatus_'    + sType);
+}
+
+//******************************************************************************
+
+Procedure ReadFiltrDSK;
+{
+  if NOT ReadMyDSK(bFilterOD, 'Filtr_DO_bFilterOD_' + sType, TRUE)
+    bFilterOD := FALSE;
+
+  if NOT ReadMyDsk(_wFltBaseDoc, 'Filtr_DO_NewFltBaseDoc_' + sType, TRUE)
+    _wFltBaseDoc := 0;
+
+  if NOT  ReadMyDsk(_dFltBeg, 'Filtr_DO_dFltBeg_' + sType, TRUE)
+    _dFltBeg := 0;
+
+  if NOT ReadMyDsk(_dFltEnd, 'Filtr_DO_dFltEnd_' + sType, TRUE)
+    _dFltEnd := Cur_Date;
+
+  if NOT ReadMyDsk(cFltRecOrg, 'Filtr_DO_cFltRecOrg_' + sType, TRUE)
+    cFltRecOrg := 0;
+
+  if NOT ReadMyDsk(sFltDescr, 'Filtr_DO_sFltDescr_' + sType, TRUE)
+    sFltDescr := '';
+
+  if NOT ReadMyDsk(sFltGrDes, 'Filtr_DO_sFltGrDes_' + sType, TRUE)
+    sFltGrDes := '';
+
+  if NOT ReadMyDsk(cFltRecDog, 'Filtr_DO_cFltRecDog_' + sType, TRUE)
+    cFltRecDog := 0;
+
+  if NOT ReadMyDsk(wFltStatus, 'Filtr_DO_wFltStatus_' + sType, TRUE)
+    wFltStatus := 0;
+}
+
+//******************************************************************************
+
+Procedure SetFieldFilter;
+var tmpClusterDisable: word;
+{
+  tmpClusterDisable := _wClusterDisable;
+
+  // по периоду
+  SetFieldVisible(#dNewBeg, (_NewFltBaseDoc and 1) <> 0);
+  SetFieldVisible(#dNewEnd, (_NewFltBaseDoc and 1) <> 0);
+
+  // по контрагенту
+  SetFieldVisible(#fKontr, (_NewFltBaseDoc and 2) <> 0);
+  if ( (_NewFltBaseDoc and 2) = 2 )
+    tmpClusterDisable := 4 + 8 + 16 + 32;
+
+  // по дескриптору
+  SetFieldVisible(#_NewFltDescr, (_NewFltBaseDoc and 4) <> 0);
+  if ( (_NewFltBaseDoc and 4) = 4 )
+    tmpClusterDisable := 2 + 8 + 16 + 32;
+
+  // по группе дескрипторов
+  SetFieldVisible(#_NewFltGrDes, (_NewFltBaseDoc and 8) <> 0);
+  if ( (_NewFltBaseDoc and 8) = 8 )
+    tmpClusterDisable := 2 + 4 + 16 + 32;
+
+  // по договору
+  SetFieldVisible(#fDog, (_NewFltBaseDoc and 16) <> 0);
+  if ( (_NewFltBaseDoc and 16) = 16 )
+    tmpClusterDisable := 2 + 4 + 8 + 32;
+
+  // по статусу
+  SetFieldVisible(#_Status, (_NewFltBaseDoc and 32) <> 0);
+  if ( (_NewFltBaseDoc and 32) = 32 )
+    tmpClusterDisable := 2 + 4 + 8 + 16;
+//  ClusterDisabledField(#_NewFltBaseDoc, tmpClusterDisable);
+}
+
+//******************************************************************************
+Procedure InitWin;
+{
+  ReadFiltrDSK;
+
+  _NewFltBaseDoc := _wFltBaseDoc;
+  _NewFltDescr   := sFltDescr;
+  _NewFltGrDes   := sFltGrDes;
+  _NewRecOrg     := cFltRecOrg;
+  _NewRecDog     := cFltRecDog;
+  _Status        := wFltStatus;
+  dNewBeg        := _dFltBeg;
+  dNewEnd        := _dFltEnd;
+
+  if ( dNewEnd = ZeroDate )
+    dNewEnd := Cur_Date;
+
+  if ( curVisib = dcOwnOnly )
+    {
+      if ( (_NewFltBaseDoc and 4) = 4 )
+        _NewFltBaseDoc := _NewFltBaseDoc XOR 4;
+
+      if ( (_NewFltBaseDoc and 8) = 8 )
+        _NewFltBaseDoc := _NewFltBaseDoc XOR 8;
+
+      ClusterDisabledField(#_NewFltBaseDoc, 12)
+    }
+  else
+    if ( curVisib = dcGrpModif OR curVisib = dcGrpRead )
+      {
+        if ( (_NewFltBaseDoc and 8) = 8 )
+          _NewFltBaseDoc := _NewFltBaseDoc XOR 8;
+
+        ClusterDisabledField(#_NewFltBaseDoc, 8)
+      }
+    else
+      ClusterDisabledField(#_NewFltBaseDoc, 0);
+
+  SetFieldFilter;
+
+  PushBounds(tbByFlt_Org);
+  PushBounds(tbByFlt_Dog);
+  ReReadRecord;
+}
+
+// Изменение статус строки при редактировании ДО
+// в соответствии с установленным фильтром
+Procedure SetFltStatusConText;
+{
+  if ((_wFltBaseDoc AND 2) = 2)
+    SetHelpAndStatusContext(_FltScrFormat, #KatOrg.Name, sci178Esc, -1)
+  else
+    SetHelpAndStatusContext(_FltScrFormat, #KatOrg.Name, sci1378Esc, -1);
+  if ((_wFltBaseDoc AND 4) = 4)
+    SetHelpAndStatusContext(_FltScrFormat, #BaseDoc.Descr, sci178Esc, -1)
+  else
+    SetHelpAndStatusContext(_FltScrFormat, #BaseDoc.Descr, sci1378Esc, -1);
+  if ((_wFltBaseDoc AND 8) = 8)
+    SetHelpAndStatusContext(_FltScrFormat, #BaseDoc.DesGr, sci178Esc, -1)
+  else
+    SetHelpAndStatusContext(_FltScrFormat, #BaseDoc.DesGr, sci1378Esc, -1);
+  if ((_wFltBaseDoc AND 16) = 16)
+    {
+      SetHelpAndStatusContext(_FltScrExFormat, #Dogovor.dDoc    , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #Dogovor.NoDoc   , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #AppDogovor.dDoc , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #AppDogovor.NoDoc, sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #CalPlan.dInput  , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #CalPlan.NoDoc   , sci178Esc, -1)
+    }
+  else
+    {
+      SetHelpAndStatusContext(_FltScrExFormat, #Dogovor.dDoc    , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #Dogovor.NoDoc   , sci1378Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #AppDogovor.dDoc , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #AppDogovor.NoDoc, sci1378Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #CalPlan.dInput  , sci178Esc, -1)
+      SetHelpAndStatusContext(_FltScrExFormat, #CalPlan.NoDoc   , sci1378Esc, -1)
+    }
+}
+
+//******************************************************************************
+Procedure FilterOnDoc;
+{
+  var tmpStatus : string;
+
+   _wFltBaseDoc := _NewFltBaseDoc;
+   sFltDescr    := _NewFltDescr;
+   sFltGrDes    := _NewFltGrDes;
+   cFltRecOrg   := _NewRecOrg;
+   cFltRecDog   := _NewRecDog;
+   wFltStatus   := _Status;
+   _dFltBeg     := dNewBeg;
+   _dFltEnd     := dNewEnd;
+
+  ReSetBounds(#BaseDoc);
+
+  var tmpFlt0     : word;
+
+  strnum := GetVidBaseDocName(tipDo);
+
+  tmpFlt0 := 0;
+
+  case _NewFltBaseDoc of
+  //***********************
+    0:
+      case CurVisib of
+      //***********************
+        dcOwnOnly:
+          PushBounds(tbVscBound);
+      //***********************
+        dcGrpRead, dcGrpModif:
+          PushBounds(tbVscGrBound);
+      //***********************
+      else
+        {
+          if ( wSortField = 1 )
+            PushBounds(tbMainBoundONoDoc);
+          else
+            PushBounds(tbMainBoundOdDoc);
+        }
+      end;
+  //***********************
+    1:
+      {
+        d1 := dNewBeg; d2 := dNewEnd;
+        case CurVisib of
+        //***********************
+         dcOwnOnly:
+           PushBounds(tbdVscBound);
+        //***********************
+         dcGrpRead, dcGrpModif:
+           PushBounds(tbdVscGrBound);
+        //***********************
+        else
+          PushBounds(tbdMainBound);
+        end;
+        strnum := strnum +if(d1 <> ZeroDate, ' с '+string(d1), '')+' по '+string(d2);
+      }
+ //***********************
+   else
+     {
+       tmpFlt0 := _NewFltBaseDoc;
+
+       if (  CurVisib = dcAllModif
+          or CurVisib = dcOwnModifAllRead
+          or CurVisib = dcGrpModifAllRead )
+         {
+           if ( (_NewFltBaseDoc and 2) <> 0 )
+             {
+               if ( (_NewFltBaseDoc and 1) = 1 )
+                 {
+                   d1 := dNewBeg;
+                   d2 := dNewEnd;
+
+                   PushBounds(tbdKontrBound);
+
+                   strnum := strnum + if(d1 <> ZeroDate, ' с ' + string(d1), '') + ' по ' + string(d2);
+                 }
+               else
+                 PushBounds(tbKontrBound);
+
+               tmpFlt0 := tmpFlt0 and (not 2);
+               strnum := strnum + '. Контрагент "' + fKontr + '"';
+             }
+           else
+             if ( (_NewFltBaseDoc and 4) <> 0 )
+               {
+                 if ( (_NewFltBaseDoc and 1) = 1 )
+                   {
+                     d1 := dNewBeg;
+                     d2 := dNewEnd;
+
+                     PushBounds(tbdDescrBound);
+
+                     strnum := strnum + if(d1 <> ZeroDate, ' с ' + string(d1), '') + ' по ' + string(d2);
+                   }
+                 else
+                   PushBounds(tbDescrBound);
+
+                 tmpFlt0 := tmpFlt0 and (not 4);
+                 strnum := strnum + '. Дескриптор "' + sFltDescr + '"';
+               }
+             else
+               if ( (_NewFltBaseDoc and 8) <> 0 )
+                 {
+                   if ( (_NewFltBaseDoc and 1) = 1 )
+                     {
+                       d1 := dNewBeg;
+                       d2 := dNewEnd;
+
+                       PushBounds(tbdGrDesBound);
+
+                       strnum := strnum + if(d1 <> ZeroDate, ' с ' + string(d1), '') + ' по ' + string(d2);
+                     }
+                   else
+                     PushBounds(tbGrDesBound);
+
+                   tmpFlt0 := tmpFlt0 and (not 8);
+                   strnum := strnum + '. Группа дескрипторов "' + sFltGrDes + '"';
+                 }
+               else
+                 if ( (_NewFltBaseDoc and 16) <> 0 )
+                   {
+                     if ( (_NewFltBaseDoc and 1) = 1 )
+                       {
+                         d1 := dNewBeg;
+                         d2 := dNewEnd;
+
+                         PushBounds(tbdDogBound);
+
+                         strnum := strnum + if(d1 <> ZeroDate, ' с ' + string(d1), '') + ' по ' + string(d2);
+                       }
+                     else
+                       PushBounds(tbDogBound);
+
+                     tmpFlt0 := tmpFlt0 and (not 16);
+                     strnum := strnum +'. Договор "'+fDog+'"';
+                   }
+                 else
+                   if ( (_NewFltBaseDoc and 32) <> 0 )
+                     {
+                       if ( (_NewFltBaseDoc and 1) = 1 )
+                         {
+                           d1 := dNewBeg;
+                           d2 := dNewEnd;
+
+                           PushBounds(tbdStatusBound);
+
+                           strnum := strnum + if(d1 <> ZeroDate, ' с ' + string(d1), '') + ' по ' + string(d2);
+                         }
+                       else
+                         PushBounds(tbStatusBound);
+
+                       tmpFlt0 := tmpFlt0 and (not 32);
+
+                       tmpStatus := if(_Status = 1, 'оформляемый',
+                                      if(_Status = 2, 'исполняемый',
+                                        if(_Status = 3, 'закрытый', ' '))) ;
+                       strnum := strnum +'. Статус "'+ tmpStatus +'"';
+                     }
+         }
+       else
+         {
+           if ( (_NewFltBaseDoc and 1) = 0 )
+             {
+               case CurVisib of
+               //***********************
+                 dcOwnOnly:
+                   PushBounds(tbVscBound);
+               //***********************
+                 dcGrpRead, dcGrpModif:
+                   PushBounds(tbVscGrBound);
+               //***********************
+               else
+                 {
+                   if ( wSortField = 1 )
+                     PushBounds(tbMainBoundONoDoc);
+                   else
+                     PushBounds(tbMainBoundOdDoc);
+                 }
+               end;
+             }
+           else
+             {
+               d1 := dNewBeg; d2 := dNewEnd;
+               case CurVisib of
+               //***********************
+                dcOwnOnly:
+                  PushBounds(tbdVscBound);
+               //***********************
+                dcGrpRead, dcGrpModif:
+                  PushBounds(tbdVscGrBound);
+               //***********************
+               else
+                 PushBounds(tbdMainBound);
+               end;
+               strnum := strnum +if(d1 <> ZeroDate, ' с '+string(d1), '')+' по '+string(d2);
+             }
+         }
+     }
+  end;
+
+  //-----------------------------------------------------------------------------------------------
+
+  if (CurVisib <> 0)
+    {
+      if(  NOT BoundActive(tbdVscBound)
+       AND NOT BoundActive(tbVscBound)
+       AND NOT BoundActive(tbdVscGrBound)
+       AND NOT BoundActive(tbVscGrBound)
+        )
+        if ((curVisib = dcOwnOnly) or
+            (curVisib = dcGrpRead) or
+            (curVisib = dcGrpModif))
+          if (curVisib = dcOwnOnly)  // видимость своих ДО
+            {
+              strnum := strnum + ' ' + trim(curdescr) + ' ';
+              AddBounds(if (IsFilter, tbdVscBound, tbVscBound));
+            }
+          else    // видимость ДО группы  (visible = dcGrpRead, dcGrpModif)
+            {
+              strnum := strnum + + ' ГР ' + trim(curdesGr) + ' ';
+              AddBounds(if (IsFilter, tbdVscGrBound, tbVscGrBound));
+            }
+    }
+
+  //------------------------------------------------------------------------------
+
+  if ( tmpFlt0 > 0 )
+    {
+      if ( (tmpFlt0 and 2) <> 0 )
+        {
+          strnum := strnum + '. Контрагент "' + fKontr + '"';
+          AddBounds(tbKontrBoundNI);
+        }
+
+      if ( (tmpFlt0 and 4) <> 0 )
+        {
+          strnum := strnum + '. Дескриптор "' + sFltDescr + '"';
+          AddBounds(tbDescrBoundNI);
+        }
+
+      if ( (tmpFlt0 and 8) <> 0 )
+        {
+          strnum := strnum + '. Группа дескрипторов "' + sFltGrDes + '"';
+          AddBounds(tbGrDesBoundNI);
+        }
+
+      if ( (tmpFlt0 and 16) <> 0 )
+        {
+          strnum := strnum +'. Договор "'+fDog+'"';
+          AddBounds(tbDogBoundNI);
+        }
+
+      if ( (tmpFlt0 and 32) <> 0 )
+        {
+          tmpStatus := if(_Status = 1, 'оформляемый',
+                         if(_Status = 2, 'исполняемый',
+                           if(_Status = 3, 'закрытый', ' '))) ;
+          strnum := strnum +'. Статус "'+ tmpStatus +'"';
+          AddBounds(tbStatusBound);
+        }
+    }
+
+  //-----------------------------------------------------------------------------------------------
+
+  PushPos(#BaseDoc);
+
+
+  if ( GetLast FastFirstRow BaseDoc <> tsOk )
+    {
+     if ( Message('Нет записей удовлетворяющих ограничениям...'#13 + 'Отменить?', YesNo) = cmYes )
+       {
+         bFilterOD  := FALSE;
+         /*
+         sFltDescr  := _SavFltDescr;
+         sFltGrDes  := _SavFltGrDes;
+         cFltRecOrg := _SavRecOrg;
+         cFltRecDog := _SavRecDog;
+         _dFltBeg   := _SavFltBeg;
+         _dFltEnd   := _SavFltEnd;
+
+         strnum := GetVidBaseDocName(tipDo);
+
+         ReSetBounds(#BaseDoc);
+
+         d1 := _dFltBeg;
+         d2 := _dFltEnd;
+
+         case CurVisib of
+         //***************************
+          dcOwnOnly:
+            PushBounds(tbVscBound);
+         //***************************
+          dcGrpRead, dcGrpModif:
+            PushBounds(tbVscGrBound);
+         //***************************
+         else
+           {
+             if ( ( d2 <> ZeroDate ) AND ( d2 >= d1 ) )
+               {
+                 strnum := strnum + 'с ' + string(d1) + ' по ' + string(d2);
+                 PushBounds(tbdMainBound);
+               }
+             else
+               {
+                 if ( wSortField = 1 )
+                   PushBounds(tbMainBoundONoDoc);
+                 else
+                   PushBounds(tbMainBoundOdDoc);
+               }
+           }
+         //***************************
+         end; //case
+
+         PopPos(#BaseDoc);      */
+
+          ReSetBounds(#BaseDoc);
+
+            case CurVisib of
+            //***************************
+              dcOwnOnly:
+                PushBounds(tbVscBound);
+            //***************************
+              dcGrpRead, dcGrpModif:
+                PushBounds(tbVscGrBound);
+            //***************************
+            else
+              {
+                if ( wSortField = 1 )
+                  PushBounds(tbMainBoundONoDoc);
+                else
+                  PushBounds(tbMainBoundOdDoc);
+              }
+            end; //case
+
+           PopPos(#BaseDoc);
+            RereadRecord;
+
+          SetWindowTitle(wnMainWindow, GetVidBaseDocName(tipDo));
+          SaveFiltrDSK;
+          Exit;
+       }
+     else
+       bFilterOD := TRUE;
+    }
+  else
+    {
+      bFilterOD    := TRUE;
+      _wFltBaseDoc := _NewFltBaseDoc;
+      sFltDescr    := _NewFltDescr;
+      sFltGrDes    := _NewFltGrDes;
+      cFltRecOrg   := _NewRecOrg;
+      cFltRecDog   := _NewRecDog;
+      wFltStatus   := _Status;
+      _dFltBeg     := dNewBeg;
+      _dFltEnd     := dNewEnd;
+    }
+
+  SetWindowTitle(wnMainWindow, strnum);
+
+  SetFltStatusConText;
+
+  RereadRecord;
+  RescanPanel(tnBaseDoc);
+}
+
+//******************************************************************************
+
+HandleEvent
+
+cmCheckField:
+  if ( CurField = #_NewFltBaseDoc )
+    SetFieldFilter;
+
+cmDelOnProtect:
+  case CurField of
+    #fKontr      : set cFltRecOrg   := comp(0);
+    #_NewFltDescr: set _NewFltDescr := '';
+    #_NewFltGrDes: set _NewFltGrDes := '';
+    #fDog        : set cFltRecDog   := comp(0);
+  end;
+
+cmPick:
+  {
+    case CurField of
+    //**************
+      #_NewFltDescr:
+        {
+          var strDesGr  : string[4];
+          var strDescr  : string[20];
+          var wIsVisible: word;
+
+          strDesGr   := _NewFltGrDes;
+          strDescr   := _NewFltDescr;
+          wIsVisible := word(12345);
+
+          if ( RunInterface('GetDescr', strDescr, strDesGr, wIsVisible) <> cmCancel )
+            set _NewFltDescr := strDescr;
+        }
+    //**************
+      #_NewFltGrDes:
+        {
+          var strGrDescr: string[4]; strGrDescr := '';
+
+          if ( RunInterface('GetGrDescr', strGrDescr, FALSE, FALSE, comp(0)) <> cmCancel )
+            set _NewFltGrDes := strGrDescr
+        }
+    //**************
+      #fKontr:
+        {
+          var _tmpKontr: comp; _tmpKontr := _NewRecOrg;
+
+          if ( RunInterface('GetKatOr', _tmpKontr, comp(0), FALSE, comp(0), comp(0)) <> cmCancel )
+            set _NewRecOrg := _tmpKontr;
+        }
+    //**************
+      #fDog:
+        {
+          var _tmpDog: comp; _tmpDog := _NewRecDog;
+
+          if ( RunInterface('GetSomeDogovor', word(0)
+                                            , word(-1)
+                                            , word(0)
+                                            , word(0)
+                                            , FALSE
+                                            , _tmpDog
+                                            , FALSE
+                                            , comp(0)) <> cmCancel )
+            set _NewRecDog := _tmpDog;
+        }
+     end
+   }
+
+end; // HandleEvent
+
+end; // Panel
+
+HandleEvent
+
+cmInit:
+  InitWin;
+
+cmBDF2:
+  {
+    ResetAllFilters;
+
+    SaveMyDSK(bFilterOD, 'Filtr_DO_bFilterOD_' + sType);
+    SaveFiltrDSK;
+    RescanPanel(tnBaseDoc);
+    PutCommand(cmCancel);
+  }
+
+cmBDF1:
+  {
+    if ( ( (_NewFltBaseDoc and 1) = 1 ) AND ( dNewEnd < dNewBeg ) )
+      {
+        Message('Проверьте диапазон дат.', OkButton);
+        Exit;
+      }
+
+    if ( ( (_NewFltBaseDoc AND 2) = 2) AND ( _NewRecOrg = comp(0) ) )
+      {
+        Message('Выберите контрагента.', OkButton);
+        Exit;
+      }
+
+    if ( ( (_NewFltBaseDoc and 16) = 16 ) AND ( _NewRecDog = comp(0) ) )
+      {
+        Message('Выберите договор.', OkButton);
+        Exit;
+      }
+
+    bFilterOD := TRUE;
+    SaveFiltrDSK;
+    FilterOnDoc;
+    PutCommand(cmCancel);
+  }
+
+cmDone:
+  {
+    PopBounds(tbByFlt_Org);
+    PopBounds(tbByFlt_Dog);
+  }
+
+end; // HandleEvent
+end; // Window

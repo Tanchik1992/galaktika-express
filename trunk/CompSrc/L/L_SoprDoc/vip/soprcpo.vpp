@@ -1,0 +1,512 @@
+//-----------------------------------------------------------------------------
+// Создание актов по распоряжения на прием-отпуск мтр
+//
+
+//******************************************************************************
+
+Create View cvAKT2MTR
+var
+  wL : word;
+
+from
+  KatSopr
+, KatSopr KatSopr2
+, SpSopr
+, SpSopr SpSopr3
+, Pick
+, SpecZatr
+, SpecZatr SpecZatr2
+
+where
+((
+     KatSopr.NRec     ==  SpSopr.cSopr
+AND  KatSopr2.NRec    ==  SpSopr3.cSopr
+))
+
+;
+
+//******************************************************************************
+// Создание документа на основе другого документа
+//
+Function UpdAktPOMTR (_VidSopr_ : word) : boolean;
+{
+  UpdAktPOMTR := FALSE;
+
+  cvAKT2MTR.KatSopr.VidSopr     := _VidSopr_;
+  cvAKT2MTR.KatSopr.cPodrFrom   := cvAKT2MTR.KatSopr2.cPodrTo;
+  cvAKT2MTR.KatSopr.cMolFrom    := cvAKT2MTR.KatSopr2.cMolTo;
+  cvAKT2MTR.KatSopr.cPodrTo     := if (_VidSopr_ = 210 OR _VidSopr_ = 229, comp(0), cvAKT2MTR.KatSopr2.cPodrFrom);
+  cvAKT2MTR.KatSopr.cMolTo      := if (_VidSopr_ = 210 OR _VidSopr_ = 229, comp(0), cvAKT2MTR.KatSopr2.cMolFrom);
+
+  cvAKT2MTR.KatSopr.cOrgBase    := if (_VidSopr_ = 210 OR _VidSopr_ = 229, cvAKT2MTR.KatSopr2.cOrg, cvAKT2MTR.KatSopr2.cOrgBase);
+  cvAKT2MTR.KatSopr.cOrg        := if (_VidSopr_ = 210 OR _VidSopr_ = 229, cvAKT2MTR.KatSopr2.cOrg, cvAKT2MTR.KatSopr2.cOrgBase);
+  cvAKT2MTR.KatSopr.cVal        := cvAKT2MTR.KatSopr2.cVal;
+
+  cvAKT2MTR.KatSopr.cDogovor    := if (_VidSopr_  = 210 OR _VidSopr_ = 229, cvAKT2MTR.KatSopr2.cDover, cvAKT2MTR.KatSopr2.cDogovor);
+  cvAKT2MTR.KatSopr.cAppDogovor := if (_VidSopr_  = 210 OR _VidSopr_ = 229, comp(0), cvAKT2MTR.KatSopr2.cAppDogovor);
+  cvAKT2MTR.KatSopr.cCalPlan    := if (_VidSopr_  = 210 OR _VidSopr_ = 229, comp(0), cvAKT2MTR.KatSopr2.cCalPlan);
+
+  cvAKT2MTR.KatSopr.cPerson     := cvAKT2MTR.KatSopr2.cPerson;
+  cvAKT2MTR.KatSopr.cGruzFrom   := cvAKT2MTR.KatSopr2.cGruzFrom;
+  cvAKT2MTR.KatSopr.cGruzTO     := cvAKT2MTR.KatSopr2.cGruzTO  ;
+  cvAKT2MTR.KatSopr.cOtvPodr    := cvAKT2MTR.KatSopr2.cOtvPodr;
+  cvAKT2MTR.KatSopr.cUKS        := cvAKT2MTR.KatSopr2.cUKS;
+
+  cvAKT2MTR.KatSopr.cTransp     := cvAKT2MTR.KatSopr2.cTransp;
+  cvAKT2MTR.KatSopr.nVagon      := cvAKT2MTR.KatSopr2.nVagon ;
+  cvAKT2MTR.KatSopr.cCellVal    := cvAKT2MTR.KatSopr2.cCellVal;
+  cvAKT2MTR.KatSopr.cNMoveCell  := cvAKT2MTR.KatSopr2.cNMoveCell;
+
+  cvAKT2MTR.KatSopr.cHozOper    := 0;
+  cvAKT2MTR.KatSopr.cKatSopr    := cvAKT2MTR.KatSopr2.NRec;
+  cvAKT2MTR.KatSopr.YearSopr    := Year(Cur_Date);
+  cvAKT2MTR.KatSopr.cSchFact    := 0;
+  cvAKT2MTR.KatSopr.wADoc       := 0;
+  cvAKT2MTR.KatSopr.cADoc       := 0;
+  cvAKT2MTR.KatSopr.dOpr        := ZeroDate;
+
+  cvAKT2MTR.KatSopr.VhodNal     := cvAKT2MTR.KatSopr2.VhodNal;
+
+//  if (cvAKT2MTR.KatSopr.dSopr = ZeroDate)
+//    cvAKT2MTR.KatSopr.dSopr := Cur_Date;
+
+  if (not boGetTune('Doc.ChangeDescr'))
+    {
+      cvAKT2MTR.KatSopr.Descr := sGetTune('User.Descr');
+      cvAKT2MTR.KatSopr.DesGr := sGetTune('User.DesGr');
+    }
+
+  if cvAKT2MTR.Update Current KatSopr = tsOk
+    UpdAktPOMTR := TRUE;
+}
+
+//******************************************************************************
+//
+Function KolDostupAkt(_NRec_OLD_ : comp; _cOE_OLD_  : comp; dKol : double) : double;
+var dUsed : double;
+{
+  KolDostupAkt := 0;
+
+  dUsed := 0;
+
+  cvAKT2MTR._LOOP SpecZatr2 where ((_NRec_OLD_ == SpecZatr2.cUKS))
+    dUsed := dUsed + double(cvAKT2MTR.SpecZatr2.cSpec);
+
+  dUsed := dKol - dUsed / fEdIzm.GetKoefOtpEd(_cOE_OLD_);
+
+  KolDostupAkt := if (dUsed < 0, 0, dUsed);
+}
+
+//******************************************************************************
+// Перенос произвольной спецификации распоряжения на прием-отпуск
+//
+
+Procedure CopyAnySpecPOMTR (_VidSopr_ : word);
+var _NRec_OLD_ : comp;
+var _cMc_OLD_  : comp;
+var _cOE_OLD_  : comp;
+var KolFactSrc : double;
+var KolSrc     : double;
+var KolOplSrc  : double;
+var dKol       : double;
+{
+  cvAKT2MTR.wL := wPList;
+
+  cvAKT2MTR._LOOP Pick where ((cvAKT2MTR.wL == Pick.wList))
+    if (cvAKT2MTR.GetFirst SpSopr3 where ((cvAKT2MTR.Pick.cRec == SpSopr3.NRec)) = tsOk)
+      {
+        _NRec_OLD_ := cvAKT2MTR.SpSopr3.NRec;
+        _cMc_OLD_  := cvAKT2MTR.SpSopr3.cMcUsl;
+        _cOE_OLD_  := cvAKT2MTR.SpSopr3.cOtpEd;
+        KolFactSrc := cvAKT2MTR.SpSopr3.KolFact;
+        KolSrc     := cvAKT2MTR.SpSopr3.Kol;
+        KolOplSrc  := cvAKT2MTR.SpSopr3.KolOpl;
+
+        cvAKT2MTR.SpSopr3.NRec    := 0;
+        cvAKT2MTR.SpSopr3.cSopr   := cvAKT2MTR.KatSopr.NRec;
+        cvAKT2MTR.SpSopr3.VidSopr := _VidSopr_;
+        cvAKT2MTR.SpSopr3.Npp     := oSpNext.GetSpNppNext(cvAKT2MTR.KatSopr.NRec, coSpSopr);
+        cvAKT2MTR.SpSopr3.KolFact := CheckKolSpSopr(cvAKT2MTR.KatSopr.NRec, cvAKT2MTR.SpSopr3.cMCUSL, cvAKT2MTR.SpSopr3.cOtpED, cvAKT2MTR.Pick.PickKol, cvAKT2MTR.SpSopr3.NRec, FALSE);
+        cvAKT2MTR.SpSopr3.SumNDS  := 0;
+        cvAKT2MTR.SpSopr3.SumVNDS := 0;
+
+        if (cvAKT2MTR.insert current SpSopr3 <> tsOK)
+          { }
+
+        var piKatDopEd : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+
+        if (SpSopr.PrMC = 1)
+          {
+            piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(1), KolFactSrc,
+                                word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(1), cvAKT2MTR.SpSopr3.KolFact, cvAKT2MTR.SpSopr3.VidSopr);
+            piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(2), KolSrc,
+                                word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(2), cvAKT2MTR.SpSopr3.Kol    , cvAKT2MTR.SpSopr3.VidSopr);
+            piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(3), KolOplSrc,
+                                word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(3), cvAKT2MTR.SpSopr3.KolOpl , cvAKT2MTR.SpSopr3.VidSopr);
+          }
+
+        if (cvAKT2MTR.SpSopr3.cUks <> 0)
+          oMTRFun.GenSpecMTRForUKS(coSpSopr, cvAKT2MTR.SpSopr3.NRec, cvAKT2MTR.SpSopr3.cUks, 0);
+
+#ifndef __MTR_TO_SPEC__
+         if (cvAKT2MTR.GetFirst SpecZatr where ((coSpSopr   == SpecZatr.coTable
+                                             AND _NRec_OLD_ == SpecZatr.cSpec)) = tsOk)
+           {
+             var cz : comp;  cz := cvAKT2MTR.SpecZatr.cAddSumTune;
+
+             cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnSpecZatr);
+
+             cvAKT2MTR.SpecZatr.coTable := coSpSopr;
+             cvAKT2MTR.SpecZatr.cSpec   := cvAKT2MTR.SpSopr3.nRec;
+             cvAKT2MTR.SpecZatr.cAddSumTune := cz;
+
+             if (cvAKT2MTR.Insert Current SpecZatr = tsOk) {};
+           }
+#else
+        oMTRFun.CopySpecMTR(coSpSopr, _NRec_OLD_, coSpSopr, cvAKT2MTR.SpSopr3.NRec);
+#end
+
+      }
+
+  CheckSumma(TRUE);
+}
+
+//******************************************************************************
+//  Копирование спецификации распоряжения на прием-отпуск
+//
+
+Procedure CopySpecPOMTR (_VidSopr_ : word);
+var _NRec_OLD_ : comp;
+var _cMc_OLD_  : comp;
+var _cOE_OLD_  : comp;
+var KolFactSrc : double;
+var KolSrc     : double;
+var KolOplSrc  : double;
+var dKol       : double;
+{
+  cvAKT2MTR._LOOP SpSopr3
+    {
+      _NRec_OLD_ := cvAKT2MTR.SpSopr3.NRec;
+      _cMc_OLD_  := cvAKT2MTR.SpSopr3.cMcUsl;
+      _cOE_OLD_  := cvAKT2MTR.SpSopr3.cOtpEd;
+      KolFactSrc := cvAKT2MTR.SpSopr3.KolFact;
+      KolSrc     := cvAKT2MTR.SpSopr3.Kol;
+      KolOplSrc  := cvAKT2MTR.SpSopr3.KolOpl;
+
+      cvAKT2MTR.SpSopr3.NRec    := 0;
+      cvAKT2MTR.SpSopr3.cSopr   := cvAKT2MTR.KatSopr.NRec;
+      cvAKT2MTR.SpSopr3.VidSopr := _VidSopr_;
+      cvAKT2MTR.SpSopr3.Npp     := oSpNext.GetSpNppNext(cvAKT2MTR.KatSopr.NRec, coSpSopr);
+      cvAKT2MTR.SpSopr3.KolFact := CheckKolSpSopr(cvAKT2MTR.KatSopr.NRec, cvAKT2MTR.SpSopr3.cMCUSL, cvAKT2MTR.SpSopr3.cOtpED, cvAKT2MTR.SpSopr3.KolFact, cvAKT2MTR.SpSopr3.NRec, FALSE);
+      cvAKT2MTR.SpSopr3.SumNDS  := 0;
+      cvAKT2MTR.SpSopr3.SumVNDS := 0;
+
+
+      if (cvAKT2MTR.SpSopr3.KolFact < 0.000001)
+        Continue;
+
+      if (cvAKT2MTR.insert current SpSopr3 <> tsOK)
+        { }
+
+      var piKatDopEd : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+
+      if (SpSopr.PrMC = 1)
+        {
+          piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(1), KolFactSrc,
+                              word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(1), cvAKT2MTR.SpSopr3.KolFact, cvAKT2MTR.SpSopr3.VidSopr);
+          piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(2), KolSrc,
+                              word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(2), cvAKT2MTR.SpSopr3.Kol    , cvAKT2MTR.SpSopr3.VidSopr);
+          piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(3), KolOplSrc,
+                              word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(3), cvAKT2MTR.SpSopr3.KolOpl , cvAKT2MTR.SpSopr3.VidSopr);
+        }
+
+      if (cvAKT2MTR.SpSopr3.cUks <> 0)
+        oMTRFun.GenSpecMTRForUKS(coSpSopr, cvAKT2MTR.SpSopr3.NRec, cvAKT2MTR.SpSopr3.cUks, 0);
+
+#ifndef __MTR_TO_SPEC__
+         if (cvAKT2MTR.GetFirst SpecZatr where ((coSpSopr   == SpecZatr.coTable
+                                             AND _NRec_OLD_ == SpecZatr.cSpec)) = tsOk)
+           {
+             var cz : comp;  cz := cvAKT2MTR.SpecZatr.cAddSumTune;
+
+             cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnSpecZatr);
+
+             cvAKT2MTR.SpecZatr.coTable := coSpSopr;
+             cvAKT2MTR.SpecZatr.cSpec   := cvAKT2MTR.SpSopr3.nRec;
+             cvAKT2MTR.SpecZatr.cAddSumTune := cz;
+
+             if (cvAKT2MTR.Insert Current SpecZatr = tsOk) {};
+           }
+#else
+        oMTRFun.CopySpecMTR(coSpSopr, _NRec_OLD_, coSpSopr, cvAKT2MTR.SpSopr3.NRec);
+#end
+
+
+      CheckSumma(TRUE);
+    }
+}
+
+//******************************************************************************
+//
+//
+
+Procedure CreateAktByPOMTR(_NRec_ : comp; _VidSopr_ : word);
+{
+  var cKSPR : comp;
+
+  if cvAKT2MTR.GetFirst KatSopr where ((_NRec_ == KatSopr.NRec)) <> tsOK
+    {
+      cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnKatSopr);
+      cvAKT2MTR.KatSopr.NRec    := comp(0);
+      cvAKT2MTR.KatSopr.VidSopr := _VidSopr_;
+      cvAKT2MTR.KatSopr.NSopr   := GetLastNumD(_VidSopr_);
+      cvAKT2MTR.KatSopr.dSopr   := Cur_Date;
+      if cvAKT2MTR.insert current KatSopr <> tsOK
+        { }
+    }
+
+  cKSPR := cvAKT2MTR.KatSopr.cKatSopr;
+
+  if (RunInterface('RPriemOtp', cKSPR, 1) <> cmCancel)
+    if cvAKT2MTR.GetFirst KatSopr2 where ((cKSPR == KatSopr2.NRec)) = tsOK
+      {
+        if (Message('Создать акт на основании выбранного распоряжения на прием-отпуск?', Confirmation + YesNo) = cmYes )
+          if (UpdAktPOMTR(_VidSopr_))
+            {
+              if (cvAKT2MTR.KatSopr.VidSopr = 210 OR cvAKT2MTR.KatSopr.VidSopr = 229)
+                {
+                  if (RunInterface('GetDocSpAPO', cvAKT2MTR.KatSopr.cKatSopr, word(1), word(1), wPList) = cmDefault)
+                    CopyAnySpecPOMTR(_VidSopr_);
+                }
+              else
+                if (Message('Копировать всю спецификацию из выбранного распоряжения на прием-отпуск?', Confirmation + YesNo) = cmYes )
+                  CopySpecPOMTR(_VidSopr_);
+                else
+                  if (RunInterface('GetDocSpSopr', cvAKT2MTR.KatSopr.cKatSopr, word(442), word(1), wPList) = cmDefault)
+                    CopyAnySpecPOMTR(_VidSopr_);
+            }
+      }
+    else
+      Message('Не найден документ!');
+}
+
+//******************************************************************************
+//
+//
+
+Procedure CreateSpAktByPOMTR(_NRec_ : comp; _VidSopr_ : word);
+{
+  if cvAKT2MTR.GetFirst KatSopr where ((_NRec_ == KatSopr.NRec)) = tsOK
+    {
+      if (RunInterface('GetDocSpSopr', cvAKT2MTR.KatSopr.cKatSopr, word(442), word(1), wPList) = cmDefault)
+        {
+          if ( not isNew )
+            DoDeleteCurrentSpSopr;
+
+          CopyAnySpecPOMTR(_VidSopr_);
+        }
+    }
+  else
+    Message('Не найден документ!');
+}
+
+//******************************************************************************
+// Перенос произвольной спецификации акта о приемке материалов (М-7) в приходную накладную
+//
+
+Procedure CopyAnySpecAkt (_VidSopr_ : word);
+var _NRec_OLD_ : comp;
+var _cMc_OLD_  : comp;
+var _cOE_OLD_  : comp;
+var KolFactSrc : double;
+var KolSrc     : double;
+var KolOplSrc  : double;
+var dKol       : double;
+{
+  cvAKT2MTR.wL := wPList;
+
+  cvAKT2MTR._LOOP Pick where ((cvAKT2MTR.wL == Pick.wList))
+    if (cvAKT2MTR.GetFirst SpSopr3 where ((cvAKT2MTR.Pick.cRec == SpSopr3.NRec)) = tsOk)
+      {
+        _NRec_OLD_ := cvAKT2MTR.SpSopr3.NRec;
+        _cMc_OLD_  := cvAKT2MTR.SpSopr3.cMcUsl;
+        _cOE_OLD_  := cvAKT2MTR.SpSopr3.cOtpEd;
+        KolFactSrc := cvAKT2MTR.SpSopr3.KolFact;
+        KolSrc     := cvAKT2MTR.SpSopr3.Kol;
+        KolOplSrc  := cvAKT2MTR.SpSopr3.KolOpl;
+
+        dKol := KolDostupAkt(_NRec_OLD_, _cOE_OLD_, KolFactSrc);
+
+        if (dKol <= 0.000001)
+        Continue;
+
+        cvAKT2MTR.SpSopr3.NRec    := 0;
+        cvAKT2MTR.SpSopr3.cSopr   := cvAKT2MTR.KatSopr.NRec;
+        cvAKT2MTR.SpSopr3.VidSopr := _VidSopr_;
+        cvAKT2MTR.SpSopr3.Npp     := oSpNext.GetSpNppNext(cvAKT2MTR.KatSopr.NRec, coSpSopr);
+        cvAKT2MTR.SpSopr3.KolFact := dKol;
+        cvAKT2MTR.SpSopr3.SumNDS  := 0;
+        cvAKT2MTR.SpSopr3.SumVNDS := 0;
+
+        if (cvAKT2MTR.insert current SpSopr3 <> tsOK)
+          Continue;
+
+        if (cvAKT2MTR.GetFirst SpecZatr where ((cvAKT2MTR.SpSopr3.NRec == SpecZatr.cAddSumTune
+                                            AND _cMc_OLD_              == SpecZatr.cUKS)) = tsOk)
+          {
+            if (cvAKT2MTR.SpecZatr.coTable = 0)
+              cvAKT2MTR.Update current SpecZatr set SpecZatr.cSpec := comp(1000000.0 * dKol * fEdIzm.GetKoefOtpEd(_cOE_OLD_));
+          }
+        else
+          {
+            cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnSpecZatr);
+
+            cvAKT2MTR.SpecZatr.coTable     := 0;
+            cvAKT2MTR.SpecZatr.cAddSumTune := cvAKT2MTR.SpSopr3.NRec;    // ссылка на спецификацию накладной
+            cvAKT2MTR.SpecZatr.cUKS        := _NRec_OLD_            ;    // ссылка на спецификацию акта М-7
+            cvAKT2MTR.SpecZatr.cSpec       := comp(1000000.0 * dKol * fEdIzm.GetKoefOtpEd(_cOE_OLD_));
+          
+            cvAKT2MTR.insert current SpecZatr;
+          }
+
+        var piKatDopEd : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+
+        if (SpSopr.PrMC = 1)
+          {
+            piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(1), KolFactSrc,
+                                word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(1), cvAKT2MTR.SpSopr3.KolFact, cvAKT2MTR.SpSopr3.VidSopr);
+            piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(2), KolSrc,
+                                word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(2), cvAKT2MTR.SpSopr3.Kol    , cvAKT2MTR.SpSopr3.VidSopr);
+            piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(3), KolOplSrc,
+                                word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(3), cvAKT2MTR.SpSopr3.KolOpl , cvAKT2MTR.SpSopr3.VidSopr);
+          }
+
+#ifndef __MTR_TO_SPEC__
+         if (cvAKT2MTR.GetFirst SpecZatr where ((coSpSopr   == SpecZatr.coTable
+                                             AND _NRec_OLD_ == SpecZatr.cSpec)) = tsOk)
+           {
+             var cz : comp;  cz := cvAKT2MTR.SpecZatr.cAddSumTune;
+
+             cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnSpecZatr);
+
+             cvAKT2MTR.SpecZatr.coTable := coSpSopr;
+             cvAKT2MTR.SpecZatr.cSpec   := cvAKT2MTR.SpSopr3.nRec;
+             cvAKT2MTR.SpecZatr.cAddSumTune := cz;
+
+             if (cvAKT2MTR.Insert Current SpecZatr = tsOk) {};
+           }
+#else
+        oMTRFun.CopySpecMTR(coSpSopr, _NRec_OLD_, coSpSopr, cvAKT2MTR.SpSopr3.NRec);
+#end
+
+      }
+
+  CheckSumma(TRUE);
+}
+
+//******************************************************************************
+//  Копирование спецификации акта о приемке материалов (М-7) в приходную накладную
+//
+
+Procedure CopySpecAkt (_VidSopr_ : word);
+var _NRec_OLD_ : comp;
+var _cMc_OLD_  : comp;
+var _cOE_OLD_  : comp;
+var KolFactSrc : double;
+var KolSrc     : double;
+var KolOplSrc  : double;
+var dKol       : double;
+{
+  cvAKT2MTR._LOOP SpSopr3
+    {
+      _NRec_OLD_ := cvAKT2MTR.SpSopr3.NRec;
+      _cMc_OLD_  := cvAKT2MTR.SpSopr3.cMcUsl;
+      _cOE_OLD_  := cvAKT2MTR.SpSopr3.cOtpEd;
+      KolFactSrc := cvAKT2MTR.SpSopr3.KolFact;
+      KolSrc     := cvAKT2MTR.SpSopr3.Kol;
+      KolOplSrc  := cvAKT2MTR.SpSopr3.KolOpl;
+
+      dKol := KolDostupAkt(_NRec_OLD_, _cOE_OLD_, KolFactSrc);
+
+      if (dKol <= 0.000001)
+        Continue;
+
+      cvAKT2MTR.SpSopr3.NRec    := 0;
+      cvAKT2MTR.SpSopr3.cSopr   := cvAKT2MTR.KatSopr.NRec;
+      cvAKT2MTR.SpSopr3.VidSopr := _VidSopr_;
+      cvAKT2MTR.SpSopr3.Npp     := oSpNext.GetSpNppNext(cvAKT2MTR.KatSopr.NRec, coSpSopr);
+      cvAKT2MTR.SpSopr3.KolFact := dKol;
+      cvAKT2MTR.SpSopr3.SumNDS  := 0;
+      cvAKT2MTR.SpSopr3.SumVNDS := 0;
+
+      if (cvAKT2MTR.insert current SpSopr3 <> tsOK)
+        Continue;
+
+      if (cvAKT2MTR.GetFirst SpecZatr where ((cvAKT2MTR.SpSopr3.NRec == SpecZatr.cAddSumTune
+                                          AND _cMc_OLD_              == SpecZatr.cUKS)) = tsOk)
+        {
+          if (cvAKT2MTR.SpecZatr.coTable = 0)
+            cvAKT2MTR.Update current SpecZatr set SpecZatr.cSpec := comp(1000000.0 * dKol * fEdIzm.GetKoefOtpEd(_cOE_OLD_));
+        }
+      else
+        {
+          cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnSpecZatr);
+
+          cvAKT2MTR.SpecZatr.coTable     := 0;
+          cvAKT2MTR.SpecZatr.cAddSumTune := cvAKT2MTR.SpSopr3.NRec;    // ссылка на спецификацию накладной
+          cvAKT2MTR.SpecZatr.cUKS        := _NRec_OLD_            ;    // ссылка на спецификацию акта М-7
+          cvAKT2MTR.SpecZatr.cSpec       := comp(1000000.0 * dKol * fEdIzm.GetKoefOtpEd(_cOE_OLD_));
+        
+          cvAKT2MTR.insert current SpecZatr;
+        }
+
+      var piKatDopEd : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+
+      if (SpSopr.PrMC = 1)
+        {
+          piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(1), KolFactSrc,
+                              word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(1), cvAKT2MTR.SpSopr3.KolFact, cvAKT2MTR.SpSopr3.VidSopr);
+          piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(2), KolSrc,
+                              word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(2), cvAKT2MTR.SpSopr3.Kol    , cvAKT2MTR.SpSopr3.VidSopr);
+          piKatDopEd.CopyDopEd(word(coSpSopr), _NRec_OLD_            , word(3), KolOplSrc,
+                              word(coSpSopr), cvAKT2MTR.SpSopr3.NRec, word(3), cvAKT2MTR.SpSopr3.KolOpl , cvAKT2MTR.SpSopr3.VidSopr);
+        }
+
+#ifndef __MTR_TO_SPEC__
+         if (cvAKT2MTR.GetFirst SpecZatr where ((coSpSopr   == SpecZatr.coTable
+                                             AND _NRec_OLD_ == SpecZatr.cSpec)) = tsOk)
+           {
+             var cz : comp;  cz := cvAKT2MTR.SpecZatr.cAddSumTune;
+
+             cvAKT2MTR.ClearBuffer(cvAKT2MTR.tnSpecZatr);
+
+             cvAKT2MTR.SpecZatr.coTable := coSpSopr;
+             cvAKT2MTR.SpecZatr.cSpec   := cvAKT2MTR.SpSopr3.nRec;
+             cvAKT2MTR.SpecZatr.cAddSumTune := cz;
+
+             if (cvAKT2MTR.Insert Current SpecZatr = tsOk) {};
+           }
+#else
+        oMTRFun.CopySpecMTR(coSpSopr, _NRec_OLD_, coSpSopr, cvAKT2MTR.SpSopr3.NRec);
+#end
+
+
+      CheckSumma(TRUE);
+    }
+}
+
+//******************************************************************************
+// Формирования накладной по документу
+//
+Procedure CreatePrixNakl(_cRec_ : comp; _NRec_ : comp; _VidSopr_ : word);
+{
+  if cvAKT2MTR.GetFirst KatSopr2 where ((_cRec_ == KatSopr2.NRec)) = tsOK
+    if cvAKT2MTR.GetFirst KatSopr where ((_NRec_ == KatSopr.NRec)) = tsOK
+      if UpdAktPOMTR(cvAKT2MTR.KatSopr.VidSopr)
+        if (Message('Копировать всю спецификацию из выбранного акта?', Confirmation + YesNo) = cmYes )
+          CopySpecAkt(_VidSopr_);
+        else
+          if (RunInterface('GetAktSp', cvAKT2MTR.KatSopr.cKatSopr, wPList) = cmDefault)
+            CopyAnySpecAkt(_VidSopr_);
+
+}

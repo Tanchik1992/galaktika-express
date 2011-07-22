@@ -1,0 +1,930 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика - приходные накладные
+// методы для soprdocb.vip
+//********************************************************************************
+
+#include saldomcs.vpp   // Тригеры для SpOrder
+#include sopconst.inc   // Константы для сопроводительных документов
+#include WrInPut.vpp    // формирование заказа в Автотранспорте
+#include CopNal.vpp     // c налогов
+#include CopOrdB.vpp    // c распределения
+#include getmolsk.vpp   // (VOLOD) получения МОЛ по умолчанию для склада
+
+#ifdef __SOPRDOC102__
+#include skymodif.vpp
+#end
+
+//********************************************************************************
+
+#doc
+  Редактирования примечания
+#end
+
+Window EditTextRepr 'Примечание' escclose;
+  Show at(2, 12, 78, 19);
+
+panel paEditTextRField
+  Show at (, , , );
+  Table DocInfo;
+
+Text DocInfo.TextData;
+
+HandleEvent
+
+cmInsertRecord:
+  insert current DocInfo;
+
+cmUpdateRecord:
+  update current DocInfo;
+
+cmDeleteRecord:
+  if( Message('Удалим?', YesNo+Confirmation) = cmYes )
+    delete current DocInfo;
+end; // HandleEvent
+end; // panel
+end; // window
+
+//********************************************************************************
+
+Window GTDVals 'Установка значений страны и номера ГТД' escclose;
+  Show at(, , 56, 9);
+
+Panel pnGTDVals
+  Table KatSopr;
+
+Screen scrGTDValues ('', , sciEsc);
+
+Fields
+  sNameCountry ('Наименование классификатора', , ) : skip;
+  sCountry     ('Значение классификатора', , sci13Esc): Protect, PickButton;
+  sNameNumber  ('Наименование атрибута', , ) : skip;
+  sNumber      ('Значение атрибута', , sci1Esc): NoProtect;
+  wPrizn       ('Формировать номер ГТД из номера п/п по позиции спецификации'): NoProtect;
+
+Buttons
+  cmOk, default, , 'Установить';
+  cmCancel, , , 'Отмена';
+<<
+
+  .@@@@@@@@@@@@@@@@@@@   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  .@@@@@@@@@@@@@@@@@@@   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+     [.]  указывать номер п/п по позиции спецификации`
+
+        <.Установить.>              <.  Отмена  .>
+>>
+end; // Screen
+
+HandleEvent
+
+cmDelOnProtect :
+{
+  if CurField = #sCountry
+    {
+      Set sCountry := '';
+      RescanPanel(#KatSopr);
+      cCodeSeg := Comp(0);
+    }
+
+}
+end; //HandleEvent
+end; //Panel
+
+HandleEvent
+
+cmInit:
+{
+  sNameCountry := sGetTune('Nalog.Rus.GTD.Class_Country');
+  sNameNumber  := sGetTune('Nalog.Rus.GTD.Attr_GTDNumber');
+
+  sCountry := '';
+  sNumber  := '';
+  cCodeSeg := Comp(0);
+
+  if ((sNameNumber = '') and (sNameCountry = ''))
+  {
+    ShowTune('Не заданы названия внешних классификатора и атрибута в настройках!', 'Nalog.Rus.GTD.Class_Country');
+    abort;
+    exit;
+  }
+
+  if (sNameNumber <> '')
+  {
+    iExtAttr.ReNameAttr(coKatParty, 'ГТД', cgAttrType_Str, 0, 0, sNameNumber, false);
+    SetFieldState(#sNumber, sfVisible);
+  }
+  else
+    ClearFieldState(#sNumber, sfVisible);
+
+  if (sNameCountry <> '')
+  {
+    iClass.CreateClass(coKatParty, sNameCountry, 1);
+    wCodeCountry := iClass.GetClassCode(coKatParty, sNameCountry);
+
+    SetFieldState(#sCountry, sfVisible);
+  }
+  else
+    ClearFieldState(#sCountry, sfVisible);
+
+  ReadMyDsk(wPrizn, 'Prizn_npp', true);
+}
+
+cmPick:
+  if CurField = #sCountry
+   {
+     RunInterface('PickExClassifier2', coKatParty, wCodeCountry, cCodeSeg, 1);
+
+     If GetFirst ExClassSeg where ((cCodeSeg == ExClassSeg.nRec)) = tsOk
+       sCountry := ExClassSeg.Name;
+   }
+
+cmOk:
+{
+  var ClassRes, AtrRes : boolean;
+
+  ClassRes  := false;
+  AtrRes    := false;
+
+  if (Message('Установить значения для всех позиций спецификации?', Confirmation + YesNo + mfSwapButtons) = cmNo)
+  {
+    abort;
+    exit;
+    CloseWindow(GTDVals);
+  }
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Установка значений страны и номера ГТД', 1);
+
+  PushPos(#SpSopr);
+
+  _loop SpSopr
+  {
+    if isValid(#KatParty)
+    {
+      if (cCodeSeg <> comp(0))
+      {
+        if (GetFirst ExClassVal where ((    wCodeCountry   == ExClassVal.ClassCode
+                                        and coKatParty     == ExClassVal.wTable
+                                        and KatParty.NRec  == ExClassVal.cRec)) = tsOk)
+        {
+          ExClassVal.cClassSeg := cCodeSeg;
+          ClassRes := ((update current ExClassVal) = tsOk);
+        }
+        else
+        {
+          ClearBuffer(tnExClassVal);
+          ExClassVal.ClassCode := wCodeCountry;
+          ExClassVal.wTable := coKatParty;
+          ExClassVal.cRec := KatParty.Nrec;
+          ExClassVal.cClassSeg := cCodeSeg;
+
+          ClassRes := ((insert current ExClassVal) = tsOk);
+        }
+      }
+      AtrRes := (iExtAttr.sSetAttr (coKatParty, KatParty.nrec, sNameNumber,
+                 sNumber + if (wPrizn <> 0, '/' + string(SpSopr.npp), '') ));
+    }
+  }
+  PopPos(#SpSopr);
+  StopVisual('',0);
+  SaveMyDsk(wPrizn, 'Prizn_npp');
+  CloseWindow(GTDVals);
+}
+end; // HandleEvent
+end; // window
+
+//********************************************************************************
+
+Procedure OnInitInsMCInfo;
+{
+  ResetBounds(#SoprOrdB);
+
+  if (Delete NoVisual SoprOrdB
+            where ((KatSopr.NRec == SoprOrdB.cSoprDoc)) <> tsOk)
+    {};
+
+  SetBounds(#SoprOrdB);
+}
+
+//********************************************************************************
+
+Function OnAfterMakeBaseDoc: boolean;
+{
+  OnAfterMakeBaseDoc := TRUE
+}
+
+//********************************************************************************
+
+#include sopruzb.vpp    //процедуры для формирования повагонных накладных
+
+// Очистка позиций матценностей по накладной и связанных с ними записей
+#include soprc07.vpp    // OnBeforeClearSpSopr; // Перекрытие абстракта
+
+#include soprgen.vpp    // Модуль фунций общей обработки
+#include pickzatr.vpp   // выбор затраты
+#include soprval.vpp    // Обработка расчетов по валюте
+
+
+#include naklgen.vpp    // Общая обработка для всех накладных
+#include soprprih.vpp   // Модуль обработки приходных накладных
+#include soprordb.vpp   // Модуль обработки soprordb
+#include nneword.vpp    // Автоинкремент номеров складских ордеров
+#include delord.vpp     // Удаление складских ордеров
+
+//********************************************************************************
+
+var LastDocType       : word;    // используется для оптимизации быстродействия
+var TitlePart         : string;  // тайтл для окна EditSopr
+                                 // накладываем баундсы только когда окно EditSopr на экране
+
+//********************************************************************************
+//не испольуются
+//все делает CheckSumma
+Procedure SumSopUslChanged(aNRec: comp);
+{
+}
+
+//********************************************************************************
+
+#include rcsum_p.vpp    // Пересчет сумм по накладной
+#include soprnald.vpp   // Обработка налогов в накладной
+
+//********************************************************************************
+
+Procedure OnAfterInsertSpSopr;
+{
+  NalogsFromSpStep;
+}
+
+//********************************************************************************
+
+Procedure OnAfterInsertSpSoprFromPrice;
+{
+}
+
+//********************************************************************************
+
+#include rzprhsop.vpp   // Функции КУТ розницы
+
+//********************************************************************************
+Function RDeleteOrders(Warn: boolean): boolean;
+var Res: boolean;
+{
+  if (NOT IsDelOrder)
+    Exit;
+
+  if GetFirst SklOrder where ((KatSopr.nRec == SklOrder.cSopr)) = tsOk
+   Res := DeleteOrders(Warn);  //удаление складского ордера
+  else
+   Res := DeleteKUTS(Warn);    //удаление КУТ (розница)
+
+  RDeleteOrders := Res;
+}
+
+//********************************************************************************
+
+Function CanMakeOrder: Date;
+{
+  var dat: Date; Dat := to_Days(0);
+
+  CanMakeOrder := Dat;
+
+  if (not IsValid(#SpSopr))
+    Exit;
+
+  if (NOT IsDelOrder)
+    Exit;
+
+  Dat := if (longint(KatSopr.dOpr) = 0, KatSopr.dSopr, KatSopr.dOpr);
+
+  if (not isPacketMode)
+    if (RunDialog(GetFormNa, Dat) = cmCancel)
+      Exit;
+
+  if (KatSopr.dSopr > Dat)
+    if (Message('Дата формирования ордеров меньше даты документа!'#13 +
+                'Продолжить формирование?', Confirmation + YesNo + mfSwapButtons) <> cmYes)
+      Exit;
+
+  var tmpSkl: comp; tmpSkl := 0;
+  var tmpMol: comp; tmpMol := 0;
+
+  if (not CheckSoprOrdB(tmpSkl, tmpMol, boolean(true)))
+    {
+      Message('Складские ордера не сформированы...', CancelButton);
+      Exit;
+    }
+
+  if (not RDeleteOrders(true))
+    Exit;
+
+  CanMakeOrder := Dat;
+}
+
+//********************************************************************************
+
+#include soprc03.vpp
+
+//********************************************************************************
+
+Function OnSchFactSumm(Value: double): double;
+{
+  OnSchFactSumm := if (KatSopr.VidSopr = 103, -Value, Value);
+}
+
+//********************************************************************************
+
+#include schffun.vpp   // Поддержка счетов-фактур
+
+#include soprc00b.vpp
+
+//********************************************************************************
+
+Function BeforeDeleteKatSopr (pNRec: comp; isWarnings, isVisual: boolean): boolean;
+  var dchanged: boolean;
+  var St: string;
+{
+  BeforeDeleteKatSopr := FALSE;
+
+  PopCondition(tcNo_SN_KatSopr);
+
+  if GetFirst KatSopr where ((pNRec == KatSopr.Nrec)) <> tsOk
+    {
+      Exit;
+      PushCondition(tcNo_SN_KatSopr); // спрятать сторнирующие накладные
+    }
+
+  if (isVisual)
+    StartNewVisual(vtNumericVisual, vfTimer, 'Подготовка документа к удалению...', 1);
+
+  var Res: boolean;  Res := oSDfuns.CanDeleteKS_GTD(KatSopr.NRec,isWarnings);
+
+  if (Res)
+   {
+     Res := CanDelOrdEx(true, false);  //проверка возможности удаления складского ордера
+
+     if (isVisual)
+       SetVisualHeader('Удаление ордеров');
+
+     if Res
+      {
+        SaveMyDsk('','delord_del_nakl');
+
+        Res := if (IsDelOrder, RDeleteOrders(isWarnings), FALSE);  //удаление складского ордера или КУТ (розница)
+
+        if not Res
+          if ReadMyDsk(St, 'delord_del_nakl', dchanged)
+            if St = 'confirm Cancel del nakl'
+              {
+                if Message('Отменить удаление накладной?', YesNo) = No
+                  Res := TRUE;
+
+                SaveMyDsk('','delord_del_nakl');
+              }
+      }
+   }
+
+  if (Res)
+    _LOOP SpSopr where((KatSopr.Nrec == SpSopr.cSopr))
+       OnBeforeClearSpSopr;
+
+  if (isVisual)
+    StopVisual('', 0);
+
+  if (Res)
+    if (GetFirst KSopr where ((KatSopr.NRec == KSopr.cKatSopr)) = tsOk)
+      If (KSopr.VidSopr <> 111)
+        Update KSopr where ((KatSopr.NRec == KSopr.cKatSopr)) set KSopr.cKatSopr := 0;
+      else// (KSopr.VidSopr = 111)
+        {
+          if (Message('Данной накладной соответствуют сопутствующие услуги.'#13#3+
+              'Удалить акты на данные услуги?', YesNo+Confirmation) <> cmYes)
+            Update KSopr where ((KatSopr.NRec == KSopr.cKatSopr)) set KSopr.cKatSopr := 0;
+          else
+            {
+              var objDel: objDelSopr;
+
+              if (not LoadVipRef(objDel, 'DelSopr'))
+                {
+                  Message('Не загрузился интерфейс objDelSopr.'#10#13 +
+                           'Удаление отменено', mfError);
+                  Exit;
+                }
+
+              if (isVisual)
+                StartNewVisual(vtNumericVisual, vfTimer, 'Удаляются документы: ', 0);
+
+              _LOOP KSopr where ((KatSopr.NRec == KSopr.cKatSopr))
+                {
+                  if (isVisual)
+                    NextVisual;
+
+                  objDel.DeleteSopr(KSopr.NRec, FALSE, FALSE);
+                }
+
+              if (isVisual)
+                StopVisual('', 0);
+            }
+
+        }
+
+
+  PushCondition(tcNo_SN_KatSopr); // спрятать сторнирующие накладные
+  oDel.DelMilk(KatSopr.nRec);
+  BeforeDeleteKatSopr := Res;
+}
+
+//********************************************************************************
+
+#include makeprih.vpp // Формирование приходных ордеров
+#include consvoz.vpp  // Формирование ордеров возврата с консигнации
+#include soprc04.vpp
+#include gmckat_p.vpp // Выбор материальных ценностей из каталога
+#include gmcprl.vpp   // Выбор материальных ценностей из прайса
+#include insstds.vpp  // Стандартная обработка выбора МЦ по счету
+#include insmc_n.vpp  // Вставка МЦ по документу (через MakeNakl)
+#include insmc0.vpp   // общие функции для  insmc1.vpp , insmc2.vpp
+#include insmc2.vpp   // заполнение накладной по договор-соглашение-кал.план
+#include prnprih.vpp  // Печать приходной накладной
+#include copySopr.vpp // Копирование документа
+#ifdef _SMETA_IN_SOPR_
+#include gSmetKS.vpp  // Выбор МЦ/Усл из смет
+#end
+
+#include IMPVAG.vpp
+
+//********************************************************************************
+
+Function getNDS_SpSopr_SopUsl(pSpSopr: comp; var bnNDS: double;var bnNDSV: double; var nNDS: double;var nNDSV: double): word;
+
+var ret: word;
+var SumDRb, SumDVb, SumDRn, SumDVn: double; // Суммы услуг до таможни
+var SumTRb, SumTVb, SumTRn, SumTVn: double; // Суммы позиций МЦ
+var SumPRb, SumPVb, SumPRn, SumPVn: double; // Суммы услуг после таможни
+var SumVRb, SumVVb: double;  // Cумма соп. услуг по весу без налогов
+var SumVRn, SumVVn: double;  // Cумма соп. услуг по весу с налогами
+var SumORb, SumOVb: double;  // Суммы соп. усулг по объему без налогов
+var SumORn, SumOVn: double;  // Сумма соп. услуг по объему с налогами
+var SumKolRb, SumKolVb: double;  // Суммы соп. усулг по количеству без налогов
+var SumKolRn, SumKolVn: double;  // Сумма соп. услуг по количеству с налогами
+var Sum_KP_Rb, Sum_KP_Vb: double;  // Суммы соп. усулг по количеству позиций без налогов
+var Sum_KP_Rn, Sum_KP_Vn: double;  // Суммы соп. усулг по количеству позиций с налогами
+var CommonKol: double;
+var VesTov, ObTov  : double;   // Сумма веса и объема МЦ
+var bnPrice, bnVPrice, nPrice, nVPrice: double; // Цены для позиции
+var pKatSopr: comp;
+
+{
+  PopCondition(tcNo_SN_KatSopr); // показать сторнирующие накладные
+  getNDS_SpSopr_SopUsl := 1;
+  bnNDS := 0;bnNDSV := 0;nNDS := 0;nNDSV := 0;
+  ret := GetFirst SpSopr where ((pSpSopr == SpSopr.NRec));
+  if (ret <> tsOk) Exit;
+  pKatSopr := SpSopr.cSopr;
+  ret := GetFirst KatSopr where ((pKatSopr == KatSopr.NRec));
+  if (ret <> tsOk) Exit;
+  if (SpSopr.VidSopr <> 101)  AND (SpSopr.VidSopr <> 108) AND
+     (SpSopr.VidSopr <> 1411) Exit;
+
+  GetProcNac(SumDRb, SumDVb, SumDRn, SumDVn, SumTRb, SumTVb, SumTRn, SumTVn,
+             SumPRb, SumPVb, SumPRn, SumPVn, SumVRb, SumVVb, SumVRn, SumVVn,
+             SumORb, SumOVb, SumORn, SumOVn,
+             SumKolRb, SumKolVb, SumKolRn, SumKolVn,
+             Sum_KP_Rb, Sum_KP_Vb, Sum_KP_Rn, Sum_KP_Vn,
+             CommonKol,
+             VesTov, ObTov);
+
+  ResetBounds(#SpSopr);
+  ResetBounds(#KatPodr);
+  ret := GetFirst SpSopr where ((pSpSopr == SpSopr.NRec));
+  KSopr_NRec := 0; // Нужна для функции SetSoprOrdBPrice
+  SetSoprOrdBPrice(SumDRb, SumDVb, SumDRn, SumDVn, SumTRb, SumTVb, SumTRn, SumTVn,
+                   SumPRb, SumPVb, SumPRn, SumPVn, SumVRb, SumVVb, SumVRn, SumVVn,
+                   SumORb, SumOVb, SumORn, SumOVn,
+                   SumKolRb, SumKolVb, SumKolRn, SumKolVn,
+                   Sum_KP_Rb, Sum_KP_Vb, Sum_KP_Rn, Sum_KP_Vn,
+                   CommonKol,
+                   VesTov, ObTov,
+                   bnPrice, bnVPrice, nPrice, nVPrice);
+
+  bnNDS  := loStdPrb.bnNDS;
+  nNDS   := loStdPrb.nNDS;
+  bnNDSV := loStdPrb.bnNDSV;
+  nNDSV  := loStdPrb.nNDSV;
+
+  SetBounds(#SpSopr);
+  SetBounds(#KatPodr);
+  PushCondition(tcNo_SN_KatSopr); // спрятать сторнирующие накладные
+  getNDS_SpSopr_SopUsl := 0;
+}
+
+//********************************************************************************
+
+Procedure NettoInKol;
+{
+  if RecordExists SpSopr <> tsOk
+    Exit;
+
+  if (Message('Перенести значение поля "Нетто" в поле "Количество"?', YesNo + Confirmation) <> cmYes)
+    Exit;
+
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr
+  {
+    var KolOld: double; KolOld := SpSopr.KolFact;   // старое кол-во (нужно для уточнения процента)
+    SpSopr.KolFact := SpSopr.Netto;
+
+    if (KatOtpEd.Diskret = 1) //неделимая
+    {
+      var cEd: comp;  cEd := if(GetFirst fastfirstrow KatEd = tsOK, KatEd.NRec, comp(0));
+      fEdIzm.CheckKolDiskretAll(SpSopr.KolFact, SpSopr.cOtpEd, cEd, TRUE, FALSE);
+    }
+
+    Update Current SpSopr;
+
+    oSDfuns.CheckKolSoprOrdB(SpSopr.NRec, KolOld);
+  }
+
+  PopPos(#SpSopr);
+
+  CheckSumma (true);
+}
+
+//********************************************************************************
+
+#include katssetd.vpp
+
+//********************************************************************************
+
+Procedure _SetTypeSopr(wSopr: word);
+{
+  TypeSopr := wSopr;
+}
+
+//********************************************************************************
+// !!! Функция в данный момент 11/2005 нигде не используется
+Procedure MakePrixNakl(_NRecDO: comp);
+{
+  Reason := 0;
+
+  SelectPanel(#KatSopr);
+
+  ClearBuffer(#KatSopr);
+
+  katssetd;
+
+  if (not InsertMC(0))
+    Exit;
+
+  MakeSopUslFromDO;//пропорционально распределять соп. услугу из ДО
+
+  var isRasprDO: boolean;
+  if Reason = 0
+    if (not ReadMyDsk (isRasprDO, 'Rasprdo_vip', FALSE)) or (not isRasprDO)
+      {
+        var dc  : boolean;
+        var mes: string;
+
+        ReadMyDsk (mes, 'mess_nakl', dc);
+
+        if (message('Сформированы накладные № ' + mes + '!'#13+
+                    'Перейти в окно накладных для печати?', YesNo+Confirmation) = yes)
+          {
+            if (KatSopr.VidSopr = 111) or (KatSopr.VidSopr = 110)
+              RunInterface('AktUslB', word(KatSopr.VidSopr), KatSopr.Nrec, comp(0))
+            else
+              RunInterface('SoprDocB' , word(KatSopr.VidSopr), KatSopr.Nrec);
+
+            RereadRecord(#KatSopr);
+          }
+      }
+}
+
+//********************************************************************************
+
+Procedure KNMakePereocOrder;
+var SklOrder__nRec: comp;
+    cMC_, cParty_, valOrd_: comp;
+    SklOrder__nOrder: string;
+    sumOrd_, vSumOrd_: double;
+{
+  If ( GetFirst SklOrder where ((KatSopr.nRec == SklOrder.cSopr )) <> tsOk )
+    Exit;
+
+  PushPos(#SklOrder);
+
+    SklOrder.dOrd   := Add_Day(SklOrder.dOrd, 1);
+    SklOrder.tipOrd := 4;
+    SklOrder.nOrder := GetNextNOrder(true, SklOrder.cPodr);
+    SklOrder.nRec   := 0;
+
+    insert current SklOrder;
+
+    SklOrder__nRec   := SklOrder.nRec;
+    SklOrder__nOrder := SklOrder.nOrder;
+
+  PopPos(#SklOrder);
+
+  InitMCInfo(SklOrder.dOrd);
+
+  cMC_ := 0;
+  cParty_ := 0;
+  sumOrd_ := 0;
+  vSumOrd_:= 0;
+  valOrd_ := 0;
+
+  _LOOP SpOrder where ((SklOrder.nRec == SpOrder.cSklOrder))
+                             ordered by index SpOrder04
+    {
+      //если есть одинаковые позиции - м.б. при добавлении кол-ва в накладной
+      if (SpOrder.cMC = cMC_) AND (SpOrder.cParty = cParty_)
+        continue;
+
+      cMC_ := SpOrder.cMC;
+      cParty_ := SpOrder.cParty;
+
+      PushPos(#SpOrder);
+
+      NalT(SpOrder.dOrd, SpOrder.cMC,
+                         if(SpOrder.ccPodr = 0, -1, SpOrder.ccPodr),
+                         if(SpOrder.ccMOL = 0 , -1, SpOrder.ccMOL),
+                         if(SpOrder.cParty = 0, -1, SpOrder.cParty) );
+
+      if CountMC = 0
+        {
+          PopPos(#SpOrder);
+          Continue;
+        }
+
+      SpOrder.srPrice := (SpOrder.srPrice - AveragePrice)*CountMC;
+
+      if SpOrder.cVal <> GetCurVal
+        {
+          if (SpOrder.cVal = 0)
+            SpOrder.vPrice := 0;
+
+          if (GetCurVal <> 0) //переводим в CurVal
+            SpOrder.vPrice := oValFunc.GetAnyCurrency(SpOrder.cVal,
+                              if(SpOrder.cVal<>0, SpOrder.vPrice, SpOrder.srPrice),
+                              SpOrder.dOrd, GetCurVal);
+        }
+
+      if (SpOrder.vPrice <> 0)
+        SpOrder.vPrice := (SpOrder.vPrice - AverageVPrice) * CountMC;
+
+      SpOrder.rSrPrice := SpOrder.srPrice;
+      SpOrder.rvPrice := SpOrder.vPrice;
+      SpOrder.cVal := if(GetCurVal<>0, GetCurVal, SpOrder.cVal);
+      SpOrder.kol := 0.0;
+      SpOrder.dOrd := Add_Day(SpOrder.dOrd, 1);
+      SpOrder.tipOrd := 4;
+      SpOrder.cSklOrder := SklOrder__nRec;
+      SpOrder.nRec := 0;
+
+      if (SpOrder.srPrice <> 0) or (SpOrder.vPrice <> 0)
+        {
+          PushPos(#SklOrder);
+
+          if (GetFirst SklOrder where ((SklOrder__nRec == SklOrder.nRec)) = tsOk)
+            OneSpOrder_insert;
+
+          PopPos(#SklOrder);
+        }
+
+      sumOrd_  := sumOrd_  + SpOrder.srPrice; //т.к. SpOrder.kol = 0
+      vSumOrd_ := vSumOrd_ + SpOrder.vPrice;  //т.к. SpOrder.kol = 0
+      valOrd_  := if(SpOrder.cVal<>0, SpOrder.cVal, valOrd_);
+
+      PopPos(#SpOrder);
+    }
+
+  DoneMCinfo;
+
+  if (GetFirst SpOrder where ((SklOrder__nRec == SpOrder.cSklOrder))<>tsOK)
+    delete SklOrder where ((SklOrder__nRec == SklOrder.nRec))
+  else
+    {
+      if (GetFirst SklOrder where ((SklOrder__nRec == SklOrder.nRec)) = tsOk)
+        InsertSoprHozByOrder(sumOrd_, vSumOrd_, valOrd_);
+      Message('Сформирован ордер переоценки № ' + SklOrder__nOrder, Information);
+    }
+}
+
+//********************************************************************************
+
+Procedure KNMakeOrder;
+{
+  // ---- для функционала корректирующей накладной -----
+  // При помощи стандартных функций создаются два ордера: по Сторнирующей и Корректирующей Накладной
+  var PN_KatSopr: comp;
+  var Dat        : Date;
+  var prRzn, fPar1, fPar2: boolean;
+
+  prRzn := FALSE;
+  fPar1 := TRUE;
+  fPar2 := TRUE;
+
+  PN_KatSopr  := KatSopr.cADoc;
+  Dat := if (longint(KatSopr.dOpr) = 0, KatSopr.dSopr, KatSopr.dOpr);
+
+  if (RunDialog(GetFormNa, Dat) = cmCancel)  // запрашиваем дату сразу для двух накладных -- всегда должна быть одинаковой
+    Exit;
+
+  if ( (Dat < dGetTune('Dat_M_Ot')) )
+    {
+      Message('Дата оприходования корректирующей накладной должна находиться в открытом отчетном периоде.'#13 +
+              'Процесс оприходования прерван!', Warning);
+      Exit;
+    }
+
+  PushPos(#KatSopr);
+
+  isPacketMode  := TRUE;  // в пакетном режиме -- без запроса даты
+  KatSopr.dOpr  := Dat;            // зададим дату оприходования
+  MakeOrder(true, fPar2, prRzn);   // по корректирующей
+
+  if (prRzn)
+    {
+      Update_Current_KatSopr;
+      RunInterface(KUTOper);
+    }
+
+  PopCondition(tcNo_SN_KatSopr); // иначе не найдем сторнирующую накладную
+
+  // если по исходной накладной проводилось оприходование -- необходимо сформировать складские сторнирующие ордера
+  if (GetFirst KatSopr where ((PN_KatSopr == KatSopr.nRec)) = tsOk) AND (longint(KatSopr.dOpr) <> 0)
+    if (GetFirst KatSopr where ((PN_KatSopr == KatSopr.cADoc AND adSoprDocSN == KatSopr.wADoc)) <> tsOk)
+      Message('Произошло внутреннее нарушение целостности данных: Не найдена накладная (СН).');
+    else
+      {
+        fPar1 := TRUE;
+        fPar2 := TRUE;
+        KatSopr.dOpr := Dat;             // зададим дату оприходования
+        MakeOrder(true, fPar2, prRzn);     // по сторнирующей
+      }
+
+  PushCondition(tcNo_SN_KatSopr); // пользователь не сможет любоваться на сторнирующие накладные!
+
+  isPacketMode := FALSE;
+
+  PopPos(#KatSopr);
+
+  RereadRecord;
+}
+
+//********************************************************************************
+
+#include soprcomm.vpp
+#include wspdocn2.vpp // Окно с редактированием налогов к документу
+
+//********************************************************************************
+
+Procedure RecalcSoprDocB;
+{
+  var rksMarker: longint;  rksMarker := InitMarker('RecalcKatSopr', 8, 10, 5);
+
+  var i: word;
+  var cNRec: comp;
+  For (i := 0; i < GetMarkerCount(rksMarker); inc(i) )
+    if GetMarker(rksMarker, i, cNRec)
+      if (GetFirst KatSopr where ((cNRec == KatSopr.NRec)) = tsOk)
+        CheckSumma(true);
+
+  DoneMarker(rksMarker, '');
+}
+
+//********************************************************************************
+
+Function RemakeNalogsByCurs: boolean;
+{ //--пересчет налогов по курсу
+  RemakeNalogsByCurs := FALSE;
+  var cur: double;
+  var cValut: comp;  cValut := KatSopr.cValut;
+
+  if RunInterface(GetDCCurse, Date(0, 0, 0), cValut, Date(0, 0, 0), cur) = cmCancel
+    Exit;
+
+  StartNewVisual(vtNumericVisual, vfTimer, 'Пересчет налогов по курсу', 1);
+
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr
+    {
+      _LOOP SpDocNal
+        {
+          NextVisual;
+          if (KatSopr.cVal = 0)
+            SpDocNal.SumVal := SpDocNal.Summa / cur;
+          else
+            SpDocNal.Summa := SpDocNal.SumVal * cur;
+
+          SpDocNal.SumNal := SpDocNal.Summa;
+          update current SpDocNal;
+        }
+
+      SpSopr.ManualTax := 1;
+      update current SpSopr;
+    }
+
+  PopPos(#SpSopr);
+
+  PushPos(#SpSopUsl);
+
+  _LOOP spsopusl
+    {
+      _LOOP spdocnalsopusl
+        {
+          NextVisual;
+
+          if (KatSopr.cVal = 0)
+            spdocnalsopusl.SumVal := spdocnalsopusl.Summa / cur;
+          else
+            spdocnalsopusl.Summa := spdocnalsopusl.SumVal * cur;
+
+          spdocnalsopusl.SumNal := spdocnalsopusl.Summa;
+          update current spdocnalsopusl;
+        }
+
+      spsopusl.ManualTax := 1;
+      update current spsopusl;
+    }
+
+  StopVisual('', vfSilent);
+
+  PopPos(#spsopusl);
+
+  RemakeNalogsByCurs := TRUE;
+}
+
+//********************************************************************************
+
+Procedure  good_SpDocNalSopUsl;
+{
+  if update current SpDocNalSopUsl <>tsok
+    {};
+
+  PushPos(#SpDocNalSopUsl);
+
+    CheckSumma(false);
+
+  PopPos(#SpDocNalSopUsl);
+
+  RereadRecord(#SpDocNalSopUsl);
+}
+
+//********************************************************************************
+
+#include soprc16.vpp
+
+//********************************************************************************
+
+Procedure SetEditOption;
+{
+  if not isEditSoprVisible
+    Exit;
+
+  Case SpSopUsl.PrMC of
+  //-------------------
+    3:
+      {
+        SetFieldOption(#SpSopUsl.Kol, ofSelectable);
+
+        if ((CurField = #SpSopUsl.Price) or (CurField = #SpSopUsl.VPrice))
+          SelectField(#spSopUsl.Kol);
+
+        ClearFieldOption(#spSopUsl.Price, ofSelectable);
+        ClearFieldOption(#spSopUsl.VPrice, ofSelectable);
+        ClearFieldOption(#KlVal.Simvolv, ofSelectable);
+      }
+  //-------------------
+    4..7:
+      {
+        SetFieldOption(#spSopUsl.Price, ofSelectable);
+        SetFieldOption(#spSopUsl.VPrice, ofSelectable);
+        SetFieldOption(#KlVal.Simvolv, ofSelectable);
+
+        if (CurField = #SpSopUsl.Kol)
+          SelectField(if (katSopr.cVal = 0, #SpSopUsl.Price, #spSopUsl.VPrice));
+
+        ClearFieldOption(#SpSopUsl.Kol, ofSelectable);
+      }
+  //-------------------
+  end;
+
+  var bTuneEditCena: boolean;
+  bTuneEditCena := boGetTune('Doc.NoEditCena');
+
+  if (KatSopr.VidSopr = 1411 OR KatSopr.VidSopr = 1421)
+    bTuneEditCena := boGetTune('Doc.Wood.NoEditCena');
+
+  if bTuneEditCena
+    {
+      //По настройке нельзя менять вручную цену
+      ClearFieldOption(#PrV, ofSelectable);
+      ClearFieldOption(#SumPrice, ofSelectable);
+      ClearFieldOption(#KlVal.Simvolv, ofSelectable);
+      ClearFieldOption(#SpSopUsl.Price, ofSelectable);
+      ClearFieldOption(#SpSopUsl.VPrice, ofSelectable);
+    }
+}

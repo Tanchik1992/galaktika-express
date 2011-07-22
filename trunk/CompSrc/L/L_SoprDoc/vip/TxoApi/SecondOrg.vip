@@ -1,0 +1,381 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,2000 корпорация ГАЛАКТИКА                    ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Бухгалтерский контур                                      ║
+ ║ Версия        : 5.8x                                                      ║
+ ║ Назначение    : Услуги, отнесенные на другого контрагента                 ║
+ ║ Ответственный : Ларин Михаил Николаевич (larin@galaktika.by)              ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include TxoApi.vih
+
+VipInterface Txo_TxoSecondOrg
+  Implements ObjTxoIdentPlugin
+  #ifdef Atl51
+  Licensed(Free)
+  #end
+;
+
+//******************************************************************************
+#doc
+Назначение:
+  Обработа ТХО в услугах, отнесенных на другого контрагента (используется как объектный)
+#end
+//******************************************************************************
+
+Interface Txo_TxoSecondOrg (,hcTXOWVIPParam);
+
+create view
+var
+  CurHTxo      : longint; // ссылка на текущий сервис ТХО
+  CurSoprDoc   : comp;
+  Param_Result : word;    // 0-Сумма по спецификации без налогов, 1-сумма по спецификации
+  Param_Distr  : word;    // Распределение сумм актов на сторонние услуги по спецификации накладной
+
+as select
+  *
+from
+  Katsopr  (readonly),                      // основная накладная
+  synonym KatSopr KatSopr_S (readonly)      // акты на услуги отнесенные на другого контрагента
+  ,KatOrgDescr
+  ,SpSopr
+  ,KatMC
+  ,KatUsl
+  ,KatParty
+  ,KatMol
+  ,synonym KatMol KatMol_S (readonly)
+
+where
+((
+  comp(CurSoprDoc)     == KatSopr.Nrec          // позиционирование на основную накладную
+  and comp(CurSoprDoc) == SpSopr.cSopr          // спецификация накладной
+  and KatSopr.nrec     == KatSopr_S.cKatSopr    // связка с актами
+
+  and SpSopr.cMcUsl    == KatMC.NRec
+  and SpSopr.cMcUsl    == KatUsl.NRec
+  and SpSopr.cParty    == KatParty.NRec
+  and KatSopr.cMolTo   == KatMol.NRec
+  and KatSopr.cMolFrom == KatMol_S.NRec
+));
+
+function GetKontragentGroup(cOrg : comp) : comp;
+begin
+  GetKontragentGroup := 0;
+  _loop KatOrgDescr where ((cOrg == KatOrgDescr.cRec))
+     if (KatOrgDescr.cGroup <> 0)
+     {
+       GetKontragentGroup := KatOrgDescr.cGroup;
+       exit;
+     }
+end;
+
+
+function GetInfo : string;
+{
+   GetInfo := 'Услуги, отнесенные на другого контрагента';
+}
+
+//******************************************************************************
+Function ParamGen: string;
+{
+   var s: string;
+   s := '';
+   PackFields;
+
+   case Param_Result of
+   //0: s := s+'[Рез: БезНалогов]';    // по умолчанию будет сумма по спецификации без налогов
+     1: s := s + '[Рез:СНалогами]';
+   //  2: s := s + '[Рез:Налоги]';
+   end;
+
+   if (Param_Distr = 1)
+     s := s + '[Распр:Пропорц]';
+
+   ParamGen := s;
+}
+
+//******************************************************************************
+Procedure ParamParser;
+{
+   var s: string;
+   var i: longint;
+
+   TxoDebugMsg(CurHTxo, 'SecondOrg', ' =============================================================================== ');
+
+   // Значения параметров по умолчанию
+   Param_Result := 0;
+   Param_Distr  := 0;
+
+   // 2 разбор параметров
+   For(i := 1; i<= TxoParamCount(CurHTxo); i := i+1)
+   {
+     case TxoParamName(CurHTxo, i) of
+      'РЕЗ':
+        {
+          case TxoParamValue(CurHTxo, i) of
+            'БЕЗНАЛОГОВ' : Param_Result := 0;
+            'СНАЛОГАМИ'  : Param_Result := 1;
+            //'НАЛОГИ'     : Param_Result := 2;
+          end;
+        }
+
+      'РАСПР' :
+      {
+        case TxoParamValue(CurHTxo, i) of
+          'ПРОПОРЦ' : Param_Distr := 1;
+        end;
+      }
+      end;
+
+      TxoDebugMsg(CurHTxo, 'SecondOrg', 'Param '+string(i)+' of '+string(TxoParamCount(CurHTxo))+' ['+TxoParamName(CurHTxo,i)+':'+TxoParamValue(CurHTxo,i)+']');
+   }
+}
+
+Window winParam 'Параметры идентификатора' EscClose, DoAccept;
+  Show at (10, 5, 80, 25);
+TabbedSheet tbParam;
+
+Screen scParam 'Параметры';
+
+  Fields
+    ParamGen: Skip, {Font = {Bold = TRUE}}, Centered;
+    Param_Result ('Результат', , sci13EnEsc):
+      [LIST 0 'Сумма без налогов', 1 'Сумма с налогами'], Protect;
+    Param_Distr  ('[x] - Пропорциональное распределение по спецификации накладной', , sci1EnEsc): NoProtect;
+
+<<
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Результат` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+    [.] Пропорциональное распределение по спецификации накладной`
+
+  Идентификатор выдает сумму услуг, отнесенных на другого контрагента
+  в зависимости от параметра "Результат" без налогов или с налогами.
+
+  При установке параметра
+  "Пропорциональное распределение по спецификации накладной" идентификатор выдает
+  суммы актов на услуги распределенных пропорционально спецификации накладной
+  в зависимости от параметра результат с налогами или без налогов. Работает при
+  установленной циклической обработке по МЦ
+
+  При циклической обработке по организациям или группам организаций:
+  <режим 0> - выдаст аналитику из основной накладной;
+  <режим 1> - выдаст аналитику из актов на услуги.
+>>
+End;
+End;
+
+TableEvent table KatSopr
+cmCheckField:
+{
+  ParamGen;
+}
+
+cmDelOnProtect:
+{
+  case CurField of
+    #Param_Result : set Param_Result := 0;
+  end;
+
+  RereadRecord;
+}
+End;
+
+HandleEvent
+cmInit:
+{
+  SetWindowTitle(winParam, 'Параметры &VIP[Obj: "SecondOrg"]');
+}
+End;
+End;
+
+function ParamMaster : string;
+{
+   ParamMaster := '';
+
+  if( RunWindowModal(winParam) = cmDefault )
+  {
+    PackFields;
+    ParamMaster := ParamGen;
+  }
+}
+
+procedure StoreCycles(hTxo : longint; buf : TTxoApiInfoDoc);
+{
+   var sum:double;
+   var sumV:double;
+
+   CurSoprDoc := buf.cSoprDoc;
+   CurHTxo    := hTxo;
+
+   TxoAllowRecallStoreCycles(hTxo);
+
+   ParamParser;
+
+   if (getfirst KatSopr = tsOk) // позиционирование на основную накладную
+   {
+     If (Param_Distr = 1)
+     {
+        TxoBodyClear(hTxo);
+
+        _loop Katsopr_s // цикл по актам, связанным с основной накладной
+        {
+           // контрагент из основной накладной
+           TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_KatSopr, KatSopr.NREC);
+           TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_KatOrg,  KatSopr.cOrg);
+           TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_GrOrg,   GetKontragentGroup(KatSopr.cOrg));
+           //контрагент из акта на услуги
+           TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_KatSopr, KatSopr_s.NREC);
+           TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_KatOrg,  KatSopr_s.cOrg);
+
+           TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_GrOrg,   GetKontragentGroup(KatSopr_S.cOrg));
+
+            _Loop SpSopr
+            {
+              if(SpSopr.prMC = 1)
+               {
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMC, SpSopr.cMcUsl); // Материальные ценности
+
+                 if( GetFirst FastFirstRow KatMc = tsOk )
+                 {
+                   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_GroupMC, KatMc.cGroupMC); //Группы МЦ
+                   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_TypeMC, KatMc.cType); //Типы МЦ
+                 }
+               }
+               else
+               {
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatUsl, SpSopr.cMcUsl); // Услуги
+
+                 if( GetFirst FastFirstRow KatUsl = tsOk )
+                   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_GroupUsl, KatUsl.cGroupUsl); // Группы услуг
+               }
+
+               TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatParty, SpSopr.cParty); // Партии МЦ
+               TxoBodyAddKau(CurHTxo, wFlKau_Auto, wFlCycle_SpSopr, SpSopr.NRec); // Для извлечения SpSopr.Nrec при помощи SoprDoc
+
+               if( GetFirst FastFirstRow KatParty = tsOk )
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_GroupParty, KatParty.cGroupParty); // Группы партий МЦ
+
+               TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KlVal, SpSopr.cVal); // Валюты
+
+               if ( KatSopr.cPodrFrom = 0 ) then
+               {
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatPodr, KatSopr.cPodrTo);
+
+                 if (IsValid(#KatMol))
+                   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_Persons, KatMol.cPersons); // Сотрудник
+
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMOL, KatSopr.cMolTo);
+               }
+               else if ( KatSopr.cPodrTo = 0 ) then
+               {
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatPodr, KatSopr.cPodrFrom);
+
+                 if (IsValid(#KatMol_S))
+                   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_Persons, KatMol_S.cPersons); // Сотрудник
+
+                 TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMOL, KatSopr.cMolFrom); // МОЛ
+               }
+
+               // расчет суммы у учетом входимости налогов
+              case Param_Result of
+                0: // Сумма без налогов
+                {
+                  if(KatSopr.VHODNAL=1)
+                  {  // налоги входят в сумму
+                    sum:=(katsopr_s.Summa - katsopr_s.SNALOGS)/(KatSopr.Summa - KatSopr.sNalogs)*(SpSopr.Price * SpSopr.KolFact - SpSopr.SumNDS);
+                    sumv:=(katsopr_s.SumVal - katsopr_s.SVNALOGS)/(KatSopr.SumVal - KatSopr.sVNalogs)*(SpSopr.VPrice * SpSopr.KolFact - SpSopr.SumVNDS) ;
+                  }
+                  else
+                  {  // налоги не входят в сумму
+                    sum:=(katsopr_s.Summa-katsopr_s.SNALOGS)/(KatSopr.Summa - KatSopr.sNalogs)*(SpSopr.Price*SpSopr.KolFact) ;
+                    sumv:=(katsopr_s.SumVal-katsopr_s.SVNALOGS)/(KatSopr.SumVal - KatSopr.sVNalogs)*(SpSopr.VPrice*SpSopr.KolFact) ;
+                  }
+                }
+                1:// Результат с налогами
+                {
+                  if(KatSopr.VHODNAL=1)
+                  {  // налоги входят в сумму
+                    sum:=katsopr_s.Summa/KatSopr.Summa*(SpSopr.Price * SpSopr.KolFact);
+                    sumv:=katsopr_s.SumVal/KatSopr.SumVal*(SpSopr.VPrice * SpSopr.KolFact) ;
+                  }
+                  else
+                  {  // налоги не входят в сумму
+                    sum:=katsopr_s.Summa/KatSopr.Summa*(SpSopr.Price*SpSopr.KolFact + SpSopr.SumNDS) ;
+                    sumv:=katsopr_s.SumVal/KatSopr.SumVal*(SpSopr.VPrice*SpSopr.KolFact + SpSopr.SumVNDS) ;
+                  }
+                }
+               End;
+
+               // отладочное сообщение
+               TxoDebugMsg(hTxo,'TxoSecondOrg',' katsopr_s.Summa='+string(katsopr_s.Summa)+
+                                               ' katsopr_s.SNALOGS='+string(katsopr_s.SNALOGS));
+               //перекачка сумм в ТХО
+               TxoBodySetSum(hTxo,Sum,0,0);
+               TxoBodySetSumVal(hTxo,SumV,katsopr_s.cval);
+               TxoBodyInsert(hTxo);
+            }
+        }
+     }
+     else
+     {
+       _loop Katsopr_s // цикл по актам, связанным с основной накладной
+       {
+          TxoBodyClear(hTxo);
+          // контрагент из основной накладной
+          TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_KatSopr, KatSopr.NREC);
+          TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_KatOrg,  KatSopr.cOrg);
+          TxoBodyAddKau(hTxo, wFlKau_Mode0, cgKau_GrOrg,   GetKontragentGroup(KatSopr.cOrg));
+          //контрагент из акта на услуги
+          TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_KatSopr, KatSopr_s.NREC);
+          TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_KatOrg,  KatSopr_s.cOrg);
+
+          TxoBodyAddKau(hTxo, wFlKau_Mode1, cgKau_GrOrg,   GetKontragentGroup(KatSopr_S.cOrg));
+
+          // расчет суммы у учетом входимости налогов
+
+          case Param_Result of
+            0: // Сумма без налогов
+            {
+              sum:=katsopr_s.Summa-katsopr_s.SNALOGS;
+              sumv:=katsopr_s.SumVal-katsopr_s.SVNALOGS;
+            }
+
+            1: //Сумма с налогами
+            {
+              sum:=katsopr_s.Summa;
+              sumv:=katsopr_s.SumVal;
+            }
+          end;
+          // блин, кажись в этом алгоритме ошибка, налоги всегда входят
+          // в общую сумму по документу не зависимо от katsopr_s.VHODNAL
+          //sum  :=0;
+          //sumv :=0;
+          //if(katsopr_s.VHODNAL=1)
+          //{  // налоги входят в сумму
+          //   sum:=katsopr_s.Summa-katsopr_s.SNALOGS;
+          //   sumv:=katsopr_s.SumVal-katsopr_s.SVNALOGS;
+          //}
+          //else
+          //{  // налоги не входят в сумму
+          //   sum:=katsopr_s.Summa;
+          //   sumv:=katsopr_s.SumVal;
+          //}
+
+          // отладочное сообщение
+          TxoDebugMsg(hTxo,'TxoSecondOrg',' katsopr_s.Summa='+string(katsopr_s.Summa)+
+                                          ' katsopr_s.SNALOGS='+string(katsopr_s.SNALOGS));
+          //перекачка сумм в ТХО
+          TxoBodySetSum(hTxo,Sum,0,0);
+          TxoBodySetSumVal(hTxo,SumV,katsopr_s.cval);
+          TxoBodyInsert(hTxo);
+       }
+     }
+   }
+}
+
+end.

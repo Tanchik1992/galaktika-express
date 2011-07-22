@@ -1,0 +1,557 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║                     (c) 1994,99 корпорация ГАЛАКТИКА                      ║
+!║ Проект        : ГАЛАКТИКА                                                 ║
+!║ Система       : Оперативный контур                                        ║
+!║ Версия        : 5.71                                                      ║
+!║ Назначение    : Выбор  накладных typSopr=101,600,502                      ║
+!║ Ответственный : Логвин В. А.                                              ║
+!║ Параметры     : есть                                                      ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#include RunDSel.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор накладных
+
+Параметры:
+  Kontragent - исли указан контрагент - фильтр прих.накладных по контрагенту иначе все
+  pNrec      - позиционирование
+  MarkerNZ   - маркер
+  flag_pick  - TRUE-интерфейс выбора нескольких накладных
+#end
+
+//******************************************************************************
+
+Interface Spis_PrihNakl ' Список накладных ' EscClose, Cyan;
+  Show at (,,,31);
+Create view
+var
+  pNRec, Kontragent  : comp;     //pNRec - Автоустановка на накладную
+  TypeSopr           : word;
+  MarkerNZ,IndexNZ   : longint;
+  flag_pick          : boolean;
+  NrecFiltr, cDog,
+  cAppDog, CalPlan   : comp;
+  FlagFiltr          : word;
+  NDogovor, s_SimvRub: string;
+  begdate, enddate   : date;
+
+  pNrecwinFiltr      : comp;
+  LstNakl            : word;
+  strflt             : string;
+  pRunDocSelections  : RunDocSelObj;
+
+as Select
+  if (KatSopr.cVal = 0,
+    if (s_SimvRub = '', 'руб.', s_SimvRub), KlVal.SimvolV)
+          (FieldName = Valut)
+, if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal)
+          (FieldName = Sum)
+, LPad((String(Sum) + ' ' + Valut), 20)
+          (FieldName = SumNakl)
+, if (longint(KatSopr.dOpr) = 0, '-', '+')
+          (FieldName = PrOrd)
+, if (SearchMarker(MarkerNZ, KatSopr.NRec, IndexNZ), '√', ' ')
+          (FieldName = Picked)
+, PrintNumber(BaseDoc2.Descr, BaseDoc2.NoDoc)
+          (FieldName = BDNomDes2)
+, if (CalPlan > 0, 'Кал.план/' + NDogovor,
+    if (cAppDog > 0, 'Соглашение/' + NDogovor,
+      if (cDog > 0, 'Договор/' + NDogovor, '')))
+          (FieldName = BDNomDes3)
+, KatSopr.*
+, KatOrg.Name
+, klVal.SimvolV
+
+From
+  KatSopr
+, KatOrg
+, KlVal
+, Dogovor
+, synonym Dogovor AppDogovor
+, CalPlan
+, synonym BaseDoc BaseDoc2
+, synonym BaseDoc BaseDoc3
+, synonym StepDoc StepDoc2
+
+where
+((
+       TypeSopr           ==  KatSopr.VidSopr
+  AND  KatSopr.cOrgBase   ==  KatOrg.NRec
+  AND  KatSopr.cValut     ==  KlVal.NRec
+  AND  KatSopr.cStepDoc   ==  StepDoc.NRec
+  AND  StepDoc.cBaseDoc   ==  BaseDoc.NRec
+  AND  NrecFiltr          ==  StepDoc2.NRec
+  AND  StepDoc2.cBaseDoc  ==  BaseDoc2.NRec
+
+))
+
+bounds FILTR      =     TypeSopr   ==  KatSopr.VidSopr
+                    AND Kontragent ==  KatSopr.cOrgBase
+
+bounds MainBound  =     TypeSopr   ==  KatSopr.VidSopr
+                        ordered by KatSopr.dSopr,katSopr.NSopr
+
+bounds FiltrDo    =     TypeSopr   ==  KatSopr.VidSopr
+                    AND NrecFiltr  ==  KatSopr.cStepDoc
+
+bounds FiltrD01   =     cDog       ==  KatSopr.cDogovor
+                    AND TypeSopr   ==  KatSopr.VidSopr
+
+bounds FiltrD02   =     cAppDog    ==  KatSopr.cAppDogovor
+                    AND TypeSopr   ==  KatSopr.VidSopr
+
+bounds FiltrD03   =     CalPlan    ==  KatSopr.cCalPlan
+                    AND TypeSopr   ==  KatSopr.VidSopr
+
+bounds dMainBound =     TypeSopr   ==  KatSopr.VidSopr
+                    AND begdate   <<=  KatSopr.dSopr
+                    AND enddate   >>=  KatSopr.dSopr (NoIndex)
+                        ordered by KatSopr.dSopr,katSopr.NSopr
+
+bounds FILTR_     =     TypeSopr   ==  KatSopr.VidSopr
+                    AND (Kontragent =  KatSopr.cOrgBase)
+;
+
+Parameters
+  Kontragent // исли указан контрагент - фильтр прих.накладных по контрагенту иначе все
+, pNrec      // позиционирование
+, MarkerNZ   // маркер
+, flag_pick  // TRUE-интерфейс выбора нескольких накладных
+;
+
+//окно установки фильтров по накладным
+Procedure MakeTypeSopr;
+{
+  case LstNakl of
+    0 : TypeSopr := 101;
+    1 : TypeSopr := 600;
+    2 : TypeSopr := 502;
+  end;
+}
+
+Procedure ReFreshBounds(mess:boolean);
+{
+  if mess
+    message('Нет документов удовлетворяющих условиям фильтра.')
+  else
+    if (RecordExists KatSopr <> tsOk)
+    {
+      TypeSopr := 101;
+    }
+
+  PushBounds(tbMainBound);
+
+  //возвращаюсь на исходную позицию
+  if GetFirst KatSopr where ((pNrecwinFiltr == KatSopr.Nrec)) = tsOk{}
+}
+
+
+Window winFiltr 'Установить/Снять фильтр' (,hcWinFilterForNakl, sci1Esc) EscClose, DoAccept, Gray;
+  Show at (27,7,88,14);
+Screen scrFiltr;
+  Table KatSopr;
+Fields
+  BDNomDes2  ('Номер документа-основания в накладной.',,sci13Esc) : protect, PickButton;
+  BDNomDes3  ('Договор/Соглашение/Календарный план.',,sci13Esc) : protect, PickButton;
+Buttons
+  cmOK,,,'Ввод - принять выбор',,sci1Esc;
+  cmValueCancel,,,'Отмена',,sci1Esc;
+<<
+
+      Основание № :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Дог/Согл/К.план :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+       <.~У~становить фильтр.> <.~С~нять фильтр.>
+>>
+End; // Screen
+
+Screen scrFiltr2;
+  Table KatSopr;
+Fields
+  BDNomDes2  ('Номер документа-основания в накладной.',,sci13Esc) : protect, PickButton;
+  BDNomDes3  ('Договор/Соглашение/Календарный план.',,sci13Esc) : protect, PickButton;
+  LstNakl ('Выберите необходимый тип накладной.',) :  [LIST 'Приходная накладная',
+                                      'Накладная на внутреннее перемещение',
+                                      'Накладная на приход из производства'],protect;
+Buttons
+  cmOK,,,'Ввод - принять выбор',,sci1Esc;
+  cmValueCancel,,,'Отмена',,sci1Esc;
+<<
+
+      Основание № :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Дог/Согл/К.план :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    Тип накладной :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+       <.~У~становить фильтр.> <.~С~нять фильтр.>
+>>
+End; // Screen
+
+
+HandleEvent
+
+cmInit:
+{
+  pNrecwinFiltr := KatSopr.Nrec;
+
+  ReadMyDSK(strflt , 'UZBEKwinFiltr',FALSE)
+
+  if locase(strflt) = 'scrfiltr2'
+  {
+    SetFormat(scrFiltr2);
+
+    if not ReadMyDSK(LstNakl , 'UZBEKWLstNakl', FALSE)
+      LstNakl := 0;
+  }
+  else
+   SetFormat(scrFiltr);
+}
+
+cmPick:
+  Case CurField of
+    #BDNomDes2:
+    {
+      set CalPlan := 0;
+      set cAppDog := 0;
+      set cDog    := 0;
+
+      RunInterface(GetDBase, TRUE, word(2), word(0), comp(0), NrecFiltr, comp(0), double(0));
+    }
+
+    #BDNomDes3:
+    {
+      set NrecFiltr := 0;
+
+      if NullVipRef(pRunDocSelections)
+        if not(LoadVipRef(pRunDocSelections, 'RunDocSelections'))
+        {
+          Message(''#3'Не удалось загрузить библиотеку RunDocSelObj', Error);
+          Exit;
+        }
+
+      if (pRunDocSelections.F3(cDog, cAppDog, cCalPlan, 1
+                             , word(2+4) // _wMaska: word  // 0FFFFh - все документы, иначе битовая маска
+                                         // РАЗРЕШЕННЫХ статусов документов
+                                         // разрешен выбор только из исполняемых
+                                         // или приостановленных договоров
+                             , word(0)
+                              ) <> cmCancel)
+      {
+        set NDogovor:='';
+      }
+
+      if (CalPlan <> 0)
+        if (GetFirst CalPlan where(( CalPlan == CalPlan.Nrec )) = tsOK)
+        {
+          set NDogovor := CalPlan.NoDoc;
+          Exit;
+        }
+
+      if (cAppDog <> 0)
+        if (GetFirst AppDogovor where(( cAppDog == AppDogovor.Nrec )) = tsOK)
+        {
+          set NDogovor := AppDogovor.NoDoc;
+          Exit;
+        }
+
+      if (cDog <> 0)
+        if (GetFirst Dogovor where(( cDog == Dogovor.Nrec)) = tsOK)
+          set NDogovor := Dogovor.NoDoc;
+    }
+  end;
+
+cmValueCancel :
+{
+  set NrecFiltr := 0;
+  set cDog      := 0;
+  set cAppDog   := 0;
+  set CalPlan   := 0;
+
+  PutCommand(cmCancel);
+}
+
+cmCancel:
+{
+  ReFreshBounds(FALSE);
+}
+
+cmOK:
+  PutCommand(cmDefault);
+
+cmDefault:
+{
+  if locase(strflt) = 'scrfiltr2'
+  {
+    SaveMyDsk( LstNakl, 'UZBEKWLstNakl');
+    MakeTypeSopr;
+
+    // проверка, попадает ли запись под условия фильтра
+    ReDrawPanel(#KatSopr);
+
+    if (RecordExists KatSopr <> tsOk)
+    {
+      message('Нет документов удовлетворяющих условиям фильтра.');
+      Abort;
+      EXIT;
+    }
+  }
+
+  if (NrecFiltr = 0) AND (cDog = 0) AND (cAppDog = 0) AND (CalPlan = 0)
+  {
+    ReFreshBounds(FALSE);
+    Exit;
+  }
+
+  ResetBounds(#KatSopr);
+
+  if (NrecFiltr <> 0)
+    PushBounds(tbFiltrDo);
+  else
+    if (CalPlan <> 0)
+      PushBounds(tbFiltrD03);
+    else
+      if (cAppDog <> 0)
+        PushBounds(tbFiltrD02);
+      else
+        if (cDog <> 0)
+          PushBounds(tbFiltrD01);
+
+  // проверка, попадает ли запись под условия фильтра
+  ReDrawPanel(#KatSopr);
+
+  if (RecordExists KatSopr <> tsOk)
+  {
+    message('Нет документов удовлетворяющих условиям фильтра.');
+    Abort;
+  }
+}
+End;// HandleEvent;
+end // Window
+
+! Установка фильтров на документ в заданном диапазоне
+Procedure SetDateFlt;
+var
+  aBegDate, aEndDate: date;
+{
+  aBegDate := Cur_Date;
+  aEndDate := Cur_Date;
+  ReadMyDsk(aBegDate, 'aBegDate_pNakl', FALSE);
+  ReadMyDsk(aEndDate, 'aEndDate_pNakl', FALSE);
+
+  if (RunDialog(GetInterval, aBegDate, aEndDate) <> cmCancel)
+  {
+    if (aBegDate > aEndDate)
+    {
+      Message('Начальная дата фильтра больше конечной. Фильтр не изменен...', Information);
+      Exit;
+    }
+
+    begdate := aBegDate;
+    enddate := aEndDate;
+
+    if (NOT BoundActive(tbdMainBound))
+      PushBounds(tbdMainBound);
+  }
+  else
+    if (BoundActive(tbdMainBound))
+    {
+      PopBounds(tbdMainBound);
+      PushBounds(tbMainBound);
+    }
+
+  SaveMyDSK(aBegDate, 'aBegDate_pNakl');
+  SaveMyDSK(aEndDate, 'aEndDate_pNakl');
+
+  if (Kontragent <> comp(0))
+    AddBounds(tbFILTR_)
+
+  RereadRecord(#KatSopr);
+
+  if NOT isValid(#KatSopr)
+  {
+    ReFreshBounds(TRUE);
+  }
+}
+
+Procedure SetTitleForDatFlt;
+{
+ if (BoundActive(tbdMainBound))
+   SetTitle(' Список накладных - "Диапазон дат:  ' + string(begdate) + ' -  ' + string(enddate) + ' "')
+ else
+   SetTitle(' Список накладных ')
+}
+
+Panel pnSelect table KatSopr
+Browse brSelect ('Для выбора приходной накладной нажмите <ENTER>', hcSpis_PrihNakl2, sci14esc);
+fields
+  KatSopr.dSopr  #3'Дата'      : [10,'DD/MM/YYYY'], protect, centered;
+  KatSopr.Descr  #3'Дескриптор': [10], protect;
+  KatSopr.NSopr  #3'Номер'     : [15], protect;
+  KatOrg.Name    #3'Поставщик' : [28], protect;
+  Sum            #3'Сумма'     : [20, '\2p[|-]36 666 666 666 666.88'], protect;
+  Valut          #3'Вал.'      : [4],  protect, centered;
+  PrOrd          #3'О'         : [1],  skip;
+end; // browse
+
+Browse brSelectPick ('Для формирования накладной нажмите <Enter>.  Выбор по <Insert>',hcSpis_PrihNakl2,sci14EscIns);
+fields
+  {Font = {Color = if (Picked = '√',ColorMark,0)}};
+  picked         #3'√'          : [1], skip;
+  KatSopr.dSopr  #3'Дата'       : [10,'DD/MM/YYYY'], protect, centered;
+  KatSopr.Descr  #3'Дескриптор' : [10], protect;
+  KatSopr.NSopr  #3'Номер'      : [15], protect;
+  KatOrg.Name    #3'Поставщик'  : [28], protect;
+  Sum            #3'Сумма'      : [20, '\2p[|-]36 666 666 666 666.88'], protect;
+  Valut          #3'Вал.'       : [4],  protect, centered;
+  PrOrd          #3'О'          :  [1], skip;
+end; // browse
+
+
+HandleEvent
+cmNal:
+{
+  if (RunWindowModal(winFiltr) <> cmDefault)
+    if (RecordExists KatSopr <> tsOk)
+    {
+      TypeSopr := 101;
+    }
+
+  if (Kontragent <> comp(0))
+    if BoundActive(tbMainBound)
+      Pushbounds(tbFILTR)
+
+  ReReadRecord(#KatSopr);
+  SetTitleForDatFlt;
+}
+
+cmHotKeys:
+{
+  PutHotCommand(RunMenu('mnuFiltrForNaklPoDo'));
+}
+
+cmMarkUnMark:
+{
+  if (SearchMarker(MarkerNZ, KatSopr.NRec, IndexNZ))
+    DeleteMarker(MarkerNZ, KatSopr.NRec);
+  else
+     InsertMarker(MarkerNZ,KatSopr.NRec);
+
+#ifdef ATL51
+   RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+   if (GetNext KatSopr = tsOk)
+     CallToNeighBours(cmPosDown,#KatSopr);
+
+   ReReadRecord(#KatSopr);
+#end
+}
+
+cmSelectAll :
+{
+  PushPos(#KatSopr);
+  ClearMarker(MarkerNZ);
+
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+             ''#3'Помечаю документы ...'#13#3, 1);
+  if (GetFirst KatSopr = tsOK)
+  do
+    if (not NextVisual)
+      Break;
+    else
+    {
+      if (not SearchMarker(MarkerNZ, KatSopr.NRec, IndexNZ))
+        InsertMarker(MarkerNZ, KatSopr.NRec);
+    }
+  while (GetNext KatSopr = tsOK);
+
+  PopPos(#KatSopr);
+  ReReadRecord(#KatSopr);
+  StopVisual('',0);
+}
+
+cmUnSelectAll :
+{
+  ClearMarker(MarkerNZ);
+  ReReadRecord(#KatSopr);
+}
+
+cmEdit:
+{
+  RunInterface(SoprDocB, KatSopr.vidSopr, KatSopr.nRec);
+}
+
+cmDefault:
+{
+  if (flag_pick)
+    if (GetMarkerCount(MarkerNZ) = 0)
+      InsertMarker(MarkerNZ,KatSopr.NRec);
+
+   pNRec := KatSopr.NRec;
+   CloseInterface(cmDefault);
+}
+
+cmFilterSave:
+{
+  if (isValid(#KatSopr) OR BoundActive(tbdMainBound))
+    SetDateFlt
+  else
+    Message('Нет записей для фильтрации.', Information);
+  SetTitleForDatFlt;
+}
+
+end;
+end; // panel
+
+HandleEvent
+
+cmInit :
+{
+  s_SimvRub := sGetTune('NDE.SimvRub');
+
+  if (flag_pick)
+    SetFormat(brSelectPick)
+  else
+    SetFormat(brSelect);
+
+  TypeSopr := 101;
+
+  if (GetFirst KatSopr where (( pNrec == KatSopr.NRec )) <> tsOk)
+    GetLast KatSopr;
+
+  if (Kontragent <> comp(0))
+    Pushbounds(tbFILTR)
+  else
+    Pushbounds(tbMainBound);
+}
+
+cmDelOnProtect:
+{
+  Case CurField of
+    #BDNomDes2:
+    {
+      set NrecFiltr := 0;
+    }
+    #BDNomDes3:
+    {
+      set CalPlan := 0;
+      set cAppDog := 0;
+      set cDog    := 0;
+    }
+  end;
+}
+
+cmProtectedInput:
+  stop;
+
+end; // handleevent interface
+End.
+
+mnuFiltrForNaklPoDo Menu
+{
+-'Фильтр по ДО/Дог/Согл/К.план',cmNal,'Установить/снять фильтр по ДО/Договору/Соглашению/Календарному плану',hcWinFilterForNakl,'Alt+F',kbAltF,sci1Esc;
+-'Фильтр по дате',cmFilterSave,'Установка и снятие фильтра по датам',hcctxSoprFilterSave,'Alt+B', kbAltB, sci1Esc;
+}

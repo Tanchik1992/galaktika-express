@@ -1,0 +1,629 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика - сбыт
+// Работа с автоматическими весами
+//********************************************************************************
+
+! Для работы модуля необходима Scales05.dll, которая обеспечивает доступ к функциям
+! драйвера весов (см. pas\tb003\Scales05\Emulator\Scales.exe - эмулятор весов)
+
+#include ExtAttr.vih
+#include oEdIzm.vih
+#include SpDocs.vih
+#include SDfuns.vih
+#include VesFuns.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Работа с автоматическими весами
+
+Параметры:
+  pKatSopr - ссылка на сопр.документ
+  pSpSopr  - ссылка на позозицию в сопр.документе
+#end
+
+//******************************************************************************
+
+Interface Scales 'Работа с весами' alwaysReturn, EscClose;
+  show at (,,68,17);
+
+table struct TmpKolOst
+(
+  cRec   : Comp    "Ссылка на позицию",
+  Weight : Double  "Вес позиции",
+  KolItog: Double  "Доступно для списания"
+)
+with index
+(
+  TmpKolVZ01 = cRec,
+  TmpKolVZ02 = KolItog
+);
+
+#include oEdIzm.var
+#include SDfuns.var
+#include VesFuns.var
+
+const
+  KatSoprWAvto    = 'ВЕС АВТОМОБИЛЯ БЕЗ ГРУЗА';
+  KatSoprWFreight = 'ВЕС ГРУЗА';
+  SpSoprWFreight  = 'ВЕС ГРУЗА';
+end;
+
+Create View
+Var
+  pSpSopr, pKatSopr  : Comp;    //параметры
+  iWeight            : Integer; //текущий вес
+  sInitScales        : String;  //состояние весов
+  TypeW              : Word;    //тип взвешивания
+  wPlatf             : Word;    //платформа
+  sState, sStateAvto : String;  //статус весов
+  iState             : Word;    //статус весов
+  isWeighing         : Boolean; //взвешивание
+  iWAvto, iWAvtoLoad, iWFreight: Integer; //вес автомобиля, груза
+  piExtAttr          : iExtAttr;
+  iMyKey, iUniKey    : Longint; //для деблокирования сервера
+  strUnLock          : String;
+  wMethod            : Word;    // метод распределения груза
+
+(
+  KoefP, //коэффициент пересчета
+  KolUth //кол-во в учетных ед.измерения
+)
+
+as select
+  if(isValid(tnKatOtpEd), KatOtpEd.Koef, 1),
+  SpSopr.KolFact * Koefp,
+  *
+
+from
+  KatSopr,
+  SpSopr (SpSopr11),
+  KatMC,
+  KatOtpEd,
+  KatEd,
+  TmpKolOst,
+  synonym SpSopr SpSopUsl (SpSopr11),
+  synonym SpSopr SpSopMC  (SpSopr11),
+  synonym KatUsl KatUsl2
+
+where
+((
+  pKatSopr         ==  KatSopr.NRec   and
+  KatSopr.NRec     ==  SpSopr.cSopr   and
+  Word(1)          ==  SpSopr.PrMc    and
+  SpSopr.cMCUsl    ==  KatMC.NRec     and
+  SpSopr.cOtpEd    ==  KatOtpEd.NRec  and
+  KatMC.cEd        ==  KatEd.NRec     and
+  SpSopr.NRec      ==  TmpKolOst.cRec and
+
+  KatSopr.NRec     ==  SpSopUsl.cSopr  and
+  Word(1)         <<=  SpSopUsl.PrMc   and
+  SpSopUsl.cMcUsl   ==  KatUsl2.NRec
+))
+
+Bounds OneSpSopr = pSpSopr == SpSopr.NRec
+;
+
+Parameters
+  pKatSopr,
+  pSpSopr
+;
+
+#include soprgen4.vpp
+
+//создание внешнего атрибута
+Procedure CreateAttr(coTable: Word; AttrName: String; AttrType: Word);
+{
+  If (piExtAttr.AttrId(coTable, AttrName) = 0)
+    piExtAttr.CreateAttr(coTable, AttrName, AttrType);
+}
+
+//Кол-во МЦ, доступное к списанию по текущей позиции SpSopr
+Function GetKolOst: Double;
+var
+  Nal, ResNal: Double;
+
+{
+  //сальдовый остаток
+  Nal := NalT( KatSopr.dSopr, SpSopr.cMCUsl,
+               if (KatSopr.cPodrFrom = 0, Comp(-1), Katsopr.cPodrFrom),
+               if (Katsopr.cMolFrom  = 0, Comp(-1), Katsopr.cMolFrom),
+               if (SpSopr.cParty     = 0, Comp(-1), SpSopr.cParty)
+             );
+  //резерв
+  ResNal := oSDfuns.MakeRes_CheckRes( KatSopr.VidSopr,   KatSopr.NRec,     SpSopr.cMCUsl,
+                              Katsopr.cPodrFrom, Katsopr.cMolFrom, SpSopr.cParty, 0
+                            );
+  Nal       := Nal - ResNal;
+  GetKolOst := Nal;
+}
+
+//проверка инициализации весов
+Function GetInitScales: String;
+{
+  GetInitScales := if(isInitScales05, '', 'не ') + 'инициализированы';
+}
+
+//инициализация весов
+Function InitScales: Boolean;
+{
+  InitScales05;
+  set sInitScales := GetInitScales;
+  InitScales := isInitScales05;
+}
+
+//установить значение веса автомобиля без груза
+Procedure SetIWAvto (iW: Integer);
+{
+  set iWAvto := iW;
+  piExtAttr.doSetAttr(coKatSopr, KatSopr.NRec, KatSoprWAvto, Double(iW));
+  set TypeW  := if(iWAvto > 0, 1, 0);
+}
+
+//получить значение веса автомобиля без груза
+Function GetIWAvto: Integer;
+{
+  GetIWAvto := Integer(piExtAttr.doGetAttr(coKatSopr, KatSopr.NRec, KatSoprWAvto));
+}
+
+//установить значение веса груза
+Procedure SetIWFreight (iW: Integer; isPos: Boolean);
+{
+  if (isPos)
+    piExtAttr.doSetAttr(coSpSopr, SpSopr.NRec, SpSoprWFreight, Double(iW))
+  else
+  {
+    set iWFreight := iW
+    piExtAttr.doSetAttr(coKatSopr, KatSopr.NRec, KatSoprWFreight, Double(iW))
+  }
+}
+
+//получить значение веса груза
+Function GetIWFreight(isPos: Boolean): Integer;
+{
+  if (isPos)
+    GetIWFreight := Integer(piExtAttr.doGetAttr(coSpSopr, SpSopr.NRec, SpSoprWFreight))
+  else
+    GetIWFreight := Integer(piExtAttr.doGetAttr(coKatSopr, KatSopr.NRec, KatSoprWFreight))
+}
+
+//пересчет доступного кол-ва
+Procedure ReCalcTmpKolOst;
+{
+  InitMCInfo(KatSopr.dSopr);
+  PushPos(#SpSopr);
+  _Loop SpSopr
+    if (GetFirst TmpKolOst <> tsOk)
+    {
+      ClearBuffer(#TmpKolOst);
+      TmpKolOst.cRec    := SpSopr.NRec;
+      TmpKolOst.Weight  := GetIWFreight(true);
+      TmpKolOst.KolItog := GetKolOst;
+      insert current TmpKolOst;
+    }
+    else
+    {
+      TmpKolOst.Weight  := GetIWFreight(true);
+      TmpKolOst.KolItog := GetKolOst;
+      update current TmpKolOst;
+    }
+  PopPos(#SpSopr);
+  DoneMCInfo;
+}
+
+//запись результата взвешивания
+Procedure WriteWeight;
+var
+  _result : Boolean;
+  _Method : Word;
+  _MBrutto: Double;
+
+{
+  SaveMyDsk(wPlatf  ,'Scales_wPlatf');
+  if (iWFreight <= 0)
+  {
+    Exit
+  }
+
+  StartNewVisual(vtIndicatorVisual, vfTimer + vfConfirm, 'Пересчет цен в накладной №' + KatSopr.NSopr, 3);
+
+  //РАСЧЕТ КОЛИЧЕСТВА
+  if (wMethod = 0)
+  {
+    SetIWFreight(iWFreight, false);
+    _MBrutto := KatMC.Massa + KatMC.MTara;
+    SpSopr.KolFact := iWFreight / if(_MBrutto = 0, 1, _MBrutto) / KoefP;
+    CheckAndMakeKol;
+    Update Current SpSopr;
+    SetIWFreight(iWFreight, true);
+  }
+  else
+  {
+    var _KolUth   : double;
+    var _iWFreight, tWFreight: integer;
+    var _LastPos  : comp;
+
+    SetIWFreight(iWFreight, false);
+    //пересчет доступного кол-во к списанию
+    ReCalcTmpKolOst;
+
+    PushPos(#SpSopr)
+    if (GetLast SpSopr = tsOk)
+      _LastPos := SpSopr.NRec;
+    _iWFreight := iWFreight;
+
+// Во всех позициях кроме последней контролируется превышение остатка,
+// Остаток веса попадает в последнюю позицию
+
+    _Loop SpSopr
+      if (SpSopr.NRec <> _LastPos)
+      {
+        _MBrutto := KatMC.Massa + KatMC.MTara;
+        _KolUth  := _iWFreight / if(_MBrutto = 0, 1, _MBrutto);
+
+        if (TmpKolOst.KolItog - _KolUth < GetPresision_forKol)
+          _KolUth := TmpKolOst.KolItog / if(_MBrutto = 0, 1, _MBrutto);
+
+        SpSopr.KolFact := _KolUth / KoefP;
+        CheckAndMakeKol;
+        Update Current SpSopr;
+
+        tWFreight  := Integer(SpSopr.KolFact * KoefP * if(_MBrutto = 0, 1.0, _MBrutto));
+        _iWFreight := _iWFreight - tWFreight;
+        SetIWFreight(tWFreight, true);
+      }
+      else
+      {
+        _MBrutto := KatMC.Massa + KatMC.MTara;
+        SpSopr.KolFact := _iWFreight / if(_MBrutto = 0, 1.0, _MBrutto) / KoefP;
+        CheckAndMakeKol;
+        Update Current SpSopr;
+        SetIWFreight(_iWFreight, true);
+      }
+
+    PopPos(#SpSopr);
+  }
+
+  //ПЕРЕСЧЕТ ЦЕН
+  _Method  := wGetTune('Doc.Sell.ValRubCalc');
+
+  //пересчет цен в документе
+  RunInterface(iChkSum, KatSopr.NRec, 0, false, _Method, _result);
+
+  //пересчет расчетных услуг
+  NextVisual;
+  _LOOP SpSopUsl
+    if (KatUsl2.TYPEUSL = 1)
+    {
+
+      //обнуление расчетных услуг
+      var _Price, _rPrice, _KolOpl, _KolFact, _Kol: double;
+      _Price   := SpSopUsl.Price;
+      _rPrice  := SpSopUsl.rPrice;
+      _KolOpl  := SpSopUsl.KolOpl;
+      _KolFact := SpSopUsl.KolFact;
+      _Kol     := SpSopUsl.Kol;
+      SpSopUsl.Price  := 0; SpSopUsl.rPrice  := 0;
+      SpSopUsl.KolOpl := 0; SpSopUsl.KolFact := 0; SpSopUsl.Kol := 0;
+      update current SpSopUsl;
+      //пересчет цен без расчетной услуги
+      RunInterface(iChkSum, KatSopr.NRec, SpSopUsl.NRec, false, _Method, _result);
+      ReReadRecord(#SpSopUsl);
+
+      SpSopUsl.Price   := _Price;
+      SpSopUsl.rPrice  := _rPrice;
+      SpSopUsl.KolOpl  := _KolOpl;
+      SpSopUsl.KolFact := _KolFact;
+      SpSopUsl.Kol     := _Kol;
+      update current SpSopUsl;
+      // получение параметров расчетной услуги
+      if (KatSopr.cVal = 0)
+        RunInterface('GETPAR2', 1, SpSopUsl.Nrec, KatUsl2.Nrec, SpSopUsl.rPrice,  SpSopUsl.KolFact, Word(coSpSopr))
+      else
+        RunInterface('GETPAR2', 1, SpSopUsl.Nrec, KatUsl2.Nrec, SpSopUsl.rVPrice, SpSopUsl.KolFact, Word(coSpSopr));
+
+      update current SpSopUsl;
+      // пересчет цен с расчетной услугой
+      RunInterface(iChkSum, KatSopr.NRec, SpSopUsl.NRec, false, _Method, _result);
+    }
+
+  //пересчет цен в документе
+  NextVisual;
+  RunInterface(iChkSum, KatSopr.NRec, 0, false, _Method, _result);
+  ReCalcTmpKolOst;
+  ReReadRecord (#SpSopr);
+  StopVisual('',0);
+}
+
+Screen scrGoods1 (,,sci1Esc);
+  show at (,,,5);
+Table SpSopr;
+Bevel b1 {1, 0, 67,  5, bsLowered, bsFrame};
+Fields
+  SpSopr.Npp   ('Номер текущей позиции'): Protect, {Font = {Bold   = True}};
+  KatMC.Name   ('Наименование матценности'): Skip, {Font = {Bold   = True}};
+  KolUth       ('Кол-во в учетных единицах измерения'): ['\p[|-]36`666`666`666`666'], Protect, {Font = {Bold   = True}};
+  KatEd.Name   ('Наименование учетной единицы измерения'): Skip, {Font = {Bold   = True}};
+  KatMC.Massa * KolUth
+               ('Вес нетто'): ['\p[|-]36`666`666`666`666'], Protect;
+  KatMC.MTara * KolUth
+               ('Вес тары') : ['\p[|-]36`666`666`666`666'], Protect;
+  (KatMC.Massa + KatMC.MTara) * KolUth
+               ('Вес нетто'): ['\p[|-]36`666`666`666`666'], Protect;
+<<
+       Груз
+ `Номер`.@@ `Наименование:`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Кол-во в учетных ед.изм.`.@@@@@@@@`Учетная ед.изм.:`.@@@@@@@@@@@
+ `Нетто`.@@@@@@@@ кг. `Тара` .@@@@@@@@ кг. `Брутто` .@@@@@@@@ кг.
+
+>>
+end;//screen
+Browse scrGoods2 (,,sci1Esc);
+  show at (,,,5);
+Table SpSopr;
+Fields
+  SpSopr.Npp        '№'            ('Номер позиции'): Protect,
+                      [2], {Font = {Bold   = True}};
+  KatMC.Name        'Наименование' ('Наименование матценности'): Skip,
+                      [15], {Font = {Bold   = True}};
+  KolUth            'КолУч'        ('Кол-во в учетных единицах измерения'): Protect,
+                      [10,'\p[|-]36`666`666`666`666'];
+  KatEd.Name        'УчЕд'         ('Наименование учетной единицы измерения'): Skip,
+                      [10], {Font = {Bold   = True}};
+  TmpKolOst.KolItog 'Наличие'      ('Доступно к списанию'): Protect,
+                      [10,'\p[|-]36`666`666`666`666'];
+  TmpKolOst.Weight  'Вес'          ('Вес позиции в килограммах'): Protect,
+                      [10,'\p[|-]36`666`666`666`666'], {Font = {Bold   = True}};
+end;//browse
+Screen scrScales 'Взвешивание'(,,sci1Esc);
+  show at (,6,,);
+Table SpSopr;
+Bevel b2 {1, 4, 67, 12, bsLowered, bsFrame};
+Fields
+  iWAvto       ('Вес автомобиля без груза'): ['[|-]36`666`666`666`666'], Protect;
+  iWAvtoLoad   ('Вес автомобиля с грузом') : ['[|-]36`666`666`666`666'], Protect;
+  iWFreight    ('Вес груза'): ['[|-]36`666`666`666`666'], Protect, {Font = {Bold   =  true}};
+  sInitScales  ('Состояние весов'): Skip, {Font = {Bold   = True}};
+  wPlatf       ('Номер весовой платформы'):
+    [LIST '0', '1'], Protect;
+  TypeW        ('Тип взвешивания'):
+    [LIST 'Автомобиля без груза', 'Автомобиля с грузом'], Protect;
+  iWeight      ('Текущий вес') : ['[|-]36`666`666`666`666'], Skip,
+    {Font = {Bold   = if (isWeighing, false, true)}};
+  sState       ('Статус весов'): Skip, {Font = {Italic = True}};
+  sStateAvto   ('Статус груза'): Skip, {Font = {Italic = True; Color = ColorError}};
+buttons
+  cmValue3 ,,,'Взвесить груз',,;
+  cmValue1 ,,,'Загрузить драйвер для работы с весами',,;
+  cmValue2 ,,,'Выгрузить драйвер для работы с весами',,;
+<<
+
+ `Вес автомобиля без груза` .@@@@@@@@@@ кг.
+ `Вес автомобиля с грузом`  .@@@@@@@@@@ кг.
+ `ВЕС ГРУЗА`.@@@@@@@@@@ кг.
+       Работа с весами
+ `Состояние весов:`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Весовая платформа` .@@@   `Взвешивание`.@@@@@@@@@@@@@@@@@@@@@@@@
+ `Текущий вес:`.@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                          .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  <.   Взвесить   .>     <.Инициализировать.> <.Завершить работу.>
+>>
+end;//screen
+!--------------------------------------------------------------------------------------------------------------------
+//Окно настройки драйвера весов
+Window  winDriver 'Настройка драйвера' escClose;
+  show at (,,64,13);
+Screen scrScalesReg 'Драйвер' (,,sci1Esc);
+Table
+  SpSopr;
+Bevel b1 {1, 0, 64,  6, bsLowered, bsFrame};
+Bevel b2 {1, 6, 64, 12, bsLowered, bsFrame};
+Fields
+  iMyKey   ('Уникальный код для передачи разработчикам драйвера весов'): Protect, {Font = {Bold = true}};
+  iUniKey  ('Введите уникальный ключ, полученный от разработчиков драйвера весов'): noProtect, {Font = {Bold = true}};
+  strUnLock Skip, {Font = {Bold   =  true}};
+buttons
+  cmValue10,,,'Получить уникальный код' ,,;
+  cmValue11,,,'Инициализировать драйвер',,;
+<<
+
+ `Уникальный код для передачи разработчикам драйвера весов`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  <.     Получить  код      .>
+
+
+
+ `Уникальный ключ, полученный от разработчиков драйвера весов`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  <.Инициализировать драйвер.>
+
+
+  Корректность инициализации драйвера:.@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Handleevent
+cmInit:
+  set strUnLock := 'Инициализация ' + if(IsInit05, '', 'не') + 'корректна';
+
+cmValue10:
+{
+  InitScales;
+  set iMyKey := Key05;
+}
+
+cmValue11:
+{
+  InitScales;
+  var i: longint;
+  i := UnLock05(iUniKey)
+  set strUnLock := 'Инициализация ' + if(IsInit05, '', 'не') + 'корректна';
+}
+
+end;
+end;//window
+!--------------------------------------------------------------------------------------------------------------------
+
+Handleevent
+cmInit:
+{
+  if (GetFirst SpSopr <> tsOk)
+  {
+    message('Нет товарных позиций у документа.')
+    abort;
+    exit;
+  }
+
+  set sInitScales := GetInitScales;
+  ReadMyDsk(wPlatf  ,'Scales_wPlatf'  ,false);
+  //создание внешних атрибутов
+  CreateAttr(coKatSopr, KatSoprWAvto   , 1);
+  CreateAttr(coKatSopr, KatSoprWFreight, 1);
+  CreateAttr(coKatSopr, SpSoprWFreight , 1);
+
+  wMethod := wGetTune('Ves.Method');
+
+  Delete All TmpKolOst;
+
+  if (wMethod = 0)
+  {
+    PushBounds(tbOneSpSopr);
+    SetFormat(scrGoods1)
+  }
+  else
+  {
+    SetFormat(scrGoods2);
+    //доступное кол-во к списанию и вес позиций
+    ReCalcTmpKolOst;
+    ReReadRecord(#SpSopr);
+  }
+
+  iWAvto     := GetIWAvto;
+  iWFreight  := GetIWFreight(false);
+  iWAvtoLoad := if(iWFreight > 0, iWAvto + iWFreight, 0);
+  TypeW      := if(iWAvto > 0, 1, 0);
+}
+
+cmHotKeys :
+  PutHotCommand(RunMenu('mnuScalesDriver'));
+
+cmValue1:
+{
+  InitScales;
+}
+
+cmValue2:
+{
+  FreeScales05;
+  set sInitScales := GetInitScales;
+}
+
+cmValue3:
+{
+  set sState     := '';
+  set sStateAvto := '';
+  //сначала нужно взвесить автомобиль без груза
+  if (TypeW = 1)
+    if (iWAvto <= 0)
+    {
+      message('Сначала нужно взвесить автомобиль без груза');
+      Exit;
+    }
+  //сбросить вес груза
+  if (iWFreight > 0)
+  {
+    if (message('Вес груза уже определен!'#13#3 + 'Повторить взвешивание?', YesNo + Confirmation) = cmNo)
+      Exit;
+
+    if (TypeW = 0)
+      SetIWAvto(0);
+
+    iWAvtoLoad := 0;
+    SetIWFreight(0, false);
+  }
+
+  if (isInitScales05)
+  {
+    isWeighing := true;
+    set sState := 'Взвешивание...';
+    StartTimer(cmValue4, 1, false)
+  }
+  else
+    message('Весы не были инициализированы.');
+}
+
+cmValue4:
+{
+  iState := GetState05(wPlatf);
+  set iWeight := GetWeight05(wPlatf);
+
+  var s: String;
+  s := '';
+
+  if (iState = 0)
+    s := 'Весы не инициализированы'
+  else
+    if (iState = 1)
+      s := 'Взвешивание...'
+    else
+    {
+      if ((iState and 2) = 2)
+      {
+        s := s + 'Вес зафиксирован.';
+        StopTimer(cmValue4);
+        isWeighing := false;
+
+        case TypeW of
+          0: {
+               SetIWFreight(0, false);
+
+               if (iWAvtoLoad = 0) or (iWAvtoLoad > iWeight)
+               {
+                 SetIWAvto(iWeight);
+                 SetIWFreight(if((iWAvtoLoad > iWAvto) and (iWAvto > 0), iWAvtoLoad - iWAvto, 0), false);
+                 WriteWeight;
+               }
+               else
+                 sStateAvto := 'Вес груза не определен';
+          }
+          1: {
+               SetIWFreight(0, false);
+
+               if (iWAvto = 0) or (iWeight > iWAvto)
+               {
+                 set iWAvtoLoad := iWeight;
+                 SetIWFreight(if((iWAvtoLoad > iWAvto) and (iWAvto > 0), iWAvtoLoad - iWAvto, 0), false);
+                 WriteWeight;
+               }
+               else
+                 sStateAvto := 'Вес груза не определен';
+          }
+        end;
+      }
+      if ((iState and  4) =  4) then s := 'Cвязь с весами отсутствует.';
+      if ((iState and  8) =  8) then s := s + 'Ошибка при обработке данных от весов.';
+      if ((iState and 16) = 16) then s := s + 'Вес ниже параметра НМПВ.';
+      if ((iState and 32) = 32) then s := s + 'Вес больше НПВ весов.';
+    }
+
+  set sState := s;
+}
+
+cmValue5:
+{
+  RunWindowModal(winDriver);
+}
+
+end;
+end.
+
+mnuScalesDriver Menu
+{
+- 'Настройка драйвера',cmValue5, 'Деблокирование драйвера весов',,'',,sci1Esc;
+}
+mnuSopDocKatSoprGetWeight Menu
+{
+-'Работа с автоматическими весами (COM-драйвер)', cmGetWeight,'Работа с автоматическими весами (COM-драcвер)',,'Alt-4',kbAlt4,sci1Esc;
+}

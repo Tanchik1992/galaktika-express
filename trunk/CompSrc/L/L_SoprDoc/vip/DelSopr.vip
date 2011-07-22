@@ -1,0 +1,790 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// удаление сопроводительного документа
+//******************************************************************************
+
+#ifdef __SKYSHOP__
+define __SOPRDOC102__
+#include skymodif.vih
+#end
+
+#include aStatUser.vih  // права доступа
+#include Avizo.vih
+#include DelSopr.vih
+#include GetDocSpecInfo.vih
+#include notes.vih
+#include oDEI.vih       //Функции доп.ед.изм. (iKatDopEd)
+#include oEdIzm.vih
+#include ofpmacro.vpp
+#include osreal.vih     // iOsReal
+#include SDfuns.vih
+#include SHManager.vih
+#include SpNext.vih
+#include statlog.vih
+#include VSchet.vih
+#include serialmove.vih
+#include ObjIntPl.vin
+#include kontrbal.vih
+#include FurnInSet.vih
+#include ChkSchem.vih
+#include TotalLog_v1.vih  // Обьектный интерфес общего лога (СФ)
+
+//******************************************************************************
+
+#doc
+Назначение:
+  удаление сопроводительного документа
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+Interface DelSopr;
+
+//******************************************************************************
+
+#include Notes.var      // oNotes       пояснения к статусу
+#include oEdIzm.var     // fEdIzm         функции для работы с единицами измерения
+#include SDfuns.var     // oSDfuns        резервирование МЦ
+#include SpNext.var     // oSpNext        объект получения последнего номера спецификации
+#include StatLog.var    // oStatLog     работа со статусами документов
+#include serialmove.var
+#include ChkSchem.var
+#include TotalLog_v1.var  // Переменная-объект для общих логов
+//******************************************************************************
+
+type
+TDefineInDoc = record
+  _AVIZO_,
+  _DSOPRHOZ_,
+  NEED_DETAIL : boolean;
+end;
+
+type
+TDelDoc = record
+  _AKTUSL_VIP, _AKTUSLB_VIP, _SOPRDOC_VIP, _SOPRDOCB_VIP, _AKTREC_VIP,
+  ACTCOMPL_VIP, AKT_SPIS_VIP, ACTPAKET_VIP, INV_PRIH_VIP, INV_RASH_VIP,
+  SOPINMOV_VIP, AKT_PEREOC_VIP : boolean;
+end;
+
+//------------------------------------------------------------------------------
+
+create view
+var
+ pNrec   : comp;    //параметр 1
+ MyDef   : TDefineInDoc;
+ DelDoc  : TDelDoc;
+ tStr    : string;//для временных целей
+ msg1,
+ msg2    : string;
+ boProt  : boolean;
+
+ pDelKN  : comp;//для корректирующей накладной
+ bCorrect: boolean; //указывает нужно ли выполнять корр. ДО при групповом удалении
+ piOsReal: iOsReal;
+
+ #include SoprVar.vpp
+ oStatUser : VipStatUser;
+ gldt      : GlobData;
+ insTbl    : InsertTblMnpl;
+ wDelete   : word;
+ MCount    : longint;
+
+ iFurnInSet : FurnInSet; //для удаления фурнитуры вместе с накладной
+
+as select
+   KatSopr.*
+
+from
+  KatSopr
+ ,StepDoc
+ ,BASEDOC
+ ,FILIAL
+ ,SPSOPR
+ ,SPSTEP
+ ,SPDOCS
+ ,BaseFin
+ ,SchFact
+ ,SoprHoz
+ ,Pick
+ ,KatStroy
+ ,SoprDop
+ ,PutGsm
+ ,KatZak
+ ,OBOROT
+
+where
+((
+       pNRec             ==  KatSopr.NRec
+  AND  KatSopr.cStepDoc  ==  StepDoc.NRec
+  AND  StepDoc.cBaseDoc  ==  BaseDoc.NRec
+
+))
+//#INCLUDE soprdes1.vpp // Подключение обработки дескрипторов
+;
+var iKB : iKontrBal;
+
+form frmProt('delsopr.out','errr');
+
+#include soprgen1.vpp
+#include soprcom1.vpp
+
+//для падежей слова "документ"...
+function StrDoc (i: longint): string;
+var
+ s: string;
+{
+  s := 'ов';
+  case (i mod 10) of
+    1: if (i mod 100) <> 11 s := '';
+    2: if (i mod 100) <> 12 s := 'а';
+    3: if (i mod 100) <> 13 s := 'а';
+    4: if (i mod 100) <> 14 s := 'а';
+  end;
+  StrDoc := String(i) + ' документ' + s;
+}
+
+Window WDeleteDoc 'Параметры удаления накладных' (,, sci1Esc) gray, EscClose, doAccept;
+  show at (,,56,7);
+screen scrDelDoc;
+Fields
+  msg1    ('',,): Skip;
+  msg2    ('',,): Skip;
+  wDelete ('Удаление ДО в случае, если с ДО связана только одна накладная',,), NoProtect;
+
+Buttons
+  cmOK, , ,'Удаление накладных', , sci1Esc;
+  cmCancel, , ,'Отмена удаления', , sci1Esc;
+<<
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ [.] Удаление ДО, связанного с накладной                `
+
+      <.      ОК      .>    <.    Отмена    .>
+
+>>
+end;
+
+Handleevent
+cmOK:
+{
+  SaveMyDsk(wDelete, 'DelSopr_wDelete');
+  PutCommand(cmDefault);
+}
+
+cmInit:
+{
+  ReadMyDsk(wDelete, 'DelSopr_wDelete', TRUE);
+  msg1 := 'Для удаления выбран'+
+          if(MCount mod 100 <> 11, if(MCount mod 10 = 1,' ','о '),'о ') +
+          StrDoc(MCount) +'.';
+  msg2 := 'Будут также удалены все документы, связанные с выбранным'+if(MCount>1,'и','')+'!';
+}
+End;
+End;
+
+//определение действий в документах
+Procedure DefineDelDoc;
+{
+  //сбыт-снабжение
+  DelDoc._AKTUSLB_VIP  := false;
+  DelDoc._AKTUSL_VIP   := false;
+  DelDoc._SOPRDOCB_VIP := false;
+  DelDoc._SOPRDOC_VIP  := false;
+  DelDoc._AKTREC_VIP   := false;
+  //склад
+  DelDoc.ACTCOMPL_VIP  := false;
+  DelDoc.AKT_SPIS_VIP  := false;
+  DelDoc.ACTPAKET_VIP  := false;
+  DelDoc.SOPINMOV_VIP  := false;
+  DelDoc.INV_PRIH_VIP  := false;
+  DelDoc.INV_RASH_VIP  := false;
+  //дефайны
+  MyDef._AVIZO_        := false;
+  MyDef.NEED_DETAIL    := false;
+  MyDef._DSOPRHOZ_     := true;
+
+  case KatSopr.VidSopr of
+    110,//Акт выполненных работ в строительстве
+    111,//Акт на прием услуги
+    114://Акт приемки
+    {
+      DelDoc._AKTUSLB_VIP  := true;
+      MyDef._AVIZO_        := true;
+    }
+    211://Акт на оказание услуги
+    {
+      DelDoc._AKTUSL_VIP   := true;
+      MyDef._AVIZO_        := true;
+    }
+    101,//Накладная на прием МЦ
+    102,//Накладная на возврат МЦ от консигнатора
+    103,//Накладная на прием МЦ от консигнанта
+    108,//Накладная на прием молочного сырья
+    115,//Акт о приемке материалов
+    1411://УЛХ Дневник приемки работ
+    {
+      DelDoc._SOPRDOCB_VIP := true;
+      MyDef._AVIZO_        := true;
+    }
+    201,//Накладная на отпуск МЦ
+    202,//Накладная на отпуск МЦ консигнатору
+    203,//Накладная на возврат МЦ консигнанту
+    1421,//УЛХ. Накладная на отпуск лесопродукции
+    210,//Акт передачи оборудования в монтаж
+    229://Акт передачи материалов на строительство
+    {
+      DelDoc._SOPRDOC_VIP  := true;
+      MyDef._AVIZO_        := true;
+    }
+    106,//Рекламационная накладная от покупателя на возврат МЦ
+    610,//Реестр смонтированного оборудования
+    1610,//Ведомость оборудования, монтаж которого начат
+    629,//Отчет по форме М-29
+    206://Рекламационная накладная на возврат МЦ продавцу
+      DelDoc._AKTREC_VIP   := true;
+    600,//Накладная на внутреннее перемещение /склад-склад
+    601,//Накладная на передачу МЦ в ОС
+    602,//Накладная на передачу МЦ в МБП
+    603,//Накладная на передачу МЦ в розничную торговлю
+    605,//Накладная на передачу МЦ в НМА
+    606://Транзитная накладная
+      DelDoc.SOPINMOV_VIP  := true;
+    611://Акт инвентаризации об излишке МЦ
+      DelDoc.INV_PRIH_VIP  := true;
+    612://Акт инвентаризации о недостаче МЦ
+      DelDoc.INV_RASH_VIP  := true;
+    621,//Акт на комплектование
+    622://Акт на разукомплектование
+      DelDoc.ACTCOMPL_VIP  := true;
+    204://Акт на списание МЦ со склада
+      DelDoc.AKT_SPIS_VIP  := true;
+    551, 552:
+    {
+      DelDoc._SOPRDOC_VIP  := true;
+      MyDef._AVIZO_        := true;
+    }
+    631://Акт переоценки НЗС
+      DelDoc.AKT_PEREOC_VIP  := true;
+  end;
+}
+
+//предварительные действия перед удалением документа
+Function BeforeDelete(pNRec: comp; isWarnings,isVisual: boolean): boolean;
+var
+  objDel: objBeforeDelSopr;
+  sObjName: string;
+{
+  BeforeDelete := false;
+  sObjName := '';
+
+  if (DelDoc._AKTUSLB_VIP)  sObjName := #AddComp('L_SOPRDOC')'AktUslB';
+  if (DelDoc._AKTUSL_VIP)   sObjName := #AddComp('L_SOPRDOC')'AktUsl';
+  if (DelDoc._SOPRDOCB_VIP) sObjName := #AddComp('L_SOPRDOC')'SoprDocB';
+  if (DelDoc._SOPRDOC_VIP)  sObjName := #AddComp('L_SOPRDOC')'SoprDoc';
+  if (DelDoc._AKTREC_VIP)   sObjName := #AddComp('L_SOPRDOC')'AktRec';
+  if (DelDoc.ACTCOMPL_VIP)  sObjName := #AddComp('L_Sklad')'ActCompl';
+  if (DelDoc.AKT_SPIS_VIP)  sObjName := #AddComp('L_Sklad')'Akt_spis';
+  if (DelDoc.ACTPAKET_VIP)  sObjName := #AddComp('L_Sklad')'ActPaket';
+  if (DelDoc.INV_PRIH_VIP)  sObjName := #AddComp('L_Sklad')'Inv_Prih';
+  if (DelDoc.INV_RASH_VIP)  sObjName := #AddComp('L_Sklad')'Inv_Rash';
+  if (DelDoc.SOPINMOV_VIP)  sObjName := #AddComp('L_Sklad')'SopInMov';
+  if (DelDoc.AKT_PEREOC_VIP) sObjName := #AddComp('L_UKS')'AktPereocNZS';
+
+  if sObjName = ''
+  {
+    BeforeDelete := true;
+    EXIT;
+  }
+
+  if (not GetVipRef(objDel, sObjName))
+  {
+    message('Не загрузился интерфейс objDelSopr.'#10#13 +
+            'Удаление отменено',mfError);
+    Exit;
+  }
+
+  BeforeDelete := objDel.BeforeDeleteKatSopr(pNRec,isWarnings,isVisual);
+}
+
+//удаление для __Sky_Shop__
+function DelForSkyShop: boolean;
+{
+  DelForSkyShop := false;
+#ifdef __SKYSHOP__
+  case KatSopr.VidSopr of
+    202:
+    {
+      if delete safe novisual SkyLinks <> tsOk {};
+      if delete safe novisual SkyHistState <> tsOk {};
+
+      _loop SkySopr where (( SkySopr.cContainer == Container.nRec ))
+         if (update current Container set Container.NSopr := '') <> tsOK {};
+
+      if delete safe novisual SkySopr <> tsOk {};
+
+       var BD      : comp;
+       var F       : boolean;
+       var BDStatus: word;
+       var KS_nSopr: comp; KS_nSopr := KatSopr.nRec;
+       var KS_dSopr: Date; KS_dSopr := KatSopr.dSopr;
+       DelForSkyShop := true;
+       F := IsValid(#BaseDoc);
+       BD := BaseDoc.nRec;   //!!!! ispravit!!
+       if (oSDfuns.KatSopr_Delete(KatSopr.nRec) = tsOK)
+       {
+         if F
+           if ( getFirst BaseDoc where (( BD == BaseDoc.nRec )) = tsOK )
+           {
+             var OldNote: comp;
+             var OldStatus: word;
+             OldNote := BaseDoc.cNote;
+             OldStatus := BaseDoc.Status;
+             BaseDoc.cNote := oNotes.GetFirstNote(word(40), 3);
+             BaseDoc.Status := 3;
+             BaseDoc.Name := 'по накладной №'+string(KS_nSopr)+' от '+
+                              DateToStr(KS_dSopr,'DD/MM/YYYY')+
+                              ', накладная удалена, документ закрыт';
+             update current BaseDoc;
+             oStatlog.StatLog_InsNewStat(word(40),
+                                         BaseDoc.nRec,
+                                         OldStatus,
+                                         OldNote,
+                                         word(3),
+                                         BaseDoc.cNote,
+                                         '');
+           }
+       }
+    }
+    102:
+    {
+      var F : boolean;
+      var SD: comp;
+      DelForSkyShop := true;
+      F  := IsValid(#StepDoc);
+      SD := StepDoc.nRec;
+
+      if (oSDfuns.KatSopr_Delete(KatSopr.nRec) = tsOK) and F
+      {
+        var LL: SkyModificatorObj;
+        GetVipRef(LL, 'SkyModificator');
+        LL.ModifyNaklStatus(true, false, SD, true);
+      }
+    }
+  end;
+#end
+}
+
+//удаление документа
+Function DeleteSopr(pNRec: comp; isWarnings,isVisual: boolean): boolean;
+begin
+  DeleteSopr := false;
+
+  if GetFirst KatSopr where ((pNRec == KatSopr.NRec)) <> tsOk
+    EXIT;
+
+  iKB.SaveInfoforBal(KatSopr.VidSopr,KatSopr.nRec);
+
+  TypeSopr := KatSopr.VidSopr;
+  DefineDelDoc;
+
+  // для производственного планирования
+  if (TypeSopr = 210) OR (TypeSopr = 229)
+    if (GetVipRef (gldt,'GlobDataSource'))
+      insTbl := gldt.GetInsertTblMnpl
+    else
+      message('Не проинициализировался объект GlobDataSource из производственного планирования!');
+
+  //проверка SoprHoz
+  if (MyDef._DSOPRHOZ_)
+    if (not oSDfuns.CanDeleteDocument(KatSopr.dSopr))
+      EXIT;
+
+  //общая проверка на удаление
+  if (not CanEditDocument)
+    EXIT;
+
+  if ( not oSerialMove.CanDeleteSopr(KatSopr.nRec) )
+    {
+      Message('В накладной введены серийные номера. Удалить документ невозможно.');
+      Exit;
+    }
+
+  //запрос на удаление
+  if (isWarnings)
+  {
+    if (MyDef.NEED_DETAIL)
+      tStr := ''#3'Удалить накладную №'+KatSopr.NSopr+' ?'
+    else
+      tStr := ''#3'Удалить текущий документ ?';
+    if (Message(tStr,YesNo+Confirmation+mfSwapButtons) <> cmYes)
+      EXIT;
+  }
+
+  if (isVisual)
+    StartNewVisual(vtRotateVisual, vfTimer,
+                   ''#3'Подготовка документа к удалению...'#13#3,1);
+
+  // если для накладной существует корректирующая
+  //необходимо чтобы пользователь удалил сначала ее..............................
+  if DelDoc._SOPRDOCB_VIP
+  {
+    pDelKN := comp(0);
+    PushPos(#KatSopr);
+    if (GetFirst KatSopr where (( pNRec       == KatSopr.cADoc    and
+                                  adSoprDocKN == KatSopr.wADoc   )) = tsOk)
+
+    {
+     pDelKN  := KatSopr.NRec;
+     if (isWarnings)
+     {
+       if Message('Для данной накладной №' + KatSopr.NSopr +
+                  ' существует корректирующая накладная.'#10#13 +
+                  'Сначала нужно удалить ее! Удалить корректирующую накладную? ',
+                  YesNo+Confirmation+mfSwapButtons) <> cmYes
+
+       {
+         if (isVisual)  StopVisual('',0);
+         DropPos(#KatSopr);
+         if (isWarnings) message('Удаление отменено.');
+         EXIT;
+       }
+     }
+
+    }
+
+    PopPos(#KatSopr);
+  }// _SOPRDOCB_VIP
+  //..............................................................................
+
+  //собственно удаление СФ выполняет oSDfuns.DeleteSoprHoz
+  if (isWarnings)
+    if GetFirst SchFact where ((KatSopr.cSchfact == SchFact.NRec)) = tsOk
+      if (message('С документом связан счет-фактура '+f_sNuMDate(SchFact.Num, SchFact.dPost)+'.'#13+
+                  'Удалить счет-фактуру?', confirmation + YesNo) = cmNo)
+      {
+         if (isVisual)
+           StopVisual('',0);
+         message('Удаление отменено.');
+         EXIT;
+      }
+
+  if (not BeforeDelete(KatSopr.NRec, isWarnings, isVisual))
+  {
+    if (isVisual)  StopVisual('',0);
+    if (isWarnings) message('Удаление отменено.');
+    EXIT;
+  }
+
+  //удаление корректирующей и сторнирующей накладной
+  //..............................................................................
+  if DelDoc._SOPRDOCB_VIP
+  {
+    // если данная накладная является корректирующей,
+    //то необходимо удалить также и сторнирующую накладную
+    PushPos(#KatSopr);
+    if (KatSopr.wADoc = adSoprDocKN)
+    {
+      var PN_nRec : comp;
+      PN_nRec  := KatSopr.cADoc;
+      if (GetFirst KatSopr
+        where ((PN_nRec == KatSopr.cADoc and adSoprDocSN == KatSopr.wADoc)) <> tsOk )
+      {
+        if (isWarnings)
+          Message('Не найдена сторнирующая накладная.');
+      }
+      else
+      {
+        if (isVisual)
+          SetVisualHeader(''#3'Удаление сторнирующей накладной...');
+
+        if not DeleteSopr(KatSopr.NRec,false,false)
+        {
+          if (isVisual)  StopVisual('',0);
+          EXIT;
+        }
+      }
+    }
+    //удаление корректирующей накладной
+    if (pDelKN <> comp(0))
+    {
+      if (isVisual)
+        SetVisualHeader(''#3'Удаление корректирующей накладной...');
+      DeleteSopr(pDelKN,false,false)
+    }
+    PopPos(#KatSopr);
+  }
+  //..............................................................................
+
+  //Синхронизация ДО
+  if (not DelDoc._SOPRDOCB_VIP)
+    if (not MyDef.NEED_DETAIL)
+      if (boGetTune('Oper.SynchrDONakl'))
+      {
+        if (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108) or (KatSopr.VidSopr = 201)
+          if ((wDelete and 1) = 1) OR isWarnings
+            if DeleteBaseDocumentOnKatSopr(isWarnings, boProt)
+            {
+              delete Pick where ((word(32) == Pick.wList));
+              if GetFirst StepDoc = tsOK
+              {
+                SaveMyDsk(BaseDoc.VidDoc, 'USG3Choice');
+                insert Pick set Pick.wList := 32, Pick.cRec := StepDoc.nRec;
+              }
+            }
+            else
+            {
+              if (isVisual)  StopVisual('',0);
+              EXIT;
+            }
+      }
+  // удаление АВИЗО
+  if (MyDef._AVIZO_)
+  {
+    var iAvizo : Avizo;
+    var wButton : word;
+    if isWarnings
+      wButton := word(0);
+    else
+      wButton := cmOK;
+    if (iAvizo.load(KatSopr.VidSopr,coKatSopr,KatSopr.nRec, wButton))
+      iAvizo.Delrec;
+  }//_AVIZO_
+
+
+  //Здесь же удаляется и счет-фактура
+  //функция DeleteDoc интерфейса SHmanager
+  if (isVisual)
+    SetVisualHeader('Удаление хозопераций...');
+
+  // Удаление SoprHoz
+  oTL.TotalLogOpen;  // Открытие лога сообщений СФ
+  oSDfuns.DeleteSoprHoz(KatSopr.NRec, KatSopr.VidSopr);
+  oTL.TotalLogClose; // Закрытие лога сообщений СФ без его отображения
+
+// удаление документа
+//---------------------------------------------------------------------------//
+
+
+  //удаление спецификации
+  if (isVisual)
+    SetVisualHeader(''#3'Удаление спецификации документа...');
+
+  WHILE (GetFirst SpSopr
+                  where ((KatSopr.NRec == SpSopr.cSopr)) = tsOK)
+  DO
+  {
+    if (isVisual) NextVisual;
+    if DelDoc._SOPRDOC_VIP
+      if (GetFirst KatStroy where ((SpSopr.cMCUsl == KatStroy.cMC(NoIndex))) = tsOk)
+      {
+        var wOldStatus: word;
+        var pOldNote : comp;
+        oStatlog.StatLog_GetLast(451, KatStroy.nRec, wOldStatus, pOldNote);
+        UpDate current KatStroy Set KatStroy.Status1 := wOldStatus,
+                                    KatStroy.cNote1  := pOldNote;
+        oStatlog.StatLog_DeleteLast(451, KatStroy.nRec);
+      }
+
+    oSerialMove.RemoveSpSoprLink(SpSopr.nRec);
+    //удаляем фурнитуру в комплекте данной накладной
+    iFurnInSet.DeleteFurnInSet(SpSopr.NRec, cgKatKod_FurnNakl);
+
+    if (oSDfuns.SpSopr_Delete(SpSopr.nRec) <> tsOK)
+      break;
+  }
+
+  //удаление ссылок в путевых листах
+  if (isVisual)
+    SetVisualHeader(''#3'Удаление ссылок в путевых листах...');
+
+  while  GetFirst SoprDop where ((KatSopr.NRec == SoprDop.cSopr)) = tsOk
+  do
+  {
+    if (isVisual) NextVisual;
+    while GetFirst Putgsm where ((SoprDop.NRec == PutGsm.cSoprDop)) = tsok
+    do
+    {
+      Putgsm.cSoprDop :=0;
+      if Update current Putgsm <> tsok
+        break;
+    }
+    if delete current SoprDop <> tsok
+      break;
+  }
+
+  AbortNewDocument;
+
+  if (isVisual)
+    SetVisualHeader(''#3'Модификация заказа на внешние перевозки...');
+
+  while GetFirst KatZak where((KatSopr.NRec == KatZak.cKatSopr)) = tsOk
+  do
+  {
+    if (isVisual) NextVisual;
+    KatZak.cKatSopr := 0;
+    if update current KatZak <> tsok
+       break;
+  }
+  if (isVisual)
+    SetVisualHeader(''#3'Удаление сопроводительного документа...');
+
+  //удаление статусов
+  oStatlog.StatLog_Delete(if (KatSopr.vidSopr=202, 202, 100), KatSopr.NRec) ;
+
+  case KatSopr.VidSopr of
+     106,206,111,211,110,210,600,606,611,612,629,601,204,621,622,610,1610,
+     114, 115, 1411, 1421,
+     101, 108, 201, 631: oChkSchem.RemoveDocFromSpSchem(KatSopr.nRec, KatSopr.VidSopr);
+  end;
+
+  if not DelForSkyShop
+  {
+   #ifdef __YUKOS_OSSP__
+    if DelDoc._SOPRDOC_VIP
+     piOsReal.OnDeleteDoc(cgOsReal_Nakl,KatSopr.nRec);
+   #end
+
+    // для производственного планирования
+    if (KatSopr.VidSopr = 210) OR (KatSopr.VidSopr = 229)
+      insTbl.DeleteEnviroment(toKatSopr, KatSopr.NRec);
+
+    oSDfuns.KatSopr_Delete(KatSopr.nRec);
+  }
+
+  if (not DelDoc._SOPRDOCB_VIP)
+    if (not MyDef.NEED_DETAIL)
+      if (boGetTune('Oper.SynchrDONakl'))
+        if (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108) or (KatSopr.VidSopr = 201)
+          if GetFirst StepDoc = tsOK
+            if GetFirst Pick where (( word(32) == Pick.wList )) = tsOK
+              if isWarnings
+                RunInterface(CorrectDo, word(0));
+              else
+                bCorrect := TRUE;
+
+  if (isVisual)
+  {
+    NextVisual;
+    StopVisual('',0);
+  }
+//---------------------------------------------------------------------------//
+  iKB.DeleteKontrBal(KatSopr.VidSopr,KatSopr.nRec);
+  DeleteSopr := true;
+
+end;//delete_sopr
+
+//Удаление документов, выбранных маркером
+Function DeleteMarkSopr (pMarker: longint; isWarnings: boolean): boolean;
+var
+  i   : longint;
+  cRec: comp;
+{
+  DeleteMarkSopr := false;
+  MCount := GetMarkerCount(pMarker);
+  If (MCount <= 0) EXIT;
+
+  GetMarker(pMarker, 0, cRec);
+  if GetFirst KatSopr where ((cRec == KatSopr.nRec)) <> tsOK
+      Exit;
+
+  if Katsopr.VidSopr = 201 AND (boGetTune('Oper.SynchrDONakl'))
+    {
+      if RunWindowModal(wDeleteDoc) = cmCancel
+        Exit;
+    }
+  else
+    {
+      If message('Для удаления выбран'+
+              if(MCount mod 100 <> 11, if(MCount mod 10 = 1,' ','о '),'о ') +
+              StrDoc(MCount) +'.'#13#3 +
+             'Будут также удалены все документы, связанные с выбранным'+if(MCount>1,'и','')+'!'#10#13 +
+             'Продолжить удаление?',YesNo+Confirmation+mfSwapButtons) <> cmYes
+        Exit;
+    }
+
+  if Message('Вывести протокол выполнения операции?', YesNo) = Yes
+    {
+      boProt := TRUE;
+      frmProt.write('   Протокол удаления сопроводительных документов.');
+    }
+
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm,
+                ''#3'Удаление сопроводительного документа', MCount);
+
+  var iDoc: longint;
+  var sAllDoc: string;
+  iDoc := 1;
+  sAllDoc := String(MCount);
+  i := 0;
+  do
+  {
+    SetVisualHeader('Удаление ' + String(iDoc) + '-го документа из ' + sAllDoc +'.');
+    if (not NextVisual)
+      break;
+    GetMarker(pMarker, i, cRec);
+    if DeleteSopr(cRec, false, false)
+    {
+      AtDeleteMarker(pMarker, i);
+      MCount := MCount - 1
+    }
+    else
+      i := i + 1;
+    iDoc := iDoc + 1;
+  }
+  while (MCount > i)
+
+  StopVisual('',0);
+
+  if bCorrect
+    RunInterface(CorrectDo, word(0));
+
+  if (MCount>0)
+  {
+/*    if message ('Не удален'+
+                 if(MCount mod 100 <> 11,if(MCount mod 10 = 1,' ','о '),'о ') +
+                 StrDoc(MCount)+'.'#10#13 +
+                'Показать список не удаленных документов?',
+                 YesNo+Confirmation+mfSwapButtons) = cmYes*/
+    if boProt
+    {
+      var s: string;
+      frmProt. write('');
+      frmProt. write('   Список не удаленных документов ');
+      FOR ( i := 0; i < MCount; i := i + 1 )
+      {
+        GetMarker(pMarker, i, pNRec);
+        if GetFirst KatSopr where ((pNRec == KatSopr.NRec)) = tsOk
+          frmProt.write('Документ: ' +PrintNumber(KatSopr.Descr,KatSopr.NSopr) +
+                        ' от ' + DateToStr(KatSopr.dSopr,'DD/MM/YYYY')+' г.');
+      }
+      frmProt.PutEvent(feBreak);
+      if (not frmProt.Error)
+        frmProt.ShowFile('Протокол выполнения операции.');
+    }
+  }
+  else
+    {
+      if boProt and ((wDelete and 1)) <> 0
+        {
+          frmProt.PutEvent(feBreak);
+          if (not frmProt.Error)
+             frmProt.ShowFile('Протокол выполнения операции.');
+        }
+      DeleteMarkSopr := true;
+    }
+  ClearMarker(pMarker);
+}
+
+Handleevent
+ cmInit:
+ {
+   abort;
+ }
+
+end;
+End.

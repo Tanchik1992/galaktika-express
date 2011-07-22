@@ -1,0 +1,330 @@
+/*
+ ╔════════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) Корпорация ГАЛАКТИКА, 1997,98                      ║
+ ║ Проект        : ГАЛАКТИКА                                                  ║
+ ║ Система       : Оперативный контур                                         ║
+ ║ Версия        : 5.70                                                       ║
+ ║ Назначение    : Разнарядка на снятие объемов с отгрузки                    ║
+ ║ Ответственный : Славко Александр Анатольевич(SLAVKO)                       ║
+ ╚════════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Разнарядка на снятие объемов с отгрузки
+#end
+Interface ROtg_R03 'Разнарядка на снятие объемов с отгрузки' EscClose; //
+  Show At (,,,);
+
+//********************************************************************************
+// Таблицы для печати разнарядки на снятие объемов с отгрузки на FastReport
+
+//Шапка
+table struct FRPoDogovoru
+(
+  NRec	        : longint //номер
+
+, DogovorNoDoc  : string  //номер договора
+, DogovordDoc   : date    //дата договора
+, OrgFormName   : string  //контрагент
+, NZakazNoDoc   : string  //номер наряда-заказа
+)
+with index
+(
+  indextPoDogovoru = NRec
+);
+
+//Реквизиты МЦ, снимаемых (частично снимаемых) с отгрузки
+table struct FRPoMC
+(
+  NRec1	            : longint //номер
+, NRec2	            : longint //номер
+
+, KatMCName         : string  //МЦ
+, KolFact           : string  //количество
+, KatOtpEdName      : string  //единица измерения
+, OtgOrderSynNoDoc  : string  //номер отменяемой разнарядки
+, OtgOrderSyndDoc   : string  //дата отменяемой разнарядки
+, ContributorName   : string  //ресурс
+)
+with index
+(
+  indextPoMC  = NRec1
+, indextPoMC2 = NRec2
+);
+
+//*******************************************************************************
+
+Create View
+Var
+  parNRec,
+  varNZakaz,
+  varSpDocs
+    : Comp;
+  RoundKolfromNastr,
+  VidReport         : word;
+  FR_Nrec,
+  FR_Nrec1          : longint;
+From
+  OtgOrder ,
+  synonym  OtgOrder OtgOrderSyn ,
+  SpOtgOrd ,
+  synonym  SpOtgOrd SpOtgOrdSyn ,
+  NZakaz   ,
+  Dogovor  ,
+  SpDocs   ,
+  KatMC    ,
+  GroupMC  ,
+  synonym  GroupMC  GroupMCSyn  ,
+  synonym  KatOrg   OrgForm     ,
+  synonym  KatOrg   Contributor ,
+  KatOtpEd,
+  FRPoDogovoru,
+  FRPoMC
+Where
+((
+      parNRec                 == OtgOrder.NRec
+  and OtgOrder.cOrgForm       == OrgForm.NRec
+  and OtgOrder.NRec           == SpOtgOrd.cOtgOrder
+  and OtgOrder.cOwner         == OtgOrderSyn.NRec
+
+  and SpOtgOrd.NRec           == SpNZRasp.cSpOtgOrd
+  and SpOtgOrd.cNZakaz        == NZakaz.NRec
+
+  and NZakaz.cDogovor         == Dogovor.NRec
+  and NZakaz.cContrib         == Contributor.NRec // заявитель
+
+  and SpNZRasp.cSpNZak        == SpDocs.NRec
+
+  and SpDocs.cMCUsl           == KatMC.NRec
+  and SpDocs.cGrMCUsl         == GroupMC.NRec
+  and SpDocs.cOtpEd           == KatOtpEd.NRec
+
+  and FRPoDogovoru.NRec       == FRPoMC.NRec1
+));
+
+Parameters
+  parNRec;
+
+Form FrmRO('ROtg_R03.out', 'ROtg_R03') With NoVisual;
+
+//******************************************************************************
+
+#ifdef ATL51
+DataStream FRRotg_R3
+(
+  [cfh] CommonFormHeader;
+
+  [OtgOrderNoDoc]  OtgOrder.NoDoc;   //номер распоряжения на отгрузку 
+  [OtgOrderdDoc]   DateToStr(OtgOrder.dDoc,'DD/MM/YYYY');   //дата распоряжения на отгрузку  
+  [Ispolnitel]     '';               //исполнитель  
+
+  table FrPoDogovoru    
+  (                            
+    [NRec]	        FRPoDogovoru.NRec;     
+                               
+    [DogovorNoDoc]      FRPoDogovoru.DogovorNoDoc;   
+    [DogovordDoc]       DateToStr(FRPoDogovoru.DogovordDoc,'DD/MM/YYYY');  
+    [OrgFormName]       FRPoDogovoru.OrgFormName ;   
+    [NZakazNoDoc]       FRPoDogovoru.NZakazNoDoc ; 
+  );                                     
+                                             
+  table FrPoMC                  
+  (                                      
+    [NRec1]	        FRPoMC.NRec1;	      
+    [NRec2]	        FRPoMC.NRec2;      
+    
+    [KatMCName]         FRPoMC.KatMCName;       
+    [KolFact]           FRPoMC.KolFact; 
+    [KatOtpEdName]      FRPoMC.KatOtpEdName;    
+    [OtgOrderSynNoDoc]  FRPoMC.OtgOrderSynNoDoc;     
+    [OtgOrderSyndDoc]   FRPoMC.OtgOrderSyndDoc;   
+    [ContributorName]   FRPoMC.ContributorName;
+  );                            
+)
+end;
+#end
+
+//******************************************************************************
+
+Procedure Print_Line;
+{
+  if (not IsValid(tnSpDocs)) 
+    if (VidReport = 0)
+      FrmRO.SkipFormat(6);
+
+  if (not IsValid(tnKatMC)) 
+    ClearBuffer(tnKatMC);
+
+  if (not IsValid(tnGroupMC))
+    ClearBuffer(tnGroupMC);
+
+  if (not IsValid(tnKatOtpEd)) 
+    ClearBuffer(tnKatOtpEd);
+
+  if (not IsValid(tnContributor))
+    ClearBuffer(tnContributor);
+
+  if (VidReport = 0)
+    {
+  FrmRO.Write(if(SpDocs.cMCUsl <> Comp(0),KatMC.Name,GroupMC.Name));
+      FrmRO.Write(Trim(String(SpNZRasp.KolFact,18,RoundKolfromNastr))); // кол-во 
+  FrmRO.Write(KatOtpEd.Name);
+    }
+  else
+    {
+      if(SpDocs.cMCUsl <> Comp(0))
+        FRPoMC.KatMCName := KatMC.Name;   
+      else
+        FRPoMC.KatMCName := GroupMC.Name;
+
+      FRPoMC.KolFact      := Trim(String(SpNZRasp.KolFact,18,RoundKolfromNastr));     
+      FRPoMC.KatOtpEdName := KatOtpEd.Name;
+    }
+
+  if (IsValid(tnOtgOrderSyn))
+    {
+      if (VidReport = 0)
+        {
+     FrmRO.Write(OtgOrderSyn.NoDoc);
+     FrmRO.Write(OtgOrderSyn.dDoc);
+    }
+  else
+        {
+          FRPoMC.OtgOrderSynNoDoc := OtgOrderSyn.NoDoc;
+          FRPoMC.OtgOrderSyndDoc  := DateToStr(OtgOrderSyn.dDoc, 'DD/MM/YYYY'); 
+        }
+    }
+  else
+    if (VidReport = 0)
+    FrmRO.SkipFormat(2);
+
+  if (VidReport = 0)
+  FrmRO.Write(Contributor.Name);
+  else
+    FRPoMC.ContributorName := Contributor.Name;
+}; // Procedure Print_Line
+
+Procedure PrintReport;
+Var
+  varBreak,
+  varIsDoc
+    : Boolean;
+{
+ StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,''#3'Формирую отчет...',1);
+  ReadMyDsk(VidReport,'VidReport',False);
+
+  FR_Nrec  := 0;
+  FR_Nrec1 := 0;
+
+ if (GetFirst OtgOrder = tsOk) {};
+
+  if (VidReport = 0)
+    {
+ FrmRO.Write(OtgOrder.NRec);
+ FrmRO.Write(OtgOrder.NoDoc);
+ FrmRO.Write(OtgOrder.dDoc);
+    }
+
+ varBreak := False;
+ varIsDoc := False;
+
+ _loop SpOtgOrd
+   {
+      if (VidReport = 0)
+        {
+    FrmRO.Write(''); // Исполнитель
+    FrmRO.Write(Dogovor.NoDoc); // Договор
+    FrmRO.Write(Dogovor.dDoc);  // Договор_Дата
+    FrmRO.Write(OrgForm.Name);  // Контрагент
+    FrmRO.Write(NZakaz.NRec);
+    FrmRO.Write(NZakaz.NoDoc);
+        }
+      else
+        {
+          ClearBuffer(#FRPoDogovoru);
+          FR_Nrec             := FR_Nrec + 1;
+          FRPoDogovoru.NRec   := FR_Nrec;
+
+          FRPoDogovoru.DogovorNoDoc := Dogovor.NoDoc;
+          FRPoDogovoru.DogovordDoc  := Dogovor.dDoc;
+          FRPoDogovoru.OrgFormName  := OrgForm.Name;
+          FRPoDogovoru.NZakazNoDoc  := NZakaz.NoDoc;
+
+          insert current FRPoDogovoru;  
+        }
+    _loop SpNZRasp
+      {
+       if (not NextVisual)
+         varBreak := True;
+
+       if (SpDocs.PrMC <> 1) // МЦ
+         Continue;
+
+          if (VidReport = 1)
+            {
+              ClearBuffer(#FRPoMC); 
+              FR_Nrec1 := FR_Nrec1 + 1;
+              FRPoMC.NRec1           := FR_Nrec;
+            }
+
+       Print_Line;
+
+          if (VidReport = 1)
+            insert current FRPoMC;  
+
+       varIsDoc := True;
+
+          if varBreak
+            Break;
+      }
+
+    if varBreak Break;
+        if (VidReport = 0)
+    FrmRO.PutEvent(feBreak);
+   }
+
+  if (VidReport = 0)
+  FrmRO.PutEvent(feBreak);
+
+  if (not varIsDoc)
+    {
+     varBreak := True;
+     Message('Нет позиций для печати.', Information);
+    }
+
+  StopVisual('',0);
+
+  if (VidReport = 0)
+  if (FrmRO.Error or varBreak)
+    FrmRO.AbortForm
+  else
+    FrmRO.ShowFile('');
+
+  if (varIsDoc)
+    #ifdef ATL51
+      if (VidReport = 1)
+        {
+          RunFReport(FRRotg_R3, '', false);
+
+          ResetBounds(#FRPoDogovoru);
+          ResetBounds(#FRPoMC);
+          Delete All FRPoDogovoru;
+          Delete All FRPoMC;
+          SetBounds(#FRPoDogovoru);
+          SetBounds(#FRPoMC);
+        }
+    #end
+ 
+  SaveMyDsk(0,'VidReport');
+
+}; // procedure PrintReport
+
+HandleEvent
+cmInit :
+{
+  RoundKolfromNastr := wGetTune('Round.KolSign');
+  PrintReport;
+  Abort;
+};
+End; // HandleEvent
+END. // Interface

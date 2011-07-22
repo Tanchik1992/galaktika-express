@@ -1,0 +1,190 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Добавить только зарезервированные позиции из ДО           ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+Procedure InsFromReserv;
+var Curse: double;
+var pMakeSoprByBuff : MakeSoprByBuff;
+{
+  delete all SDocBuf;
+  delete all SpDocBuf;
+
+  if (not SGetBaseDoc(Curse, 0)) 
+    Exit;
+
+  Delete all TmpSklMol;
+  Delete all TmpNaklOst;
+
+  SaveMyDsk(word(0),'ShowRaspr');
+  SaveMyDsk (false, 'MakeSoprByBuff_GetCurse');
+
+  _LOOP SpStep where ((StepDoc.NRec == SpStep.cStepDoc)) 
+    if (SpStep.PrMC = 1) and (SpStep.Reserv > 0) 
+      RunInterface('iMakeNeogrPos',0,0,SpStep.NRec);
+
+// Выбор разреза резервирования.
+  if (GetFirst tmpSklMol = tsOk) 
+    if (GetNext tmpSklMol <> tsOk) 
+      {
+        KatSopr.cPodrFrom := tmpSklMol.cPodr;
+        KatSopr.cMolFrom := tmpSklMol.cMol;
+      }  
+    else
+      if RunInterface(GetReservRasres,KatSopr.cPodrFrom,KatSopr.cMolFrom)=cmCancel
+        {
+          RereadRecord(#KatSopr);
+          exit;
+        }
+
+  if (update current KatSopr) <> tsOK
+      message('Разрез в накладной не сохранился!', Warning); //сохранить разрез СКЛАД-МОЛ
+
+  Delete all TmpSklMol;
+  Delete all TmpNaklOst;
+
+//формирую заново эти таблицы по известному разрезу
+  _LOOP SpStep where ((StepDoc.NRec == SpStep.cStepDoc)) 
+    if (SpStep.PrMC = 1) and (SpStep.Reserv > 0)
+      RunInterface('iMakeNeogrPos',KatSopr.cPodrFrom,KatSopr.cMolFrom,SpStep.NRec);
+
+  if (RecordExists tmpNaklOst where ((KatSopr.cPodrFrom == tmpNaklOst.cPodr and
+                                        KatSopr.cMolFrom == tmpNaklOst.cMol)) <> tsOk) 
+    {
+      if (wGetTune('Reserv.FormSopr') = 0) // разрешать формирование накладных по ДО без резерва
+        {
+          var prRes0 : boolean;
+
+          prRes0 := false;
+          _loop SpStep where ((StepDoc.NRec == SpStep.cStepDoc and 
+                               word(1) == SpStep.PrMC))
+            {
+              if (GetFirst DoRes where ((SpStep.NRec == DoRes.cSpStep)) = tsOk)
+                {
+                  prRes0 := true;
+                  break;
+                }
+            }
+
+          if (not prRes0)
+            {
+              _loop SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc)) ordered by index SpStep02
+                 {
+                   FillSpNaklBuffer;
+                   SpDocBuf.KolFact := SpStep.Kol;
+                   SpDocBuf.KolSkl  := SpStep.Kol * (1 - (SpDocBuf.ProcUb / 100));
+                   update current SpDocBuf;
+                 }
+            }
+        }
+      else
+        {
+          message( 'Матценности из спецификации ДО исчерпаны ранее сформированными накладными/актами.');
+          exit;
+        }
+    }
+  else
+    {
+      _LOOP tmpNaklOst where ((KatSopr.cPodrFrom == tmpNaklOst.cPodr and
+                                KatSopr.cMolFrom == tmpNaklOst.cMol)) 
+         if (GetFirst FastFirstRow SpStep where ((tmpNaklOst.cSpStep == SpStep.NRec)) = tsOk) 
+           {
+             FillSpNaklBuffer;
+             SpDocBuf.KolFact := tmpNaklOst.Kol;
+             SpDocBuf.KolSkl  := tmpNaklOst.Kol * (1 - (SpDocBuf.ProcUb / 100));
+             SpDocBuf.cParty  := tmpNaklOst.cParty;
+             update current SpDocBuf;
+           }
+    }
+
+  SaveMyDSK(true,'_InsFromReserv_');
+  pMakeSoprByBuff.MakeDocument (KatSopr.dSopr, longint(0), SDocBuf.Name, word(1+2));
+  SaveMyDSK(false,'_InsFromReserv_');
+
+} // procedure InsFromReserv
+
+!
+! = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+!
+
+Procedure InsPosFromReserv;
+var pMakeSoprByBuff : MakeSoprByBuff;
+{
+  delete all SDocBuf;
+  delete all SpDocBuf;
+  Delete all TmpSklMol;
+  Delete all TmpNaklOst;
+
+  SaveMyDsk(word(0),'ShowRaspr');
+  SaveMyDsk (false, 'MakeSoprByBuff_GetCurse');
+
+  _LOOP SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc)) 
+    if (SpStep.PrMC = 1) and (SpStep.Reserv > 0)
+      RunInterface('iMakeNeogrPos',KatSopr.cPodrFrom,KatSopr.cMolFrom,SpStep.NRec);
+
+  if (RecordExists tmpNaklOst = tsOk)
+    {
+      if ( RunInterface(GetReservesPos,KatSopr.cPodrFrom,KatSopr.cMolFrom) <> cmDefault )
+        exit;
+    }
+  else
+    {
+      if (wGetTune('Reserv.FormSopr') = 0) // разрешать формирование накладных по ДО без резерва
+        {
+          var prRes0 : boolean;
+
+          prRes0 := false;
+          _loop SpStep where ((StepDoc.NRec == SpStep.cStepDoc and 
+                               word(1) == SpStep.PrMC))
+            {
+              if (GetFirst DoRes where ((SpStep.NRec == DoRes.cSpStep)) = tsOk)
+                {
+                  prRes0 := true;
+                  break;
+                }
+            }
+
+          if (not prRes0)
+            {
+              GetMCUslSopr;
+              exit;
+            }
+        }
+
+      message( 'Матценности из спецификации ДО исчерпаны ранее '+
+                'сформированными сопроводительными документами');
+      If (getfirst FastFirstRow SpSopr<>tsOk) //без этого зацикливание при пустой спецификации
+        {
+          ClearAllEvents;
+          SelectPanel(#KatSopr);
+        }
+      rereadrecord(#SpSopr);
+      Exit;
+    }
+
+  SDocBuf.cKatSopr := KatSopr.NRec;
+  SDocBuf.cVal     := KatSopr.cVal;
+  SDocBuf.dValCurse:= KatSopr.dPrice;
+  insert current SDocBuf;
+  // ссылка на валюту нужна в MAKENAKL.VIP для пересчета спецификации
+  SaveMyDSK(if(KatSopr.cVal <> 0, KatSopr.cVal, KatSopr.cValut),'_InsFromReserv_сVal_');
+
+  _LOOP Pick where ((word(555) == Pick.wList)) 
+     if (GetFirst FastFirstRow tmpNaklOst where ((Pick.cRec == tmpNaklOst.NRec)) = tsOk)
+       if (GetFirst FastFirstRow SpStep where ((tmpNaklOst.cSpStep == SpStep.NRec)) = tsOk) 
+         {
+           FillSpNaklBuffer;
+           SpDocBuf.KolFact := Pick.PickKol;
+           SpDocBuf.KolSkl  := Pick.PickKol * (1 - (SpDocBuf.ProcUb / 100));
+           SpDocBuf.cParty  := tmpNaklOst.cParty;
+           update current SpDocBuf;
+         }
+
+  SaveMyDSK(true,'_InsFromReserv_');
+  if pMakeSoprByBuff.MakeDocument (KatSopr.dSopr, longint(0), SDocBuf.Name, word(1+2))<>0
+     SelectPanel(#KatSopr);//при отказе от формирования зацикливание
+  SaveMyDSK(false,'_InsFromReserv_');
+  SaveMyDSK(0,'_InsFromReserv_сVal_');
+
+  rereadrecord(#katSopr);
+  rereadrecord(#SpSopr);
+} // procedure InsFromReserv

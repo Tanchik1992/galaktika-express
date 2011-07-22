@@ -1,0 +1,93 @@
+// ╔════════════════════════════════════════════════════════╗
+// ║ используются в интерфейсе удаления накладных(актов)    ║
+// ╚════════════════════════════════════════════════════════╝
+
+#ifndef __NOT_USG_3__
+
+Create view vUSG3 from KatSopr;
+
+function DeleteBaseDocumentOnKatSopr(isWarnings, boProt: boolean) : boolean;
+var c, c1: comp;
+{
+  DeleteBaseDocumentOnKatSopr := true;
+  if (KatSopr.VidSopr <> 101) and (KatSopr.VidSopr <> 108) and (KatSopr.VidSopr <> 201)
+    exit;
+  if GetFirst StepDoc <> tsOK 
+    exit;
+  c := KatSopr.nRec;
+  c1 := StepDoc.nRec;
+
+  var prizn : boolean;
+  // если есть еще накладные, ссылающиеся на то же ДО, выходим
+  if vUSG3.GetFirst KatSopr where (( c1 == KatSopr.cStepDoc and
+                                    ( c <> vUSG3.KatSopr.nRec) )) = tsOK
+    exit;
+
+  prizn := TRUE;
+
+  if GetFirst BaseFin where (( word(0)      == BaseFin.TiDkBase and
+                               StepDoc.nRec == BaseFin.cStepDoc )) = tsOK 
+    {
+      if isWarnings
+        DeleteBaseDocumentOnKatSopr :=
+        message( 'С ДО по данной накладной не связано больше ни одного '+
+                  'сопроводительного документа.'#13'Удаление ДО невозможно.'+
+                  'По ДО есть платежи.'#13#13'Продолжить удаление накладной?',
+                  YesNo + Confirmation + mfSwapButtons) = cmYes;
+      if boProt
+        frmProt.write('Документ-основание №'+ BaseDoc.noDoc + ' от ' + BaseDoc.dDoc + ' не удален.'+
+                      'По ДО есть платежи.' );
+    }
+  else
+    {
+      if isWarnings
+        prizn := message( 'С ДО по данной накладной не связано больше ни одного '+
+                'сопроводительного документа.'#13'Удалить ДО по накладной?',
+                  YesNo + Confirmation + mfSwapButtons) = cmYes 
+      if (isWarnings) AND (not prizn)
+      DeleteBaseDocumentOnKatSopr :=
+        message('Продолжить удаление накладной?',
+                YesNo + Confirmation + mfSwapButtons) = cmYes;
+      if prizn
+      {
+        var BD: BaseDocDeleterObj;
+        case BaseDoc.VidDoc of
+          101 : GetVipRef(BD, 'VSchetB');
+          201 : GetVipRef(BD, 'VSchet');
+          else  exit;
+        end;
+        BD.DeleteBaseDoc(BaseDoc.nRec, BaseDoc.VidDoc);
+          if boProt
+            frmProt.write('Удален документ-основание №'+ BaseDoc.noDoc + ' от ' + BaseDoc.dDoc);
+      }
+    }
+}  
+
+function CanDeleteSoprDocumentOnBaseDoc(pNRec: comp): boolean;
+var
+  f : boolean;
+{
+  f := True;
+
+  _loop KatSopr where (( pNRec == KatSopr.cStepDoc )) 
+    {
+      // По актам дату оприходования учитывать не надо, у нее несколько иной смысл - дата исполнения
+      f := ((Longint(KatSopr.dOpr) = 0) or
+            (KatSopr.VidSopr = 111) or (KatSopr.VidSopr = 211) or (KatSopr.VidSopr = 110)); 
+      if not f 
+        Break;
+
+      f := (GetFirst SchFact where (( KatSopr.cSchFact == SchFact.NRec )) <> tsOK);
+      if not f 
+        Break;
+
+      if (GetFirst SoprHoz = tsOk) 
+        f := (GetFirst Oborot where (( SoprHoz.NRec == Oborot.cSoprHoz )) <> tsOK);
+      if not f 
+        Break;
+    }
+
+  CanDeleteSoprDocumentOnBaseDoc := f;
+}
+
+#end

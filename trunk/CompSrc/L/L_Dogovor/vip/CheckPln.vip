@@ -1,0 +1,409 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Различные условия отгрузки/оплаты и контроль их выполнения║
+ ║ Ответственный : Бартош Евгений Анатольевич (BAR)                          ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include PickDoc.vih
+#include EditDoc.vih   // Обьектный интерфес - стрелочник вызовов интерфейсов редактирования
+#include aStatUser.vih // права доступа
+
+#doc
+Различные условия отгрузки/оплаты ПКП и контроль их выполнения
+#end
+Interface CheckPln 'Условия' escclose, alwaysreturn;
+show at (5,1,76,18);
+
+#include PickDoc.var
+#include EditDoc.var   // Переменная типа VipInterface EditDoc
+
+create view vCheckPln
+var
+  prmCalPlan    : comp;
+  prmPlanPays   : comp;
+  prmMode       : word;
+  prmCondStatus : word;
+  And_Or_Def    : word;
+  s_SimvRub     : string;
+  oStatUser     : VipStatUser;
+  (
+    ModeName,  // 1
+    ControlName, // 2
+    FactName, // 3
+    ValutName, // 4
+    SoprHozDateCurse,
+    SoprHozSumma, // 7
+    SoprHozDescr, // 8
+    ccDogovor // 9
+  )
+as select
+  // 1
+  if ( CheckPln.VidChecks = 1, 'Условия отгрузки',
+     if (CheckPln.VidChecks = 101,'Условия авансового платежа',
+     if (CheckPln.VidChecks = 102,'Условия основного платежа',
+     if (CheckPln.VidChecks = 103,'Условия дополнительного платежа',
+     '!Некорректный тип условий!')))),
+
+  // 2
+  if ( CheckPln.Control = 0, '-','+'),
+
+  // 3
+  if ( CheckPln.Fact = 0, '-','+'),
+
+  // 4
+  if ( CheckPln.cVal = 0, s_SimvRub, KlVal.SimvolV ),
+
+  if ( IsValid(tnSoprHoz), if ( longint(SoprHoz.DatOb) <> 0 , SoprHoz.DatOb, cur_date),cur_date),
+  // 7
+  if ( IsValid(tnSoprHoz),
+    if ( SoprHoz.KodValut = 0, PGetAnyCurrency(comp(0),SoprHoz.Summa,SoprHozDateCurse,CheckPln.cVal),
+            PGetAnyCurrency(SoprHoz.KodValut,SoprHoz.SumValut,SoprHozDateCurse,CheckPln.cVal)),0),
+
+  // 8
+  SoprHoz.DesGr + '/' + SoprHoz.Descr,
+
+  // 9
+  if ( Dogovor.cDogovor = 0, Dogovor.nRec, Dogovor.cDogovor )
+
+from
+  checkpln,
+  planpays,
+  CalPlan,
+  Dogovor,
+  KatNotes,
+  SoprCalP,
+  KatDoc,
+  synonym CheckPln CheckPln_s ,
+  SoprHoz ,
+  klval
+where ((
+  prmPlanPays            == PlanPays.nRec          and
+  prmCalPlan             == CalPlan.nRec           and
+  CalPlan.cDogovor       == Dogovor.nRec           and
+  CalPlan.cNote          == KatNotes.nRec          and
+  CheckPln.cVal          == KlVal.nRec             and
+  CheckPln.nRec          == SoprCalP.cCheckPln     and
+  SoprCalP.cSoprHoz      == SoprHoz.nRec
+))
+bounds byCalPlan =
+         prmCalPlan             == CheckPln.cCalPlan      and
+         prmMode                == CheckPln.VidChecks
+bounds byCalPlanFor_s =
+         prmCalPlan             == CheckPln_s.cCalPlan      and
+         prmMode                == CheckPln_s.VidChecks
+bounds byPlanPays =
+         prmPlanPays            == CheckPln.cPlanPays     and
+         prmMode                == CheckPln.VidChecks
+bounds byPlanPaysFor_s =
+         prmPlanPays            == CheckPln_s.cPlanPays     and
+         prmMode                == CheckPln_s.VidChecks
+;
+
+Parameters
+  prmCalPlan,
+  prmPlanPays,
+  prmMode,
+  prmCondStatus;
+
+#include GetCurTunes.vpp
+#INCLUDE EditPos.vpp
+
+procedure CheckFact;
+{
+  if CheckPln.Control = 1
+    if CheckPln.DocSumma >= CheckPln.CheckSumma
+      set CheckPln.Fact := 1
+    else set CheckPln.Fact := 0;
+}
+
+panel CheckPln;
+show at (,,,8);
+table CheckPln;
+browse brCheckPln (,hcDogPaymentCond,);
+show at (,,,5);
+fields
+  CheckPln.Code '№' ('Номер условия по порядку',,sci178Esc) : [3], noprotect;
+  CheckPln.CondName 'Условие' ('Наименование условия',,sci178Esc) : [17], noprotect;
+  KatDoc.Name 'Документ' ('Документ, подтверждающий выполнение условия',,sci1378Esc) : [20], protect;
+  CheckPln.CheckSumma 'Сумма условия' ('Сумма для выполнения условия',,sci178Esc) : [15,2], noprotect;
+  ValutName 'Вал' ('Денежная единица',,sci1378Esc) : [3], protect;
+  ControlName 'К' ('Признак контроля условия',,sci1378Esc): [1], protect;
+  FactName 'Ф' ('Признак выполнения условия',,sci1378Esc) : [1], protect;
+end; // browse
+/*screen scrCheckPln01 (,hcDogPaymentCond,);
+show at (70,,,5);
+fields
+  CheckPln.And_Or ('Способ объединения условий',,sci1Esc) : noprotect;
+<<
+
+ (.) ИЛИ `
+ (.) И   `
+>>
+end; // screen*/
+screen scrCheckPln02 (,hcDogPaymentCond,);
+show at (,6,,);
+fields
+  CheckPln.And_Or ('Способ объединения условий',,sci1Esc) : noprotect;
+  //CheckPln.DocSumma : [,'\2p[|-]3666`666`666`666.88'],skip;
+  //ValutName : skip;
+<<
+ (.) достаточно выполнение одного условия `
+ (.) необходимо выполнение всех условий   `
+>>
+end; // screen
+
+handleevent
+
+  cmPick : {
+    if NOT EditPlanPosEnabled(true)
+      {
+        abort;
+        exit;
+      }
+
+    case ( curfield ) of
+      #ControlName : {
+        set CheckPln.Control := 1 - CheckPln.Control;
+        CheckFact;
+      }
+      #FactName : {
+        set CheckPln.Fact := 1 - CheckPln.Fact;
+        set CheckPln.Control := 0;
+      }
+      #KatDoc.Name :
+        iPickDoc.PickSingle('Хозяйственные документы', CheckPln.TiDkGal);
+      #ValutName :
+        if ( curtable = #checkpln )
+          if RunInterface(GetValOt,CheckPln.cVal) = cmDefault {
+          var Sm: double; Sm := 0;
+          _loop SoprCalP
+            Sm := Sm + SoprHozSumma;
+          set CheckPln.DocSumma := Sm;
+          CheckFact;
+          }
+    end;
+    RescanPanel(#CheckPln);
+  }
+
+  cmCheckField : {
+    case ( curfield ) of
+      #CheckPln.And_Or : {
+        And_Or_Def := CheckPln.And_Or;
+        UpdateTable;
+        PushPos(#CheckPln);
+        update CheckPln set CheckPln.And_Or := And_Or_Def;
+        PopPos(#CheckPln);
+      }
+    end;
+  }
+
+  cmCheckRecord : {
+    if ( CheckPln.TiDkGal = 0 ) {
+      message(''#3'Определите тип документа, подтверждающий выполнение условия',OkButton);
+      Abort;
+      Exit;
+    }
+  }
+
+  cmSetDefault : {
+    ClearBuffer(#CheckPln);
+    CheckPln.cCalPlan := prmCalPlan;
+    CheckPln.cPlanPays := prmPlanPays;
+    CheckPln.And_Or  := And_Or_Def;
+    CheckPln.Control := 0;
+    if ( getlast CheckPln_s = tsOK )  {
+      var tmpS : string;
+      tmpS := CheckPln_s.Code;
+      if ( tmpS = '' ) tmpS := '0000';
+      CheckPln.Code := NextNumStr(tmpS);
+    }
+    else CheckPln.Code := '0001';
+  }
+
+  cmInsertRecord :
+    insert current checkpln;
+
+  cmUpdateRecord :
+    update current checkpln;
+
+  cmDeleteRecord : {
+    if ( message(''#3'Удалить условие?',YesNo) = cmYes ) {
+      delete SoprCalP;
+      delete current checkpln;
+    }
+  }
+
+  cmOpenSearch :
+    {
+      if NOT EditPlanPosEnabled(true)
+      {
+        abort;
+        exit;
+      }
+
+      if ( curtable = #checkpln ) PutCommand(cmPick);
+    }
+
+end; // handleevent
+
+end; // panel
+
+panel panSoprCalP;
+show at (,9,,);
+table SoprCalP;
+browse brSoprCalP (,hcDogPaymentCond,);
+show at (,,,14);
+fields
+  SoprHozDescr 'Дескриптор' ('Дескриптор(идентификатор) пользователя',,sci1478EnEsc) : [10], protect;
+  SoprHoz.DatOb 'Дата док.' ('Дата документа',,sci1478EnEsc) : [10,'DD/MM/YYYY'], protect;
+  SoprHoz.NoDoc 'Номер' ('Номер документа',,sci1478EnEsc) : [17], protect;
+  SoprHozSumma 'Сумма по документу' ('Сумма по документу',,sci1478EnEsc) : [20,2], protect;
+  ValutName 'Вал' ('Денежная единица',,sci1478EnEsc) : [4], protect;
+end;  // browse
+screen scrCheckPln03 (,hcDogPaymentCond,);
+show at (,15,,);
+fields
+  CheckPln.DocSumma : [,'\2p[|-]3666`666`666`666.88'],skip;
+  ValutName : skip;
+<<
+                Сумма по документам.@@@@@@@@@@@@@@@@@@@@@@.@@@@@
+>>
+end; // screen
+
+
+handleevent
+  cmSetDefault : {
+    ClearBuffer(#SoprCalP);
+    SoprCalP.cCheckPln := CheckPln.nRec;
+    if ( RunInterface(GetSoprHoz,CheckPln.TiDkGal,word(0),ccDogovor,SoprCalP.cSoprHoz) = cmCancel ) {
+      Abort;
+      Exit;
+    }
+    else {
+      set SoprCalP.cSoprHoz := SoprCalP.cSoprHoz;
+      set CheckPln.DocSumma := CheckPln.DocSumma + SoprHozSumma;
+    }
+  }
+
+  cmInsertRecord : {
+    insert current SoprCalP;
+    CheckFact;
+  }
+
+  cmUpdateRecord : {
+    update current SoprCalP;
+    CheckFact;
+  }
+
+  cmDeleteRecord :
+    if ( message(''#3'Отменить связь документ с условием?',YesNo) = cmYes ) {
+      set CheckPln.DocSumma := CheckPln.DocSumma - SoprHozSumma;
+      delete current SoprCalP;
+      CheckFact;
+    }
+
+  cmEdit : {
+    if ( ( curtable = #SoprCalP ) and ( SoprCalP.cSoprHoz <> 0 ) ) {
+      iEditDoc.RunEditHozDoc(coSoprHoz,SoprHoz.TiDkGal,SoprHoz.TipDoc,SoprHoz.cSoprDoc);
+    }
+  }
+
+  cmPick :
+    {
+      if NOT EditPlanPosEnabled(true)
+      {
+        abort;
+        exit;
+      }
+    }
+
+  cmOpenSearch :
+    {
+      if NOT EditPlanPosEnabled(true)
+      {
+        abort;
+        exit;
+      }
+    }
+
+end; // handleevent
+
+end; // panel
+
+Procedure ForClose;
+var AndOr: word;
+{
+  UpdateTable;
+  set prmCondStatus := 0;
+  if ( getfirst checkpln = tsOK ) {
+    _loop checkpln
+    {
+      AndOr := CheckPln.And_Or;
+      if ( CheckPln.And_Or = 1 ) {
+// необходимо выполнение всех условий
+        if ( CheckPln.Fact = 0 ) {
+// если хоть одно не выполняется, то все условия невыполнены
+          set prmCondStatus := 1;
+          break;
+        }
+      }
+      else {
+// необходимо выполнение хотя бы одного условия
+        if ( CheckPln.Fact = 1 ) {
+// если хоть одно выполняется, то все условия выполнены
+          set prmCondStatus := 2;
+          break;
+        }
+      }
+    }
+    if ( prmCondStatus = 0 )
+      set prmCondStatus := 1 + AndOr;
+  }
+}
+
+HandleEvent
+  cmInit : {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    InitGetCur;
+
+    if ( getfirst checkpln = tsOK ) And_Or_Def := CheckPln.And_Or;
+    else And_Or_Def := 0;
+    if ( prmPlanPays = 0 ) {
+      PushBounds(tbByCalPlan);
+      PushBounds(tbByCalPlanFor_s);
+    }
+    else {
+      PushBounds(tbByPlanPays);
+      PushBounds(tbByPlanPaysFor_s);
+    }
+
+    var boNeedProtect: boolean;
+
+    boNeedProtect := Not EditPlanPosEnabled(false);
+
+    SetFieldProtected(#CheckPln.Code      , boNeedProtect);
+    SetFieldProtected(#CheckPln.CondName  , boNeedProtect);
+    SetFieldProtected(#CheckPln.CheckSumma, boNeedProtect);
+    SetFieldProtected(#CheckPln.And_Or    , boNeedProtect);
+  }
+
+  cmDone : {
+    ForClose;
+    DoneGetCur;
+  }
+
+  cmCancel : {
+    CloseInterface(cmDefault);
+    Stop;
+  }
+
+end;
+
+end. // interface

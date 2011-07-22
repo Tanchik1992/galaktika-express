@@ -1,0 +1,407 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#include oEdIzm.vih
+
+//********************************************************************************
+
+#doc
+Назначение:
+   Выбор спецификации для накладной
+
+Параметры:
+  Specif - NRec накладной
+  aNrec  - NRec спецификации акта
+  aPos   - для позиционирования
+#end
+
+//******************************************************************************
+
+Interface Select_MC ' Выбор матценности из накладной '(, hcSellWActPriemPickMC, ) doAccept, EscClose, Cyan;
+  Show at (5, , , 100);
+
+table struct TmpKolVZ
+(
+  NRec   : comp    "Nrec спецификации",
+  Kol    : double  "Доступное количество",
+  isOrder: boolean "Запись в спецификации расх. ордера"
+)
+with index
+(
+  TmpKolVZ01 = NRec,
+  TmpKolVZ02 = Kol
+);
+
+#include oEdIzm.var
+
+Create view
+var
+  Specif      : comp; // NRec накладной
+  aNrec       : comp; // NRec спецификации акта
+  aPos        : comp; // для позиционирования
+  MarkerMc, IndexMc: longint;
+  bShowMess   : boolean; // чтобы дважны не выдавалось сообщение при cmDefault
+
+(
+  picked,
+  isOrder
+)
+
+As select
+  if(SearchMarker(MarkerMc, SpSopr.NRec, IndexMc), '√', ' '),
+  if( TmpKolVZ.isOrder, '+', '-')
+
+from
+  SpSopr,
+  KatMC,
+  KatOtpEd,
+  KatParty,
+  Pick,
+  SpOrder,
+  TmpKolVZ,
+  synonym SpSopr SpSoprVZ,
+  synonym KatSopr KatSoprVZ
+
+where
+((
+  Specif            == SpSopr.cSopr      AND
+  SpSopr.cMCUSL     == KatMC.NRec        AND
+  1                 == SpSopr.PrMc       AND
+  SpSopr.cOtpED     == KatOtpEd.NRec     AND
+  KatMc.cEd         == KatEd.NRec        AND
+  SpSopr.cParty     == KatParty.NRec     AND
+
+  word(614)         == Pick.wList        AND
+  SpSopr.NRec       == Pick.cRec         AND
+
+  SpSopr.NRec       == SpOrder.cSpSopr   AND
+  SpOrder.NRec      == SpSoprVZ.cSpOrder AND
+  SpSoprVZ.cSopr    == KatSoprVZ.NRec    AND
+  SpSopr.NRec       == TmpKolVZ.NRec
+))
+
+ condition NotZeroKol = (double(0) <> TmpKolVZ.Kol)
+;
+
+Parameters
+  Specif, aNrec, aPos;
+
+//Function MaxKolVZ
+#include soprc25.vpp
+
+Function Update_Current_Pick (aMes: boolean): boolean;
+begin
+    Update_Current_Pick := FALSE;
+
+    if (not fEdIzm.CheckKolDiskret(Pick.PickKol,
+        if (SpSopr.cOtpEd = 0, KatEd.Nrec, KatOtpEd.Nrec), TRUE, aMes))
+      {
+        Stop;
+        Abort;
+      }
+
+    if Pick.PickKol>TmpKolVZ.Kol
+    {
+      Pick.PickKol := TmpKolVZ.Kol;
+
+      if (aMes)
+        if Pick.PickKol = 0
+        {
+          Message('Нет доступного кол-ва МЦ!');
+          Exit;
+        }
+        else
+          Message ('Количество установлено равное доступному');
+    }
+
+    if not IsValid(tnPick)
+      {
+        Pick.wList := 614;
+        Pick.cRec := SpSopr.NRec;
+        Pick.NRec := 0;
+        if Pick.PickKol<>0
+        {
+           Insert Current Pick;
+           Update_Current_Pick := TRUE;
+        }
+!        else
+!           if aMes Message('Не указано количество МЦ');
+      }
+    else
+      {
+        if Pick.PickKol<>0
+        {
+          Update current Pick;
+          Update_Current_Pick := TRUE;
+        }
+        else
+        {
+           delete current Pick;
+!           if aMes Message('Не указано количество МЦ');
+        }
+
+      }
+end;
+
+Procedure UnMarkAll;
+begin
+    PushPos(#SpSopr);
+    ClearMarker(MarkerMc);
+    StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+                   'Снимаю пометки ...'#13#3, 1);
+    _LOOP SpSopr
+    {
+      if (not NextVisual) Break
+      else
+      {
+        if IsValid (#Pick) delete current Pick;
+      }
+    }
+
+    PopPos(#SpSopr);
+    RescanPanel(#SpSopr);
+    StopVisual('', 0);
+end;
+
+Procedure SetFilterZero;
+begin
+  if not ConditionActive(tcNotZeroKol)
+  {
+    PushCondition(tcNotZeroKol);
+    SaveMyDsk(byte(1), 'AktPrmFltZero');
+    SetTitle(' Выбор матценности из накладной - "Фильтр по доступному кол-ву"');
+  }
+  else
+  {
+    PopCondition(tcNotZeroKol);
+    SaveMyDsk(byte(0), 'AktPrmFltZero');
+    SetTitle(' Выбор матценности из накладной ');
+  }
+  RereadRecord(#SpSopr);
+
+end;
+
+Panel pnSelMC Table SpSopr
+Browse brMC (, , sci1EnIns);
+fields
+    {Font = {Color = if (Picked = '√', ColorMark, 0)}};
+ picked         'V'  : [1], skip, NoAutoSize;
+ KatMC.BarKod   'Код'    ('Код МЦ'): [12], protect, Nodel, NoAutoSize;
+ KatMC.Name     'Название'('Название МЦ'): [15], protect, Nodel;
+ KatOtpEd.Abbr  'Ед.изм.'('Отпускная единица измерения МЦ'): [3], protect, Nodel, NoAutoSize;
+ Pick.PickKol   'Выбор'  ('Укажите количество МЦ'): [10.3], noprotect, NoAutoSize;
+ TmpKolVZ.Kol   'Доступно'('Количество с учетом возвратов по накладной'): [10.3], protect, Nodel, NoAutoSize;
+ SpSopr.KolFact 'Количество' ('Количество по накладной'): [10], [prSignsInKol], protect, Nodel, NoAutoSize;
+ SpSopr.Price   'Цена'   ('Цена по накладной'): [12.2], protect, Nodel, NoAutoSize;
+ KatParty.Name  'Партия' ('Ссылка на партию МЦ'): [15], protect, Nodel, NoAutoSize;
+ isOrder        'O'      ('Есть ли позиция в спецификации расходного ордера'): [1], protect, Nodel, NoAutoSize;
+end;
+
+HandleEvent
+
+cmCheckField:
+{
+  if (CurField <> #Pick.PickKol)
+    Exit;
+
+  if Update_Current_Pick(true)
+  {
+    if not SearchMarker(MarkerMc, SpSopr.NRec, IndexMc)
+       InvertMarker(MarkerMc, SpSopr.NRec);
+  }
+  else
+  {
+    bShowMess := FALSE;
+
+    if SearchMarker(MarkerMc, SpSopr.NRec, IndexMc)
+      InvertMarker(MarkerMc, SpSopr.NRec);
+  }
+
+  RereadRecord;
+}
+
+
+cmMarkUnMark:
+{
+  if (not SearchMarker(MarkerMc, SpSopr.NRec, IndexMc))
+  {
+    if not IsValid(tnPick)
+    {
+      ClearBuffer(#Pick);
+      Pick.PickKol := 1;
+    }
+
+    if (wGetTune('Pick.ChkGrpIns') = 1)
+      RunDialog(GetPickKol, Pick.PickKol);
+
+    if not Update_Current_Pick(true)
+      InvertMarker(MarkerMc, SpSopr.NRec);
+  }
+  else
+  {
+    if IsValid(tnPick)
+      delete current Pick;
+  }
+
+  InvertMarker(MarkerMc, SpSopr.NRec);
+
+#ifdef ATL51
+  RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+  if GetNext SpSopr = tsOk
+    CallToNeighbours(cmPosDown, #SpSopr);
+  RescanPanel(#SpSopr);
+#end
+}
+
+cmSelectAll:
+{
+  if Message('Пометить все позиции?', YesNo) = Yes
+  {
+    PushPos(#SpSopr);
+    ClearMarker(MarkerMc);
+    StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+                   'Помечаю позиции ...'#13#3, 1);
+
+    var tkol: double;
+    tkol := 1;
+
+     RunDialog(GetPickKolAll, tkol);
+
+
+    _LOOP SpSopr
+    {
+      if (not NextVisual) Break
+      else
+      {
+        if ( not  SearchMarker(MarkerMc, SpSopr.NRec, IndexMc))
+           InsertMarker(MarkerMc, SpSopr.NRec);
+
+        Pick.PickKol := tkol;
+
+        if not Update_Current_Pick(false)
+           InvertMarker(MarkerMc, SpSopr.NRec);
+
+      }
+    }
+
+    PopPos(#SpSopr);
+    RereadRecord(#SpSopr);
+    StopVisual('', 0);
+  }
+}
+
+cmUnSelectAll:
+  if Message('Снять пометки с позиций?', YesNo) = Yes
+  {
+     UnMarkAll;
+  }
+
+end;
+end; //HandleEvent panel
+
+HandleEvent
+
+cmDefault:
+{
+  if not IsValid(#SpSopr)
+  {
+    Abort;
+    CloseInterface(cmCancel);
+    Exit;
+  }
+
+  if GetMarkerCount(MarkerMc) = 0 InsertMarker(MarkerMc, SpSopr.NRec);
+
+  if not IsValid(#Pick) Pick.PickKol := 1
+  else if Pick.PickKol = 0 Pick.PickKol := 1;
+
+  if not Update_Current_Pick(bShowMess)
+  {
+    bShowMess := TRUE;
+
+    if SearchMarker(MarkerMc, SpSopr.NRec, IndexMc)
+      InvertMarker(MarkerMc, SpSopr.NRec);
+
+    Abort;
+  }
+}
+
+cmInit:
+{
+  var tkoef: double;
+
+  bShowMess := TRUE;
+
+  _LOOP Pick where (( word(614) == Pick.wList ))
+   delete current Pick;
+
+  MarkerMc := InitMarker('SpSopr_MC', 8, 100, 10);
+  ClearMarker(MarkerMc);
+
+  StartNewVisual (vtNumericVisual, vfTimer+vfThread+vfBreak,
+                  'Проверка доступного количества ...', 1);
+  _LOOP SpSopr
+  {
+    if not NextVisual
+    {
+       if (Message('Прервать процесс?', YesNo + Confirmation) = cmYes)
+       Abort;
+       DoneMarker(MarkerMc, 'SpSopr_MC');
+       Break;
+    }
+    else
+    {
+      ClearBuffer(#TmpKolVZ);
+      TmpKolVZ.NRec := SpSopr.NRec;
+
+      TmpKolVZ.Kol  := MaxKolVZ(comp(0), aNRec, TRUE, tkoef);
+      if IsValid(tnSpOrder) TmpKolVZ.isOrder := TRUE
+      else TmpKolVZ.isOrder := FALSE;
+      insert current TmpKolVZ;
+    }
+  }//end _LOOP
+
+  if aPos <> comp(0)
+  {
+    if GetFirst SpSopr where ((aPos == SpSopr.NRec )) <> tsOk
+       if GetFirst Spsopr = tsOk {}
+  }
+  else if GetFirst Spsopr = tsOk {}
+
+  var tZFlt: byte;
+  if not ReadMyDsk(tZFlt, 'AktPrmFltZero', FALSE) tZFlt := byte(0);
+
+  if tZFlt <> byte(0) SetFilterZero
+  else RereadRecord(#SpSopr);
+
+  ProtectRecord(#SpSopr, TRUE);
+  SelectField(#Pick.PickKol);
+
+  StopVisual('', 0)
+}
+
+cmDone: DoneMarker(MarkerMc, 'SpSopr_MC');
+
+cmCancel: UnMarkAll;
+
+cmProtectedInput: Stop;
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuFltKolZero'));
+
+cmValue1:
+{
+  SetFilterZero;
+}
+
+end; // HandleEvent Interface
+End.
+
+mnuFltKolZero Menu
+{
+-'Скрыть/показать записи с нулевым доступным кол-вом', cmValue1, 'Установка/снятие фильтра на записи нулевым доступным кол-вом', , , , sci1Esc;
+}

@@ -1,0 +1,634 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// расчет цен в позиции документа (приходные накладные, НВП)
+//******************************************************************************
+
+/*
+  ╔═══════════════════════════════════════════════════════════════════════════╗
+  ║ Параметры     :                                                           ║
+  ║        1-й    : _pSopr   - KatSopr.NRec                                   ║
+  ║        2-й    : _pSpSopr - SpSopr.NRec, пересчет по переданной позиции +  ║
+  ║               :        пересчет общих сумм по документу. Если _pSpSopr=0, ║
+  ║               :        то пересчет по всем позициям документа             ║
+  ║        3-й    : _pSpSopUsl - SpSopr.NRec, пересчет по переданной позиции+ ║
+  ║               :        пересчет общих сумм по документу. Если _pSpSopr=0, ║
+  ║               :        то пересчет по всем позициям документа             ║
+  ║        4-й    : _MSUOnly - пересчет только сумм по позиции, без пересчета ║
+  ║               :        общих сумм по документу                            ║
+  ║        5-й    : метод пересчета суммы в валюте по текущему курсу          ║
+  ║        6-й    : результат выполнения (был ли пересчет)                    ║
+  ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#define _RETTARA_
+
+#include ExtAttrClass.vih
+#include GetDocSpecInfo.vih
+#include oEdIzm.vih
+#include SpNext.vih
+#include SDfuns.vih
+#include KontrBal.vih
+#include FactoryPrice.vih
+#include NormUbFuns.vih
+#include RecalcSumByPlat.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  расчет цен в позиции документа (приходные накладные, НВП)
+
+Параметры:
+  _pSopr     - ссылка на сопроводительный документ
+  _pSpSopr   - ссылка на позицию сопр.документа, пересчет по переданной позиции +
+               пересчет общих сумм по документу. Если _pSpSopr=0, то пересчет по всем позициям документа
+  _pSpSopUsl - ссылка на позицию услуги в сопр.документе, пересчет по переданной позиции +
+               пересчет общих сумм по документу. Если _pSpSopr=0, то пересчет по всем позициям документа
+  _MSUOnly   - пересчет только сумм по позиции, без пересчета общих сумм по документу
+  _Method    - метод пересчета суммы в валюте по текущему курсу
+  _result    - результат выполнения (был ли пересчет)
+#end
+
+//******************************************************************************
+
+Interface iChkSumB EscClose,cacheable, alwaysReturn;
+  Show at (,,,);
+
+ function fnFactoryPrice : double; forward;
+ function fnVFactoryPrice: double; forward;
+
+#include oEdIzm.var
+#include SpNext.var
+#include SDfuns.var
+#include KontrBal.var
+#include FactoryPrice.var
+#include NormUbFuns.var
+#include RecalcSumByPlat.var
+
+create view
+var
+  //параметры
+  _pSopr       : comp;
+  _pSpSopr     : comp;
+  _pSpSopUsl   : comp;
+  _MSUOnly     : boolean;
+  _Method,NastrRoundPrice: word;
+  _Result      : boolean;
+  //-------------------------------------------------------------
+!  SumSpNalogs : double;     // Сумма налогов в НДЕ по позиции спецификации
+  DocTuneNDS            : boolean;    // регулируемая ставка НДС
+  isNalUch              : boolean;    // используется налоговый учет
+  isNalogFromSpStep     : boolean;
+  OperSellNaklCalcGrM   : boolean;
+  isDocFactoryPrice     : boolean;    // Работа с заводской ценой
+  wReCalcPriceByFactory : word;       // Расчет цены в приходной накладной по заводской цене и входящему проценту
+  isSavePriceRef        : boolean;    // Сохранять ссылку на прайс-лист при корректировке цены в документах
+
+  sumNalUch, sumNalUchUsl: double;    // для налогового учета
+  CursV    : double;
+
+(
+   FactoryPrice   //заводская цена в НДЕ
+  ,VFactoryPrice  //заводская цена в валюте
+
+)
+as select
+   fnFactoryPrice
+  ,fnVFactoryPrice
+from
+   KatSopr
+  ,SpSopr
+  ,SpDocNal
+  ,KatNalog
+  ,KatOrg
+  ,KatParty
+  ,KatOtpEd
+  ,KatUsl
+  ,KatMC
+  ,SpSopr   SpSopUsl
+  ,SpSopr   SpSopr1
+  ,SpDocNal SpDocNalSopUsl
+  ,KLVAL
+  ,BASEDOC
+  ,CursVal
+  ,KatEd
+  ,SoprHoz
+  ,ActSaldo
+  ,Oborot
+  ,KatStroy
+  ,Prices
+
+where
+((
+   _pSopr            == KatSopr.NRec           and
+   KatSopr.NRec      == SpSopr.cSopr           and
+   KatSopr.cValut    == KlVal.NRec             and //ПИР 101.26741
+   word(1)           == SpSopr.PrMC            and
+
+   SpSopr.cMCUSL     == KatMc.NRec             and
+
+   KatSopr.NRec      == SpSopr1.cSopr          and
+
+   SpSopr.NRec       == SpDocNal.cSpDoc        and
+   KatSopr.VidSopr   == SpDocNal.TipDoc        and
+   SpSopr.cParty     == KatParty.NRec          and
+   SpSopr.cOtpEd     == KatOtpEd.NRec          and
+
+   KatSopr.NRec      == SpSopUsl.cSopr         and
+   word(3)          <<= SpSopUsl.PrMC          and
+
+   SpSopUsl.cMCUsl   == KatUsl.NRec            and
+   KatSopr.VidSopr   == SpDocNalSopUsl.TipDoc  and
+   SpSopUsl.NRec     == SpDocNalSopUsl.cSpDoc
+
+
+))
+bounds SpSlkadBound =  coSpSopr     ==  SpSklad.wTable and
+                       SpSopr.nRec  ==  SpSklad.cRec   and
+                       word(100)    ==  SpSklad.TypeZ
+;
+
+Parameters
+  _pSopr,
+  _pSpSopr,
+  _pSpSopUsl,
+  _MSUOnly,
+  _Method,
+  _result
+  ;
+
+#include SoprAll.vpp  // общие функции сопроводительных документов
+#include soprval.vpp
+#include chksum.vpp
+
+Procedure CheckPriceUsl;
+{
+   case _Method of
+   //-------------
+     0:// Пересчет суммы в валюте по текущему курсу=ДА
+      {
+       if KatSopr.cVal=0//документ в НДЕ
+          SpSopUsl.VPrice:=SpSopUsl.Price/CursV;
+        else //документ в валюте
+         SpSopUsl.Price:=SpSopUsl.VPrice*CursV;
+      }
+   //-------------
+     10:
+         SpSopUsl.VPrice:=SpSopUsl.Price/CursV;
+   //-------------
+     20:
+         SpSopUsl.Price:=SpSopUsl.VPrice*CursV;
+   //-------------
+     1 //не пересчитывать "Пересчет суммы в валюте по текущему курсу= НЕТ"
+   , 11
+   , 21:{}//не пересчитывать "Пересчет суммы в валюте по текущему курсу= по запросу"
+   //-------------
+   end
+}
+
+procedure FSRoundPriceUSL;
+{
+//округление цены при включенной настройке
+  SpSopUSL.Price:=FSRoundRub(SpSopUSL.Price);
+  SpSopUSL.VPrice:=FSRoundVal(SpSopUSL.VPrice);
+  SpSopUSL.rPrice:=SpSopUSL.Price;
+  SpSopUSL.rVPrice:=SpSopUSL.VPrice;
+}
+
+procedure CalcSumNalogsSopUsl;
+{
+  SPSOPUSL.SumNDS := 0;
+  SPSOPUSL.SumVNDS := 0;
+   _LOOP SpDocNalSopUsl
+      if (SpDocNalSopUsl.cOrg = KatSopr.cOrgBase)
+        {
+          SPSOPUSL.SumNDS := SPSOPUSL.SumNDS +SpDocNalSopUsl.Summa;
+          SPSOPUSL.SumVNDS := SPSOPUSL.SumVNDS + SpDocNalSopUsl.SumVal;
+        }
+}
+
+Function SSopUslInDO(pPRMC : word; pcMcUSL : comp) : double;
+{
+  SSopUslInDO  :=0;
+  _LOOP SpStep where((KatSopr.cStepDoc == SpStep.cStepDoc and
+                      pPRMC            == SpStep.PrMc     and
+                      pcMcUsl          == SpStep.cMcUSL ))
+    SSopUslInDO := SSopUslInDO + SpStep.Summa//пир103.1371+if(BaseDoc.VhodNal = 1, 0, SpStep.Nds);
+}
+
+Function STovInDO : double;
+{
+  STovInDO   :=0;
+  _LOOP SpStep where((KatSopr.cStepDoc == SpStep.cStepDoc and
+                     word(1)          == SpStep.PrMc  ))
+    STovInDO := STovInDO + SpStep.Summa//пир103.1371+if(BaseDoc.VhodNal = 1, 0, SpStep.Nds);
+}
+
+procedure RecalcAllSpSopr;
+var
+  MassaTov, MassaTara : double;
+  pGetDocSpecInfo : GetDocSpecInfo;
+  bCalcTara: boolean;
+{
+    KatSopr.Summa  := 0;
+    KatSopr.SumVal := 0;
+    KatSopr.sNalogs  := 0;
+    KatSopr.svNalogs := 0;
+    bCalcTara := boGetTune('Oper.Netto&Tara_AutoCalc');
+    if (bCalcTara)
+      {
+        KatSopr.Netto := 0;
+        KatSopr.mTara := 0;
+      }
+   _LOOP SpSopr1
+     {
+       KatSopr.sNalogs := KatSopr.sNalogs + SpSopr1.SumNDS;
+       KatSopr.svNalogs := KatSopr.svNalogs + SpSopr1.SumVNDS;
+
+       if (SpSopr1.prmc = 1)
+         {
+           if (bCalcTara)
+           {
+             pGetDocSpecInfo.GetOneSpecInfo(coKatSopr, SpSopr1.nRec, MassaTov, MassaTara);
+             KatSopr.Netto := KatSopr.Netto + MassaTov;
+             KatSopr.mTara := KatSopr.mTara + MassaTara;
+           }
+           KatSopr.Summa := KatSopr.Summa + SpSopr1.Price * SpSopr1.KolOpl;
+           KatSopr.SumVal := KatSopr.SumVal + SpSopr1.VPrice * SpSopr1.KolOpl;
+         }
+       else
+         {
+           KatSopr.Summa := KatSopr.Summa + SpSopr1.Price ;
+           KatSopr.SumVal := KatSopr.SumVal + SpSopr1.VPrice ;
+         }
+
+     }
+
+    if (KatSopr.VhodNal <> 1)
+      {
+        KatSopr.Summa := (KatSopr.Summa + KatSopr.sNalogs);
+        KatSopr.SumVal := (KatSopr.SumVal + KatSopr.svNalogs);
+      }
+
+}
+
+procedure MakeSpSopUsl(PrMC:word);
+{
+  case PrMC of
+    3:
+     {
+        if (KatSopr.cVal = 0)
+          SpSopUsl.Price := KatSopr.Summa*SpSopUSL.Kol/100;
+        else
+          SpSopUsl.VPrice := KatSopr.SumVal*SpSopUSL.kol/100;
+
+        CheckPriceUSL;//пересчет стоимости
+        FSRoundPriceUSL;//округление стоимости по настройкам
+
+        case KatSopr.VidSopr of
+          600..606:
+          {
+            SpSopUsl.SumNDS  := 0;
+            SpSopUsl.SumVNDS := 0;
+
+            Delete All SpDocNalSopUsl where (( KatSopr.VidSopr == SpDocNalSopUsl.TipDoc  and
+                                               SpSopUsl.NRec   == SpDocNalSopUsl.cSpDoc ));
+          }
+          else
+            if (SpSopUsl.ManualTax = 0)
+            {
+               Update Current SpSopUsl;
+
+               RunInterface(iRecalcSpSopUslNalogs, SpSopUsl.NRec, KatUsl.cGrNal, 0, KatSopr.buffer,
+                                                       SpSopUsl.SumNDS, SpSopUsl.SumVNDS);
+            }
+            else
+              CalcSumNalogsSopUsl;
+        end;
+
+        SpSopUsl.KolFact := If (SpSopUSL.kol<>0, 1, 0);
+        SpSopUsl.KolOpl  := If (SpSopUSL.kol<>0, 1, 0);
+
+     }
+     4, 5, 6, 7:
+     {
+        if (( KatSopr.VidSopr = 101 ) or ( KatSopr.VidSopr = 108 ))
+          if boGetTune('Doc.Buy.RasprSopUsl')
+           if (KatSopr.cStepDoc <> 0)
+        {
+          if (KatSopr.cVal = 0)
+             spsopusl.Price:= KatSopr.Summa*SSopUslInDO(SpSopUsl.PrMC,SpSopUsl.cMcUsl)/STovInDO;
+          else
+            spsopusl.VPrice:= KatSopr.SumVal*SSopUslInDO(SpSopUsl.PrMC,SpSopUsl.cMcUsl)/STovInDO;
+        }
+
+        CheckPriceUSL;//пересчет стоимости
+        FSRoundPriceUSL;//округление стоимости по настройкам
+
+        case KatSopr.VidSopr of
+          600..606:
+          {
+            SpSopUsl.SumNDS  := 0;
+            SpSopUsl.SumVNDS := 0;
+
+            Delete All SpDocNalSopUsl where (( KatSopr.VidSopr == SpDocNalSopUsl.TipDoc  and
+                                               SpSopUsl.NRec   == SpDocNalSopUsl.cSpDoc ));
+          }
+          else
+            if (SpSopUsl.ManualTax = 0)
+            {
+              Update Current SpSopUsl;
+
+              RunInterface(iRecalcSpSopUslNalogs, SpSopUsl.NRec, KatUsl.cGrNal, 0, KatSopr.buffer,
+                                                  SpSopUsl.SumNDS, SpSopUsl.SumVNDS);
+            }
+            else
+              CalcSumNalogsSopUsl;
+        end;
+
+        SpSopUsl.Kol:=0;
+
+        if (KatSopr.cVal = 0)
+          If (KatSopr.Summa<>0)
+            SpSopUsl.Kol :=SpSopUsl.Price/KatSopr.Summa*100;
+
+        if (KatSopr.cVal <> 0)
+          IF (KatSopr.SumVal<>0)
+            SpSopUsl.Kol :=SpSopUsl.VPrice/KatSopr.SumVal*100;
+
+        if SpSopUSL.kol<>0
+        {
+           SpSopUsl.KolFact := 1;
+           SpSopUsl.KolOpl  := 1;
+        }
+        else
+        {
+           SpSopUsl.KolFact := 0;
+           SpSopUsl.KolOpl  := 0;
+        }
+      }
+  end;
+}
+
+function CheckSummaProcessUSL:boolean;
+{
+CheckSummaProcessUSL:=false;
+
+var kol,kolopl,kolfact,price,vprice,SumNDS,SumVNDS:double;
+
+    kol:=spsopusl.Kol; kolopl:=spsopusl.KolOpl; kolfact:=spsopusl.KolFact;
+    price:=spsopusl.Price; vprice:=spsopusl.vPrice;
+    SumNDS:=spsopusl.SumNDS; SumVNDS:=spsopusl.SumVNDS;
+
+    MakeSpSopUsl(spsopusl.prmc);
+
+IF  kol<>spsopusl.Kol or kolopl<>spsopusl.KolOpl or kolfact<>spsopusl.KolFact or
+    price<>spsopusl.Price or vprice<>spsopusl.vPrice or
+    SumNDS<>spsopusl.SumNDS or SumVNDS<>spsopusl.SumVNDS
+    CheckSummaProcessUSL:=true;
+}
+
+procedure RecalcSpSopr;
+var
+  SoprUslTara: boolean;
+  KodGrMcTara: string;
+{
+   KatSopr.Summa := 0;
+   KatSopr.SumVal := 0;
+   SoprUslTara := boGetTune('Oper.SoprUslTara');
+   KodGrMcTara := sGetTune('Tara.KodGrMcTara');
+
+   PushPos(#SpSopr);
+  _LOOP SpSopr
+   {
+     if not (SoprUslTara)
+      if (KodGrMcTara <> '')
+       if (KatMC.kGroupMC = KodGrMcTara)
+         continue;
+
+      KatSopr.Summa  := KatSopr.Summa  + SpSopr.Price  * SpSopr.KolOpl;
+      KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+   }
+   PopPos(#SpSopr);
+}
+
+//рассчитать суммы для налогового учета в тек.позиции SpSopr-a
+//цены для налогового учета по МЦ рассчитываются после услуг
+Procedure CalcSumForNalUch1;
+var
+  sumNal  : double;
+  vsumNal : double;
+{
+ if (isNalUch)
+ {
+   //все проверки выполняются в интерфейсе
+   RunInterface(ViewNalUch, SpSopr.nRec, sumNal, vsumNal, false);
+   SpSopr.priceN  := sumNal  / SpSopr.kolFact;
+   SpSopr.vPriceN := vsumNal / SpSopr.kolFact;
+   update current SpSopr;
+ }
+}
+
+//рассчитать суммы для налогового учета в тек.позиции SpSopUsl-a
+Procedure CalcSumForNalUch2;
+var
+  sumNal   : double;
+  vsumNal  : double;
+{
+ if (isNalUch)
+ {
+   //все проверки выполняются в интерфейсе
+   RunInterface(ViewNalUch, SpSopUsl.nRec, sumNal, vsumNal, false);
+   SpSopUsl.priceN := sumNal  / SpSopUsl.kolFact;
+   SpSopUsl.vPriceN:= vsumNal / SpSopUsl.kolFact;
+   update current SpSopUsl;
+ }
+}
+
+function _recalcsumm(full:boolean): boolean; //FLAG для совместимости со старой версией
+{
+_recalcsumm := false;
+
+//по всему документу
+IF (full)
+{
+  StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,
+                 ''#3'Пересчет спецификации документа',1);
+
+ _loop SpSopr
+  {
+    if not NextVisual break;
+    If (CheckSummaProcess)
+    {
+      if update current SpSopr <>tsOk{};
+    }
+  }
+
+  RecalcSpSopr;//сумма позиций МЦ без услуг
+
+  var isRecalcForNalUch: boolean;
+  isRecalcForNalUch := false;
+
+  //---для услуг---
+  _loop spsopusl// where((KatSopr.Nrec == spsopusl.csopr))
+  {
+    if not NextVisual break;
+    If CheckSummaProcessUSL
+    {
+      if update current spsopusl<> tsok{};
+    }
+    //---налоговый учет---
+    if (isNalUch)
+     if (SpSopUsl.cMCUsl <> 0)
+      if (KatUsl.nalUch = 1)  //услуга входит в налоговый учет
+      {
+        CalcSumForNalUch2;
+        isRecalcForNalUch := true;
+      }
+  }
+
+  //в сумму по МЦ для нал.учета включается соп.услуга
+  if (isRecalcForNalUch)
+  {
+     RestartVisual (''#3'Пересчет сумм для налогового учета',1);
+     _loop SpSopr
+     {
+       if not NextVisual break;
+       CalcSumForNalUch1;
+     }
+   }
+
+StopVisual('',0);
+}
+ELSE //по позиции
+{
+  if GetFirst SpSopr where ((_pSpSopr == SpSopr.NRec)) <> tsOk
+    Exit;
+
+  if (_pSpSopUsl <> 0)
+  {
+   if GetFirst SpSopUsl where ((_pSpSopUsl == SpSopUsl.NRec)) = tsOk
+   {
+     RecalcSpSopr;//сумма позиций МЦ без услуг
+
+     If CheckSummaProcessUSL
+     {
+       if update current spsopusl<> tsok{};
+     }
+     //---налоговый учет---
+     CalcSumForNalUch2;
+   }
+  }
+  else
+  {
+    if (SpSopr.PrMC = 1 and SpSopr.cMCUsl <> 0) and UKS_Used
+     if (GetFirst KatStroy where ((SpSopr.cMCUsl == KatStroy.cMC)) = tsOk)
+       if (SpSopr.KolFact <> 1)
+       {
+         Message('МЦ соответствует объекту строительства !'+chr(13)+
+                  chr(13)+'Количество может быть равно только 1 !', Information);
+         SpSopr.KolFact := 1;
+       }
+
+  If (CheckSummaProcess)
+  {
+    if update current SpSopr <>tsOk{}
+  }
+
+  RecalcSpSopr;//сумма позиций МЦ без услуг
+
+ _loop spsopusl //where((KatSopr.Nrec == spsopusl.csopr))
+    {
+     If CheckSummaProcessUSL
+       if update current spsopusl<> tsok{};
+
+     CalcSumForNalUch2;
+    }
+
+  CalcSumForNalUch1;
+ }
+}//not full
+
+ RecalcAllSpSopr;
+_recalcsumm := true;
+}
+
+
+Function CheckZapret:boolean;
+ var bul:boolean;
+{
+  CheckZapret:=false;
+  IF readmydsk(bul,'__CheckSumma__',false)
+    CheckZapret:=bul;
+}
+
+function CheckSumma(full:boolean): boolean;
+{
+  CheckSumma := false;
+
+  case KatSopr.VidSopr of
+    101,//Накладная на прием МЦ
+    102,//Накладная на возврат МЦ от консигнатора
+    103,//Накладная на прием МЦ от консигнанта
+    108://Накладная на прием молочного сырья
+     {
+       IF CheckZapret Exit;
+     }
+  end;
+
+  CheckSumma := _RecalcSumm(full);
+
+  Update_Current_KatSopr;
+}
+
+Function MakeSopUslFromDO: boolean;
+{
+  MakeSopUslFromDO := false;
+  If ( (KatSopr.VidSopr<>101) and (KatSopr.VidSopr<>108) )
+    Exit;
+  if (not boGetTune('Doc.Buy.RasprSopUsl'))
+  or (KatSopr.cStepDoc = 0)
+    Exit;
+
+  RecalcSpSopr;//сумма позиций МЦ без услуг
+
+  pushpos(#spsopusl);
+  _loop spsopusl //where((KatSopr.Nrec == spsopusl.csopr))
+    If CheckSummaProcessUSL
+      if update current spsopusl<> tsok{};
+  poppos(#spsopusl);
+
+  RecalcAllSpSopr;
+
+  Update_Current_KatSopr;
+
+  MakeSopUslFromDO := true;
+}
+
+Handleevent
+cmInit:
+{
+  NastrRoundPrice       := wGetTune('Doc.Buy.RoundPrice');
+  DocTuneNDS            := boGetTune('Doc.TuneNDS');
+  isNalogFromSpStep     := boGetTune('Doc.iNalogsFromSpStep');
+  isDocFactoryPrice     := boGetTune('DOC.FACTORYPRICE');
+  wReCalcPriceByFactory := if (isDocFactoryPrice, wGetTune('Oper.Buy.Nakl.ReCalcPriceByFactory'), 0);
+  OperSellNaklCalcGrM   := FALSE;
+  isSavePriceRef        := TRUE;
+
+  case KatSopr.VidSopr of
+    101,//Накладная на прием МЦ
+    102,//Накладная на возврат МЦ от консигнатора
+    103,//Накладная на прием МЦ от консигнанта
+    108://Накладная на прием молочного сырья
+      isNalUch := boGetTune('Oper.NalUch')
+    else
+      isNalUch := false;
+  end;
+  CursV   := GetCursPrice;
+  _result := if (_MSUOnly, MakeSopUslFromDO, CheckSumma(_pSpSopr = 0));
+  abort;
+}
+end;
+End.

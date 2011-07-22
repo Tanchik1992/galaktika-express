@@ -1,0 +1,602 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Просмотр и редактирование составляющих комплектной МЦ в спецификации договоров
+//********************************************************************************
+
+#include oEdIzm.vih
+#include xlReport.Vih  // Excel
+
+#doc
+Просмотр и редактирование составляющих комплектной МЦ в спецификации договоров
+#end
+Interface ComplMcSpec 'Составляющие комплектной МЦ'
+                     ('Составляющие комплектной МЦ', hcBSTO_Win_Sost_KomplMC, sci18Esc) EscClose;
+Show at (, , 100, 14);
+
+#include NDSComp.gd   // Временная таблица для расчета сумм НДС элементов комптектного МЦ
+#include NDSComp.defs // Макрос для расчета сумм НДС элементов комптектного МЦ
+#include oEdIzm.var
+
+Create view
+Var
+//**********************
+  CanEdit
+          : boolean;
+  pParam
+          : word;
+//**********************
+  pNRecSpDocs
+, CurGroup
+, cPers
+          : comp;
+//**********************
+  s_SimvRub
+, tmpN
+, Pers_FIO 
+, Pers_Post
+, ID
+, sXLTFileName
+, sXLSFileName
+          : string;
+//**********************
+  pXL     : XLSRepBuilder;   // Excel
+//**********************
+
+As select
+//******************************************************************************
+  if (isValid(tnKatMC), KatMC.Name, ' ')
+    ( FieldName = NamePos )
+//******************************************************************************
+, if (isValid(tnKatMC), KatMC.BarKod, ' ')
+    ( FieldName = BarKodPos )
+//******************************************************************************
+, if (SpDocs.cVal = 0,
+    if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+    ( FieldName = Valut )
+//******************************************************************************
+, if(SpDocs.cOtpEd = 0, KatEd.Name, if (wGetTune('Doc.BrAbbrEd')=0, KatOtpEd.ABBR, KatOtpEd.Name))
+    ( FieldName = OtpEd )
+//******************************************************************************
+, if (SpDocs2.cOtpEd = Comp(0), KatEdCompl.Name, KatOtpEdCompl.ABBR)
+    (FieldName = OtpEdCompl)
+//******************************************************************************
+
+From
+  SpDocs(SpDocs02)
+, SpDocs SpDocs1
+, SpDocs SpDocs2
+, Dogovor
+, CalPlan
+, KatMC
+, KatMC KatMC2
+, GroupMC
+, Pick
+, KatOtpEd
+, KatOtpEd KatOtpEd2
+, KatEd
+, KlVal
+, SpMC
+, AttrNam AttrNamP
+, AttrVal AttrValP
+, KatMC KatMCCompl
+, KatEd KatEdCompl
+, KatOtpEd KatOtpEdCompl
+, SpMC SpMC_Curr
+, Persons
+, Appointments
+, Catalogs
+, AttrNam AttrNam_Curr
+, AttrVal AttrVal_Curr
+, tmpNDSComp (tmpNDSComp01)
+, tmpNDSComp tmpNDSComp_Sp
+Where
+((
+//***********************************
+    word(438)       ==  SpDocs.TiDk
+AND pNRecSpDocs     ==  SpDocs.cDoc
+AND pNRecSpDocs     ==  SpDocs2.nRec
+AND SpDocs2.cDoc    ==  Dogovor.nRec
+AND SpDocs2.cDoc    ==  CalPlan.nRec
+AND SpDocs2.cMCUsl  ==  KatMCCompl.NRec
+AND KatMCCompl.cEd  ==  KatEdCompl.NRec
+AND SpDocs2.cOtpEd  ==  KatOtpEdCompl.NRec
+//***********************************
+AND SpDocs.cMCUsl   ==  KatMC.nRec
+AND KatMC.cEd       ==  KatEd.NRec
+AND SpDocs.cOtpEd   ==  KatOtpEd.nRec
+AND SpDocs.cVal     ==  KlVal.nRec
+AND SpDocs.NRec     ==  tmpNDSComp_Sp.cSpDocs
+//***********************************
+AND SpDocs2.cMCUsl  ==  SpMC_Curr.cMCkompl
+AND SpDocs.cMCUsl   ==  SpMC_Curr.cMC
+
+AND coKatMC            == AttrNam_Curr.wTable
+AND '% стоимости'      == AttrNam_Curr.Name
+AND coSpMC             == AttrVal_Curr.wTable
+AND SpMC_Curr.NRec     == AttrVal_Curr.cRec
+AND AttrNam_Curr.NRec  == AttrVal_Curr.cAttrNam
+//***********************************
+AND SpDocs2.cMCUsl  ==  SpMC.cMCkompl
+AND SpMC.cMC        ==  KatMC2.nRec
+AND word(1)         ==  KatOtpEd2.Akt
+AND KatMC2.nRec     ==  KatOtpEd2.cMCUsl
+AND word(1)         ==  KatOtpEd2.PrMC
+//***********************************
+AND coKatMC         ==  AttrNamP.wTable
+AND '% стоимости'   ==  AttrNamP.Name
+AND coSpMC          ==  AttrValP.wTable
+AND SpMC.NRec       ==  AttrValP.cRec
+AND AttrNamP.NRec   ==  AttrValP.cAttrNam
+//***********************************
+));
+
+Parameters
+  pNRecSpDocs // входной - SpDocs.nRec
+, pParam      // 0 - редактирование составляющих комплента
+              // 1 - печатать отчет
+              // 2 - настройка шаблона
+;
+
+#include rounddog.vpp
+
+//******************************************************************************
+
+Window wiParam 'Параметры отчета' EscClose, DoAccept;
+  Show at (, , 64, 7);
+
+Screen scParam (, , sci1EnEsc);
+  Bevel b1 { 1, 1, 63, 5, bsLowered, bsFrame };
+
+Fields
+  'Уполномоченное лицо отдела комплектации' : Skip, { Font = { Bold = TRUE } };
+  Pers_Post ('Уполномоченное лицо отдела комплектации'   , , sci13Esc) : Protect;
+  Pers_FIO  ('Уполномоченное лицо отдела комплектации'   , , sci13Esc) : Protect;
+
+Buttons
+  cmOK     ,Default, , 'Печать',,sci1Esc;
+  cmCancel ,       , , 'Отмена',,sci1Esc;
+
+<<
+            .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Должность`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Ф.И.О.`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+           <.    Печать    .>     <.    Отмена    .>
+>>
+End; // Screen
+
+Panel p1
+
+HandleEvent
+
+cmPick:
+  {
+    case CurField of
+      #Pers_FIO
+    , #Pers_Post :
+       {
+         if ( RunInterface(GetPers, cPers) <> cmCancel )
+           if ( GetFirst Persons where (( cPers == Persons.nRec )) = tsOk )
+             {
+               set cPers    := Persons.nRec;
+               set Pers_FIO := Persons.FIO;
+
+               if ( GetFirst Appointments where (( Persons.AppointCur == Appointments.nRec )) = tsOk )
+                 {
+                   if ( GetFirst Catalogs where (( Appointments.Post == Catalogs.nRec )) = tsOk )
+                     set Pers_Post := Catalogs.Name
+                   else
+                     set Pers_Post := '';
+                 }
+               else
+                 set Pers_Post := '';
+             }
+       }
+    end;
+  }
+
+cmDelOnProtect:
+  {
+    case CurField of
+      #Pers_FIO
+    , #Pers_Post : 
+       {
+         set cPers := comp(0);
+         set Pers_Post := '';
+         set Pers_FIO  := '';
+       }
+    end;
+  }
+
+end;
+end; // panel p1
+
+HandleEvent // window wiParam
+
+cmInit:
+  {
+    if (NOT ReadMyDSK(cPers, 'ComplMcSpec_cPers', TRUE))
+      cPers := comp(0);
+
+    if (cPers <> comp(0))
+      if ( GetFirst Persons where (( cPers == Persons.nRec )) = tsOk )
+        {
+          Pers_FIO := Persons.FIO;
+
+          if ( GetFirst Appointments where (( Persons.AppointCur == Appointments.nRec )) = tsOk )
+            {
+              if ( GetFirst Catalogs where (( Appointments.Post == Catalogs.nRec )) = tsOk )
+                Pers_Post := Catalogs.Name
+              else
+                Pers_Post := '';
+            }
+          else
+            Pers_Post := '';
+        }
+  }
+
+cmOk:
+  {
+    SaveMyDSK(cPers , 'ComplMcSpec_cPers');
+
+    PutCommand(cmDefault);
+  }
+
+end; // window wiParam
+end;
+
+//******************************************************************************
+
+browse brSpDocs (,, sci18Esc)
+  Show at (,,,)
+Table SpDocs
+;
+Fields
+//**************************************************************************
+  SpDocs.CODE    #3'№'#13#3'п/п'   : [4], Protect, NoAutoSize;
+//**************************************************************************
+  NamePos        #3'Наименование'  : [30], Protect, NoDel;
+//**************************************************************************
+  BarKodPos      #3'Ном.номер' ('Номенклатурный номер / баркод')
+                                   : [10], Protect, NoDel, NoAutoSize;
+//**************************************************************************
+  OtpEd          #3'ЕдИзм'         : [ 5], Skip, NoDel, NoAutoSize;
+//**************************************************************************
+  SpDocs.Kol     #3'Количество'    : [10.3, '\3p[|-]3666`666`666`666.888'], NoProtect, NoAutoSize;
+//**************************************************************************
+  SpDocs.Price   #3'Цена'          : [16.2, '\2p[|-]3666`666`666`666.88'] , NoProtect, NoAutoSize;
+//**************************************************************************
+  SpDocs.Summa   #3'Стоимость'     : [16.2, '\2p[|-]3666`666`666`666.88'] , NoProtect, NoAutoSize;
+//**************************************************************************
+  Valut          #3'Вал.'          : [ 5], Skip, NoAutoSize;
+//**************************************************************************
+end;  //Browse
+
+!-------------- Переформирование спецификации комплекта --------------------------
+
+Procedure InsertComplSpec;
+var
+  Sum0, Sum1 : double;
+{
+  tmpN := '0000';
+  Sum0 := SpDocs2.Price;
+
+  _LOOP SpMC
+    {
+      ClearBuffer(#SpDocs);
+
+      NextNumStr(tmpN);
+
+      SpDocs.CODE     := tmpN;
+      SpDocs.PrMC     := word(1);
+      SpDocs.TiDk     := word(438);
+      SpDocs.cDoc     := pNRecSpDocs;
+      SpDocs.Direct   := SpDocs2.Direct;
+      SpDocs.cVal     := SpDocs2.cVal;
+      SpDocs.cMCUsl   := KatMC2.nRec;
+      SpDocs.cGrMCUsl := KatMC2.cGroupMC;
+
+      if ( GetFirst FastFirstRow KatOtpEd2 = tsOk )
+        SpDocs.cOtpEd := KatOtpEd2.nRec
+      else
+        SpDocs.cOtpEd := KatMC2.cEd;
+
+      Sum1 := 0.01 * AttrValP.vDouble * SpDocs2.Price; // стоимость составляющей в единице комплекта
+
+      SpDocs.Kol      := SpMC.Kol * fEdIzm.GetKoefOtpEd(SpDocs2.cOtpEd);
+      SpDocs.Summa    := DogRound(SpDocs.cVal <> 0, Sum1);
+      SpDocs.Price    := DogRound_P(SpDocs.cVal <> 0, SpDocs.Summa / SpDocs.Kol);
+
+      insert current SpDocs;
+
+      Sum0 := Sum0 - SpDocs.Summa;
+    }
+
+  if (GetLast SpDocs = tsOk)
+    {
+      SpDocs.Summa    := DogRound(SpDocs.cVal <> 0, SpDocs.Summa + Sum0);
+      SpDocs.Price    := DogRound_P(SpDocs.cVal <> 0, SpDocs.Summa / SpDocs.Kol);
+
+      update current SpDocs;
+    }
+}
+
+// Печать ведомости определения учетных цен комплектных МТР
+procedure PrintVedPr;
+var
+  aSumRes, aPercRes, aNDS : Double;
+  Str : String;
+  i   : LongInt;
+{
+  if ( RunWindowModal(wiParam) = cmCancel )
+    Exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Формирование отчета...', 1);
+
+  ID := 'L_Dogovor\VedPr';
+
+  if (not ReadMyDsk(sXLTFileName, ID, True))
+    Set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True); // Создание отчета
+!  Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);    // Создание заготовки шаблона
+
+  pXL.CreateVar(sXLSFileName);
+
+  Str := if (Dogovor.cDogovor = 0, 'договору поставки',
+           if (Dogovor.cZamena = 0, 'уточняющему соглашению', 'отменяющему соглашению'));
+  pXL.SetStringVar('DogovorInfo',
+    'по ' + Str + ' № ' + Dogovor.NoDoc + DateToStr(Dogovor.dDoc, ' от "DD" mon YYYYг.'));
+
+  pXL.SetStringVar('SpInfo', 'спецификация № ' + SpDocs2.Code);
+  pXL.SetStringVar('SignFIO', Pers_FIO);  // ФИО подписывающего документ. Должен выбираться из каталога сотрудников.
+  pXL.SetStringVar('SignPos', Pers_Post);
+  pXL.SetDateVar('RepDate', Cur_Date);
+  pXL.PublishVar;
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('SpDocs');
+
+  pXL.CreateTblFld('NPP');
+  pXL.CreateTblFld('Name_MTP');
+  pXL.CreateTblFld('Kod_MTP');
+  pXL.CreateTblFld('TotalSumms');
+  pXL.CreateTblFld('PartElem_TotalSumms');
+  pXL.CreateTblFld('EdIzm');
+  pXL.CreateTblFld('Kol');
+  pXL.CreateTblFld('PriceElem');
+  pXL.CreateTblFld('SummaElem');
+
+  // Вывод информациио комплектном МТР
+  pXL.ClearTblBuffer;
+  pXL.SetTblStringFldValue('Name_MTP',   KatMCCompl.Name);
+  pXL.SetTblStringFldValue('Kod_MTP',    KatMCCompl.BarKod);
+  pXL.SetTblNumberFldValue('TotalSumms', SpDocs2.Price);
+  pXL.SetTblStringFldValue('EdIzm',      OtpEdCompl);
+  pXL.InsTblRow;
+
+  PushPos(#SpDocs);
+  aSumRes  := 0;
+  aPercRes := 0;
+  i        := 0;
+
+  // Расчет сумм НДС элементов комптектного МЦ
+  #CalcNDSForElement_ComplMC(SpDocs, SpDocs2.SumNDS, SpDocs2.Kol, SpDocs2.Summa, SpDocs2.cVal)
+
+  // Печать спецификации
+  _loop SpDocs
+  {
+    i  := i + 1;
+
+    pXL.ClearTblBuffer;
+
+    pXL.SetTblNumberFldValue('NPP',        i);
+    pXL.SetTblStringFldValue('Name_MTP',   NamePos);
+    pXL.SetTblStringFldValue('Kod_MTP',    BarKodPos);
+
+    // Если в валюте, то надо перевести в рубли
+    pXL.SetTblNumberFldValue('TotalSumms', SpDocs.Summa);
+    pXL.SetTblNumberFldValue('PartElem_TotalSumms', AttrVal_Curr.vDouble);
+    pXL.SetTblStringFldValue('EdIzm',      OtpEd);
+    pXL.SetTblNumberFldValue('Kol',        SpDocs.Kol);
+    pXL.SetTblNumberFldValue('PriceElem',  SpDocs.Price);
+
+    // Учетная стоимость без НДС.
+    aNDS := if (IsValid(#tmpNDSComp_Sp), tmpNDSComp_Sp.SumNDS, 0);
+
+    pXL.SetTblNumberFldValue('SummaElem',  if (Dogovor.VhodNal = 1, SpDocs.Summa - aNDS, SpDocs.Summa));
+
+    pXL.InsTblRow;
+
+    aSumRes  := aSumRes  + SpDocs.Summa;
+    aPercRes := aPercRes + AttrVal_Curr.vDouble;
+  } // _loop SpDocs
+
+  PopPos(#SpDocs);
+  RereadRecord(#SpDocs);
+
+  // Вывод итоговых сумм
+  pXL.ClearTblBuffer;
+
+  pXL.SetTblStringFldValue('Name_MTP',            'Итого по МТР');
+  pXL.SetTblNumberFldValue('TotalSumms',          aSumRes);
+  pXL.SetTblNumberFldValue('PartElem_TotalSumms', aPercRes);
+  pXL.InsTblRow;
+
+  pXL.PublishTbl('SpDocs');
+  pXL.LoadReport(sXLSFileName);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+}
+
+!-------------------------------------------------------------------------------
+
+HandleEvent  //browse brSpDocs
+
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    CanEdit := TRUE;
+
+    case SpDocs2.TiDk of
+    //******************
+      400, 401:
+        CanEdit := (Dogovor.Status = 0);
+    //******************
+      403:
+        CanEdit := (CalPlan.Status = 0);
+    //******************
+    end;
+
+    SetFieldSelectable(#SpDocs.Kol,   CanEdit);
+    SetFieldSelectable(#SpDocs.Price, CanEdit);
+    SetFieldSelectable(#SpDocs.Summa, CanEdit);
+
+    if ( GetFirst SpDocs <> tsOk )
+      {
+        if CanEdit
+          InsertComplSpec
+        else
+          {
+            Message('Составляющие комплекта отсутствуют.', Information);
+
+            Abort;
+            Exit;
+          }
+      }
+
+    if ( GetFirst SpDocs <> tsOk )
+      {
+        if (Message('Составляющие комплекта отсутствуют.'#13#13
+                  + 'Перейти в окно редактирования МЦ?', Confirmation + YesNo ) <> cmYes)
+          {
+            Abort;
+            Exit;
+          }
+        else
+          {
+            RunInterface('KatMC', SpDocs2.cMCUsl, comp(0));
+
+            RereadRecord(#SpDocs2);
+
+            if CanEdit
+              InsertComplSpec;
+
+            if ( GetFirst SpDocs <> tsOk )
+              {
+                Abort;
+                Exit;
+              }
+          }
+      }
+
+    RereadRecord(#SpDocs);
+
+    case pParam of
+    1 : {
+          Abort;
+          PrintVedPr;
+        }
+    2 : {
+          Abort;
+
+          ID := 'L_Dogovor\VedPr';
+
+          if (not ReadMyDsk(sXLTFileName, ID, True))
+            Set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+          RunInterface('xlRepSetup', 1, ID, sXLTFileName);
+          SaveMyDsk(sXLTFileName, ID);
+        }
+    end; //case
+  }
+
+end; // HandleEvent Browse brSpDocs
+
+!-----------Обработка событий таблицы SpDocs------------------------------------
+Panel paSpDog
+  Table SpDocs;
+
+HandleEvent // Panel paSpDog
+
+cmDelOnProtect:
+  Abort;
+
+cmDeleteRecord:
+  {
+    if CanEdit
+      if ( Message('Удалить составляющую комплекта?', YesNo + mfSwapButtons) = Yes )
+        {
+          delete current SpDocs;
+
+          //--- перенумерация спецификации-------------------------------------------
+          tmpN := '0000';
+          _LOOP SpDocs1 where (( word(438)   == SpDocs1.TiDk AND
+                                 pNRecSpDocs == SpDocs1.cDoc )) ordered by index SpDocs02
+            {
+              NextNumStr(tmpN);
+              SpDocs1.Code := tmpN;
+              update current SpDocs1;
+            }
+
+          RescanPanel(#SpDocs);
+        }
+  }
+
+end; // HandeEvent Panel paSpDog;
+
+end; // Panel paSpDog;
+
+HandleEvent
+
+cmHotKeys:
+  {
+    SetCommandEnabled(cmValue1, CanEdit);
+
+    PutHotCommand(RunMenu('mnuComplMcSpec'));
+  }
+cmValue1:
+  {
+    delete SpDocs where ((word(438)   == SpDocs.TiDk AND
+                          pNRecSpDocs == SpDocs.cDoc));
+
+    InsertComplSpec;
+
+    RereadRecord(#SpDocs);
+  }
+
+cmPrintDoc :
+  PrintVedPr;
+
+cmValue2 :
+{
+  ID := 'L_Dogovor\VedPr';
+
+  if (not ReadMyDsk(sXLTFileName, ID, True))
+    Set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  RunInterface('xlRepSetup', 1, ID, sXLTFileName);
+  SaveMyDsk(sXLTFileName, ID);
+}
+
+end;
+
+End. // Interface
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::ComplMcSpec>L_Dogovor::ComplMcSpec - Спецификация комплектной МЦ</link>
+#end
+mnuComplMcSpec Menu
+{
+- 'Переформировать спецификацию комплектной МЦ', cmValue1, 'Переформирование спецификации комплектной МЦ'  , , '', , sci1Esc;
+= 'Ведомость учетных цен комплектных МТР', 'Печать ведомости определения учетных цен комплектных МТР',, sci1Esc;
+  {
+    - 'Печать',    cmPrintDoc,,, 'Ctrl+P', kbCtrlP, sci1Esc;
+    - 'Настройка', cmValue2,,,,, sci1Esc;
+  }
+}

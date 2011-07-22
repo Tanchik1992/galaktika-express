@@ -1,0 +1,475 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Импорт весов вагонов
+//******************************************************************************
+
+#ifndef _IMPVAG_VPP
+#define _IMPVAG_VPP
+
+#include SDfuns.var
+
+Var
+  OkFileDlg   : boolean;
+  VesAuto     : word;
+
+#INCLUDE g_date.vpp
+
+window winFile 'Выбор файлов с результатами взвешивания вагонов'
+  escclose,
+  gray
+  ;
+  show at (5,7,65,14);
+Panel panFile;
+screen scrFile (,,sci1Esc);
+fields
+  FStr1       ('Имя и путь файла взвешивания пустого состава .DBF',,sci13Esc):PickButton ;
+  FStr2       ('Имя и путь файл взвешивания груженого состава .DBF',,sci13Esc):PickButton ;
+
+Buttons
+  cmValue1,Default,,'Сформировать ',,sci1EnEsc;
+  cmCancel,,,'Отказ от формирования ',,sci1Esc;
+
+<<
+ `Файл взвешивания пустого состава .DBF`
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Файл взвешивания груженого состава .DBF`
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+    <.Продолжить.>        <.Отмена.>
+
+>>
+end; // screen
+HandleEvent
+cmPick:
+  { var TmpStr : string;
+    case (curfield) of
+      #FStr1:
+        {
+          TmpStr := ImportSDHandler(cmValue1,0,'');
+          if (TmpStr <> '')
+            {
+              FStr1        := TmpStr;
+            }
+        }
+      #FStr2:
+        {
+          TmpStr := ImportSDHandler(cmValue1,0,'');
+          if (TmpStr <> '')
+            {
+              FStr2        := TmpStr;
+            }
+        }
+    end;
+  }
+end;
+end; // panel
+HandleEvent
+cmValue1:
+  {
+    OkFileDlg := true;
+    CloseWindow(winFile);
+  }
+cmInit:{
+          ReadMyDSK( FStr1, 'RoadForShternCement1', TRUE);
+          ReadMyDSK( FStr2, 'RoadForShternCement2', TRUE);
+       }
+cmDone:{
+      SaveMyDsk(FStr1, 'RoadForShternCement1');
+      SaveMyDsk(FStr2, 'RoadForShternCement2');
+       }
+end;
+end; // window
+
+procedure SHT_CE_ReSetBounds ;
+  {
+  ReSetBounds (#KatSopr);
+  ReSetBounds (#SpSopr);
+  ReSetBounds (#KatMC);
+  ReSetBounds (#Pick);
+  }
+procedure SHT_CE_SetBounds ;
+  {
+  SetBounds (#KatSopr);
+  SetBounds (#SpSopr);
+  SetBounds (#KatMC);
+  SetBounds (#Pick);
+  }
+
+procedure PrintProtocol(pStr:string);
+{
+  frmProt.Write(pStr);
+}
+
+procedure makeTmpCollect;
+var ret : word;
+var pickrec: comp;
+var MarkerCount,i:longint;
+{
+  delete ALL NoNalMC;
+  delete ALL ValCap;
+   MarkerCount:=GetMarkerCount(MarkerNZ);
+    if (MarkerCount=0){
+          pickrec := KatSopr.NRec;
+          MarkerCount:=1;
+          }
+   FOR ( i:=0; i<MarkerCount; i:=i+1 )
+    {
+      if (GetMarkerCount(MarkerNZ)<>0)
+         GetMarker(MarkerNZ,i,pickrec);
+
+      ret := GetFirst KatSopr where ((pickrec == KatSopr.NRec));
+      if (ret <> tsOk) continue;
+      _LOOP SpSopr where ((KatSopr.NRec==SpSopr.cSopr))
+       if (SpSopr.PrMC = 1)
+        {
+          ClearBuffer(#NoNalMC);
+          NoNalMC.cDoc   := KatSopr.NRec;
+          NoNalMC.cSpDoc := SpSopr.NRec;
+          NoNalMC.Name   := SpSopr.nVagon;
+          insert current NoNalMC;
+        }//end for
+    } //end FOR
+}
+
+procedure CheckAfter;
+var ret : word;
+{
+  PushPos(#KatSopr);
+  PushPos(#SpSopr);
+  PrintProtocol('');
+  PrintProtocol('-------------------------------------------------------------------------------------');
+  PrintProtocol('№ накладной'+'|'+'Дата накл.'+'|'+' № вагона '+'|'+'    Вес     '+'|'+'    Вес     '+'|'+'    Вес     '+'|'+'    Вес     ' );
+  PrintProtocol('           '+'|'+'          '+'|'+'          '+'|'+'по документу'+'|'+'груж.вагона '+'|'+'пустого ваг.'+'|'+'фактический ' );
+  PrintProtocol('-------------------------------------------------------------------------------------');
+  _LOOP NoNalMC
+    {
+       ret := GetFirst KatSopr where ((NoNalMC.cDoc == KatSopr.NRec));
+       if (ret = tsOk)
+         {
+           ret := GetFirst SpSopr where ((NoNalMC.cSpDoc == SpSopr.NRec));
+           if (ret = tsOk)
+             {
+               if ((NoNalMC.cMC = 0) and (NoNalMC.cPodr = 0))
+                 {
+                   PrintProtocol(Pad(KatSopr.NSopr,11)+' '+DateToStr(KatSopr.dSopr,'DD/MM/YYYY')+
+                                 ' '+Pad(SpSopr.nVagon,10)+'            '+' '+' не найден  '+' '+' не найден  ');
+
+                 }
+               else
+                 {
+                   if (NoNalMC.cMC = 0)
+                     {
+                       PrintProtocol(Pad(KatSopr.NSopr,11)+' '+DateToStr(KatSopr.dSopr,'DD/MM/YYYY')+
+                                 ' '+Pad(SpSopr.nVagon,10)+'            '+' '+'            '+' '+' не найден  ');
+                     }
+                   if (NoNalMC.cPodr = 0)
+                     {
+                       PrintProtocol(Pad(KatSopr.NSopr,11)+' '+DateToStr(KatSopr.dSopr,'DD/MM/YYYY')+
+                                 ' '+Pad(SpSopr.nVagon,10)+'            '+' '+' не найден  '+' '+'            ');
+                     }
+                 }
+               if ((NoNalMC.cPodr <> 0) and (NoNalMC.cMC <> 0))
+                 {
+                    PrintProtocol(Pad(KatSopr.NSopr,11)+' '+DateToStr(KatSopr.dSopr,'DD/MM/YYYY')+
+                                  ' '+Pad(SpSopr.nVagon,10)+' '+LPad(string(NoNalMC.Res),12)+
+                                  ' '+LPad(string(NoNalMC.Nal),12)+' '+LPad(string(SpSopr.mTara),12)+
+                                  ' '+LPad(string(SpSopr.KolFact),12));
+                 }
+             }
+         }
+    }
+  PopPos(#KatSopr);
+  PopPos(#SpSopr);
+}
+
+function ImportTaraToTmp(pNvag:string;pVes:double):boolean;
+var ret : word;
+{
+  ret := GetFirst ValCap where ((pNVag == ValCap.nVal));
+  if (ret = tsOk)
+    {
+      ValCap.Prih := pVes;
+      ret := update current ValCap;
+    }
+  else
+    {
+      ValCap.cVal := 0;
+      ValCap.nVal := pNVag;
+      ValCap.Prih := pVes;
+      ValCap.Rash := 0.0;
+      ValCap.sVal := '';
+      ret := insert current ValCap;
+    }
+  ImportTaraToTmp := true;
+}
+function ImportBruttoToTmp(pNvag:string;pVes:double):boolean;
+var ret : word;
+{
+  ret := GetFirst ValCap where ((pNVag == ValCap.nVal));
+  if (ret = tsOk)
+    {
+      ValCap.Rash := pVes;
+      ret := update current ValCap;
+    }
+  else
+    {
+      ValCap.cVal := 0;
+      ValCap.nVal := pNVag;
+      ValCap.Prih := 0.0;
+      ValCap.Rash := pVes;
+      ValCap.sVal := '';
+      ret := insert current ValCap;
+    }
+  ImportBruttoToTmp := true;
+}
+
+function IsFilesReversed:boolean;
+{
+  IsFilesReversed := false;
+  _LOOP ValCap ordered by index ValCap02
+    if ((ValCap.Prih <> 0) and (ValCap.Rash <> 0))
+      {
+        if (ValCap.Prih > ValCap.Rash)
+          IsFilesReversed := true;
+        exit;
+      }
+}
+
+function ImportTmpToSopr(isReverseFiles:boolean):boolean;
+var ret : word;
+    myNetto,
+    myBrutto,
+    myTara        : double;
+{
+  StartNewVisual(vtNumericVisual,vfTimer,
+        ''#3'Импорт'#13#3,1);
+  ImportTmpToSopr := true;
+  _LOOP ValCap ordered by index ValCap02
+    {
+      NextVisual;
+      ret := GetFirst NoNalMC where ((ValCap.nVal == NoNalMC.Name));
+      if (ret = tsOk)
+        {
+          SHT_CE_SetBounds;
+          ret := GetFirst SpSopr where ((NoNalMC.cSpDoc == SpSopr.NRec));
+          if (ret <> tsOk)
+            SHT_CE_ReSetBounds;
+          else
+            {
+
+              myTara   := if(ValCap.Prih < ValCap.Rash,ValCap.Prih,ValCap.Rash);
+              myBrutto := if(ValCap.Prih > ValCap.Rash,ValCap.Prih,ValCap.Rash);
+              myNetto  := myBrutto - myTara;
+
+              if (myTara <> 0) NoNalMC.cMC := SpSopr.NRec;
+              if (myBrutto <> 0) NoNalMC.cPodr := SpSopr.NRec;
+           //-- NoNalMC.Res - это вес по документу
+              NoNalMC.Res := if (GetFirst KatMC where ((SpSopr.cMCUSL==KatMC.nRec))=tsOk,
+                         if (KatMC.Massa+KatMC.mTara=0,1,KatMC.Massa+KatMC.mTara),
+                         1.0) * SpSopr.Kol * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+              NoNalMC.Nal := myBrutto;
+              update current NoNalMC;
+
+              RescanPanel(#SpSopr);
+
+              SpSopr.mTara := myTara;
+           //--
+              if ((NoNalMC.Res > myNetto) or (NoNalMC.Res = 0))
+                SpSopr.Netto := myNetto
+              else
+                SpSopr.Netto := NoNalMC.Res;
+
+              var wmd : double ;
+              wmd := if (GetFirst KatMC where ((SpSopr.cMCUSL==KatMC.nRec))=tsOk,
+                         KatMC.Massa+KatMC.mTara,
+                         1.0) ;
+              wmd := if (wmd=0,1.0,wmd) ;
+              set SpSopr.KolFact := SpSopr.Netto/wmd/fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) ;
+              // При импорте не надо править поле SpSopr.KolOpl
+              // Пир 101.9155
+              //CheckSpSoprKol2(#SpSopr.KolFact);
+              SpSopr.Netto := myNetto
+              // -- пересчет налогов по позиции
+              if (SpSopr.ManualTax = 0) RecalcNalogs(KatMC.cGrNal,SpSopr.cGrNal)
+              else CalcSumNalogs;
+//////          SHT_CE_ReSetBounds;
+              update current SpSopr;
+
+              /**/
+              var tmpSopr : comp;
+              tmpSopr := SpSopr.cSopr;
+//////          SHT_CE_SetBounds;
+              ret := GetFirst KatSopr where ((tmpSopr==KatSopr.nRec));
+
+              if (ret = tsOk)
+                {
+                  RescanPanel(#SpSopr);
+                  ReCalcSumm(true);
+
+                  Update_Current_KatSopr;
+                }
+
+              SHT_CE_ReSetBounds;
+              /**/
+              NoNalMC.cPodr := SpSopr.NRec;
+              update current NoNalMC;
+              continue;
+            }
+        }
+      PrintProtocol('Вагон № '+Pad(ValCap.nVal,20)+'  не найдена накладная');
+    }
+  StopVisual('',0);
+}
+
+function ImportVagonsVes(DBFName:string;DBFNameBrut:string):boolean;
+var DbfHandle,
+    DbfHandleBrut : longint;
+    ret           : word;
+    tmpStr        : string;
+    myNvag        : string;
+    myBrutto,
+    myTara        : double;
+    isReverse     : boolean;
+{
+  ImportVagonsVes := false;
+
+  DbfHandle := DBFopen(DBFName,stOpenRead);
+  if (DbfHandle = 0)
+    {
+      message(''#3'Ошибка открытия файла:'+
+              ''#13#3''+DBFName);
+      exit;
+    }
+  DbfHandleBrut := DBFopen(DBFNameBrut,stOpenRead);
+  if (DbfHandleBrut = 0)
+    {
+      message(''#3'Ошибка открытия файла:'+
+              ''#13#3''+DBFNameBrut);
+      exit;
+    }
+  makeTmpCollect;
+  StartNewVisual(vtNumericVisual,vfTimer,
+        ''#3'Импорт весов пустых вагонов из DBF'#13#3,1);
+
+  PrintProtocol('*****  Импорт весов вагонов *****');
+  PrintProtocol('');
+  PrintProtocol(DateToStr(Cur_Date,'DD/MM/YYYY')+' ,'+TimeToStr(Cur_Time,'HH:MM'));
+
+//-- просматриваем DBF
+//  PrintProtocol('*****  Импорт весов пустых вагонов');
+//  PrintProtocol('');
+  var doVesKoef : double;
+  doVesKoef := doGetTune('Ves.Koef');
+  for (ret := DBFgetFirst(DbfHandle);ret = 0;ret := DBFgetNext(DbfHandle))
+    {
+      NextVisual;
+      tmpStr := DBFgetFieldValue(DbfHandle,'Nvag');
+      myNvag := tmpStr;
+      tmpStr   := DBFgetFieldValue(DbfHandle,'Brutto');
+      myTara := double(tmpStr);
+      myTara := myTara / if (doVesKoef = 0.0, 1000, doVesKoef);
+      ImportTaraToTmp(myNvag,myTara);
+    }
+  StopVisual('',0);
+  DBFclose(DbfHandle);
+
+
+  StartNewVisual(vtNumericVisual,vfTimer,
+        ''#3'Импорт весов груженых вагонов из DBF'#13#3,1);
+
+//-- просматриваем DBFBrut
+//  PrintProtocol('');
+//  PrintProtocol('*****  Импорт весов груженых вагонов');
+//  PrintProtocol('');
+  for (ret := DBFgetFirst(DbfHandleBrut);ret = 0;ret := DBFgetNext(DbfHandleBrut))
+    {
+      NextVisual;
+      tmpStr := DBFgetFieldValue(DbfHandleBrut,'Nvag');
+      myNvag := tmpStr;
+      tmpStr   := DBFgetFieldValue(DbfHandleBrut,'Brutto');
+      myBrutto := double(tmpStr);
+      myBrutto := myBrutto / if (doVesKoef = 0.0, 1000, doVesKoef);
+      if (ImportBruttoToTmp(myNvag,myBrutto) = false)
+        {
+          StopVisual('',0);
+          DBFclose(DbfHandleBrut);
+          exit;
+        }
+    }
+  StopVisual('',0);
+  DBFclose(DbfHandleBrut);
+  isReverse := IsFilesReversed;
+  if (isReverse)
+    {
+       if (Message(''#3'Вес брутто меньше веса тары!'+
+                   ''#13#3'Вы очевидно перепутали местами'+
+                   ''#13#3' импортируемые файлы'+
+                   ''#13#3'Продолжить?',YesNo)=No)
+        {
+          PrintProtocol('Имя файла взвешивания груженых вагонов: "'+DBFNameBrut+'"');
+          PrintProtocol('Имя файла взвешивания пустых вагонов  : "'+DBFName+'"');
+          PrintProtocol('Перепутаны местами файлы с весами пустых и груженых вагонов');
+          exit;
+        }
+       PrintProtocol('Имя файла взвешивания груженых вагонов: "'+DBFName+'"');
+       PrintProtocol('Имя файла взвешивания пустых вагонов  : "'+DBFNameBrut+'"');
+       PrintProtocol('');
+    }
+  else
+    {
+       PrintProtocol('Имя файла взвешивания груженых вагонов: "'+DBFNameBrut+'"');
+       PrintProtocol('Имя файла взвешивания пустых вагонов  : "'+DBFName+'"');
+       PrintProtocol('');
+    }
+  ImportTmpToSopr(isReverse);
+  ImportVagonsVes := true;
+}
+
+
+
+
+function SHT_CE_ImpVagon : boolean ;
+  {
+    SHT_CE_ImpVagon := FALSE ;
+    SHT_CE_ReSetBounds ;
+    var retb : boolean;
+//    FStr1 := '';
+//    FStr2 := '';
+    OkFileDlg := false;
+    VesAuto := false;
+/*    if (RunInterface('GetSomeKatSopr',
+                     101,
+                     date(0,0,0),
+                     date(1,1,2100),
+                     1,
+                     0)<>cmdefault)
+        {
+        SHT_CE_SetBounds ;
+        EXIT;
+        }
+*/
+    PrintProtocol('************** Импорт номеров вагонов *****************');
+    PrintProtocol('');
+    RunWindowModal(winFile);
+    if (OkFileDlg = false)
+        {
+        SHT_CE_SetBounds ;
+        exit;
+        }
+    retb := ImportVagonsVes(FStr1,FStr2);
+    if (retb)
+      CheckAfter;
+    if (Message(''#3'Показать протокол ?',YesNo)=Yes)
+      {
+        if (not frmProt.Error)
+          frmProt.ShowFile('')
+        else
+          frmProt.AbortForm;
+      }
+    // все позиции занесены в NONalMC
+    SHT_CE_ImpVagon := retb ;
+    SHT_CE_SetBounds ;
+  }
+
+#end //_IMPVAG_VPP

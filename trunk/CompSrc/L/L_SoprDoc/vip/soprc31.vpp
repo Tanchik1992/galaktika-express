@@ -1,0 +1,86 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : пересчет расчетных услуг, которые используют VIP00        ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+var pNRec, pickrec: comp;
+var MarkerCount, i: longint;
+var oldsum, oldvsum, _sumPrice, _sumVPrice, d1: double;
+var writeflag: boolean;
+
+MarkerCount := GetMarkerCount(MarkerNZ);
+
+if (MarkerCount = 0)
+  {
+    Message('Необходимо пометить документы для пересчета.');
+    Exit;
+  }
+else
+  if Message('Пересчитать стоимость услуг в выбранных документах?', YesNO)<> cmYes
+    Exit;
+
+writeflag := FALSE;
+
+PushPos(#KatSopr);
+FOR (i := 0; i < MarkerCount; i := i+1)
+  {
+    if (GetMarkerCount(MarkerNZ) <> 0)
+      GetMarker(MarkerNZ, i, pickrec);
+    if (GetFirst KatSopr where ((pickrec == KatSopr.NRec)) = tsOk)
+      {
+        oldsum  := KatSopr.Summa;
+        oldvsum := Katsopr.SumVal;
+        _LOOP SpSopr
+          {
+            if not IsValid(#SpSklad)
+                 continue;
+            _sumPrice := SpSopr.Price;
+            _sumVPrice := SpSopr.VPrice;
+
+            d1 := if(katsopr.cval = 0, SpSopr.Price, SpSopr.VPrice);
+            RunInterface('soprus05', SpSopr.nRec, word(coSpSopr), d1, MarPunkt.Name);
+            If katsopr.cval = 0
+              spsopr.price := d1;
+            else
+              spsopr.vprice := d1;
+
+            CheckSumma(false);
+
+            if _sumPrice<>SpSopr.Price or _sumVPrice<>SpSopr.VPrice
+              {
+                ERRR.write('В Акте №'+KatSopr.NSopr+' изменилась цена в спецификации: '+'"'+KatUsl.Name+'" '
+                +' до пересчета: ' +string(if(katsopr.cval = 0, _sumPrice, _sumVPrice))+' после пересчета: '
+                +string(if(katsopr.cval = 0, SpSopr.Price, SpSopr.VPrice)));
+                writeflag := TRUE;
+              }
+          } //_LOOP SpSopr
+
+        if oldsum<>KatSopr.Summa or oldvsum<>KatSopr.SumVal
+          {
+             ERRR.write('В Акте №'+KatSopr.NSopr+' изменилась Общая СУММА в документе до пересчета: '
+             +string(if(katsopr.cval = 0, oldsum, oldvsum))+' после пересчета: '
+             +string(if(katsopr.cval = 0, KatSopr.Summa, KatSopr.SumVal)));
+             writeflag := TRUE;
+          }
+      }
+  }//end For
+
+PopPos(#KatSopr);
+ClearMarker(MarkerNZ);
+RescanPanel(#KatSopr);
+
+if writeflag
+  {
+    errr.PutEvent(feBreak);
+    errr.ShowFile('Реестр Актов, в которых произошли изменения.');
+  }
+else
+  {
+    errr.AbortForm;
+    Message('Суммы остались без изменений');
+  }

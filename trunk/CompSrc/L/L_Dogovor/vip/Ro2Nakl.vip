@@ -1,0 +1,631 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Пакетное формирование накладных по расп. на отгрузку
+//******************************************************************************
+
+#include KatSopr.vih
+#include ofpmacro.vpp
+
+//******************************************************************************
+
+#doc
+Пакетное формирование накладных по распоряжениям на отгрузку
+#end
+Interface RO2Nakl 'Формирование накладных по распоряжениям на отгрузку' EscClose, Cyan;
+  Show at (,,, 21);
+
+//******************************************************************************
+
+#include KatSopr.var
+
+//******************************************************************************
+
+create view
+var
+//------------------------------------------------------------------------------
+  Date01
+, Date02
+                : date;
+//------------------------------------------------------------------------------
+  cDogApp
+, cGrDog
+, cKontrag
+, cPunktOtg
+                : comp;
+//------------------------------------------------------------------------------
+  Kontrag
+, PunktOtg
+                : string;
+//------------------------------------------------------------------------------
+  Tip
+                : word;
+//------------------------------------------------------------------------------
+  wasMade
+                : boolean;
+//------------------------------------------------------------------------------
+  MarkerSel
+, IndexMark
+                : longint;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  SearchMarker(MarkerSel, OtgOrder2.nRec, IndexMark)
+    ( FieldName = isPickSel )
+//------------------------------------------------------------------------------
+, *
+//------------------------------------------------------------------------------
+From
+  BaseDoc
+, CalPlan
+, CursVal
+, Dogovor  AppDogovor
+, Filial
+, KatMC
+, KatNotes
+, KatOrg
+, KatOrg   KatOrg1
+, KatOrg   KatOrgTmp
+, KatOtpEd
+, KatSopr
+, KatSopr  KatSoprBr
+, KatStroy
+, KatUsl
+, KlVal
+, MarPunkt PunktOtgr
+, NZakaz
+, OtgOrder
+, OtgOrder OtgOrder2
+, Pick
+, PUTGSM
+, SoprDop
+, SoprHoz
+, SoprOrdB
+, SpDocNal
+, SpDocs
+, SpDocs   SpCalPln
+, SpDocs   SpDog
+, SpDocs   SpNZak
+, SpSopr
+, SpStep
+, StepDoc
+, TTNDoc
+
+where
+((
+//------------------------------------------------------------------------------
+    comp(0) <<= OtgOrder2.cOwner
+AND word(1)  == OtgOrder2.status (NoIndex)
+AND (
+     ( (Date01 >= OtgOrder2.dFrom) AND (Date01 <= OtgOrder2.dTo) )
+      OR
+     ( (Date01 <= OtgOrder2.dFrom) AND (Date02 >= OtgOrder2.dTo) )
+      OR
+     ( (Date02 >= OtgOrder2.dFrom) AND (Date02 <= OtgOrder2.dTo) )
+     )
+//------------------------------------------------------------------------------
+AND OtgOrder2.cGrOtp   == KatOrg.nRec
+AND OtgOrder2.cPunktP  == PunktOtgr.nRec
+AND OtgOrder2.nRec     == KatSopr.cOtgOrder
+AND OtgOrder2.nRec     == OtgOrder.nRec
+//------------------------------------------------------------------------------
+AND OtgOrder.nRec      == SpOtgOrd.cOtgOrder
+//------------------------------------------------------------------------------
+AND SpOtgOrd.NRec      == SpNZRasp.cSpOtgOrd
+AND SpOtgOrd.cNZakaz   == NZakaz.nRec
+//------------------------------------------------------------------------------
+AND NZakaz.cDogovor    == Dogovor.nRec
+AND NZakaz.cAppDogovor == AppDogovor.nRec
+AND NZakaz.cCalPlan    == CalPlan.nRec
+//------------------------------------------------------------------------------
+AND coKatSopr          == TTNDoc.wTable
+AND KatSopr.nRec       == TTNDoc.cDoc
+//------------------------------------------------------------------------------
+))
+
+//******************************************************************************
+Bounds PunktOtgBnd =
+   cPunktOtg == OtgOrder2.cPunktP (NoIndex)
+//******************************************************************************
+Bounds Dsc =
+   sGetTune('User.Descr') == OtgOrder2.Descr (NoIndex)
+//******************************************************************************
+Bounds GrDsc =
+   sGetTune('User.DesGr') == OtgOrder2.DesGr (NoIndex)
+//******************************************************************************
+
+;
+
+Parameters
+  Tip;
+
+Form prot('nakl_ro.out', 'errr') with NoVisual;
+
+//---------------------------------------
+Procedure ResetTable(tn_: integer);
+{
+  PushPos(tn_);
+  ResetBounds(tn_);
+}
+
+Procedure SetTable(tn_: integer);
+{
+  PopPos(tn_);
+  SetBounds(tn_);
+}
+
+//******************************************************************************
+Window GetBegEndDate 'Фильтр распоряжений' DoAccept, EscClose, Gray;
+  Show at (,, 37, 8);
+
+Panel pbe1
+
+Screen scrbe1 (, hcDogovorABatchOtgOrder, sci1Esc)
+Fields
+  Date01   ('Начальная дата'):  [, 'DD/MM/YYYY'], NoProtect;
+  Date02   ('Конечная дата') :  [, 'DD/MM/YYYY'], NoProtect;
+  PunktOtg ('Выбор пункта отгрузки',, sci13Esc): Protect;
+Buttons
+  cmYes   ,Default,,'Ввод дат',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+
+  `С` .@@@@@@@@@@  `по` .@@@@@@@@@@
+
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  <. Продолжить .> <. Отмена     .>
+>>
+end; //screen
+
+//******************************************************************************
+
+HandleEvent
+
+cmPick:
+  case CurField of
+    #PunktOtg:
+      {
+        if ( RunInterface('Get_Item', word(1), cPunktOtg) = cmCancel )
+          Exit;
+
+        ResetTable(#PunktOtgr);
+
+        if ( GetFirst PunktOtgr where (( cPunktOtg == PunktOtgr.nRec )) = tsOk )
+          set PunktOtg := PunktOtgr.name;
+
+        SetTable(#PunktOtgr);
+      }
+   end; // case
+
+cmDelOnProtect:
+  if ( CurField = #PunktOtg )
+    {
+      cPunktOtg := 0;
+      set PunktOtg :='все пункты';
+    }
+
+end;
+
+end; //panel
+
+HandleEvent
+
+cmYes:
+  {
+    PackFields;
+    SelectField(#date01);
+
+    set date01 := date01;
+    set date02 := date02;
+
+    if ( date01 > date02 )
+      {
+        Message('Начальная дата не должна быть больше конечной');
+        Stop;
+        Exit;
+      }
+
+    if ( date02 = ZeroDate )
+      {
+        Message('Укажите конечную дату');
+        Stop;
+        Exit;
+      }
+
+    PutCommand(cmDefault);
+  }
+
+end; // HandleEvent window
+end; // window
+
+//---------------------------------------------
+Procedure AddDelPick(Del_: boolean);
+{
+  if not SearchMarker(MarkerSel, OtgOrder2.nRec, IndexMark)
+    InsertMarker(MarkerSel, OtgOrder2.nRec)
+  else
+    if Del_
+      DeleteMarker(MarkerSel, OtgOrder2.nRec);
+}
+
+//----------------------------------------------
+Procedure SelectAll;
+{
+  ClearMarker(MarkerSel);
+
+  _loop OtgOrder2
+    InsertMarker(MarkerSel, OtgOrder2.nRec);
+}
+
+//-----------------------------------------------
+Procedure UnSelectAll;
+{
+  ClearMarker(MarkerSel);
+}
+
+var
+
+//******************************************************************************
+
+#include soprvar.vpp
+#include ro2nakl.vpp
+#include docshoz.vpp
+#include SoprAll.vpp  // общие функции сопроводительных документов
+#include soprval.vpp  // Функции обработки валюты для сопроводительных документов
+#include insmc0.vpp
+#include insmc1.vpp
+
+//******************************************************************************
+
+Browse browse0 (, hcDogovINaclOnRaspor, sciEnEsc1Ins)
+  show at (,,,18);
+
+Table OtgOrder2;
+Fields
+  { Font = { Color = if(isPickSel, ColorMark, 0) } };
+//------------------------------------------------------------------------------
+  if (isPickSel, '√', if (isValid(tnKatSopr), 'ф', ''))
+  #3'√'
+  ('"√" - распоряжение выбрано, "ф" - было формирование по данному распоряжению',,)
+  : [1], Skip, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder2.DesGr
+  #3'Группа'
+  ('Код группы пользователей. Выберите распоряжение(я) и нажмите Enter')
+  : [4], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder2.Descr
+  #3'Дескр.'
+  ('Дескриптор(идентификатор) пользователя. Выберите распоряжение(я) и нажмите Enter')
+  : [4], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder2.NoDoc
+  #3'Номер'
+  ('Номер распоряжения. Выберите распоряжение(я) и нажмите Enter')
+  : [6], Protect;
+//------------------------------------------------------------------------------
+  OtgOrder2.dInput
+  #3'Дата'
+  ('Дата ввода. Выберите распоряжение(я) и нажмите Enter')
+  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  PunktOtgr.Name
+  #3'Пункт отгрузки'
+  ('Пункт отгрузки. Выберите распоряжение(я) и нажмите Enter'
+  ): [24], Protect;
+//------------------------------------------------------------------------------
+  OtgOrder2.dFrom
+  #3'С'
+  ('Дата начала действия. Выберите распоряжение(я) и нажмите Enter')
+  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  OtgOrder2.dTo
+  #3'По'
+  ('Дата окончания действия. Выберите распоряжение(я) и нажмите Enter')
+  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+end; // browse
+
+//******************************************************************************
+
+Screen sc1
+  Show at (, 19,,)
+  Table Dogovor
+Fields
+ KatOrg.Name: Skip;
+<<
+ Отправитель.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+HandleEvent // interface
+
+cmInit:
+  {
+    if DemoMode
+      {
+        var pRecChecker: RecChecker;
+
+        if not pRecChecker.CheckKatSoprRecords(101)
+          {
+            Abort;
+            Exit;
+          }
+
+        if not pRecChecker.CheckKatSoprRecords(201)
+          {
+            Abort;
+            Exit;
+          }
+
+        if not pRecChecker.CheckKatSoprRecords(111)
+          {
+            Abort;
+            Exit;
+          }
+
+        if not pRecChecker.CheckKatSoprRecords(211)
+          {
+            Abort;
+            Exit;
+          }
+      }
+
+     var datechanged: boolean;
+
+     if ( not ReadMyDsk(Date01, 'Ro2Nakl_Date01', datechanged) )
+       date01 := Date(1, 1, 1999);
+
+     if ( not ReadMyDsk(Date02, 'Ro2Nakl_Date02', datechanged) )
+       date02:= Cur_Date;
+
+     PunktOtg  := 'все пункты';
+     cPunktOtg := 0;
+
+     if ReadMyDsk(cPunktOtg, 'Ro2Nakl_cPunktOtg', datechanged)
+       if ( GetFirst PunktOtgr where (( cPunktOtg == PunktOtgr.nRec )) = tsOk )
+         PunktOtg := PunktOtgr.name;
+
+     if ( RunWindowModal(GetBegEndDate) = cmCancel )
+       {
+         Abort;
+         Exit;
+       }
+
+     MarkerSel := InitMarker('$$$RO2NAKL_SEL', 8, 100, 10);
+
+     UnSelectAll;
+
+     SaveMyDsk(Date01   , 'Ro2Nakl_Date01');
+     SaveMyDsk(Date02   , 'Ro2Nakl_Date02');
+     SaveMyDsk(cPunktOtg, 'Ro2Nakl_cPunktOtg');
+
+     TMCUsl := 1;
+
+     if ( tip = 1 )
+       SetTitle('Формирование накладных по распоряжениям на отгрузку');
+
+     SetBounds(#OtgOrder2);
+
+     case wGetTune('Doc.Visible') of
+     //*****************************
+       dcOwnOnly:
+         AddBounds(tbDsc);
+     //*****************************
+       dcGrpRead, dcGrpModif:
+         AddBounds(tbGrDsc);
+     //*****************************
+     end;
+
+     if (cPunktOtg <> 0 )
+       AddBounds(tbPunktOtgBnd);
+
+     if ( GetFirst OtgOrder2 <> tsOk )
+       {
+         Message('Нет распоряжений на отгрузку, готовых'#13
+               + 'для пакетного формирования по заданному фильтру');
+         Abort;
+         Exit;
+       }
+  }
+
+cmDone:
+  DoneMarker(MarkerSel, '');
+
+cmDefault:
+  {
+    if ( GetMarkerCount(MarkerSel) = 0 )
+      if not CanPickRO(TRUE)
+        {
+          Stop;
+          Abort;
+          Exit;
+        }
+      else
+        {
+          AddDelPick(FALSE);
+          RereadRecord;
+        }
+
+    var s_          : string;
+    var KatSoprnRec_: comp;
+    var firstKS     : boolean;
+
+    s_ := 'Сформировать накладные ?';
+
+    firstKS := TRUE;
+
+    if ( Message(s_, YesNo) <> cmYes )
+      {
+        Stop;
+        Exit;
+      }
+
+    wasMade := FALSE;
+
+    var schCount: word; schCount := 0;
+
+    var wasFormByOrder: boolean;
+
+    s_ := 'Создание накладных по распоряжениям  ';
+
+    TypeSopr := 201;
+
+    var MarkerCount, i: longint;
+    var PickRec       : comp;
+
+    MarkerCount := GetMarkerCount(MarkerSel);
+
+    StartNewVisual(vtIndicatorVisual, 0,s_, MarkerCount);
+
+    FOR(i := 0; i < MarkerCount; inc(i))
+      {
+        GetMarker(MarkerSel, i, PickRec);
+
+        if ( GetFirst fastfirstrow OtgOrder where (( PickRec == OtgOrder.nRec )) = tsOK )
+          {
+            wasFormByOrder := FALSE;
+            firstKS        := TRUE;
+
+            NextVisual;
+
+            _loop SpOtgOrd
+              {
+                StartNewVisual(0, vfSilent, '', 0);
+
+                ResetTable(#NZakaz);
+                ResetTable(#SpNzRasp);
+                ResetTable(#SpOtgOrd);
+
+                if NZakaz2KatSopr(NZakaz.nRec, SpOtgOrd.nRec, KatSoprnRec_)
+                  {
+                    wasFormByOrder := TRUE;
+                    wasMade        := TRUE;
+
+                    schCount := schCount + 1;
+                    AddProtocol(firstKS);
+                  }
+
+                SetTable(#NZakaz);
+                SetTable(#SpNzRasp);
+                SetTable(#SpOtgOrd);
+
+                StopVisual('', 0);
+              }
+
+             if wasFormByOrder
+               prot.write('');
+          }
+      }
+
+    StopVisual('', 0);
+
+    if wasMade
+      {
+        prot.PutEvent(feBreak);
+        prot.ShowFile('Протокол');
+      }
+    else
+      prot.AbortForm;
+
+    PushPos(#OtgOrder2);
+    UnSelectAll;
+    PopPos(#OtgOrder2);
+    ReReadRecord;
+    RescanPanel(#OtgOrder2);
+
+    if not wasMade
+      Message('Накладные не сформированы');
+  }
+
+cmMarkUnmark:
+  {
+    if not isPickSel
+      if not CanPickRO(TRUE)
+        {
+          Stop;
+          Abort;
+          Exit;
+        }
+
+   AddDelPick(TRUE);
+
+#ifdef ATL51
+   RedrawCurrentAndGo(GetCurrentFormat, TRUE);
+#else
+   if ( GetNext OtgOrder2 = tsOk )
+     CallToNeighbours(cmPosDown, #OtgOrder);
+
+   RescanPanel(#OtgOrder2);
+#end
+  }
+
+cmSelectAll:
+  {
+    if ( Message('Выбрать все распоряжения ?', YesNo) <> cmYes )
+      Exit;
+
+    PushPos(#OtgOrder2);
+    SelectAll;
+    PopPos(#OtgOrder2);
+    ReReadRecord;
+    RescanPanel(#OtgOrder2);
+  }
+
+cmUnSelectAll:
+  {
+    if ( Message('Отменить выбор распоряжений ?', YesNo) <> cmYes )
+      Exit;
+
+    PushPos(#OtgOrder2);
+    UnSelectAll;
+    PopPos(#OtgOrder2);
+    ReReadRecord;
+    RescanPanel(#OtgOrder2);
+  }
+
+cmAttrib:
+  {
+    RunInterface('ROtg', OtgOrder2.nRec);
+
+    UpdateTable;
+    RereadRecord;
+  }
+
+cmAccording: //AltS
+  {
+    RunInterface('ViewNaklbyOR', OtgOrder2.nRec);
+
+    UpdateTable;
+    RereadRecord;
+  }
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuRO2Nakl'));
+
+end; // handleEvent interface
+
+End.
+
+//******************************************************************************
+
+mnuRO2Nakl Menu
+{
+//******************************************************************************
+- 'Просмотр накладных по распоряжению',
+  cmAccording,
+  'Просмотр накладных, сформированных по распоряжению на отгрузку',
+  hcNaklbyRO, 'Alt-S', kbAltS, sci1Esc;
+//******************************************************************************
+-------;
+//******************************************************************************
+- 'Просмотр распоряжения на отгрузку',
+  cmAttrib,
+  'Просмотр распоряжения на отгрузку',
+  hcDogovorM1OtgOrder, 'Ctrl-Enter', kbCtrlEnter, sci1Esc;
+//******************************************************************************
+}
+
+//******************************************************************************

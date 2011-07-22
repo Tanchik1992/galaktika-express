@@ -1,0 +1,218 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+// ПИР 101.30302 Доработка
+
+#include makenakl.vih
+#include DOfuns.vih
+#include oEdIzm.vih
+#include notes.vih
+#include aStatUser.vih // права доступа
+#include LinkGrPL.vih  // привязка к группе плат.средств
+#include ExtAttrClass.vih
+#include LinksCopier.vih
+#include SHManager.vih
+#include SpNext.vih
+#include SDfuns.vih
+#include chkschem.vih
+#include KontrBal.vih
+
+//********************************************************************************
+
+#doc
+Назначение:
+   создание акта на услуги в НДЕ
+
+Параметры:
+  c1   - ссылка на ДО
+  c2   - ссылка на услугу, для которой создается Акт
+  dFor - дата создания документа
+  summ - сумма в НДЕ для услуги
+  c3   - созданный акт
+#end
+
+//********************************************************************************
+
+Interface iMakeAktNDE;
+
+#include SpNext.var
+#include oEdIzm.var
+#include SDfuns.var
+#include DOfuns.var
+#include chkschem.var
+#include KontrBal.var
+
+Create view
+var
+  c1
+, c2
+, c3
+, cCodV
+    : comp;
+
+  dFor
+, dForA
+    : Date;
+
+  ShowRaspr
+, wVidSopr
+, TMCUSL
+, wFromDO
+    : word;
+
+  LastNumNakl
+, LastNumAkt
+, mes
+    : string[30];
+
+  Curse
+, SumR
+, SumV
+, SumNDSR
+, SumNDSV
+, summ
+    : double;
+
+  SpPresent
+, isMakingAkt
+, IsNakl
+    : boolean;
+
+ oNotes    : iNotes;
+ oStatUser : VipStatUser;
+ iGrPl     : LinkToGrPl;
+ piExAttr  : iExtAttrClass;
+ iSHoz     : ObjSHmanager; // интерфейс для работы с SoprHoz
+
+
+from
+  StepDoc
+, BaseDoc
+, SpStep
+, SDocBuf
+, SpDocBuf
+, SpDocBuf_Ex
+, KatSopr  KatSopr2
+, KatNotes
+, Dogovor
+, Dogovor  AppDogovor
+, CalPlan
+, DocInfo  SoprDocInfo
+, DocInfo  BaseDocInfo
+, TTNDoc
+, SpSopr
+, DSNASTR
+, KatSopr
+, BaseDocRem
+, GrafRem
+, WayMove
+, SpSopr SpSopr2
+
+where
+((
+  c1                  == StepDoc.NRec        AND
+  c2                  == KatUsl.nRec         AND
+  StepDoc.cBaseDoc    == BaseDoc.NRec        AND
+  BaseDoc.Nrec        == BaseDocRem.cBaseDoc AND
+  word(0)             == BaseDocRem.TipDoc   AND
+  BaseDocRem.cGrafRem == GrafRem.NRec        AND
+  StepDoc.Nrec        == SpStep.cStepDoc     AND
+  SDocBuf.cDogovor    == Dogovor.NRec        AND
+  SDocBuf.cAppDogovor == AppDogovor.NRec     AND
+  SDocBuf.cCalPlan    == CalPlan.NRec        AND
+  KatSopr.NRec        == SpSopr.cSopr
+
+));
+
+parameters
+    c1 //stepdoc.nRec
+  , c2 //KatUsl.nRec
+  , dFor
+  , summ
+  , c3
+;
+
+var d_dPrice: array[1..2] of date;
+
+#include SoprAll.vpp  // общие функции сопроводительных документов
+#include do2bufer.vpp
+#include insert_katsopr.vpp
+#include Update_KatSopr.vpp
+#include SpSoprDefault.vpp
+
+Procedure MakeSpAkt;
+{
+  TMCUSL := 2; //услуга
+  SpSoprDefault;
+  SpSopr.cMCUSL  := c2;
+  SpSopr.Kol     := 1;
+  SpSopr.KolOpl  := 1;
+  SpSopr.KolFact := 1;
+  SpSopr.Price   := summ;
+  SpSopr.rPrice  := summ;
+  IF insert current SpSopr <> tsOk {};
+}
+
+HandleEvent
+cmInit:
+  {
+    //Abort;
+
+    IF c2 = 0
+    {
+      //услуга по умолчанию. Настройка: 'Услуга по суммовой разнице'
+      c2 := coGetTune('Nalog.cUslSumDifference');
+    }
+
+    IF (not IsValid(#StepDoc)) Exit;
+    IF (not IsValid(#KatUsl)) Exit;
+
+    delete all SDocBuf;
+    delete all SpDocBuf;
+
+    FillNaklBuffer;
+    SDocBuf.cVal     := 0;//АКТ всегда в НДЕ
+    SDocBuf.TipMoney := 1;//ДО в НДЕ
+
+    case SDocBuf.VidSopr of
+      101
+    , 108: wVidSopr := 111;
+      201: wVidSopr := 211;
+    end;
+
+    IsNakl      := FALSE;
+    isMakingAkt := TRUE;
+    ReadMyDsk(ShowRaspr, 'ShowRaspr', FALSE);
+    dForA       := dFor;
+    cCodV       := if(SDocBuf.cVal > 0, SDocBuf.cVal, coGetTune('BaseCurrency'));
+    d_dPrice[1] := if(SDocBuf.dValCurse <> Date(0, 0, 0), SDocBuf.dValCurse, dFor);
+    d_dPrice[2] := if(SDocBuf.dValCurse <> Date(0, 0, 0), SDocBuf.dValCurse, dForA);
+    SaveMyDsk(d_dPrice[1], 'MakeSoprByBuff_dFor' );
+    SaveMyDsk(d_dPrice[2], 'MakeSoprByBuff_dForA');
+    SaveMyDsk(cCodV      , 'MakeSoprByBuff_cCodV');
+
+    Insert_KatSopr;
+
+    SpPresent := TRUE; // иначе удалит позицию
+    KatSopr.dSopr := dFor; //в Insert_KatSopr срабатывает еще и настройка boGetTune('Doc.Buy.dAkt=DO')
+    Update_KatSopr(if(SDocBuf.VidSopr < 200 , 1 , 2));
+    MakeSpAkt;
+
+
+    RunInterface( iChkSum,                 //chkSum.vip
+                   KatSopr.NRec,           //сопроводительный документ
+                   0,                      //если 0 - пересчет по всему документу
+                   FALSE,                  //выполнить только пересчет позиции (true)
+                   If(KatSopr.cVal = 0, 10, 20),
+                   TRUE
+                 );
+
+
+    CloseInterFace(cmDefault);
+    c3 := KatSopr.nRec;
+  }
+end;
+End.

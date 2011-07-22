@@ -1,0 +1,303 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Копирование цен из прайс-листа в спецификацию накладной
+//******************************************************************************
+
+#ifndef _SCOPYPRL_VPP
+#define _SCOPYPRL_VPP
+#include soprc11.vpp
+
+#include SDfuns.var
+
+function CheckPrlValut(handle_Prot:longint): boolean;
+{
+ CheckPrlValut := false;
+ if (KatSopr.cValut = 0) set KatSopr.cValut := klPrice.cVal;
+ if (KatSopr.cVal <> 0) {
+   if (klPrice.cVal <> KatSopr.cVal) {
+     if (handle_Prot = 0)
+       Message(''#3'Не совпадает валюта прайс-листа '+
+                   'с валютой оплаты накладной',CancelButton)
+     else
+       Form_write('По документу №'+KatSopr.NSopr+
+                  ' не совпадает валюта прайс-листа'+
+                  ' с валютой оплаты накладной','',handle_Prot);
+     Exit;
+   }
+ } else if (KatSopr.cValut <> KlPrice.cVal)
+     if (KlPrice.TipMoney <> 0) {
+       if (not isNew)
+        { if (handle_Prot = 0)
+            Message(''#3'Не совпадает валюта прайс-листа '+
+                        'с валютой позиций накладной'#13,CancelButton)
+          else
+            Form_write('По документу №'+KatSopr.NSopr+
+                       ' не совпадает валюта прайс-листа'+
+                       ' с валютой позиций накладной','',handle_Prot);
+          Exit;
+        }
+       else { set KatSopr.cValut := klPrice.cVal;
+              SpSopr.cVal := klPrice.cVal;
+            }
+     }
+ if (Longint(KatSopr.Dprice) = 0) KatSopr.dPrice := KlPrice.dPrice;
+ CheckPrlValut := true;
+}
+
+// Установка цен из выбранного прайс листа
+var W1_ProcessPrlPrices:word;
+var ClearPrice_ProcessPrlPrices:boolean;
+
+#doc
+  Диалоговое окно копирования цен из прайс-листа
+#end
+
+Window WinProcessPrlPrices 'Подтвердите выбор' ( , hcctxPriceIzmPar, ) EscClose DoAccept Gray;
+Show at (27,7,92,15);
+Screen SC ('', hcctxPriceIzmPar,);
+Fields
+  KatSopr.nSopr :skip;
+  W1_ProcessPrlPrices('Настройка позволяет отключить вызов диалогового окна если выбрано несколько док-ов'):noprotect;
+Buttons
+cmOK,Default,,'Ввод - принять выбор',,sci1Esc;
+cmOkNot0,,,'Отмена',,sci1Esc;
+<<
+
+    Обнулять цену в спецификации документа № .@@@@@@@@@@@@@@@@@@
+    которой нет в прайс-листе?
+
+    [.] применить для всех документов `
+
+           <.Обнулять цену.>    <.Не обнулять цену.>
+>>
+End; // Screen
+HandleEvent
+cmInit:
+  {
+    ClearPrice_ProcessPrlPrices := false;
+  }
+
+cmOK:
+  {
+    ClearPrice_ProcessPrlPrices := true;
+    PutCommand(cmDefault);
+  }
+cmOkNot0:
+{
+  PutCommand(cmDefault);
+}
+End;// HandleEvent;
+end // Win
+
+var wasWork: boolean;
+
+function ProcessPrlPrices(pNrec:comp; handle_Prot:longint):boolean;
+var OldKoef, NewKoef: double;
+var vCurse, PrRub, PrVal : double;
+!var ClearPrice_ProcessPrlPrices : boolean;
+{
+ProcessPrlPrices:=false;
+ wasWork:= false;
+
+ if (GetFirst klPrice where ((pNRec == KlPrice.NRec)) <> tsOk)
+     Exit;
+
+ if not BeforeCheckPRL(handle_Prot) Exit;
+
+ if (not CheckPrlValut(handle_Prot)) Exit;
+
+ if (GetFirst Oborot where ((KatSopr.VidSopr == Oborot.TiDk and
+                                 KatSopr.NRec == Oborot.cSoprDoc)) = tsOk)
+     if  message(''#3'По документу №'+KatSopr.NSopr+' есть проводки.'#13#3+
+              'Продолжить редактирование?',yesno)=cmNo Exit;
+
+! ClearPrice_ProcessPrlPrices := false;
+! ClearPrice_ProcessPrlPrices := Message ('Обнулять цену в спецификации документа №'+KatSopr.nSopr
+!                        +','#13#3+ ' которых нет в прайс-листе?',  YesNo+Warning ) = cmYes;
+ IF W1_ProcessPrlPrices=0
+ {
+   if (RunWindowModal(WinProcessPrlPrices) <> cmDefault)
+   {
+     Abort;
+     Exit;
+   }
+ }
+   if (KatSopr.cValut <> 0)
+     vCurse := GetCursPrice
+      else
+     vCurse := 0;
+   StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,
+                 ''#3'Установка цен в соответствии с выбранным прайс-листом: ',1);
+   PushPos(#SpSopr);
+  _loop SpSopr where(( KatSopr.NRec == SpSopr.cSopr
+!                    and  word(1) == Spsopr.PrMC
+                    ))
+     {
+//------------------------------------------------------------------------------
+// тип прайса должен совпадать с типом позиции спецификации документа
+       if not
+         (
+          ((KlPrice.Tip = 0) AND (SpSopr.prMC = 1))
+          OR
+          ((KlPrice.Tip = 1) AND (SpSopr.prMC <> 1))
+         )
+       {
+         Continue;
+       }
+//------------------------------------------------------------------------------
+
+       if (if (KlPrice.VidForm <> word(0),
+                  (GetFirst Prices where ((SpSopr.cMCUsl  == Prices.cThing and
+                            PNrec         == Prices.cKlPrice and
+                            SpSopr.cParty  == Prices.cParty    ))
+                   ),
+                   (GetFirst Prices where ((SpSopr.cMCUsl  == Prices.cThing and
+                             PNrec         == Prices.cKlPrice ))
+                   )
+              )
+
+           =tsOK)
+       {
+       OldKoef := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+       NewKoef := fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+       PrRub := Prices.Price / NewKoef * OldKoef;
+       PrVal := Prices.SumVal / NewKoef * OldKoef;
+
+       Case KlPrice.TipMoney of
+        0 : { // р
+          SpSopr.Price  := FSRoundRub(PrRub);
+          SpSopr.rPrice := PrRub;
+
+          if (KatSopr.cValut <> 0)
+            SpSopr.VPrice := FSRoundVal(PrRub / vCurse);
+
+          SpSopr.rVPrice := PrRub / vCurse;
+        }
+        1 : { // в-р
+          SpSopr.Price   := FSRoundRub(PrRub);
+          SpSopr.rPrice  := PrRub;
+          SpSopr.VPrice  := FSRoundVal(PrVal);
+          SpSopr.rVPrice := PrVal;
+        }
+        2 : { // в
+         SpSopr.Price   := FSRoundRub(PrVal * vCurse);
+         SpSopr.rPrice  := PrVal * vCurse;
+         SpSopr.VPrice  := FSRoundVal(PrVal);
+         SpSopr.rVPrice := PrVal;
+        }
+        else
+        {
+          SpSopr.rPrice  := PrRub;
+          SpSopr.rVPrice := SpSopr.VPrice;
+        }
+       end;
+
+       SpSopr.cPriceList := KlPrice.nRec;
+
+       if Update current SpSopr <> tsOk{};
+
+       wasWork:= true;
+     }
+    else
+     {
+       if ClearPrice_ProcessPrlPrices //обнулять
+         {
+           SpSopr.Price := 0;
+           SpSopr.VPrice := 0;
+           SpSopr.cPriceList := 0;
+           SpSopr.rPrice := 0;
+           SpSopr.rVPrice := 0;
+           if Update current SpSopr<>tsOK{};
+           wasWork:= true;
+           if (handle_Prot <> 0)
+             Form_write('Обнулена цена в спецификации документа №'+
+                         KatSopr.nSopr+', нет в прайс-листе.','',handle_Prot);
+         }
+     }
+#ifdef _AKTUSLB_VIP
+     if (KatSopr.VidSopr = 110)
+       if (IsValid(#SpDocSmeta))
+         if (IsValid(#SpStepRem))
+         {
+           SpStepRem.SumMC := SpSopr.Price;
+           SpStepRem.SumUsl := SpSopr.VPrice;
+           if (update current SpStepRem = tsOk)
+           {
+           }
+         }
+#end
+     if (not NextVisual) Break;
+   }
+   PopPos(#SpSopr);
+   StopVisual('',0);
+ProcessPrlPrices:=true;
+}
+
+procedure AssingPrlPrices;
+{
+  pNrec := 0;
+
+  if (not PickFromPRL)
+    Exit;
+
+  W1_ProcessPrlPrices := 0;//показывать окно
+
+  if (not ProcessPrlPrices(pNrec, longint(0)))
+    Exit;
+
+  case KatSopr.vidSopr of
+    101, 108, 201, 111, 211, 1411, 1421:
+    {
+      Exit;
+    }
+    else
+    {
+      RecalcSumm(true);
+      Update_Current_KatSopr;
+    }
+  end;
+}
+
+#ifdef _AKT_NAKL_
+procedure AssingPrlPrices1;
+{
+var pickrec: comp;
+var MarkerCount,i:longint;
+prot.AbortForm;
+PushPos(#KatSopr);
+  {
+    pNrec:=0;
+    W1_ProcessPrlPrices:=0;//показывать окно
+    if PickFromPRL
+      {
+       MarkerCount:=GetMarkerCount(MarkerNZ);
+       if (MarkerCount=0){
+           pickrec := KatSopr.NRec;
+           MarkerCount:=1;
+         }
+       FOR ( i:=0; i<MarkerCount; i:=i+1 )
+         {
+           if (GetMarkerCount(MarkerNZ)<>0)
+              GetMarker(MarkerNZ,i,pickrec);
+           if (GetFirst KatSopr where ((pickrec == KatSopr.NRec)) = tsOk)
+           {
+             If getfirst SpSopr <> tsOk
+               continue;
+             ProcessPrlPrices(pNrec,Prot.Handle);
+             if (wasWork) CheckSumma(true);
+           }
+         }//end for
+      }
+  }
+PopPos(#KatSopr);
+ClearMarker(MarkerNZ);
+RescanPanel(#KatSopr);
+if prot.Contain
+  prot.ShowFile('Протокол установки цен из прайс-листа');
+}
+#end
+
+#end //_SCOPYPRL_VPP

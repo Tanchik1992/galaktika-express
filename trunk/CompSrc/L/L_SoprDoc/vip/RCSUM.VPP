@@ -1,0 +1,232 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : ПЕРЕСЧЕТ СУММ ПО НАКЛАДНОЙ ПРИ ИЗМЕНЕНИИ ИНФОРМАЦИИ       ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+// Обычный пересчет сумм по накладной
+
+Create view SPSOP1
+var
+  cKS : comp;
+From
+  Spsopr, SPORDER, KATOTPED;
+
+#ifdef _SOPRDOC_VIP
+function RCSUMCheckKatSoprVhodNAL(cMCUSL:comp;PrMc:word):boolean;
+{
+  RCSUMCheckKatSoprVhodNAL := true;
+
+  If PrMC <> 1 
+    exit;
+  If KatSopr.VhodNal = 1 
+    Exit;
+  If KatSopr.VidSopr <> 201 //накладные на отпуск(Управление сбытом);
+    Exit;
+  IF (not DocTuneNDS)       //РЕГУЛИРУЕМАЯ СТАВКА НДС В ОТЧЕТАХ
+    Exit;
+
+  var  piExAttr  : iExtAttr;
+
+  IF getfirst KatMC where((cMCUSL==KatMC.nREC))=tsOK
+    IF piExAttr.doGetAttr(coKatMC,KatMc.nRec,'РЕГУЛИРУЕМАЯ СТАВКА НДС В ОТЧЕТАХ')<>0
+      RCSUMCheckKatSoprVhodNAL:=false; //если фикс.ставка налог всегда входит в цену МЦ (для РБ)
+}
+#end
+
+
+procedure RecalcSumm(UpdSpSopr : boolean);
+var
+  MassaTov, MassaTara : double;
+  _valutPrice :double;
+  pGetDocSpecInfo : GetDocSpecInfo;
+  bCalcTara: boolean;
+{
+  if (not UpdSpSopr)
+    if (not UpdateTable)
+      Exit;
+  KatSopr.Summa := 0;
+  KatSopr.SumVal := 0;
+  KatSopr.sNalogs := 0;
+  KatSopr.svNalogs := 0;
+
+  bCalcTara := boGetTune('Oper.Netto&Tara_AutoCalc');
+  if (bCalcTara)
+  { 
+    KatSopr.Netto := 0; 
+    KatSopr.mTara := 0; 
+  }
+
+  SPSOP1.cKS := KatSopr.Nrec;
+
+  if (SPSOP1.GetFirst SpSopr  where ((cKS == SpSopr.cSopr)) = tsOk)
+    {
+      SPSOP1._LOOP SpSopr  where ((cKS == SpSopr.cSopr)) 
+       {
+        //подсчет тары
+        if (bCalcTara)
+         if (SPSOP1.SpSopr.PrMC = 1)
+         {
+           pGetDocSpecInfo.GetOneSpecInfo(coKatSopr, SPSOP1.SpSopr.nRec, MassaTov, MassaTara);
+           KatSopr.Netto := KatSopr.Netto + MassaTov;
+           KatSopr.mTara := KatSopr.mTara + MassaTara;
+         }
+        KatSopr.sNalogs := KatSopr.sNalogs + SPSOP1.SpSopr.SumNDS;
+        KatSopr.svNalogs := KatSopr.svNalogs + SPSOP1.SpSopr.SumVNDS;
+        if KatSopr.VidSopr > 500 and KatSopr.VidSopr < 509
+          KatSopr.Summa := KatSopr.Summa + SPSOP1.SpSopr.Price * SPSOP1.SpSopr.KolFact;
+        else
+          KatSopr.Summa := KatSopr.Summa + SPSOP1.SpSopr.Price * SPSOP1.SpSopr.KolOpl;
+
+
+#ifdef inv_prih
+        _valutPrice := oValFunc.GetAnyCurrency(SPSOP1.SpSopr.cVal, 
+                                               SPSOP1.SpSopr.vPrice,
+                                               SPSOP1.SpSopr.dSopr, 
+                                               KatSopr.cVal);
+#else
+#ifdef INV_RASH_VIP
+        _valutPrice := oValFunc.GetAnyCurrency(SPSOP1.SpSopr.cVal, 
+                                               SPSOP1.SpSopr.vPrice,
+                                               SPSOP1.SpSopr.dSopr, 
+                                               KatSopr.cVal);
+#else
+        _valutPrice := SPSOP1.SpSopr.VPrice;
+#end
+#end
+
+        if KatSopr.VidSopr > 500 and KatSopr.VidSopr < 509
+          KatSopr.SumVal := KatSopr.SumVal + _valutPrice * SPSOP1.SpSopr.KolFact;
+        else 
+          KatSopr.SumVal := KatSopr.SumVal + _valutPrice * SPSOP1.SpSopr.KolOpl;
+
+#ifdef _SOPRDOC_VIP
+        if not RCSUMCheckKatSoprVhodNAL(SPSOP1.SpSopr.cMCUSL,SPSOP1.SpSopr.PrMc)
+         {
+          KatSopr.Summa := KatSopr.Summa - SPSOP1.SpSopr.SumNDS;
+          KatSopr.SumVal := KatSopr.SumVal - SPSOP1.SpSopr.SumVNDS;
+         }
+#end
+       }
+
+      if (KatSopr.VhodNal <> 1)
+        {
+          KatSopr.Summa := (KatSopr.Summa + KatSopr.sNalogs);
+          KatSopr.SumVal := (KatSopr.SumVal + KatSopr.svNalogs);
+        };
+
+      if (KatSopr.VidSopr <> 201) AND (KatSopr.VidSopr <> 1421)
+        {
+          KatSopr.Summa := FSRoundRub(KatSopr.Summa);
+          KatSopr.SumVal :=FSRoundVal(KatSopr.SumVal);
+        }
+    }
+
+  RereadRecord(#SpSopr);
+  set KatSopr.Summa := KatSopr.Summa;
+
+
+}
+
+// Специальный пересчет сумм по накладной по клавише
+procedure RecalcSumm2(var newsumR:double; var newsumV:double;
+      var newRN: double; var newVN: double; var koltov : word);
+{
+  KolTov := 0;
+  newsumR := 0;
+  newsumV := 0;
+  newRN := 0;
+  newVN := 0;
+
+  SPSOP1.cKS := KatSopr.Nrec;
+  if (SPSOP1.GetFirst SpSopr   where ((cKS == SpSopr.cSopr)) <> tsOk)
+    exit;
+
+  SPSOP1._LOOP SpSopr   where ((cKS == SpSopr.cSopr)) 
+    {
+      KolTov := KolTov + 1;
+      newRN := newRn + SPSOP1.SpSopr.SumNDS;
+      newVN := newVN + SPSOP1.SpSopr.SumVNDS;
+      if KatSopr.VidSopr > 501 and KatSopr.VidSopr < 509
+        {
+          newsumR := newsumR + SPSOP1.SpSopr.Price  * SPSOP1.SpSopr.KolFact;
+          newsumV := newsumV + SPSOP1.SpSopr.VPrice * SPSOP1.SpSopr.KolFact;
+        }
+      else
+        {
+          newsumR := newsumR + SPSOP1.SpSopr.Price  * SPSOP1.SpSopr.KolOpl;
+          newsumV := newsumV + SPSOP1.SpSopr.VPrice * SPSOP1.SpSopr.KolOpl;
+        }
+    }
+
+  if (KatSopr.VhodNal <> 1)
+    {
+      newsumR :=(newsumR + NewRN);
+      newsumV :=(newsumV + NewVN);
+    };
+
+  if (KatSopr.VidSopr <> 201) AND (KatSopr.VidSopr <> 1421)
+    {
+      newsumR :=FSRoundRub(newsumR);
+      newsumV :=FSRoundVal(newsumV);
+    }
+}
+
+
+//дубль CalcSrPrice, но на внешней выгрузке
+procedure RecalcSummSrPrices;
+{
+  var Sp, Pp, Mp : comp;
+
+  Sp := if (KatSopr.cPodrFrom=0,comp(-1),KatSopr.cPodrFrom);
+  Mp := if (KatSopr.cMolFrom=0,comp(-1),KatSopr.cMolFrom);
+  if not InitMCinfo(KatSopr.dSopr)
+    Exit;
+  TypeOstatki(false);
+  LockValOt(true);
+  SPSOP1.cKS := KatSopr.Nrec;
+
+  SPSOP1._LOOP SpSopr where ((cKS == SpSopr.cSopr)) 
+   if SPSOP1.SpSopr.prMC=1
+    {
+        Continue;
+
+      //поиск расходного SpOrder для позиции
+      if SPSOP1.GetFirst SpOrder where ((SPSOP1.SpSopr.nRec == SpOrder.cSpSopr and
+                                         word(1)==SpOrder.VidOrder (noindex) )) =tsOk
+       { SPSOP1.SpSopr.cVal  := SPSOP1.SpOrder.cVal;
+         SPSOP1.SpSopr.Price := SPSOP1.SpOrder.srPrice;
+         SPSOP1.SpSopr.rPrice := SPSOP1.SpSopr.Price;
+         SPSOP1.SpSopr.VPrice:= SPSOP1.SpOrder.vPrice;
+         SPSOP1.SpSopr.rVPrice := SPSOP1.SpSopr.VPrice;
+       }
+      else//расходного ордера нет
+       { Pp := if(SPSOP1.SpSopr.cParty=0, comp(-1), SPSOP1.SpSopr.cParty);
+         SPSOP1.SpSopr.cVal:= StepMCInfo(SPSOP1.SpSopr.cMCUsl, SPSOP1.SpSopr.cVal,
+                                         Sp, Mp, Pp);
+         SPSOP1.SpSopr.Price := AveragePrice;
+         SPSOP1.SpSopr.rPrice := SPSOP1.SpSopr.Price;
+         SPSOP1.SpSopr.VPrice:= AverageVPrice;
+         SPSOP1.SpSopr.rVPrice := SPSOP1.SpSopr.VPrice;
+       }
+
+      SPSOP1.SpSopr.Price :=  SPSOP1.SpSopr.Price  * fEdIzm.GetKoefOtpEd(SPSOP1.SpSopr.cOtpEd);
+      SPSOP1.SpSopr.VPrice := SPSOP1.SpSopr.VPrice * fEdIzm.GetKoefOtpEd(SPSOP1.SpSopr.cOtpEd);
+
+      SPSOP1.SpSopr.rPrice  := SPSOP1.SpSopr.Price;
+      SPSOP1.SpSopr.rVPrice := SPSOP1.SpSopr.VPrice;
+      #ifdef SOPINMOV_VIP
+      SPSOP1.SpSopr.Price  := FRoundRubOrd(1, SPSOP1.SpSopr.rPrice * SPSOP1.SpSopr.KolFact)/SPSOP1.SpSopr.KolFact;
+      SPSOP1.SpSopr.VPrice := FRoundValOrd(1, SPSOP1.SpSopr.rVPrice * SPSOP1.SpSopr.KolFact)/SPSOP1.SpSopr.KolFact;
+      if wGetTune('Round.OrderPriceSum')=1
+        { SPSOP1.SpSopr.rPrice  := FRoundRubOrd(1, SPSOP1.SpSopr.rPrice);
+          SPSOP1.SpSopr.rVPrice := FRoundValOrd(1, SPSOP1.SpSopr.rVPrice);
+          SPSOP1.SpSopr.price  := SPSOP1.SpSopr.rPrice;
+          SPSOP1.SpSopr.vPrice := SPSOP1.SpSopr.rVPrice;
+        }
+      #end
+
+      SPSOP1.update current SpSopr ;
+
+    }
+
+  DoneMCinfo;
+
+}

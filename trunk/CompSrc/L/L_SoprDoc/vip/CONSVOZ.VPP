@@ -1,0 +1,185 @@
+!╔══════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Возврат МЦ с консигнации                             ║
+!╚══════════════════════════════════════════════════════════════════════╝
+
+Create View TmpConsVoz 
+As select 
+  *
+From 
+  TmpSpOrd,
+  SPSOPR;
+
+
+// Возврат из консигнации, который испольует view, портящий всю малину
+procedure ConsVozvr;
+var OstKol : double;
+var prErr : boolean;
+var SumOrd, VSumOrd : double;
+var Counts : longint;
+var dForm : date;
+var tmpc: comp;
+{
+  Counts := 0;
+  if (not isValid(#SpSopr))
+    {
+      Message(''#3'Накладная не оформлена - нет спецификации...',CancelButton);
+      Exit;
+    }
+
+  if (not CheckNullPos)
+    Exit;
+
+  dForm := if (longint(KatSopr.dOpr) <> 0, KatSopr.dOpr, KatSopr.dSopr);
+
+  if GetFirst SklOrder where ((KatSopr.nRec == SklOrder.cSopr))=tsOk
+    {
+      message(''#3'По накладной есть сформированные складские ордера.'#13#3+
+              'Корректировка невозможна!')
+      exit;
+    }
+
+  prErr := false;
+  SumOrd := 0;
+  VSumOrd := 0;
+
+  if (delete Pick where ((word(555) == Pick.wList)) <> tsOK) {};
+
+  TmpConsVoz.Delete all tmpspord;
+  StartNewVisual(vtNumericVisual,vfTimer,
+         ''#3'Выгрузка предыдущих отпусков и возвратов для расчета: ',1);
+
+  // Поиск и выгрузка ранее произведенных возвратов и отпусков
+  _LOOP KSopr where ((KatSopr.cStepDoc == KSopr.cStepDoc)) 
+    { 
+      NextVisual;
+      ResetBounds(#SpSopr);
+      if KSopr.VidSopr = 251
+        _LOOP SpSopr where ((KSopr.NRec == SpSopr.cSopr)) 
+          { 
+            pick.cRec := SpSopr.cMCUsl;
+            Pick.PickKol := SpSopr.KolFact;
+            pick.wlist := 555;
+            insert current Pick;
+          }
+      SetBounds(#SpSopr);
+      _LOOP SklOrder where ((KSopr.Nrec == SklOrder.cSopr)) 
+        _LOOP SpOrder where ((SklOrder.NRec == SpOrder.cSklOrder))
+          { NextVisual;
+            if (SklOrder.VidOrder = 0) //прих. - возвраты
+             {
+               pick.cRec := SpOrder.cMC;
+               Pick.PickKol := SpOrder.Kol;
+               pick.wlist := 555;
+               insert current Pick;
+             }
+            else //расх.- отпуски
+             {
+               TmpConsVoz.TmpSpOrd.cMC    := SpOrder.cMC;    
+               TmpConsVoz.TmpSpOrd.srPrice:= SpOrder.srPrice;
+               TmpConsVoz.TmpSpOrd.Kol    := SpOrder.kol;    
+               TmpConsVoz.TmpSpOrd.VPRice := SpORder.VPRice;
+               TmpConsVoz.TmpSpOrd.cVal   := SpOrder.cVal;   
+               TmpConsVoz.TmpSpOrd.cParty := SpOrder.cParty;
+               TmpConsVoz.TmpSpOrd.ccMol  := SklOrder.cMol;  
+               TmpConsVoz.TmpSpOrd.ccPodr := SklOrder.cPodr;
+               TmpConsVoz.TmpSpOrd.dOrd   := SklOrder.dOrd;
+               TmpConsVoz.insert current tmpspord;
+               Counts := Counts + 1;
+             }
+          }
+    }
+  StopVisual('',vfSilent);
+
+  // Очистка выгруженных расходов от произведенных по ним возвратов
+  StartNewVisual(vtIndicatorVisual,vfTimer, 'Анализ предыдущих операций :',Counts);
+  TmpConsVoz._LOOP TmpSpOrd ordered by index TmpSpOrd03 //cMC+dOpr
+    { 
+      tmpc := TmpConsVoz.tmpSpOrd.cMC;
+      _LOOP Pick where (( word(555) == Pick.wList and tmpc == Pick.cRec))
+        if (TmpConsVoz.tmpSpOrd.kol > 0)
+          { 
+            if (Pick.PickKol > TmpConsVoz.tmpSpOrd.kol)
+              {
+                Pick.PickKol := Pick.Pickkol - TmpConsVoz.tmpSpOrd.kol;
+                TmpConsVoz.delete current tmpSpOrd;
+                Counts := Counts - 1;
+                update current Pick;
+              }
+            else
+              {
+                TmpConsVoz.tmpSpOrd.kol := TmpConsVoz.tmpSpOrd.kol - Pick.PickKol;
+                delete current Pick;
+                if (TmpConsVoz.tmpSpOrd.kol = 0)
+                  { 
+                    TmpConsVoz.Delete current TmpSpOrd;
+                    Counts := Counts - 1;
+                    Break;
+                  }
+                else 
+                  TmpConsVoz.update current tmpSpOrd;
+               }
+          }
+        else
+          { 
+            TmpConsVoz.Delete current tmpSpOrd;
+            Counts := Counts - 1;
+            Break;  
+          }
+      NextVisual;
+    }
+  StopVisual('',vfSilent);
+  PushPos(#SpSopr);
+
+  // Формирование приходного складского ордера на возврат
+  ResetBounds(#SpSopr)
+    StartNewVisual(vtNumericVisual,vfTimer,'Подсчет количества на возврат',1);
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr and
+                              word(1) == SpSopr.PrMc))
+     {
+       NextVisual;
+       if ((SpSopr.PrMC <> 1) or (SpSopr.KolFact <= 0))
+         continue;
+
+       OstKol:= SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+       tmpc := SpSopr.cMCUsl;
+
+       TmpConsVoz._LOOP tmpSpOrd where ((tmpc == tmpSpOrd.cMC))
+                         ordered by index tmpSpOrd03
+         if (TmpConsVoz.tmpSpOrd.kol > OstKol)
+           {
+             TmpConsVoz.tmpSpOrd.kol := TmpConsVoz.tmpSpOrd.kol - OstKol;
+             OstKol:=0;
+             if (TmpConsVoz.tmpSpOrd.kol = 0)  
+               TmpConsVoz.delete current tmpSpOrd
+             else 
+               TmpConsVoz.Update current tmpSpOrd;
+             break;
+           }
+         else
+           if (TmpConsVoz.tmpSpOrd.kol > 0)
+             { 
+               OstKol  := OstKol - TmpConsVoz.tmpSpOrd.kol;
+               TmpConsVoz.Delete current tmpSpOrd;
+             }
+
+       if (TmpConsVoz.Delete tmpSpOrd where ((tmpc == tmpSpORd.cMC)) = tsOk)
+         {};
+
+       if (OstKol <> 0)
+        { prErr := true;
+          SpSopr.KolFact := SpSopr.KolFact - OstKol / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+          SpSopr.KolOpl  := SpSopr.KolOpl  - OstKol / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+          Update Current SpSopr;
+        }
+    }
+    StopVisual('',vfSilent);
+
+  SetBounds(#SpSopr);
+  PopPos(#SpSopr);
+  TmpConsVoz.Delete all tmpSpOrd;
+  Delete Pick where ((word(555) == Pick.wList));
+  RereadRecord(#SpSopr);
+  if (PrErr)
+    message(''#3'Возвращаемое количество МЦ в накладной было больше отпущенного.'#13#3+
+            'Спецификация накладной исправлена.',Information);
+}

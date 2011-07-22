@@ -1,0 +1,506 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║                     (c) 1994,98 корпорация ГАЛАКТИКА                      ║
+!║ Проект        : ГАЛАКТИКА                                                 ║
+!║ Система       : Оперативный контур                                        ║
+!║ Версия        : 5.70                                                      ║
+!║ Назначение    : Выбор МЦ/Услуг по группе (возврат по Pick.wList=800)      ║
+!║ Ответственный : Лебедев Сергей Владимирович                               ║
+!║ Параметры     : есть - группа МЦ/Услуг, общее кол-во для выбора (в УчЕд), ║
+!║                        ОтпЕд, Мн/Ед выбор                                 ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#doc
+Интерфейс выбора МЦ/Услуг по группе
+#end
+interface PickByGrMCUsl DoAccept,EscClose;
+Create View
+var
+  GrNRec, OtpEdnRec : comp;
+  TotalKol          : double;
+  PrMc, _PrMc : word;
+;
+
+Parameters GrNRec, _PrMc, TotalKol, OtpEdnRec;
+
+HandleEvent
+cmInit :
+  {
+    case _PrMc of
+      1,4,5: PrMc := 1;
+      2,3  : PrMc := 2;
+    end;
+    if (RunInterface(PickByGrMCUsl_1, GrNRec, PrMc, TotalKol,
+                     OtpEdnRec,false) = cmDefault)
+      {
+        PutCommand(cmDefault);
+      }
+    else
+      {
+        abort;
+        exit;
+      }
+  }
+
+end;
+end.
+
+
+#include oEdIzm.vih
+
+#doc
+Интерфейс выбора МЦ/Услуг по группе
+#end
+Interface PickByGrMCUsl_1 EscClose, gray;
+Show at (,1,,19);
+
+#include oEdIzm.var
+
+create view
+var
+    GrNRec, OtpEdnRec, tmpComp_: comp;
+    CurOstatok, TotalKol: double;
+    wasMade, error_, OneSelect: boolean;
+    PrMc: word;
+(
+  Picked,
+  MCUslNRec,
+  MCUslName,
+  MCUslBarKod,
+  MCUslcEd,
+  UchEdnRec,
+  MCUslGroupName
+)
+as select
+  if (isValid(tnPick), 'V', ''),
+
+  if (PrMC = 1, KatMC.nRec  , KatUsl.nRec ),
+  if (PrMC = 1, KatMC.Name  , KatUsl.Name ),
+  if (PrMC = 1, KatMC.BarKod, ''          ),
+  if (PrMC = 1, KatMC.cEd   , KatUsl.cEd  ),
+  if (PrMC = 1, GroupMC.cEd , GroupUsl.cEd),
+  if (PrMC = 1, GrMC.Name   , GrUsl.Name  )
+from
+  KatMC ,
+  KatUsl ,
+  KatEd,
+  KatOtpEd,
+  synonym KatOtpEd KatOtpEdMCUsl,
+  GroupMC,
+  GroupUsl,
+  GroupMC  GrMC,
+  GroupUsl GrUsl,
+  Pick,
+  synonym Pick Pick2
+where ((
+  GrNRec == GroupMC.NRec  and
+  GrNRec == GroupUsl.NRec and
+
+  GroupMC.Kod                   <<= KatMC.kGroupMC    and
+  padch(GroupMC.Kod,''#255,20)  >>= KatMC.kGroupMC    and
+ (KatMC.cEd                       = UchEdnRec)        and
+  GroupUsl.Kod                  <<= KatUsl.kGroupUsl  and
+  padch(GroupUsl.Kod,''#255,20) >>= KatUsl.kGroupUsl  and
+ (KatUsl.cEd                      = UchEdnRec)        and
+
+  UchEdnRec == KatEd.nRec and
+
+  KatMC.cGroupMC   == GrMc.nRec  and
+  KatUsl.cGroupUsl == GrUsl.nRec and
+
+  PrMc      == KatOtpEdMCUsl.PrMC    and
+  MCUslNRec == KatOtpEdMCUsl.cMCUSL  and
+  word(1)   == KatOtpEdMCUsl.Akt     and
+
+  OtpEdnRec == KatOtpEd.nRec  and
+
+  word(800) == Pick.wList  and
+  MCUslNRec == Pick.cRec   and
+  word(800) == Pick2.wList
+))
+;
+Parameters GrNRec, PrMc, TotalKol, OtpEdnRec, OneSelect;//
+
+//---------------------------------------------
+procedure AddDelPick(Del_: boolean; wList_: word; cRec_: comp);
+begin
+if GetFirst Pick2 where (( wList_ == Pick2.wList and
+                           cRec_  == Pick2.cRec)) = tsOk
+  { if Del_ {
+      CurOstatok := CurOstatok + Pick2.PickKol*fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec);
+      delete current Pick2;
+    }
+  }
+else
+  { ClearBuffer(#Pick);
+    Pick.wList:= wList_;
+    Pick.cRec := cRec_;
+    insert current Pick;
+  }
+end;
+
+//----------------------------------------------
+procedure SelectAll;
+begin
+if (PrMc = 1)
+ {
+  PushPos(#KatMC);
+  _loop KatMC
+    { if (MCUslcEd = UchEdnRec)
+        AddDelPick(false, 800, MCUslNrec);
+    }
+  PopPos(#KatMC);
+  ReReadRecord;
+  RescanPanel(#KatMC);
+ }
+else
+ {
+  PushPos(#KatUsl);
+  _loop KatUsl
+    { if (MCUslcEd = UchEdnRec)
+        AddDelPick(false, 800, MCUslNrec);
+    }
+  PopPos(#KatUsl);
+  ReReadRecord;
+  RescanPanel(#KatUsl);
+ }
+end;
+
+//-----------------------------------------------
+procedure UnSelectAll;
+begin
+if (PrMc = 1)
+ {
+  PushPos(#KatMC);
+  _loop KatMC
+    { if isValid(tnPick) delete current Pick;
+    }
+  PopPos(#KatMC);
+  ReReadRecord;
+  RescanPanel(#KatMC);
+ }
+else
+ {
+  PushPos(#KatUsl);
+  _loop KatUsl
+    { if isValid(tnPick) delete current Pick;
+    }
+  PopPos(#KatUsl);
+  ReReadRecord;
+  RescanPanel(#KatUsl);
+ }
+ set CurOstatok := TotalKol;
+end;
+
+//------------------------------------
+function CountKolbyPick:double;
+begin
+CountKolbyPick:=0;
+_loop Pick2
+  { CountKolbyPick:=CountKolbyPick + Pick2.PickKol;
+  }
+end;
+
+Window winGetPickKol 'Введите количество' (, , sci1Esc) EscClose, DoAccept, Gray;
+  Show at (,7,,10);
+
+Panel panGetPickKol
+Screen scrGetPickKol1;
+  Fields
+   [OstatokOnPos '']
+   if(MCUslcEd = UchEdnRec,
+     DoubleToStr(CurOstatok/fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec), '\4p[|-]36666666.8888'),
+     ''): skip;
+   Pick.PickKol ('Количество',, sci1Esc): [prSignsInKol], NoProtect;
+<<
+                        Остаток       .@@@@@@@@@@@@
+ Введите количество по данной позиции .@@@@@@@@@@@@
+>>
+end;
+
+HandleEvent
+cmCheckField:
+{
+  if (KatOtpEdMCUsl.Diskret = 1) and (Round(Pick.PickKol) <> Pick.PickKol)
+    { message(''#3'Отпускная единица не является делимой!');
+      abort; exit;
+    }
+
+   if (not isValid(#Pick))
+    {
+     if (Pick.PickKol > (CurOstatok/fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec)))
+       Pick.PickKol := CurOstatok/fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec);
+    }
+   else
+    {
+     if (Pick.PickKol > (double(OldFieldValue)+CurOstatok/fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec)))
+       Pick.PickKol := double(OldFieldValue)+CurOstatok/fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec);
+    }
+
+   if (KatOtpEdMCUsl.Diskret = 1) and (Round(Pick.PickKol) <> Pick.PickKol)
+     Pick.PickKol := Trunc(Pick.PickKol);
+
+
+   var kk: double;
+   if isValid(#Pick)
+    { //message('val')
+      kk := (Pick.PickKol-double(OldFieldValue))*fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec);
+      update current Pick;
+    }
+   else
+    { //message('noVal');
+      kk := Pick.PickKol*fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec);
+      Pick.wList:=800;
+      Pick.cRec:=MCUslNrec;
+      insert current Pick;
+    }
+
+   ReReadRecord;
+   RescanPanel(if(PrMc=1, #KatMC, #KatUsl));
+
+   if Pick.PickKol<=0.000001
+    { //message(''#3'Укажите количество');
+      CurOstatok := CurOstatok - kk +
+                    Pick.PickKol*fEdIzm.GetKoefOtpEd(KatOtpEdMCUsl.nRec);
+      delete current Pick;
+      RescanPanel(if(PrMc=1, #KatMC, #KatUsl));
+      stop; exit; }
+
+   CurOstatok := CurOstatok - kk;
+   if (OneSelect=True)
+   {
+   tmpComp_ := MCUslNrec;
+   if(PrMc = 1)
+    {
+      PushPos(#KatMC);
+      _loop KatMC
+        {
+          if (tmpComp_<> MCUslNrec)
+           if isValid(tnPick) delete current Pick;
+        }
+       PopPos(#KatMC);
+       RescanPanel(#KatMC);
+    }
+    else
+     {
+      PushPos(#KatUsl);
+      _loop KatUsl
+        {
+          if (tmpComp_<> MCUslNrec)
+           if isValid(tnPick) delete current Pick;
+        }
+       PopPos(#KatUsl);
+       RescanPanel(#KatUsl);
+     }
+   }
+}
+end;
+end;
+
+HandleEvent
+end; // of HandleEvent Window winSerach
+
+end; // of Window winSerach
+
+//=================================================================
+screen sc1 show at (,,,2);
+ Table KatMC;
+Fields
+ DoubleToStr(TotalKol*fEdIzm.GetKoefOtpEd(OtpEdnRec), '\4p[|-]36666666.8888'): skip;
+ KatOtpEd.name : skip;
+ OstatokOnPos  : [prSignsInKol], skip;
+<<
+ Общее количество для выбора.@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@
+ Остаток по текущей позиции .@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+
+Browse browse0 (' ',, sci1EnIns) show at (,3,,17);
+ Table KatMC;
+Fields
+  {Font = {Color = if(MCUslcEd <> UchEdnRec, ColorGray,
+                      if(Picked <> '', ColorMark, 0))}};
+  Picked 'V' : [1], skip;
+  MCUslGroupName 'Наименование', 'группы': [15],skip;
+  MCUslName   'Наименование': [20],skip;
+  MCUslBarKod 'Номенклатурный','номер': [12],skip;
+  KatOtpEdMCUsl.name 'Единица','измерения': [10],skip;
+  Pick.PickKol 'Количество' ('Введите количество для данной позиции. Enter - завершение выбора',): [10.3], protect;
+end; // browse
+
+Panel p0;
+ Table KatMC;
+HandleEvent //panel0
+cmPositionChanged:
+  SetFieldSelectable(#Pick.PickKol, MCUslcEd = UchEdnRec);
+
+cmOpenSearch:
+ {
+   if (MCUslcEd <> UchEdnRec) {
+     message(''#3'Учетная единица данной МЦ не совпадает с учетной единицей группы МЦ.'+
+          ''#13#3'Пометка текущей позиции невозможна.', Information);
+     if isValid(#Pick)
+       delete current Pick
+     else SetModified(false);
+     RereadRecord;
+   }
+   if (RunWindowModal(winGetPickKol) <> cmCancel)
+     if (GetNext KatMC = tsOk) CallToNeighbours(cmPosDown, #KatMC);
+   RereadRecord;
+   Abort;
+ }
+
+cmMarkUnmark:
+ { if (MCUslcEd <> UchEdnRec) {
+     message(''#3'Учетная единица данной МЦ не совпадает с учетной единицей группы МЦ.'+
+          ''#13#3'Пометка текущей позиции невозможна.', Information);
+     Exit;
+   }
+   AddDelPick(true, 800, MCUslNrec);
+
+   if (PrMc=1) {
+     if GetNext KatMC = tsOk  CallToNeighbours(cmPosDown, #KatMC);
+   }
+   else
+     if GetNext KatUsl = tsOk  CallToNeighbours(cmPosDown, #KatUsl);
+   ReReadRecord;
+   RescanPanel(if(PrMc=1, #KatMC, #KatUsl));
+ }
+cmSelectAll:
+ { if message(''#3'Выбрать все МЦ ?', YesNo)=cmYes
+     SelectAll;
+ }
+cmUnSelectAll:
+ { if message(''#3'Отменить выбор МЦ ?', YesNo)=cmYes
+     UnSelectAll;
+ }
+end; // he panel 0
+end;
+
+
+Panel p1;
+ Table KatUsl;
+HandleEvent //panel1
+cmPositionChanged:
+  SetFieldSelectable(#Pick.PickKol, MCUslcEd = UchEdnRec);
+
+cmOpenSearch:
+ {
+   if (MCUslcEd <> UchEdnRec) {
+     message(''#3'Учетная единица данной услуги не совпадает с учетной единицей группы.'+
+          ''#13#3'Пометка текущей позиции невозможна.', Information);
+     if isValid(#Pick)
+       delete current Pick
+     else SetModified(false);
+     RereadRecord;
+   }
+   if (RunWindowModal(winGetPickKol) <> cmCancel)
+     if (GetNext KatUsl = tsOk) CallToNeighbours(cmPosDown, #KatUsl);
+   RereadRecord;
+   Abort;
+ }
+
+cmMarkUnmark:
+ { if (MCUslcEd <> UchEdnRec) {
+     message(''#3'Учетная единица данной услуги не совпадает с учетной единицей группы.'+
+          ''#13#3'Пометка текущей позиции невозможна.', Information);
+     Exit;
+   }
+   AddDelPick(true, 800, MCUslNrec);
+
+   if (PrMc=1) {
+     if GetNext KatMC = tsOk  CallToNeighbours(cmPosDown, #KatMC);
+   }
+   else
+     if GetNext KatUsl = tsOk  CallToNeighbours(cmPosDown, #KatUsl);
+   ReReadRecord;
+   RescanPanel(if(PrMc=1, #KatMC, #KatUsl));
+ }
+cmSelectAll:
+ { if message(''#3'Выбрать все услуги ?', YesNo)=cmYes
+     SelectAll;
+ }
+cmUnSelectAll:
+ { if message(''#3'Отменить выбор услуги ?', YesNo)=cmYes
+     UnSelectAll;
+ }
+end; // he panel 1
+end;
+
+HandleEvent // interface
+cmInit:
+ {
+   Delete novisual Pick2;
+
+   case PrMc of
+     1: {
+          if GetFirst KatMC <> tsOk
+            {
+              message(''#3'В спецификации исходного документа указаны'#3+
+                   ''#13#3'группа МЦ ('+GroupMC.name+') и количество по группе:'#3+
+                ''#13#13#3'Однако, нет МЦ, принадлежащих данной группе'#3+
+                   ''#13#3'и с учетной единицей "'+KatEd.Name+'"'#3);
+              abort; exit;
+            }
+          else
+          {
+            message(''#3'В спецификации исходного документа указаны'#3+
+                 ''#13#3'группа МЦ ('+GroupMC.name+') и количество по группе.'#3+
+              ''#13#13#3'Выберите МЦ принадлежащие данной группе...'#3);
+            SetTitle('Выбор МЦ по группе "'+GroupMC.name+'"');
+          }
+        }
+     2: {
+          if GetFirst KatUsl <> tsOk
+            {
+              message(''#3'В спецификации исходного документа указаны'#3+
+                   ''#13#3'группа услуг ('+GroupUsl.name+') и количество по группе:'#3+
+                ''#13#13#3'Однако, нет услуг, принадлежащих данной группе'#3+
+                   ''#13#3'и с учетной единицей "'+KatEd.Name+'"'#3);
+              abort; exit;
+            }
+          else
+          {
+            SetScreenTable(sc1, #KatUsl);
+            SetScreenTable(browse0, #KatUsl);
+            SetFieldVisible(#MCUslBarKod, FALSE);
+            message(''#3'В спецификации исходного документа указаны'#3+
+                 ''#13#3'группа услуг ('+GroupUsl.name+') и количество по группе.'#3+
+              ''#13#13#3'Выберите услуги принадлежащие данной группе...'#3);
+            SetTitle('Выбор Услуг по группе "'+GroupUsl.name+'"');
+          }
+        }
+   end;
+
+   SetHelpAndStatusContext(browse0,-1,
+                          if (OneSelect,sci1EnEsc,sci1EnIns),
+                          0);
+   CurOstatok := TotalKol;
+ }
+cmDefault:
+  {
+    if GetFirst Pick2 where ((word(800) == Pick2.wList and
+                              double(0) == Pick2.PickKol (noIndex) )) =tsOk
+     { message(''#3'Есть позиции с нулевым количеством');
+       RescanPanel(if(PrMc=1, #KatMC, #KatUsl))
+       stop; abort; exit;
+     }
+
+    if GetFirst Pick2=tsOk
+      CloseInterface(cmDefault)
+    else
+     { message(''#3'Сделайте выбор');
+       stop; abort; exit;
+     }
+  }
+cmCancel:
+  { Delete novisual Pick2;
+  }
+
+cmDelOnProtect:
+  {
+  Abort;
+  Stop;
+  }
+end; // handleEvent interface
+End.

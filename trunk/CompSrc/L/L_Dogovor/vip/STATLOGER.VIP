@@ -1,0 +1,493 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Управление договорами                                     ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : История изменения статусов документов                     ║
+ ║ Ответственный : Глушаков Дмитрий Сергеевич                                ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+   pViewType // 1 - разрешено редактирование
+  ,pDoc      // NRec документа
+  ,pDocType  // вид документа
+  ,pStatus   // статус
+  ,pNote     // ссылка на текущие пояснение к статусу документа
+  ,wMaska    // маска запрещенных состояний
+*/
+
+#ifdef  __FpOborotState__
+#include ExFpObSt.Vih // Fp-триггер при изменении статуса документа (Sanny)
+#endif//__FpOborotState__
+#include aStatUser.vih // права доступа
+
+#ifdef ATL51
+#include FalbeExtPBDF.vih // Точка расширения для обработки экспорта ДО
+#end
+
+#doc
+Интерфейс истории изменения статуса документа
+#end
+Interface StatLog 'Изменения статуса документа. F7 - внести изменение.' (,hcDogActStatus,)
+  EscClose,
+  DoAccept,
+  Gray ;
+  show at (4,4,77,13);
+
+#include temp_tab.vih
+create view loStatLog
+var
+  pViewType      : word ;  // параметр - просмотр или редактирование
+  pDocType       : word ;  // вид документа
+  pDocType0      : word ;  // тоже вид документа, но уточненный
+  pDoc           : comp ;  // документ
+  pStatus        : word ;  // возвращаемый статус
+  wMaska         : word ;  // маска допустимых статусов
+  pNote          : comp ;  // ссылка на текущие пояснение к статусу документа
+  pBegin         : comp ;  // ссылка на последнию запись
+  wOldStatus     : word;
+  kDostup        : word ;  // контроль доступа к документам от статуса
+  pOldNote       : comp;
+  p_Note         : boolean;
+  oStatUser      : VipStatUser;
+  wDocType       : word;
+  CurProcProtect : word;   // см. S_Close.vpp
+  TecNameFilter  : string;
+from
+   StatLog                            (Normal)
+  ,KatDoc
+  ,KatNotes
+  ,synonym KatNotes NewNotes
+  ,synonym KatNotes KatNotes1
+  ,TMP01
+  ,AllMemo
+where
+  ((
+      StatLog.cOldNote    ==   KatNotes.NRec
+  and StatLog.cNewNote    ==   NewNotes.NRec
+  and pDocType            ==   KatNotes1.VidDoc
+  and wDocType            ==   KatDoc.TiDkGal
+  and coStatLog           ==   AllMemo.wTable
+  and StatLog.NRec        ==   AllMemo.cRec
+  ))
+Bounds ByDoc
+      pDoc                ==   StatLog.cDoc
+Bounds ByDocType
+      pDocType            ==   StatLog.DocType
+;
+
+Parameters
+   pViewType // 1 - разрешено редактирование
+  ,pDoc      // NRec документа
+  ,pDocType  // вид документа
+  ,pStatus   // статус
+  ,pNote     // ссылка на текущие пояснение к статусу документа
+  ,wMaska    // маска запрещенных состояний
+  ;
+
+QuickChoice qcKatNotesName
+ {
+  AcceptField = TMP01.nrec    ;
+  ViewField   = TMP01.st80_1  ;
+  SearchField = TMP01.st80_1  ;
+
+  OnOpen  :
+              if ( (pDocType=100) and not boGetTune('Doc.Status.Sopr')    )
+                {
+                 Message(''#3'В настройке Вам не разрешено изменять статус накладных!',Warning+CancelButton);
+                 Abort;
+                 Exit;
+                }
+              else
+               _LOOP KatNotes1
+                 {
+                  ClearBuffer(tnTMP01) ;
+                  TMP01.nrec   :=  KatNotes1.nRec  ;
+                  TMP01.word1  :=  KatNotes1.Status;
+                  TMP01.st80_1 :=  KatNotes1.Name  ;
+                  insert current TMP01 ;
+                 }
+  OnClose :  {
+               pNote    := TMP01.nrec  ;
+               pStatus  := TMP01.word1 ;
+               delete all TMP01;
+             }
+ }
+
+#INCLUDE g_date.vpp
+#ifNdef Gal8_1
+#INCLUDE DirPd.vpp
+#end
+
+procedure SetTuneBounds(ChkInt:boolean);
+  {
+  }
+#include GetCurTunes.vpp
+#INCLUDE s_descr.vpp // контроль дескриптора и ввод данных
+
+#doc
+Окно с дополнительной информацией к комментарию
+#end
+Window wnDopInfo 'Дополнительная информация к комментарию' ('Дополнительная информация к комментарию',,) EscClose;
+show at (,,,)
+
+Text MemoID = memKomm AllMemo.Mem 'Дополнительная информация к комментарию';
+
+end;
+
+Browse brStatLog (,,sci17EnEsc)
+  show at (,,,5);
+  Table StatLog ;
+Fields
+  KatDoc.Name       #3'Тип документа' ('Наименование или номер типа документа') : [20], skip ;
+  StatLog.DesGr     #3'Группа', ('Код группы пользователей') : [7], protect ;
+  StatLog.Descr     #3'Дескр.'  ('Дескриптор(идентификатор) пользователя') : [4], protect ;
+  StatLog.dOper     #3'Дата' ('Дата') : [10,'DD/MM/YYYY'], protect ;
+  StatLog.TimeOper  #3'Время' ('Время') : [5,'HH:MM'], protect ;
+  KatNotes.Name     #3'Старый' ('Старый статус') : [9], protect ;
+  NewNotes.Name     #3'Новый' ('Новый статус') : [9], protect ;
+end ; // browse brStatLog
+
+Screen  scStatLog (,,sci17EnEsc)
+  show at (,6,,);
+  Table StatLog ;
+Fields
+  StatLog.Comment ('Пояснение к изменению статуса документа');
+!    {Font = {BackColor = if (isNew and (StatLog.Comment = ''),ColorNeed,0) }};
+Buttons
+  cmValue1 ,,, 'Дополнительная информация к комментарию';
+<<
+ Комментарий к изменению статуса:
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                  <. Дополнительная информация .>
+>>
+end; // screen scStatLog
+
+Panel pnMemo;
+Table AllMemo;
+
+HandleEvent
+
+cmUpDateRecord :
+{
+  update current AllMemo;
+}
+
+cmInsertRecord :
+{
+  insert current AllMemo;
+}
+
+end;
+end;
+
+Panel paStatLog ;
+  Table StatLog ;
+
+Handleevent // panel
+
+cmValue1 :
+  RunWindowModal(wnDopInfo);
+
+cmSetDefault :
+  {
+  var stMes : string; stMes := '';
+  if ( (pDocType=400) and not boGetTune('Doc.Status.Dogovor') ) stMes := 'договоров';
+  if ( (pDocType=401) and not boGetTune('Doc.Status.Soglash') ) stMes := 'соглашений';
+  if ( (pDocType=440) and not boGetTune('Doc.Status.NZ')      ) stMes := 'наряд-заказов';
+  if ( (pDocType=441) and not boGetTune('Doc.Status.Rotgr')   ) stMes := 'распоряжений на отгрузку';
+  if ( (pDocType=100) and not boGetTune('Doc.Status.Sopr')    ) stMes := 'накладных';
+  if ( (pDocType=600) and not boGetTune('Doc.Status.Sopr')    ) stMes := 'накладных';
+  if ( (pDocType=606) and not boGetTune('Doc.Status.Sopr')    ) stMes := 'накладных';
+  if ( (pDocType=40)  and not boGetTune('Doc.Status.Do')      ) stMes := 'документов-оснований';
+  if (stMes <> '')
+    {
+    Message(''#3'В настройке Вам не разрешено изменять статус '+stMes+' !',Warning+CancelButton);
+    Abort;
+    Exit;
+    }
+  var _Stat : word ;
+  var _Note : comp ;
+  if (GetLast StatLog = tsOK)
+    {
+    StatLog.cOldNote := StatLog.cNewNote  ;
+    _Note := StatLog.cOldNote ;
+    p_Note:= true;
+    }
+  else
+    {
+    if GetFirst KatNotes where
+                ((pNote == KatNotes.Nrec)) = tsOk
+      {
+        StatLog.cOldNote  := KatNotes.Nrec;
+        StatLog.OldStatus := KatNotes.Status;
+      }
+    _Note := StatLog.cOldNote ;
+    p_Note:= false;
+    wOldStatus := StatLog.OldStatus;
+    pOldNote   := StatLog.cOldNote;
+    }
+  _Stat := wMaska ;
+
+  Stop ;
+  if (RunInterface( 'GetSomKatNotes'
+#ifdef __PrDs__
+                    ,pDocType0
+#else
+                    ,pDocType
+#end
+                    ,kDostup
+                    ,_Stat
+                    ,FALSE
+                    ,_Note ) = cmCancel)
+    {
+    Abort;
+    EXIT ;
+    }
+  // сейчас мы находимся на последней записи
+  set StatLog.NRec    := 0                 ;
+  set StatLog.LastUser:= 'Оформляется'     ;
+  StatLog.DocType     := pDocType          ;
+  StatLog.cDoc        := pDoc              ;
+  StatLog.Descr       := sGetTune('User.Descr');
+  StatLog.DesGr       := sGetTune('User.DesGr');
+  StatLog.dOper       := cur_date          ;
+  StatLog.timeOper    := cur_time          ;
+  if p_Note
+    StatLog.OldStatus := StatLog.NewStatus ;
+  else
+    {
+    StatLog.OldStatus := wOldStatus        ;
+    StatLog.cOldNote  := pOldNote          ;
+    }
+
+  StatLog.NewStatus   := _Stat             ;
+  StatLog.cNewNote    := _Note             ;
+  SetFieldSelectable(#StatLog.Comment, TRUE);
+  SelectField(#StatLog.Comment) ;
+  }
+cmUpDateRecord :
+  update current StatLog ;
+cmDeleteRecord :
+  {
+  if (Message(''#3'Удалить запись ?',YesNo+mfSwapButtons) = Yes)
+    delete current StatLog ;
+  }
+cmInsertRecord :
+  insert current StatLog ;
+cmPositionChanged :
+  {
+  SetFieldSelectable(#StatLog.Comment, 'Исполняется' <> StatLog.LastUser);
+
+  if(pViewType = 0)
+    SetFieldSelectable(#StatLog.Comment, FALSE);
+
+  ProtectRecord(#StatLog,('Исполняется'=StatLog.LastUser) or (pViewType = 0)) ;
+!  ProtectRecord(#StatLog,(pViewType=1) or
+!                         (StatLog.Descr<>CurDescr) or
+!                         ('Исполняется'=StatLog.LastUser) ) ;
+  }
+cmCheckRecord :
+  {
+  if (isNew)
+    if (StatLog.Comment = '')
+      {
+      Message(''#3'Задайте комментарий к изменению статуса документа...',OkButton);
+      SelectField(#StatLog.Comment) ;
+      Abort ;
+      }
+  }
+
+cmDelOnProtect :
+  {
+    abort;
+    exit;
+  }
+end ; // Handleevent panel
+end ; // panel
+
+#ifdef  __FpOborotState__
+Var pFpStateObrot : vExtFpStateOborot; // Fp-триггер при изменении статуса документа (Sanny)
+#endif//__FpOborotState__
+
+Handleevent // interface
+
+cmInit :
+{
+  wDocType := pDocType;
+  kDostup := 0;
+  if (pViewType and 1024) = 1024
+    {
+      if oStatUser.Stat_Nastr(pDocType)
+        kDostup := 1024;
+    }
+
+#ifdef __PrDs__
+  pDocType0 := pDocType;
+  case pDocType of
+  37..39 :
+    {
+      pDocType := 37;
+    }
+  41, 43, 51, 53 :
+    {
+      pDocType  := 40;
+    }
+  61, 509 :
+    {
+      pDocType  := 40;
+    }
+  201, 202, 203, 204, 206, 211, 101, 102, 103, 106, 110, 111, 112, 113, 114, 210, 229, 629, 631, 610, 1610 :
+    {
+#ifdef __SKYSHOP__
+      if pDocType <> 202
+#end
+      pDocType  := 100;
+    }
+  501, 502, 503, 504, 505, 506, 507, 508:
+    {
+      pDocType  := 100;
+    }
+  else
+    {
+      if IsPlatDoc(pDocType) and (not IsKassaDoc(pDocType))
+         pDocType := 1;
+      else
+         if IsKassaDoc(pDocType)
+            pDocType := 7;
+    }
+  end; // case
+#end
+
+
+! KPOXA:  'Dogovor'+if(pDoc<>0,string(pDoc),'')
+
+  if (pDoc     <> 0) AddBounds(tbByDoc);
+  if (pDocType <> 0) AddBounds(tbByDocType);
+  ReScanPanel(#StatLog) ;
+  if (GetLast StatLog <> tsOk)
+    {
+    pBegin := 0 ;
+    if (pViewType = 0) // не редактировать
+    {
+      Message('Отсутствует история изменения статуса.');
+      Abort;
+      Exit;
+    }
+!    PutCommand(cmInsert);  // cmInsert и так возникнет
+    }
+  else
+    {
+    wOldStatus := StatLog.NewStatus;
+    pOldNote   := StatLog.cNewNote;
+    pBegin := StatLog.nRec ;
+    ProtectRecord(#StatLog,(pViewType=1) or (pViewType=0) or
+                           (StatLog.Descr<>CurDescr) or
+                           (not isNew) ) ;
+    if ((pViewType <> 0))
+      PutCommand(cmInsert)
+    else
+    {
+      SetHelpAndStatusContext(brStatLog, -1, sci1Esc, -1);
+      SetHelpAndStatusContext(scStatLog, -1, sci1Esc, -1);
+      SetTitle('Изменения статуса документа.');
+    }
+    }
+}
+
+cmDone :
+{
+  #ifdef  __FpOborotState__
+  // Fp-триггер при изменении статуса документа (Sanny)
+  if (not NullVipRef(pFpStateObrot) )
+    FreeVipInterface(pFpStateObrot);
+  #endif//__FpOborotState__
+}
+
+cmManagerId :
+  OkPickNewManager ;
+
+cmDefault :
+{
+  UpDateTable ;
+  if (GetLast StatLog
+        where ((     pDoc          == StatLog.cDoc
+                 and pDocType      == StatLog.DocType
+                 and 'Оформляется' == StatLog.LastUser (NoIndex)
+              )) = tsOk)
+    {
+    if (Message(''#3'Принять изменения ?',YesNo)<>Yes)
+      {
+      Abort ;
+      EXIT ;
+      }
+    else
+      {
+      #ifdef  __FpOborotState__
+      // Fp-триггер при изменении статуса документа (Sanny)
+      if (not pFpStateObrot.OnChangeDocStatus(pDocType, pDoc, wOldStatus, StatLog.NewStatus) )
+       { Abort; Exit; }
+      #endif//__FpOborotState__
+
+      StatLog.OldStatus := wOldStatus;
+      StatLog.cOldNote  := pOldNote;
+#ifdef ATL51
+//Инициируем точку расширения - статус изменен
+    epFalbeBD(StatLog.cDoc, KatNotes.Nrec, NewNotes.Nrec, pDocType);
+#end
+      }
+    }
+  StatLog.LastUser:= 'Исполняется' ;
+  update current StatLog ;
+
+  delete NoVisual StatLog
+     where ((     pDoc          == StatLog.cDoc
+              and pDocType      == StatLog.DocType
+              and 'Оформляется' == StatLog.LastUser (NoIndex)
+           )) ;
+  if (GetLast StatLog
+        where ((pDoc     == StatLog.cDoc and
+                pDocType == StatLog.DocType )) = tsOk)
+    {
+    pStatus   := StatLog.NewStatus ;
+    pNote     := StatLog.cNewNote  ;
+    }
+}
+
+cmCancel : // отменить все изменения
+{
+  if (UpDateTable) {};
+  if (GetLast StatLog
+        where ((     pDoc          == StatLog.cDoc
+                 and pDocType      == StatLog.DocType
+                 and 'Оформляется' == StatLog.LastUser (NoIndex)
+              )) = tsOk)
+    {
+    if (Message(''#3'Отменить сделанные изменения ?',YesNo)=Yes)
+      delete NoVisual StatLog
+        where ((     pDoc          == StatLog.cDoc
+                 and pDocType      == StatLog.DocType
+                 and 'Оформляется' == StatLog.LastUser (NoIndex)
+              )) ;
+    else
+      Abort ;
+    }
+}
+
+cmClose :
+{
+  Abort;
+  PutCommand(cmCancel);
+}
+
+cmHotKeys : PutHotCommand(RunMenu('Print_HotKeys'));
+
+cmPrintDoc:
+  RunForm('PrintStatLog',pDoc,pDocType);
+
+end; // HandleEvent Interface
+end. // interface
+mnuHistoryStat Menu
+{
+- 'Печать истории',cmPrintDoc,'Печать истории',,'Ctrl+P',kbCtrlP,sci1Esc;
+}

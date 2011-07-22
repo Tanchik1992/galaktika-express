@@ -1,0 +1,792 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Просмотр платежей по документу
+//********************************************************************************
+
+//******************************************************************************
+
+#include PlPorSimple.vih
+#include AppVeks.vih
+#include AutoFit.vih
+#include DistrPl.vih
+#include Docs2Obj.vih
+#include DocSet.vih    // Наборы документов для раздельного учета
+#include DOfuns.vih
+#include GetDBase.vih
+#include iSynch.vih
+#include KatOrg.vih
+#include KontrBal.vih
+#include NalTunes.vih
+#include PlPor.vih
+#include PPMacros.vih
+#include SchFactFunctions.vih
+#include SelUsDoc.vih
+#include VZachet.vih
+#include AVZachet.vih
+#include ObjNalF.vih
+#include aStatUser.vih
+#include MTRFuncs.vih           // функции целевого учета
+#include SpNext.vih
+#include CalcFuns.vih
+#include SHManager.vih
+#include Notes.vih
+
+//******************************************************************************
+
+#doc
+Интерфейс просмотра платежей по документу
+#end
+Interface SeeFin 'Просмотр платежей по документу' EscClose, Cyan, doAccept;
+  Show at (, , 100, 20);
+
+//------------------------------------------------------------------------------
+
+Table struct MTBaseFin
+(
+  cRec : comp
+)
+;
+
+//------------------------------------------------------------------------------
+
+#include AutoFit.var
+#include iSynch.var
+#include DocSet.var
+#include MTRFuncs.var           // функции целевого учета
+#include SpNext.var
+#include Notes.var
+
+//------------------------------------------------------------------------------
+
+Create view
+
+Var
+  p1       : comp;
+  cViewDoc : comp;
+  DistrPl  : ObjDistrPl;
+  tipDo    : word;
+
+As select
+  BaseFin.*
+
+From
+  BaseFin
+, KlVal
+, SpStep
+, BaseDoc
+, BaseDoc     BaseDoc1
+, StepDoc
+, StepDoc     StepDoc1
+, KatOrg
+, KatOrg      KatOrg1
+, KatOrg      KatOrg2
+, KatBank
+, KatBank     KatBank1
+, BaseDocRem
+, StepDoc     StepDocZ2
+, SpStep      SpStepZ2
+, KatSopr
+, Filial
+
+Where
+((
+     word(0)          == BaseFin.TiDkBase
+AND  p1               == BaseFin.cStepDoc
+AND  p1               == StepDoc.nRec
+AND  BaseFin.cVal     == KlVal.nRec
+AND  BaseDoc.cOrg     == KatOrg.nRec
+AND  BaseDoc.cGrOtpr  == KatOrg1.nRec
+AND  BaseDoc.cGrPol   == KatOrg2.nRec
+AND  BaseDoc.cBank    == KatBank.nRec
+AND  BaseDoc.cMyBank  == KatBank1.nRec
+))
+
+Bounds PredoplBD =
+    word(0)      == BaseFin.TiDkBase
+and BaseDoc.nRec == BaseFin.cPredoplDO
+
+Bounds MemFin
+    MTBaseFin.cRec == BaseFin.nRec
+
+Bounds BaseDocMain
+    StepDoc.cBaseDoc == BaseDoc.nRec
+;
+
+//******************************************************************************
+
+Parameters
+  p1            // StepDoc.nRec
+;
+
+//******************************************************************************
+
+Panel pan1
+  Table BaseFin
+
+Browse PickSopr ('', hcKouDocBPlat, sci14Esc);
+  Show at (, , , 16)
+
+Fields
+//------------------------------------------------------------------------------
+  GetTiDkGalName(BaseFin.TiDkGal)
+        #3'Тип документа'('Тип финансового сопроводительного документа')
+        : [17], Skip;
+//------------------------------------------------------------------------------
+  if (BaseFin.Direct = 1, 'продажа',
+    if (BaseFin.Direct = 2 ,'закупка', 'не определено'))
+        #3'Направление'
+        : [12], Skip, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseFin.Descr
+        #3'Дескр.'
+        : [5], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseFin.NoDoc
+        #3'№ документа' ('Номер финансового сопроводительного документа')
+        : [12], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  if(BaseFin.cVal = 0, BaseFin.Summa, BaseFin.SumVal)
+        #3'Сумма'
+        : [15.2, '\2p[|-]36`666`666`666`666.88'], Skip, LessNull, NoAutoSize;
+//------------------------------------------------------------------------------
+  if (BaseFin.cVal = 0, sGetTune('NDE.SimvRub'), KlVal.SimvolV)
+        #3'Вал.'
+        : [4], NoAutoSize, Skip;
+//------------------------------------------------------------------------------
+  BaseFin.dDoc
+        #3'Дата оплаты'
+        : [11, 'DD/MM/YYYY'], Skip, Centered, NoAutoSize;
+ //------------------------------------------------------------------------------
+end; // Browse
+end; // Panel
+
+//******************************************************************************
+
+Screen RasprPlat ('', hcKouDocBPlat, sci1Esc);
+  Show at (, 17, , )
+
+Buttons
+  cmValue1, , , 'Перераспределение платежей', , sci1Esc;
+
+<<
+
+                                 <. Перераспределение платежей .>
+>>
+end; // Browse
+
+//******************************************************************************
+
+var
+  iTempl      : PPT_GetTemplate; // создание назначения по шаблонам
+  iObjNDTunes : iNalDistrTunes;  // интерфейс настроек работы с документами
+  piPlPor     : PlPorSimple;
+  iKB         : iKontrBal;
+  BDCalc      : ObjGetDB;
+
+  PlPor_ValDO
+, PrDoc_VidDoc
+, PlPor_Curse
+, DatePl
+, wVidDoc
+    : word;
+
+  myDate
+, DatePlDt
+    : date;
+
+  UseMaxDate
+    : boolean;
+
+  myValNo
+    : comp;
+
+//******************************************************************************
+
+#doc
+Окно установки параметров формирования платежей
+#end
+Window wPlPorParam 'Параметры формирования' (, , ) EscClose, DoAccept;
+  Show at(, , 51, 10);
+
+Panel pSeeFin
+
+Screen scSeeFinBuy  ('', hcSellM1OperPlDoc, sci1Esc);
+
+Fields
+//------------------------------------------------------------------------------
+  PlPor_Curse  : [LIST 'из ДО', 'на дату ДО', 'на дату оплаты'], Protect;
+//------------------------------------------------------------------------------
+  PlPor_ValDo  : [LIST 'в валюте ДО', 'в НДЕ', 'с запросом валюты'], Protect;
+//------------------------------------------------------------------------------
+  UseMaxDate   : NoProtect;
+//------------------------------------------------------------------------------
+  DatePl       : NoProtect;
+//------------------------------------------------------------------------------
+  DatePlDt     : NoProtect;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmOk, , , '', , sci1EnEsc;
+<<
+ Курс валюты для ДО с типом Вал-НДЕ.@@@@@@@@@@@@@@
+ Формирование платежей производить:
+    .@@@@@@@@@@@@@@@@@@@@@@
+    [.] на дату "Оплатить до..."(если указана)`
+ либо
+    (.) на дату документа-основания`
+    (.) на произвольную дату       `.@@@@@@@@@@
+
+              <.Сформировать платеж.>
+>>
+end; // Screen
+
+Screen scSeeFinSell  ('', hcSellM1OperPlDoc, sci1Esc);
+
+Fields
+//------------------------------------------------------------------------------
+  UseMaxDate   : NoProtect;
+//------------------------------------------------------------------------------
+  DatePl       : NoProtect;
+//------------------------------------------------------------------------------
+  DatePlDt     : NoProtect;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmOk, , , '', , sci1EnEsc;
+<<
+
+ Формирование платежей производить:
+    [.] на дату "Оплатить до..."(если указана)`
+ либо
+    (.) на дату документа-основания`
+    (.) на произвольную дату       `.@@@@@@@@@@
+
+              <.Сформировать платеж.>
+>>
+end; // Screen
+
+Screen scDogSell  ('', hcSellM1OperPlDoc, sci1Esc);
+
+Fields
+//------------------------------------------------------------------------------
+  UseMaxDate   : NoProtect;
+//------------------------------------------------------------------------------
+  DatePl       : NoProtect;
+//------------------------------------------------------------------------------
+  DatePlDt     : NoProtect;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmOk, , , '', , sci1EnEsc;
+<<
+
+ Формирование платежей производить:
+    [.] на дату "Оплатить до..."(если указана)`
+ либо
+    (.) на дату договора уступки долга`
+    (.) на произвольную дату          `.@@@@@@@@@@
+
+              <.Сформировать платеж.>
+>>
+end; // Screen
+
+HandleEvent
+
+cmCheckField:
+  case CurField of
+    #DatePl:
+      if ( DatePl = 0 )
+        ClearFieldState(#DatePlDt, sfVisible)
+      else
+        SetFieldState(#DatePlDt, sfVisible);
+  end;
+
+end;
+end; // Panel
+
+HandleEvent
+
+cmInit:
+  {
+    DatePlDt := Cur_Date;
+    ClearFieldState(#DatePlDt, sfVisible);
+
+    case wVidDoc of
+    //********************
+      101, 111, 1410:
+        {
+          SetFormat(scSeeFinBuy);
+          SetFieldVisible(#PlPor_ValDo, BaseDoc.TipMoney = 3);
+        }
+      90, 91, 92, 93: SetFormat(scDogSell);
+    else
+    //********************
+      SetFormat(scSeeFinSell);
+    end;
+  }
+
+cmOk:
+  PutCommand(cmDefault);
+
+end;
+
+end; // Window
+
+//******************************************************************************
+
+#include Direct.vpp
+#include Sh_PlPor.Vpp
+
+#include gettot.vpp
+#include skidtot.vpp
+#include modifdo.vpp
+
+//******************************************************************************
+
+Function MakeDOForZRem: comp;
+Var
+  wNalog
+            : word;
+
+  cZrem
+, cZSpStep
+            : comp;
+{
+  PopBounds(tbBaseDocMain);
+
+  MakeDOForZRem := 0;
+  cZrem         := StepDoc.cBaseDoc;
+
+  if ( GetFirst BaseDoc where (( cZrem == BaseDoc.nRec )) = tsOk )
+    {
+      if ( (BaseDoc.Direct = 1) or (BaseDoc.Direct = 2) )
+        {
+          if ( GetFirst BaseDocRem where ((  BaseDoc.nRec == BaseDocRem.cBaseDoc
+                                         and word(0)      == BaseDocRem.TipDoc
+                                         )) = tsOk )
+            {
+              case BaseDoc.Direct of
+                1: tipDo    := 101;
+                2: tipDo    := 201;
+              end;
+
+              wNalog := BaseDoc.VidDoc + 1000;
+
+              BaseDoc.nRec   := 0;
+              BaseDoc.VidDoc := tipDo;
+              BaseDoc.Descr  := sGetTune('User.Descr');
+              BaseDoc.DesGr  := sGetTune('User.DesGr');
+
+              case tipDo of
+                101: BaseDoc.Status := if(wGetTune('Doc.Buy.Status') = 0, 2, 1);
+                201: BaseDoc.Status := if(wGetTune('Doc.Sell.Status') = 0, 2, 1);
+              end;
+
+              BaseDoc.cNote := oNotes.GetFirstNote(word(40), BaseDoc.Status);
+
+              insert current BaseDoc;
+
+//------------------------------------------------------------------------------
+
+              BaseDocRem.nRec        := 0;
+              BaseDocRem.cBaseDoc    := BaseDoc.nRec;
+              BaseDocRem.cBaseDocRem := cZrem;
+
+              insert current BaseDocRem;
+
+//------------------------------------------------------------------------------
+
+              if ( GetFirst StepDoc where (( cZrem == StepDoc.cBaseDoc )) = tsOk )
+                {}
+
+              StepDoc.nRec     := 0;
+              StepDoc.cBaseDoc := BaseDoc.nRec;
+              StepDoc.dEnd     := BaseDoc.dEnd;
+              StepDoc.cVal     := BaseDoc.cVal;
+              StepDoc.Name     := BaseDoc.Name;
+              StepDoc.Status   := BaseDoc.Status;
+
+              if ( BaseDoc.cVal = 0 )
+                {
+                  StepDoc.Summa  := BaseDoc.Total;
+                  StepDoc.SumVal := 0;
+                }
+              else
+                {
+                  StepDoc.Summa  := 0;
+                  StepDoc.SumVal := BaseDoc.Total;
+                }
+
+              if ( insert current StepDoc = tsOk )
+                MakeDOForZRem := StepDoc.nRec;
+
+//------------------------------------------------------------------------------
+
+              if ( GetFirst StepDocZ2 where (( cZrem == StepDocZ2.cBaseDoc )) = tsOk )
+                _loop SpStepZ2 where (( StepDocZ2.nRec == SpStepZ2.cStepDoc ))
+                  {
+                    cZSpStep := SpStepZ2.nRec;
+
+                    set SpStepZ2.nRec     := 0;
+                    set SpStepZ2.cSpDocs  := 0;
+                    set SpStepZ2.cStepDoc := StepDoc.nRec;
+                    set SpStepZ2.dDoc     := BaseDoc.dDoc;
+                    set SpStepZ2.Npp      := oSpNext.GetSpNppNext(SpStepZ2.cStepDoc, coSpStep);
+
+                    insert current SpStepZ2;
+
+                    _loop SpDocNal where ((  cZSpStep == SpDocNal.cSpDoc
+                                         and wNalog   == SpDocNal.TipDoc
+                                         ))
+                      if ( SpDocNal.cNalog <> 0 )
+                        {
+                          SpDocNal.nRec   := 0;
+                          SpDocNal.cSpDoc := SpStepZ2.nRec;
+                          SpDocNal.TipDoc := BaseDoc.VidDoc + 1000;
+
+                          if ( insert current SpDocNal = tsOk )
+                            {}
+                        }
+
+                    // скопировать ЦУ
+                    oMTRFun.CopySpecMTR(coSpStep, cZSpStep, coSpStep, SpStepZ2.nRec);
+                  }
+
+//------------------------------------------------------------------------------
+
+              GetTotalSkid(false);
+              ModifDo;
+            }
+        }
+    }
+
+  PushBounds(tbBaseDocMain);
+}
+
+//******************************************************************************
+
+Function BaseDocCreated: boolean;
+{
+  BaseDocCreated := true;
+
+  _loop BaseDocRem where (( StepDoc.cBaseDoc == BaseDocRem.cBaseDocRem ))
+    _loop BaseDoc1 where (( BaseDocRem.cBaseDoc == BaseDoc1.nRec ))
+      exit;
+
+  BaseDocCreated := false;
+}
+
+//******************************************************************************
+
+Procedure InitMTBaseFin;
+{
+  set p1 := cViewDoc;
+
+  MTClear(#MTBaseFin, mfNormal);
+
+  //платежи привязанные к заявке на ремонт
+  _loop BaseFin where (( word(0) == BaseFin.TiDkBase and p1 == BaseFin.cStepDoc ))
+    insert MTBaseFin set MTBaseFin.cRec := BaseFin.nRec;
+
+  //платежи привязанные к ДО по заявке на ремонт
+  _loop BaseDocRem where (( StepDoc.cBaseDoc == BaseDocRem.cBaseDocRem ))
+    _loop StepDoc1 where (( BaseDocRem.cBaseDoc == StepDoc1.cBaseDoc ))
+      _loop BaseFin where (( word(0) == BaseFin.TiDkBase and StepDoc1.nRec == BaseFin.cStepDoc ))
+        insert MTBaseFin set MTBaseFin.cRec := BaseFin.nRec;
+
+  RereadRecord(#MTBaseFin);
+}
+
+//******************************************************************************
+
+Procedure MakePlPor;
+{
+  PrDoc_VidDoc := BaseDoc.VidDoc;
+
+  _Sh_PlPor_wList := if((PrDoc_VidDoc = 101) or (PrDoc_VidDoc = 111), 700, 701);
+  _Sh_PlPor_Init_Tbl;
+
+  GetVipRef(BDCalc, 'GetDBase');
+
+  _Sh_PlPor_Ins_In_Tbl(BaseDoc.nRec, 1, BDCalc.GetDolgBaseDoc(BaseDoc.nRec, 0));
+  _Sh_PlPor_Make(0, 0, if(DatePl = 1, DatePlDt, ZeroDate), UseMaxDate, PlPor_ValDO);
+  _Sh_PlPor_Done_Tbl;
+}
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+{
+  PushBounds(tbBaseDocMain);
+
+  cViewDoc := p1;
+  wVidDoc  := BaseDoc.VidDoc;
+
+  case wVidDoc of
+
+    111, 211:
+      PushBounds(tbPredoplBD);
+
+    550:
+      {
+        InitMTBaseFin;
+        PushBounds(tbMemFin);
+      }
+
+  end;
+
+  if ( GetFirst BaseFin <> tsOk )
+    {
+      var Flag: boolean;
+
+      Flag := TRUE;
+
+      case wVidDoc of
+      //********************
+        101, 111, 201, 211, 1410, 1420:
+          {
+            if ( Message('Нет финансовых сопроводительных документов '
+                       + 'по основанию '+ f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc)
+                       + ''#13#13'Сформировать ?', YesNo + Confirmation) = cmYes )
+              {
+                if ( RunWindowModal(wPlPorParam) = cmCancel )
+                  {
+                    Abort;
+                    Exit;
+                  }
+
+                PutCommand(cmValue2);
+                Flag := FALSE;
+              }
+          }
+
+        550:
+          {
+            if ( Message('Нет финансовых сопроводительных документов '
+                       + 'по заявке '+ f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc)
+                       + ''#13#13'Сформировать ?', YesNo + Confirmation) = cmYes )
+              {
+                if ( BaseDocCreated )
+                  {
+                    if ( RunWindowModal(wPlPorParam) = cmCancel )
+                      {
+                        Abort;
+                        Exit;
+                      }
+
+                    Var c1: comp;
+
+                    c1 := StepDoc.cBaseDoc;
+
+                    _loop BaseDocRem where (( c1 == BaseDocRem.cBaseDocRem ))
+                      _loop StepDoc1 where (( BaseDocRem.cBaseDoc == StepDoc1.cBaseDoc ))
+                        {
+                          p1 := StepDoc1.nRec;
+
+                          if ( GetFirst StepDoc = tsOk )
+                            MakePlPor;
+                        }
+
+                    PutCommand(cmValue3);
+                    Flag := false;
+                  }
+                else
+                  {
+                    p1 := MakeDOForZRem;
+
+                    if ( p1 = 0 )
+                      {
+                        message('Невозможно сформировать ДО по заявке.'#13 + 'Операция отменена.' );
+                        Abort;
+                        Exit;
+                      }
+
+                    if ( RunWindowModal(wPlPorParam) = cmCancel )
+                      {
+                        Abort;
+                        Exit;
+                      }
+
+                    PutCommand(cmValue2);
+                    Flag := false;
+                  }
+              }
+          }
+
+        90, 91, 92, 93:
+          {
+            if ( Message('Нет финансовых сопроводительных документов '
+                       + 'договору на уступку долга'+ f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc)
+                       + ''#13#13'Сформировать ?', YesNo + Confirmation) = cmYes )
+              {
+                if ( RunWindowModal(wPlPorParam) = cmCancel )
+                  {
+                    Abort;
+                    Exit;
+                  }
+
+                PutCommand(cmValue2);
+                Flag := FALSE;
+              }
+
+          }
+      end;
+
+      if Flag
+        {
+          if ( Message('Запустить интерфейс распределения платежных документов по ДО?', YesNo + Confirmation) = cmYes )
+            if ( NOT (GetVipRef(DistrPl, 'PlDocDistr')) )
+              Message('Не удалось загрузить интерфейс для работы с распределением сумм!', Error);
+            else
+              DistrPl.RunOnDO(StepDoc.cBaseDoc);
+
+          if ( GetFirst BaseFin <> tsOk )
+            {
+              Abort;
+              Exit;
+            }
+        }
+    }
+
+  if ( NOT (GetVipRef(DistrPl, 'PlDocDistr')) )
+    {
+      Message('Не удалось загрузить интерфейс для работы с распределением сумм!', Error);
+      SetCommandEnabled(cmValue1, FALSE);
+    }
+
+  SetWindowTitle(wnMainWindow, 'Финансовые сопроводительные документы по основанию '+
+                               f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc));
+}
+
+cmValue1:
+{
+  if ( NOT (GetVipRef(DistrPl, 'PlDocDistr')) )
+    Message('Не удалось загрузить интерфейс для работы с распределением сумм!', Error);
+  else
+    {
+      DistrPl.RunOnDO(StepDoc.cBaseDoc);
+
+      if ( wVidDoc = 550 )
+        InitMTBaseFin;
+
+      RereadRecord(#BaseFin);
+    }
+}
+
+cmValue2:
+{
+  MakePlPor;
+
+  if ( wVidDoc = 550 )
+    InitMTBaseFin;
+
+  RereadRecord(#BaseFin);
+
+  if ( RecordExists BaseFin <> tsOk )
+    {
+      Message('Нет финансовых сопроводительных документов по основанию ' +
+              f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc), Information + CancelButton);
+
+      PutCommand(cmCancel);
+    }
+}
+
+cmValue3:
+{
+  if ( wVidDoc = 550 )
+    InitMTBaseFin;
+
+  RereadRecord(#BaseFin);
+
+  if ( RecordExists BaseFin <> tsOk )
+    {
+      Message('Нет финансовых сопроводительных документов по основанию ' +
+              f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc), Information + CancelButton);
+
+      PutCommand(cmCancel);
+    }
+}
+
+cmEdit:
+{
+  if ( BaseFin.cVeksl <> 0 )
+    RunInterface(AppVeks, BaseFin.TidkGal, BaseFin.TipDoc, BaseFin.cVeksl, FALSE);
+  else
+    {
+      case BaseFin.TidkGal of
+
+        71:
+          {
+            RunInterface(VZachet, 70, BaseFin.nRec, comp(0));
+          }
+        770..772 : RunInterface('AVzachet',770, BaseFin.nRec, BaseFin.cPlPor);
+        90..95:
+          {
+            var
+              cRecCessia: comp;
+
+            cRecCessia := 0;
+
+            case BaseFin.TiDkGal of
+
+              90, 94:
+                {
+                  if ( BaseFin.Direct = 1 )
+                    {
+                      if ( GetFirst SpStep where ((  word(200)    == SpStep.prMC
+                                                 AND BaseFin.nRec == SpStep.cMCUsl
+                                                 )) = tsOk )
+                        cRecCessia := SpStep.cPriceList;
+                    }
+                  else if ( BaseFin.Direct = 2 )
+                    cRecCessia := BaseFin.cBaseDoc;
+                }
+
+              92, 95:
+                {
+                  if ( BaseFin.Direct = 1 )
+                    cRecCessia := BaseFin.cBaseDoc;
+                  else
+                    if ( BaseFin.Direct = 2 )
+                      if ( GetFirst SpStep where ((  word(200)    == SpStep.prMC
+                                                 AND BaseFin.nRec == SpStep.cMCUsl
+                                                 )) = tsOk )
+                        cRecCessia := SpStep.cPriceList;
+                }
+
+              91, 93:
+                {
+                  cRecCessia := BaseFin.cBaseDoc;
+                }
+
+            end;
+
+            if ( cRecCessia <> 0 )
+              RunInterface('Cessia', BaseFin.TiDkGal, cRecCessia);
+          }
+
+      else
+        RunInterface(PlPor, BaseFin.TidkGal, BaseFin.TipDoc, BaseFin.cPlPor);
+
+      end; // case
+    }
+
+  if ( wVidDoc = 550 )
+    InitMTBaseFin;
+
+  if ( RecordExists BaseFin <> tsOk )
+    {
+      Message('Нет финансовых сопроводительных документов по основанию ' +
+              f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc), Information + CancelButton);
+
+      PutCommand(cmCancel);
+    }
+
+  RereadRecord(#BaseFin);
+}
+
+end; // HandleEvent
+End. // Interface

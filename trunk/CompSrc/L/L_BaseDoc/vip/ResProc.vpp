@@ -1,0 +1,272 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - документы-основания
+// Процедуры резервирования для продажи и отпуска на консигнацию
+//******************************************************************************
+
+#ifNdef _RESPROC_VPP
+#define _RESPROC_VPP
+
+//******************************************************************************
+
+#include ResProc.var
+#include RESPROC.tune
+#include TekRun.var
+
+//******************************************************************************
+#include MetizKoef.vpp
+//******************************************************************************
+
+Function AllowedToReservOnParty: boolean;
+{
+  Result := oResProc.AllowedToReservOnParty(SpStep.cParty, TekSaldo.cParty);
+}
+//******************************************************************************
+Function CheckRestrictRazrez(pSklad, pMOL, pParty: comp): boolean;
+var aSklad, aMOL: comp;
+{
+  aSklad := aMOL := 0;
+
+#ifdef __vschet__
+#ifndef __vschetb__
+#ifndef __Zrem__
+  if ExistTune('Reserv.DO_Sklad_Enabled')
+    if ( wGetTune('Reserv.DO_Sklad_Enabled') > 0 )
+      {
+        aSklad := BaseDoc.cParty;
+
+        if boGetTune('Pick.AvtoMol') AND ( BaseDoc.cParty <> 0 )
+          if ( GetFirst KatMOL3 where (( BaseDoc.cParty == KatMOL3.cSkl )) = tsOk )
+            {
+              aMOL := KatMOL3.nRec;
+
+              if ( GetNext KatMOL3 where (( BaseDoc.cParty == KatMOL3.cSkl )) = tsOk )
+                aMOL := 0;
+            }
+      }
+#end
+#end
+#end
+
+  if ( aSklad = 0 )
+    Result := oResProc.CheckRestrictRazrez(pSklad, pMOL, pParty)
+  else
+    {
+      Result := FALSE;
+
+      if ( aSklad <> pSklad )
+        Exit;
+
+      if boGetTune('Pick.AvtoMol') AND ( aMOL <> 0 ) AND ( aMOL <> pMOL )
+        Exit;
+
+      Result := TRUE;
+    }
+}
+
+//******************************************************************************
+
+Procedure SubResTov(var NeedKolSub: double);
+{
+  oResProc.SubResTovMC(BaseDoc.cParty, SpStep.PrMC, SpStep.cMCUSL, GetKoefOtpEdT(KatOtpEd.NRec, SpStep.NRec), NeedKolSub);
+}
+
+//******************************************************************************
+
+Procedure DelPosDoRes;
+{
+  fTekRun.DeleteDoRes(SpStep.nRec);
+}
+
+//******************************************************************************
+
+Procedure SubResRazrez;   // снятие резервов по складам
+{
+  oResProc.SubResRazrez(BaseDoc.nRec, SpStep.BufferP);
+}
+
+//******************************************************************************
+
+Function ProcSklRes: boolean; // резервирование по полному складскому разрезу
+{
+  Result := oResProc.ProcSklRes(BaseDoc.nRec, TRUE);
+
+  RescanPanel(#SpStep);
+}
+
+//******************************************************************************
+
+Procedure ResPoTov(ManualInput: double; RepErr: boolean);  // резервирование по МЦ
+{
+  oResProc.ResPoTov(BaseDoc.nRec, SpStep.BufferP, ManualInput, RepErr, TRUE);
+}
+
+//******************************************************************************
+// Автоматическое резервирование по позициям
+Function Proc20: boolean;
+{
+  Result := oResProc.Proc20(BaseDoc.nRec, ResIs, TRUE);
+  RereadRecord(#SpStep);
+
+  #ifdef __VSCHET_VIH__
+  epAfterMakeReserv(BaseDoc.nRec);
+  #end
+}
+
+//******************************************************************************
+
+Procedure Proc14;               // снятие резерва по документу
+{
+  oResProc.Proc14(BaseDoc.nRec);
+  RereadRecord(#SpStep);
+}
+
+//******************************************************************************
+
+Create view vRN
+From
+  KatSopr
+, SpSopr;
+
+//******************************************************************************
+
+Function GetOtgr: double;
+{
+  var pStepDoc : comp;    pStepDoc := StepDoc.nRec;
+  var pSpStep  : comp;    pSpStep  := SpStep.nRec;
+  var KolRas   : double;  KolRas   := 0.0;
+  var K1       : double;  K1       := fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+
+  vRN._LOOP KatSopr where (( pStepDoc == KatSopr.cStepDoc ))
+    vRN._LOOP SpSopr where (( vRN.KatSopr.nRec == SpSopr.cSopr AND pSpStep == SpSopr.cSpStep ))
+      {
+        if (longint(SpSopr.dOprTTN) = 0)
+          Continue;
+
+        var tmpSum: double;  tmpSum := vRN.SpSopr.KolFact * fEdIzm.GetKoefOtpEd(vRN.SpSopr.cOtpEd) / K1;
+
+        KolRas := KolRas + if (vRN.SpSopr.VidSopr = 106, -tmpSum, tmpSum);
+      }
+
+  GetOtgr := KolRas;
+}
+
+//******************************************************************************
+
+Procedure DoChangeReservInOneSpStep;
+{
+  SubResTov(SpStep.Reserv); // Снятие резерва по товару
+
+  SubResRazrez;             // Снятие резерва по складу
+
+  DelPosDoRes;
+
+  set SpStep.Reserv := 0;
+  SpStep.SrokRes := longint(0);
+
+  update current SpStep;
+
+  if fTekRun.WaitSemaphore(SpStep.cMCUsl)
+    if fTekRun.SwitchSemaphore(TRUE, SpStep.cMCUsl)
+      {
+        _LOOP TNalF where (( SpStep.cMCUsl == TNalF.cMC ))
+          {
+            SpStep.Reserv  := SpStep.Reserv + TNalF.KolF;
+
+            SpStep.SrokRes := Add_Day(
+                                      if (wGetTuneRes('Reserv.CalcSrokReserv', ResTunes.Reserv_CalcSrokReserv) = 0,
+                                          Cur_Date,
+                                          BaseDoc.dDoc
+                                         ),
+                                      wGetTuneRes('Reserv.SrokReserv', ResTunes.Reserv_SrokReserv)
+                                     );
+
+            if fTekRun.ModifyAllTek(SpStep.cMCUSL, TNalF.cPodr, TNalF.cMol, TNalF.cParty, 0, TNalF.KolF*GetKoefOtpEdT(KatOtpEd.NRec, SpStep.NRec))
+              fTekRun.ModifyDoRes(SpStep.Nrec, TNalF.cPodr, TNalF.cMOL, TNalF.cParty, TNalF.KolF);
+          }
+        fTekRun.SwitchSemaphore(FALSE, SpStep.cMCUsl);
+      }
+
+  update current SpStep;
+}
+
+//******************************************************************************
+
+Procedure EditMakeReservOnSpStep;
+{
+  delete all tNalF;
+
+  _LOOP DoRes
+    {
+      ClearBuffer(#TNalF);
+
+      TNalF.NRec    := SpStep.nRec;
+      TNalF.cMC     := SpStep.cMCUsl;
+      TNalF.cMOL    := DoRes.cMOL;
+      TNalF.cPodr   := DoRes.cPodr;
+      TNalF.cParty  := DoRes.cParty;
+      TNalF.cSpStep := SpStep.nRec;
+      TNalF.KolF    := DoRes.Kol;
+      TNalF.Kol     := DoRes.Kol;
+
+      if ( GetFirst fastfirstrow TekSaldo where (( SpStep.cMCUsl == TekSaldo.cMC   AND
+                                                   DoRes.cPodr   == TekSaldo.cPodr AND
+                                                   DoRes.cMOL    == TekSaldo.cMOL  AND
+                                                   DoRes.cPARTY  == TekSaldo.cPARTY )) = tsOk )
+        TNalF.Kol += (TekSaldo.Kol - TekSaldo.Res) / GetKoefOtpEdT(KatOtpEd.NRec, SpStep.NRec);
+
+      if (insert current TNalF = tsOk)
+        {}
+    }
+
+  DoInitResTunes;
+
+  PushBounds(if(wGetTune('Reserv.PriorParty') = 1, tbTekSal02, tbTekSal01));
+
+  _LOOP TekSaldo
+    {
+      if ( RecordExists DoRes
+             where ((
+                      SpStep.Nrec     == DoRes.cSpStep AND
+                      TekSaldo.cPodr  == DoRes.cPodr   AND
+                      TekSaldo.cMOL   == DoRes.cMOL    AND
+                      TekSaldo.cParty == DoRes.cParty
+                   )) = tsOk)
+        Continue;
+
+      if Not AllowedToReservOnParty
+        Continue;
+
+      if NOT CheckRestrictRazrez(TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty)
+          Continue;
+
+      ClearBuffer(#TNalF);
+
+      TNalF.NRec    := SpStep.nRec;
+      TNalF.cMC     := SpStep.cMCUsl;
+      TNalF.cMOL    := TekSaldo.cMOL;
+      TNalF.cPodr   := TekSaldo.cPodr;
+      TNalF.cParty  := TekSaldo.cParty;
+      TNalF.cSpStep := SpStep.nRec;
+      TNalF.Kol     := (TekSaldo.Kol - TekSaldo.Res) / GetKoefOtpEdT(KatOtpEd.NRec, SpStep.NRec);
+
+      if (insert current TNalF = tsOk)
+        {}
+    }
+
+  PopBounds(if(wGetTune('Reserv.PriorParty') = 1, tbTekSal02, tbTekSal01));
+
+  if (RunInterface('GetNalF', SpStep.cMCUsl,
+                              SpStep.Kol+0,
+                              BaseDoc.dDoc,
+                              SpStep.Nrec,
+                              SpStep.Kol-GetOtgr,
+                              word(1)) <> cmCancel)
+    DoChangeReservInOneSpStep;
+}
+
+//******************************************************************************
+
+#end //_RESPROC_VPP
+
+//******************************************************************************

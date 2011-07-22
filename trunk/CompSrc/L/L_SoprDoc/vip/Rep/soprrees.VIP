@@ -1,0 +1,1331 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Оперативный контур
+// Параметры отчета "Сопроводительный реестр"
+//********************************************************************************
+
+#doc
+Назначение:
+  Параметры отчета "Сопроводительный реестр"
+Параметры:
+  нет
+#end
+
+//******************************************************************************
+
+Interface Soprrees 'Сопроводительный реестр' EscClose, Gray;
+  Show at (5, 1, 109, 21);
+
+//******************************************************************************
+
+Const
+ MyCode = 1972;
+ MyMess = 'Не добавлены документы: ';
+End;
+
+//******************************************************************************
+
+Function GroupDocSopr ( C : word ) : word;
+{
+  case C of
+  //------------------------------------------------------
+    101..103
+  , 111:
+      GroupDocSopr := 1; //приходные
+  //------------------------------------------------------
+    600:
+      GroupDocSopr := 2; //внутренние
+  //------------------------------------------------------
+    201..204
+  , 211:
+      GroupDocSopr := 3; //расходные
+  //------------------------------------------------------
+    106
+  , 206:
+      GroupDocSopr := 4; //рекламационные
+  //------------------------------------------------------
+  else
+    GroupDocSopr := 0;
+  end;
+}
+
+Create view vRep_plV
+Var
+//-----------------------------------------------------
+  Podr
+, Kontr
+, Mol
+, cNakl
+, CurGroup
+, cRec_Org
+, cRecVal
+, CTG
+                : comp;
+//-----------------------------------------------------
+  TmpDat
+, BegDate
+, EndDate
+                : Date;
+//-----------------------------------------------------
+  Filtr
+, SoprInRep
+, wVidDoc
+, wItogSum
+, wDateCurs
+, InpSaldo
+, LastOrg
+, did
+, WTiDKGal
+                : word;
+//-----------------------------------------------------
+  MarkerDoc
+, IndexNoDoc
+, MarkerTree
+, IndexNoTree
+, MarkerOrg
+, idMarkerOrg
+                : longint;
+//-----------------------------------------------------
+  stOn
+, NameTG
+, Soob
+, sSimbValNDE
+                : string;
+//-----------------------------------------------------
+ Flag
+                : boolean;
+//-----------------------------------------------------
+
+As select
+//---------------------------------------------------------------------------------------------------------------------
+  if ( TempDescr.cRecKat = comp(0), TempDescr.Name, KatDoc.Name)
+    ( FieldName = KatDocN )
+//---------------------------------------------------------------------------------------------------------------------
+, if ( TempDescr.cRecKat = comp(0), '' , Trim(String(Katdoc.TiDKGal)))
+    ( FieldName = KatDocT )
+//---------------------------------------------------------------------------------------------------------------------
+, if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ) AND TempDescr.cRecKat<>0, 'V', ' ' )
+    ( FieldName = MarkerTree_V )
+//---------------------------------------------------------------------------------------------------------------------
+, if ( SearchMarker ( MarkerDoc, KatDocTmp.NRec, IndexNoDoc ), 'V', ' ' )
+    ( FieldName = MarkerDoc_V )
+//---------------------------------------------------------------------------------------------------------------------
+, KatOrg.NRec
+, KatOrg1.Name
+, KatPodrFrom.*
+, KatPodrTo.*
+, KatPodr.Name
+, KatMol.Name
+, KatSopr.*
+, KlVal.ShortDoll
+, SklOrder.nOrder
+
+From
+  KatOrg (ReadOnly, Memory, AutoLoad, KatORG02)
+, KatOrg KatOrg1(ReadOnly)
+, KatMol
+, KatPodr
+, SklOrder
+, KatPodr KatPodrFrom(ReadOnly)
+, KatPodr KatPodrTo(ReadOnly)
+, KatSopr (ReadOnly, Memory, AutoLoad) //накладные
+, KatNazna(ReadOnly)
+, KlVal   (ReadOnly)
+, KatDoc  (ReadOnly, KatDoc01)
+, KatDoc KatDocTmp(ReadOnly, KatDoc02)
+, TempDescr (TempDescr02)
+
+Where
+((
+      KatSopr.cNazna    == KatNazna.NRec
+and   TempDescr.cRecKat == KatDoc.NRec
+and   word(MyCode)      == TempDescr.Code     // номер отчета
+and   CurGroup          == TempDescr.cGroup   // для гуляния по дереву
+and   KatSopr.cOrg      == KatOrg.NRec
+and   KatSopr.cPodrFrom == KatPodrFrom.NRec
+and   KatSopr.cPodrTo   == KatPodrTo.NRec
+and   Podr              == KatPodr.NRec
+and   Kontr             == KatOrg1.NRec
+and   Mol               == KatMol.NRec
+and   cNakl             == SklOrder.cSopr
+))
+
+Bounds byKontr    =
+       Kontr        == Katsopr.cOrgBase  (NoIndex)
+
+Bounds byPodrFrom =
+       Podr         == Katsopr.cPodrFrom (NoIndex)
+
+Bounds byPodrTo   =
+       Podr         == Katsopr.cPodrTo (NoIndex)
+
+Bounds byMolFrom =
+       Mol         == Katsopr.cMolFrom (NoIndex)
+
+Bounds byMolTo   =
+       Mol         == Katsopr.cMolTo (NoIndex)
+
+Bounds byKatSoprOpr =                       // по проведенным
+       BegDate     <<= KatSopr.dOpr (NoIndex)
+   AND EndDate     >>= KatSopr.dOpr (NoIndex)
+
+Bounds byKatSoprAll =                       // по выписанным
+       BegDate     <<= KatSopr.dSopr (NoIndex)
+   AND EndDate     >>= KatSopr.dSopr (NoIndex)
+
+//на документы для разбивки дерева
+Condition byKatDocSPrih  =
+          (GroupDocSopr(KatDocTmp.TiDKGal) = 1)
+Condition byKatDocSVnut  =
+          (GroupDocSopr(KatDocTmp.TiDKGal) = 2)
+Condition byKatDocSRash  =
+          (GroupDocSopr(KatDocTmp.TiDKGal) = 3)
+Condition byKatDocSRekl  =
+          (GroupDocSopr(KatDocTmp.TiDKGal) = 4)
+
+//на накладные для разбивки отчета
+Condition byKatSoprPrih  =
+          (GroupDocSopr(KatSopr.VidSopr) = 1)
+Condition byKatSoprVnut  =
+          (GroupDocSopr(KatSopr.VidSopr) = 2)
+Condition byKatSoprRash  =
+          (GroupDocSopr(KatSopr.VidSopr) = 3)
+Condition byKatSoprRekl  =
+          (GroupDocSopr(KatSopr.VidSopr) = 4)
+;
+
+//******************************************************************************
+
+Form frmSoprReestr('SoprReestr.OUT', 'SOPRDOCREESTR') with novisual;
+
+//******************************************************************************
+
+Panel pnScreen
+
+Screen scRep_Pl0 ('Параметры сопроводительного реестра', hcPs_PlWSoprReestrParam, sci1Esc);
+  Show at (, , 50, );
+  Bevel b1 { 0, 3, 50, 8,  bsLowered, bsBox};
+Fields
+  BegDate      ('Введите начальную дату интервала', , sci13Esc): [, 'DD/MM/YYYY'], NoProtect;
+  EndDate      ('Введите конечную дату интервала', , sci13Esc)  : [, 'DD/MM/YYYY'], NoProtect;
+  Filtr        ('Ограничения на рассматриваемые документы', , ): NoProtect;
+  KatPodr.Name ('Выбр склада/подразделения по которому формируется реестр', , sci13Esc): Protect, PickButton;
+  KatMol.Name  ('Выбр МОЛ по которому формируется реестр', , sci13Esc): Protect, PickButton;
+  KatOrg1.Name ('Выбр контрагента по которому формируется реестр', , sci13Esc): Protect, PickButton;
+  SoprInRep    ('Накладные в расчетах с контрагентами', , sci13Esc): [LIST 'все', 'только проведенные'], Protect;
+  wItogSum     ('Расчет итоговые сумм в заданной валюте', , sci13Esc):
+                [LIST 'НДЕ', 'базовой валюте', 'валюте отчетов'], Protect;
+  wDateCurs    ('Дата курса валют при пересчете итоговых сумм', , sci13Esc):
+                [LIST 'дата документа', 'конечная дата периода', 'текущая дата'], Protect;
+
+Buttons
+  cmValue1, Default, , 'Сформировать отчет', , ;
+  cmCancel, , , 'Отмена', , ;
+<<
+
+ Период формирования:`c`.@@@@@@@@@`по`.@@@@@@@@@
+
+ Ограничения на документы:
+  [.] по складу/подразд.`.@@@@@@@@@@@@@@@@@@@@@@
+  [.] по МОЛ            `.@@@@@@@@@@@@@@@@@@@@@@
+  [.] по контрагенту    `.@@@@@@@@@@@@@@@@@@@@@@
+
+
+`Учитывать накладные`   .@@@@@@@@@@@@@@@@@@@@@@@
+
+`Итоговые суммы в`      .@@@@@@@@@@@@@@@@@@@@@@@
+`Дата курса валют`      .@@@@@@@@@@@@@@@@@@@@@@@
+
+    <.~С~формировать.>       <.   ~О~тмена   .>
+>>
+End;
+End;
+
+//******************************************************************************
+
+Panel pnTree;
+  Table TempDescr;
+
+Tree 1 trTemp 'Наименование документов' (, hcPs_PlWSoprReestrParam, sci178InsExPMTree);
+  Show at (51, , , );
+NoMove
+
+Fields
+   MarkerTree_V #3'V' ('Отметить', , ): [1] , Skip , {Font = { Bold = TRUE } },
+   { Font = {  Color = ColorMark } };
+   KatDocN #3'Наименование документа' ('Наименование платежного средства', , ): [37], Protect,
+   { Font = { Bold = if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ), TRUE, FALSE )}},
+   { Font = { Color = if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ), ColorMark, 0 ) } };
+   KatDocT #3'Код' ( 'Код платежного средства', , ): [3], Protect,
+   { Font = { Bold = if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ), TRUE, FALSE )}},
+   { Font = { Color = if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ), ColorMark, 0 ) } };
+End;
+End;
+
+//******************************************************************************
+
+Function GetMarkerTree (ITemp : Longint) : longint; //Считает кол-во отмеченных листьев в дереве
+{
+  var uz : longint;
+  uz := 0;
+  TreePushPos ( ITemp );
+
+  if ( TreeGetFirstEx ( ITemp ) )
+    do
+      if ( TempDescr.IsLeaf = 0 AND SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ) )
+        uz := uz + 1;
+    While ( TreeGetNextEx ( ITemp ) )
+
+  TreePopPos ( ITemp );
+  GetMarkerTree := GetMarkerCount(MarkerTree) - uz;
+}
+
+//******************************************************************************
+
+Function GetNaznCount(ITemp : longint) : longint;
+{
+  var  uz : longint;
+  uz := 0;
+  TreePushPos ( ITemp );
+
+  if ( TreeGetFirstEx ( ITemp ) )
+    {
+      if ( TempDescr.cRec = 1 )
+        uz := uz + 1;
+
+      While TreeGetNextEx ( ITemp )
+      do
+        if ( TempDescr.cRec = 1 )
+          uz := uz + 1;
+    }
+
+  TreePopPos ( ITemp );
+  GetNaznCount := uz;
+}
+
+//******************************************************************************
+
+Function GetNaznTree(ITemp : longint) : longint; //Считает кол-во включенных назначений в дереве
+{
+  var uz : longint;
+  uz := 0;
+  TreePushPos ( ITemp );
+
+  if ( TreeGetFirstEx ( ITemp ) )
+    do
+      if ( (TempDescr.cRec = 1 ) AND ( TempDescr.IsLeaf = 0 ) )
+        uz := uz + 1;
+    While ( TreeGetNextEx ( ITemp ) )
+
+  TreePopPos ( ITemp );
+  GetNaznTree := GetNaznCount(trTemp) - uz;
+}
+
+//******************************************************************************
+
+Function GetMarkerLeaf(ITemp : longint) : longint; //Считает кол-во отмеченных листьев в ветке
+{
+  var uz : longint;
+  uz := 0;
+  TreePushPos ( ITemp );
+  TreeGetNext ( ITemp );
+
+    do
+      if SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree )
+        uz := uz + 1;
+    While ( TreeGetNextEx ( trTemp ) AND TempDescr.IsLeaf = 1 )
+
+  TreePopPos ( ITemp );
+  GetMarkerLeaf := uz;
+}
+
+//******************************************************************************
+
+Function GetLeafTree(ITemp : longint) : longint; //Считает кол-во листьев в ветке
+{
+  var uz : longint;
+  uz := 0;
+  TreePushPos ( ITemp );
+
+  While ( TreeGetNextEx ( ITemp ) )
+  do
+    if ( TempDescr.IsLeaf = 1 )
+      uz := uz + 1;
+    else
+      Break;
+
+  TreePopPos ( ITemp );
+  GetLeafTree := uz;
+}
+
+//******************************************************************************
+
+Function GetLeafTreeAll(ITemp : longint) : longint; //Считает кол-во листьев в дереве
+{
+  var uz : longint;
+  uz := 0;
+
+  TreePushPos ( ITemp );
+  if ( TreeGetFirstEx ( ITemp ) )
+    do
+      if ( TempDescr.IsLeaf = 1 )
+        uz := uz + 1;
+    While ( TreeGetNextEx ( ITemp ) );
+
+  TreePopPos ( ITemp );
+  GetLeafTreeAll := uz;
+}
+
+//******************************************************************************
+
+Function GetNaznLeaf(ITemp : longint) : longint; //Считает кол-во включенных назначений в ветке
+{
+  var uz : longint;
+  uz := 0;
+  TreePushPos ( ITemp );
+  TreeGetNext ( ITemp );
+
+  do
+    if ( TempDescr.cRec = 1 )
+      uz := uz + 1;
+  While ( TreeGetNextEx ( ITemp ) AND TempDescr.IsLeaf = 1 )
+
+  TreePopPos ( ITemp );
+  GetNaznLeaf := uz;
+}
+
+//******************************************************************************
+
+Procedure SetPusto(ITemp : longint);
+{
+  TreePushPos ( ITemp );
+  TreeGetFirstEx ( ITemp );
+    do
+      if ( TempDescr.IsLeaf = 0 AND TempDescr.cGroup <> 0 )
+        if ( GetLeafTree(trTemp) = 0 )
+          {
+            DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+            UpDate Current TempDescr Set TempDescr.cRec := 0;
+            NextVisual;
+          }
+    While ( TreeGetNextEx ( ITemp ) );
+  TreePopPos ( ITemp );
+}
+
+//******************************************************************************
+
+Procedure SetMyTitle(ITemp : longint);
+{
+  SetColumnTitle (ITemp, #KatDocN, 'Наименование документов' + ' (выбрано ' + Trim(String(GetMarkerTree(trTemp))) + ')');
+}
+
+//******************************************************************************
+
+Procedure PopCondDoc;
+{
+  SetBounds ( #KatDocTmp );
+
+    case NameTG of
+    //----------------------------------------------
+      'Приходные накладные' :
+        PopCondition ( tcbyKatDocSPrih );
+    //----------------------------------------------
+      'Накладные на внутреннее перемещение' :
+        PopCondition ( tcbyKatDocSVnut );
+    //----------------------------------------------
+      'Накладные на отпуск товара' :
+        PopCondition ( tcbyKatDocSRash );
+    //----------------------------------------------
+      'Рекламационные накладные' :
+        PopCondition ( tcbyKatDocSRekl );
+    //----------------------------------------------
+    end;
+}
+
+//******************************************************************************
+
+Window wndVyborDoc 'Выбор документа' ('Выбор документа', hcD_GetDatesFinSop, sci1EnIns)EscClose, DoAccept, Gray;
+  Show at (5, 5, 47, 15)
+
+Browse brVDoc;
+  Show at (, , , )
+  Table KatDocTmp
+
+Fields
+  MarkerDoc_V 'V' ('Отметить', , ): [1] , Skip ,
+  {Font = { Bold = TRUE } },
+  { Font = {  Color = ColorMark } };
+  KatDocTmp.Name 'Тип документа' ('Тип документа', , ): [37], Protect,
+  {Font = { Bold = if (SearchMarker ( MarkerDoc, KatDocTmp.NRec, IndexNoDoc ), TRUE, FALSE) } },
+  { Font = {  Color = if (SearchMarker ( MarkerDoc, KatDocTmp.NRec, IndexNoDoc ), ColorMark, 0) } };
+  KatDocTmp.TiDkGal 'Код' ('Код типа документа', , ): [5], Protect,
+  {Font = { Bold = if (SearchMarker ( MarkerDoc, KatDocTmp.NRec, IndexNoDoc ), TRUE, FALSE) } },
+  { Font = {  Color = if (SearchMarker ( MarkerDoc, KatDocTmp.NRec, IndexNoDoc ), ColorMark, 0) } };
+  end;
+
+HandleEvent
+cmInit:
+  {
+    ReSetBounds ( #KatDocTmp );
+
+    case NameTG of
+    //----------------------------------------------
+      'Приходные накладные' :
+        PushCondition ( tcbyKatDocSPrih );
+    //----------------------------------------------
+      'Накладные на внутреннее перемещение' :
+        PushCondition ( tcbyKatDocSVnut );
+    //----------------------------------------------
+      'Накладные на отпуск товара' :
+        PushCondition ( tcbyKatDocSRash );
+    //----------------------------------------------
+      'Рекламационные накладные' :
+        PushCondition ( tcbyKatDocSRekl );
+    //----------------------------------------------
+    end;
+
+    GetFirst KatDocTmp;
+  }
+
+cmDefault:
+  {
+    Flag := TRUE;
+
+    if (GetMarkerCount ( MarkerDoc ) = 0)
+      InvertMarker ( MarkerDoc, KatDocTmp.NRec );
+  }
+
+cmCancel:
+  {
+    PopCondDoc;
+    ClearMarker ( MarkerDoc );
+  }
+
+cmClose:
+  {
+    PopCondDoc;
+    ClearMarker ( MarkerDoc );
+  }
+
+cmMarkUnMark:
+  {
+    InvertMarker ( MarkerDoc, KatDocTmp.NRec );
+
+    if ( GetNext KatDocTmp <> tsOk )
+      {};
+
+    RescanPanel ( #KatDocTmp );
+  }
+
+cmSelectall:
+  {
+    StartNewVisual ( vtRotateVisual, vfTimer, 'Помечаю все', 1 );
+    PushPos ( #KatDocTmp );
+
+    _LOOP KatDocTmp
+      {
+        InsertMarker ( MarkerDoc, KatDocTmp.NRec );
+        NextVisual;
+      }
+
+    PopPos ( #KatDocTmp );
+    RescanPanel ( #KatDocTmp );
+    StopVisual ( '', 0 );
+  }
+
+cmUnSelectall:
+  {
+    ClearMarker ( MarkerDoc );
+    RescanPanel ( #KatDocTmp );
+  }
+end;
+end;
+
+//******************************************************************************
+
+Function GetUge : boolean;
+{
+  var L : integer;
+  TreePushPos ( trTemp );
+
+  if ( TempDescr.IsLeaf = 1 )
+    TreeJumpToRecord (trTemp, TempDescr.cGroup );
+
+  L := TreeLevel ( trTemp );
+  GetUge := TRUE;
+
+  While ( TreeGetNextEx ( trTemp ) )
+  do
+    {
+      NextVisual;
+
+      if ( TreeLevel ( trTemp) <= L )
+        Break;
+
+      if ( TempDescr.cRecKat = KatDocTmp.NRec )
+        {
+          Soob := Soob + if ( Soob <> MyMess,
+                             ', ' + Trim ( String ( KatDocTmp.TiDKGal ) ),
+                             Chr(13) + Trim ( String ( KatDocTmp.TiDKGal ) ) )
+          GetUge := FALSE;
+          Break;
+        }
+    }
+  TreePopPos ( trTemp );
+}
+
+//******************************************************************************
+
+Function SetNewGroup ( Gr : comp; SName : string; SN : string ) : comp;
+{
+  ClearBuffer(#TempDescr);
+  TempDescr.Code := word(MyCode);
+  TempDescr.CGroup := Gr;
+  TempDescr.Name := SName;
+  TempDescr.SortName := SN;
+  Insert current TempDescr;
+  SetNewGroup := TempDescr.NRec;
+}
+
+//******************************************************************************
+
+Procedure SetLeafTreeDoc ( Gr : comp; ITable : word );
+{
+  ClearBuffer( #TempDescr );
+  TempDescr.Code := word(MyCode);
+  TempDescr.CGroup := Gr;
+  TempDescr.CRecKat := KatDoc.NRec;
+  TempDescr.isLeaf := 1;
+  TempDescr.Level := ITable;
+  TempDescr.SortName := String ( KatDoc.TiDKGal, 5 );
+  Insert current TempDescr;
+}
+
+//******************************************************************************
+
+Procedure AddLeafTreeDoc;
+{
+var L : comp;
+
+  if (GetFirst TempDescr where (('   70' == TempDescr.SortName(NoIndex))) = tsOk)
+    {
+      L := TempDescr.cRec;
+      ClearBuffer( #TempDescr );
+      TempDescr.Code := word(MyCode);
+      TempDescr.isLeaf := 1;
+      TempDescr.cRec := L;
+      TempDescr.Level := coBaseFin;
+      TempDescr.SortName := String ( word(71), 5 );
+      Insert current TempDescr;
+    }
+
+  if (GetFirst TempDescr where (('   90' == TempDescr.SortName(NoIndex))) = tsOk)
+    {
+      L := TempDescr.cRec;
+      ClearBuffer( #TempDescr );
+      TempDescr.Code := word(MyCode);
+      TempDescr.isLeaf := 1;
+      TempDescr.cRec := L;
+      TempDescr.Level := coBaseFin;
+      TempDescr.SortName := String ( word(94), 5 );
+      Insert current TempDescr;
+    }
+
+  if (GetFirst TempDescr where (('   91' == TempDescr.SortName(NoIndex))) = tsOk)
+    {
+      L := TempDescr.cRec;
+      ClearBuffer( #TempDescr );
+      TempDescr.Code := word(MyCode);
+      TempDescr.isLeaf := 1;
+      TempDescr.cRec := L;
+      TempDescr.Level := coBaseFin;
+      TempDescr.SortName := String ( word(93), 5 );
+      Insert current TempDescr;
+    }
+
+  if (GetFirst TempDescr where (('   92' == TempDescr.SortName(NoIndex))) = tsOk)
+    {
+      L := TempDescr.cRec;
+      ClearBuffer( #TempDescr );
+      TempDescr.Code := word(MyCode);
+      TempDescr.isLeaf := 1;
+      TempDescr.cRec := L;
+      TempDescr.Level := coBaseFin;
+      TempDescr.SortName := String ( word(95), 5 );
+      Insert current TempDescr;
+    }
+}
+
+//******************************************************************************
+
+Procedure DelAddLeafTreeDoc;
+{
+  delete TempDescr where ((    '   71'      == TempDescr.SortName(NoIndex)
+                           AND word(MyCode) == TempDescr.Code));
+  delete TempDescr where ((    '   93'      == TempDescr.SortName(NoIndex)
+                           AND word(MyCode) == TempDescr.Code));
+  delete TempDescr where ((    '   94'      == TempDescr.SortName(NoIndex)
+                           AND word(MyCode) == TempDescr.Code));
+  delete TempDescr where ((    '   95'      == TempDescr.SortName(NoIndex)
+                           AND word(MyCode) == TempDescr.Code));
+}
+
+//******************************************************************************
+
+Procedure SetDefaultTreeDoc;
+{
+var
+  GroupT
+, GroupT1
+, GroupT2
+, GroupT3
+, GroupT4  : comp;
+
+  StartNewVisual ( vtRotateVisual, vfTimer, 'Документы по умолчанию', 1 );
+  delete TempDescr where ((word(MyCode) == TempDescr.Code));
+  ClearMarker ( MarkerTree );
+  GroupT  := 0;
+  GroupT  := SetNewGroup ( GroupT, 'Документы сопроводительного реестра', '11111' );
+  GroupT1 := SetNewGroup ( GroupT, 'Приходные накладные', '22222' );
+  GroupT2 := SetNewGroup ( GroupT, 'Накладные на внутреннее перемещение', '33333' );
+  GroupT3 := SetNewGroup ( GroupT, 'Накладные на отпуск товара', '44444' );
+  GroupT4 := SetNewGroup ( GroupT, 'Рекламационные накладные', '55555' );
+  ResetBounds( #KatDoc );
+
+  if ( GetFirst KatDoc = tsOk )
+    _LOOP KatDoc
+      {
+        case KatDoc.TiDKGal of
+        //------------------------------------------------------
+          101..103
+        , 111 :
+            SetLeafTreeDoc ( GroupT1, coKatSopr );
+        //------------------------------------------------------
+          600 :
+            SetLeafTreeDoc ( GroupT2, coKatSopr );
+        //------------------------------------------------------
+          201..204
+        , 211 :
+            SetLeafTreeDoc ( GroupT3, coKatSopr );
+        //------------------------------------------------------
+          106
+        , 206 :
+            SetLeafTreeDoc ( GroupT4, coKatSopr );
+        //------------------------------------------------------
+        end;
+
+        NextVisual;
+      }
+
+  SetBounds ( #KatDoc );
+  CurGroup := 0;
+  TreeCloseAllOpenedNode(trTemp);
+
+  if (GetFirst TempDescr = tsOk)
+    {};
+
+  SetMyTitle(trTemp);
+  ReReadRecord ( tnTempDescr );
+  RescanPanel ( tnTempDescr );
+  StopVisual ( '', 0 );
+}
+
+//******************************************************************************
+
+Procedure SetHeadTree ( ITemp: longint);
+{
+
+  TreePushPos ( ITemp );
+  TreeGetFirst ( ITemp );
+
+  if ( GetMarkerTree(ITemp) = 0 )
+    DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+  else
+    InsertMarker ( MarkerTree, comp(TempDescr.SortName) );
+
+  TreePopPos ( ITemp );
+}
+
+//******************************************************************************
+
+Panel pnTreeHandle
+  Table TempDescr;
+
+HandleEvent
+cmInsert:
+  {
+    var l: word;
+    Soob := MyMess;
+
+    if ( TempDescr.cGroup = 0 )
+      {
+        Message ( 'Нельзя добавить в корень!', OkButton );
+        Stop;
+      }
+    else
+      {
+        if ( TempDescr.IsLeaf = 1 )
+          {
+            CTG := TempDescr.cGroup;
+            l := TempDescr.Level;
+            TreePushPos ( trTemp );
+            TreeJumpToRecord (trTemp, TempDescr.cGroup );
+            NameTG := TempDescr.Name;
+            TreePopPos ( trTemp );
+          }
+        else
+          {
+            CTG := TempDescr.NRec;
+            NameTG := TempDescr.Name;
+
+            if NOT TreeNodeIsOpen ( trTemp )
+              {
+                TreeOpenNode ( trTemp );
+                RescanPanel(#TempDescr);
+                TreePushPos ( trTemp );
+                TreeGetNextEx ( trTemp );
+                l := TempDescr.Level;
+                TreePopPos ( trTemp );
+              }
+            else
+              {
+                TreePushPos ( trTemp );
+                TreeGetNextEx ( trTemp );
+                l := TempDescr.Level;
+                TreePopPos ( trTemp );
+              }
+          }
+
+        Flag := FALSE;
+        RunWindowModal ( wndVyborDoc );
+        StartNewVisual ( vtRotateVisual, vfTimer, 'Добавляю', 1 );
+
+        if (not Flag )
+          StopVisual ( '', 0 );
+        else
+          {
+            if ( GetFirst KatDocTmp = tsOk )
+              _LOOP KatDocTmp
+                if ( SearchMarker ( MarkerDoc, KatDocTmp.NRec, IndexNoDoc ) )
+                  if ( GetUge )
+                    {
+                      ClearBuffer(#TempDescr);
+                      TempDescr.CRecKat := KatDocTmp.NRec;
+                      TempDescr.isLeaf := 1;
+                      TempDescr.cGroup := CTG;
+                      TempDescr.Level := l;
+                      TempDescr.SortName := String ( KatDocTmp.TiDKGal, 5 );
+                      Insert current TempDescr;
+                      TreeJumpToRecord ( trTemp, TempDescr.NRec );
+                      RescanPanel(#TempDescr);
+                      NextVisual;
+                    }
+
+            StopVisual ( '', 0 );
+          }
+
+        PopCondDoc;
+        ClearMarker ( MarkerDoc );
+
+        if ( Soob <> MyMess )
+          Message ( Soob + ', ' + Chr(13) + 'т.к. уже были в группе!', OkButton );
+
+        Stop;
+      }
+  }
+
+cmDeleteRecord:
+  {
+    if ( TempDescr.IsLeaf = 0 )
+      {
+        if ( TempDescr.cGroup = 0)
+          {
+            if (Message ( 'Удалить все документы?', YesNo + Confirmation ) = cmYes )
+              {
+                if ( GetLeafTreeAll(trTemp) = 0 )
+                  Message ( 'Нет документов!', OkButton )
+                else
+                  {
+                    TreePushPos ( trTemp );
+                    StartNewVisual ( vtRotateVisual, vfTimer, 'Удаляю', 1 );
+                    ClearMarker ( MarkerTree );
+                    Delete TempDescr where ((word(MyCode) == TempDescr.Code AND word(1) == TempDescr.IsLeaf));
+                    UpDate TempDescr where ((word(MyCode) == TempDescr.Code )) Set TempDescr.cRec := 0;
+                    NextVisual;
+                    TreePopPos ( trTemp );
+                    SetMyTitle(trTemp);
+                    RescanPanel ( #TempDescr );
+                    StopVisual ( '', 0 );
+                  }
+              }
+          }
+        else
+          if ( Message ( 'Удалить все документы из группы?', YesNo + Confirmation ) = cmYes )
+            {
+              if ( GetLeafTree(trTemp) = 0 )
+                Message ( 'Нет документов в группе!', OkButton )
+              else
+                {
+                  TreePushPos ( trTemp );
+                  StartNewVisual ( vtRotateVisual, vfTimer, 'Удаляю', 1 );
+                  var L  : integer;
+                  var Gr : comp;
+                  L := TreeLevel ( trTemp );
+                  Gr := TempDescr.NRec;
+
+                  While TreeGetNextEx ( trTemp )
+                  do
+                    {
+                      if ( TreeLevel ( trTemp ) <= L )
+                        Break;
+
+                      if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ) )
+                        {
+                          DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+                          NextVisual;
+                        }
+                    }
+
+                  if ( GetMarkerTree(trTemp) = 0 )
+                    {
+                      TreeGetFirst ( trTemp );
+                      DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+                      NextVisual;
+                    }
+
+                  Delete TempDescr where ((word(MyCode) == TempDescr.Code AND Gr == TempDescr.cGroup));
+                  TreePopPos ( trTemp );
+                  DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+                  UpDate Current TempDescr Set TempDescr.cRec := 0;
+
+                  if ( GetNaznTree(trTemp) = 0 )
+                    {
+                      TreePushPos ( trTemp );
+                      TreeGetFirst ( trTemp );
+                      UpDate Current TempDescr Set TempDescr.cRec := 0;
+                      NextVisual;
+                      TreePopPos ( trTemp );
+                    }
+
+                  NextVisual;
+                  SetMyTitle(trTemp);
+                  RescanPanel ( #TempDescr );
+                  StopVisual ( '', 0 );
+                }
+           }
+      }
+    else
+      if ( Message ( 'Вы уверены?', YesNo + Confirmation ) = cmYes )
+        {
+          if ( SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree ) OR TempDescr.cRec = 1 )
+            {
+              TreePushPos ( trTemp );
+              TreeJumpToRecord ( trTemp, TempDescr.cGroup );
+
+              if ( GetMarkerLeaf(trTemp) = 1 )
+                DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+
+              if ( GetNaznLeaf(trTemp) = 1 )
+                UpDate Current TempDescr Set TempDescr.cRec := 0;
+
+              TreePopPos ( trTemp );
+              DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+              UpDate Current TempDescr Set TempDescr.cRec := 0;
+
+              if ( GetMarkerTree(trTemp) = 0 )
+                {
+                  TreePushPos ( trTemp );
+                  TreeGetFirst ( trTemp );
+                  DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+                  TreePopPos ( trTemp );
+                }
+
+              if ( GetNaznTree(trTemp) = 0 )
+                {
+                  TreePushPos ( trTemp );
+                  TreeGetFirst ( trTemp );
+                  UpDate Current TempDescr Set TempDescr.cRec := 0;
+                  TreePopPos ( trTemp );
+                }
+            }
+
+          Delete Current TempDescr;
+          TreeGetPrev ( trTemp );
+          SetMyTitle(trTemp);
+          RescanPanel ( tnTempDescr );
+        }
+  }
+
+cmCheckField:
+  {
+    case CurField of
+      #TempDescr.cRec:
+        {
+          StartNewVisual ( vtRotateVisual, vfTimer, 'Помечаю', 1 );
+          UpDate Current TempDescr;
+          var M : boolean;
+          M := ( TempDescr.cRec = 1 );
+
+          if ( TempDescr.IsLeaf = 1 )
+            {
+              TreePushPos ( trTemp );
+              TreeJumpToRecord ( trTemp, TempDescr.cGroup );
+
+              if ( GetNaznLeaf(trTemp) = 0 )
+                UpDate Current TempDescr Set TempDescr.cRec := 0;
+              else
+                UpDate Current TempDescr Set TempDescr.cRec := 1;
+
+              TreePopPos ( trTemp );
+              NextVisual;
+            }
+          else
+            {
+              var L: integer;
+
+              if ( GetLeafTree(trTemp) = 0 )
+                UpDate Current TempDescr Set TempDescr.cRec := 0;
+              L := TreeLevel ( trTemp );
+              TreePushPos ( trTemp );
+              While TreeGetNextEx ( trTemp ) do
+                {
+                  if TreeLevel ( trTemp ) <= L Break;
+                  if M
+                  {
+                    if ( TempDescr.cRec = 0 )
+                      UpDate Current TempDescr Set TempDescr.cRec := 1;
+                  }
+                  else
+                    if ( TempDescr.cRec = 1 )
+                      UpDate Current TempDescr Set TempDescr.cRec := 0;
+                  NextVisual;
+                }
+              TreePopPos ( trTemp );
+              SetPusto(trTemp);
+            }
+
+          if ( GetNaznTree(trTemp) = 0 )
+            {
+              TreePushPos ( trTemp );
+              TreeGetFirst ( trTemp );
+              UpDate Current TempDescr Set TempDescr.cRec := 0;
+              TreePopPos ( trTemp );
+            }
+          else
+            {
+              TreePushPos ( trTemp );
+              TreeGetFirst ( trTemp );
+              UpDate Current TempDescr Set TempDescr.cRec := 1;
+              TreePopPos ( trTemp );
+            }
+
+          NextVisual;
+          RescanPanel ( tnTempDescr );
+          StopVisual ( '', 0 );
+        }
+    end;
+  }
+
+cmUpdateRecord :
+  Update current TempDescr;
+
+cmTreeTop :
+  CurGroup := 0;
+
+cmTreeUp :
+  CurGroup := TempDescr.cGroup;
+
+cmTreeDown :
+  CurGroup := TempDescr.NRec;
+
+cmTreeNodeType :
+  if ( TempDescr.isLeaf = 1 )
+    TreeSetNodeType ( trTemp, 2 );
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(trTemp, TempDescr.cGroup);
+
+cmMarkUnMark:
+  {
+    StartNewVisual ( vtRotateVisual, vfTimer, 'Помечаю', 1 );
+    InvertMarker ( MarkerTree, comp(TempDescr.SortName) );
+
+    if ( TempDescr.IsLeaf = 0 AND GetLeafTree(trTemp) = 0 AND TempDescr.cGroup <> 0 )
+      DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+
+    var M : boolean;
+    M := SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree );
+
+    if ( TempDescr.IsLeaf = 1 )
+      {
+        TreePushPos ( trTemp );
+        TreeJumpToRecord ( trTemp, TempDescr.cGroup );
+
+        if ( GetMarkerLeaf(trTemp) = 0 )
+          DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+        else
+          InsertMarker ( MarkerTree, comp(TempDescr.SortName) );
+
+        NextVisual;
+        TreePopPos ( trTemp );
+      }
+    else
+      {
+        var L : integer;
+        L := TreeLevel ( trTemp );
+        TreePushPos ( trTemp );
+
+        While TreeGetNextEx ( trTemp )
+        do
+          {
+            if TreeLevel ( trTemp ) <= L
+              Break;
+
+            if M
+              {
+                if NOT SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree )
+                  InsertMarker ( MarkerTree, comp(TempDescr.SortName) );
+              }
+            else
+              if SearchMarker ( MarkerTree, comp(TempDescr.SortName), IndexNoTree )
+                DeleteMarker ( MarkerTree, comp(TempDescr.SortName) );
+            NextVisual;
+          }
+
+        TreePopPos ( trTemp );
+        SetPusto(trTemp);
+      }
+
+    SetHeadTree (trTemp);
+    TreeGetNext ( trTemp );
+    SetMyTitle(trTemp);
+    NextVisual;
+    RescanPanel ( tnTempDescr );
+    StopVisual ( '', 0 );
+  }
+
+cmSelectall:
+  {
+    StartNewVisual ( vtRotateVisual, vfTimer, 'Помечаю все', 1 );
+    TreePushPos ( trTemp );
+
+    if ( TreeGetFirst ( trTemp ) )
+      do
+        {
+          InsertMarker ( MarkerTree, comp(TempDescr.SortName) );
+          NextVisual;
+        }
+      While ( TreeGetNextEx ( trTemp ) );
+
+    TreePopPos ( trTemp );
+    SetHeadTree (trTemp);
+    SetMyTitle(trTemp);
+    NextVisual;
+    SetPusto(trTemp);
+    RescanPanel ( tnTempDescr );
+    StopVisual ( '', 0 );
+  }
+
+cmUnSelectall:
+{
+  ClearMarker ( MarkerTree );
+  SetMyTitle(trTemp);
+  RescanPanel ( #TempDescr );
+}
+
+cmHotKeys:
+  PutHotCommand(RunMenu('StartTree_Rep'));
+
+cmDocBas:
+  SetDefaultTreeDoc;
+
+end;
+end;
+
+//******************************************************************************
+
+Procedure SaveParamOtch;
+{
+   SaveMyDsk(BegDate, 'Rep_SR_d0');
+   SaveMyDsk(EndDate, 'Rep_SR_d1');
+   SaveMyDsk(Filtr, 'Rep_SR_f');
+   SaveMyDsk(Kontr, 'Rep_SR_K');
+   SaveMyDsk(Podr, 'Rep_SR_P');
+   SaveMyDsk(Mol, 'Rep_SR_M');
+   SaveMyDsk(wItogSum, 'Rep_SR_ItogSum');
+   SaveMyDsk(wDateCurs, 'Rep_SR_DateCurs');
+};
+
+//******************************************************************************
+
+Procedure ReadParamOtch;
+{
+  var Datechanged: boolean;
+
+  if (not ReadMyDsk(BegDate, 'Rep_SR_d0', Datechanged))
+     BegDate := Sub_Months(Cur_Date, 1);
+
+  if (not ReadMyDsk(EndDate, 'Rep_SR_d1', Datechanged))
+     EndDate := Cur_Date;
+
+  if (not ReadMyDsk(Filtr, 'Rep_SR_f', Datechanged))
+     Filtr := 0;
+
+  if (not ReadMyDsk(Kontr, 'Rep_SR_K', Datechanged))
+     Kontr := 0;
+
+  if (not ReadMyDsk(Podr, 'Rep_SR_P', Datechanged))
+     Podr := 0;
+
+  if (not ReadMyDsk(Mol, 'Rep_SR_M', Datechanged))
+     Mol := 0;
+
+  if (not ReadMyDsk(wItogSum, 'Rep_SR_ItogSum', Datechanged))
+     wItogSum := 0;
+
+  if (not ReadMyDsk(wDateCurs, 'Rep_SR_DateCurs', Datechanged))
+     wDateCurs := 0;
+
+  SaveParamOtch;
+};
+
+
+//******************************************************************************
+
+Function CheckParamOtch: boolean;
+{
+  CheckParamOtch := FALSE;
+
+  if ((BegDate > ZeroDate) AND (EndDate > ZeroDate) AND (EndDate >= BegDate) AND (GetMarkerTree(trTemp) ) <> 0 )
+    CheckParamOtch := TRUE
+  else
+    if ( (GetMarkerTree(trTemp) ) = 0 )
+      Message( 'Нужно выбрать хотя бы один документ...', CancelButton + Warning )
+    else
+      if ( BegDate = ZeroDate )
+        Message('Первая дата не может быть нулевой...', CancelButton + Warning)
+      else
+        if (EndDate = ZeroDate)
+          Message('Вторая дата не может быть нулевой...', CancelButton + Warning)
+        else
+          if ( EndDate < BegDate )
+            Message('Вторая дата должна быть не меньше первой...', CancelButton + Information);
+}
+
+#include soprrees.vpp
+
+HandleEvent
+
+cmInit:
+  {
+    ReadParamOtch;
+    SoprInRep := wGetTune('Rep.SoprKontr');
+    sSimbValNDE := sGetTune('NDE.SimvRub');
+    oValFunc.InitVal;
+    SetTitle('Параметры сопроводительного реестра');
+    MarkerTree := InitMarker ( 'mrkTreeKatDoc', 8, 100, 10 );
+    MarkerDoc := InitMarker ( 'VybKatDoc', 8, 100, 10 );
+
+    if (GetFirst TempDescr <> tsOk)
+      SetDefaultTreeDoc;
+
+    SetMyTitle(trTemp);
+    RescanPanel(tnTempDescr);
+    SetFormat(scRep_Pl0);
+    SetFormat(trTemp);
+    RereadRecord;
+    SelectField(#Filtr);
+    PutCommand(cmCheckField);
+  }
+
+cmPick:
+  {
+    case CurField of
+    //-------------------------------------------------------------------
+      #KatPodr.Name:
+        RunInterface(GetAnyPodr, Podr, 0);
+    //-------------------------------------------------------------------
+      #KatOrg1.Name:
+        RunInterface(GetKatOr, Kontr, comp(0), FALSE, comp(0), comp(0));
+    //-------------------------------------------------------------------
+      #KatMol.Name:
+        RunInterface(GetMol, Mol, Podr);
+    //-------------------------------------------------------------------
+     end;
+
+     RereadRecord;
+  }
+
+cmDelOnProtect:
+  {
+    case CurField of
+    //----------------------------------
+      #KatPodr.Name :
+        set Podr  := comp(0);
+    //----------------------------------
+      #KatOrg1.Name :
+        set Kontr := comp(0);
+    //----------------------------------
+      #KatMol.Name  :
+        set Mol   := comp(0);
+    //----------------------------------
+    end;
+  }
+
+cmCheckField:
+  case CurField of
+    #Filtr:
+      {
+        SetFieldVisible(#KatPodr.Name , (Filtr AND 1) = 1);
+        SetFieldVisible(#KatMol.Name  , (Filtr AND 2) = 2);
+        SetFieldVisible(#KatOrg1.Name , (Filtr AND 4) = 4);
+      }
+  end;
+
+cmDone:
+  {
+    DoneMarker( MarkerTree, 'mrkTreeKatDoc' );
+    DoneMarker( MarkerDoc, 'VybKatDoc' );
+    SaveParamOtch;
+    oValFunc.DoneVal;
+  }
+
+cmValue1:
+  {
+    if ( CheckParamOtch )
+      {
+        SaveParamOtch;
+        AddLeafTreeDoc;
+
+        if (SearchMarker ( MarkerTree, comp(90), IndexNoTree ))
+          InsertMarker ( MarkerTree, comp(94) );
+
+        if (SearchMarker ( MarkerTree, comp(91), IndexNoTree ))
+          InsertMarker ( MarkerTree, comp(93) );
+
+        if (SearchMarker ( MarkerTree, comp(92), IndexNoTree ))
+          InsertMarker ( MarkerTree, comp(95) );
+
+        if (SearchMarker ( MarkerTree, comp(70), IndexNoTree ))
+          InsertMarker ( MarkerTree, comp(71) );
+
+        Reestr;
+
+        if (SearchMarker ( MarkerTree, comp(90), IndexNoTree ))
+          DeleteMarker ( MarkerTree, comp(94) );
+
+        if (SearchMarker ( MarkerTree, comp(91), IndexNoTree ))
+          DeleteMarker ( MarkerTree, comp(93) );
+
+        if (SearchMarker ( MarkerTree, comp(92), IndexNoTree ))
+          DeleteMarker ( MarkerTree, comp(95) );
+
+        if (SearchMarker ( MarkerTree, comp(70), IndexNoTree ))
+          DeleteMarker ( MarkerTree, comp(71) );
+
+        DelAddLeafTreeDoc;
+        CloseInterface(cmDone);
+      }
+  }
+End;
+End.

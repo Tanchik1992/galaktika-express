@@ -1,0 +1,3743 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Наряд-заказы
+//********************************************************************************
+
+#include rundsel.vih
+#include docs2obj.vih
+#include SpDocs.vih
+#include katorg.vih
+#include notes.vih
+#include DOfuns.vih
+#include statlog.vih
+#include ofpmacro.vpp
+#include oDEI.vih //Функции доп.ед.изм. (iKatDopEd)
+#include oEdIzm.vih
+#include SchFactFunctions.vih
+#include dogovor.vih
+#include AutoTrn.vih
+#include UKSfuns.vih
+#include ExtAttr.vih
+#include ExtClass.vih
+
+//********************************************************************************
+
+#doc
+Наряд-заказов
+#end
+Interface NZakaz 'Наряд-заказы' EscClose, Cyan;
+  Show at (0, 0, 80, 25);
+
+#include oEdIzm.var
+#include AutoTrn.var
+#include DOfuns.var
+#include UKSfuns.var
+#include SpDocs.var
+
+//наряд-заказ
+table struct FRNZakaz
+(
+  NRec              : string // номер
+
+//-- просмотр спецификации наряд-заказа
+, SpDocsCode        : string // номер по порядку
+//-- Группа МЦ/услуг
+, GroupMCName       : string // вид продукции
+//-- МЦ/услуга
+, KatMcBarKod       : string // номенклатурный номер
+, KatMcName         : string // ГОСТ, Марка стали, Диаметр, Стенка
+
+, KatOtpEdName      : string // Единица измерения
+, SpDocsKol         : double // Занарядка
+)
+with index
+(
+  indextFRNZakaz = NRec
+);
+
+
+Create view vwNZakaz
+
+Var
+
+  isCurTreeView
+, OkModfOtgrInSpec
+, mdfShipment
+, mdfTipOtg
+, mdfWayMove                : boolean;
+
+  SpForm
+, VidReport                 : word;  //0 - отчет в бизнес-тексте, 1 - отчет в формате FastReport
+
+! --- Дескрипторы
+  DscVisible                : word;        // Видимость дескрипторов
+  DscName                   : string[20];  // Поле для подцепки по декриптору
+  DesGroup                  : string[4];   // Поле подцепки по группе дескрипторов
+  vidReport_vschet          : string;      //Для сохранения вида отчета
+
+! --- Фильтры по датам
+  BegDate
+, EndDate                   : date;    // Диапазон фильтров
+  isFilter                  : boolean; // Признак установки фильтра даты
+
+! --- Доп. Фильтры --(хранятся в DSK)--
+  FilterNZakazDate
+, FilterNZakazDog
+, FilterNZakazAppDog
+, FilterNZakazCalPlan
+, FilterNZakazGrPol
+, FilterNZakazOtpPunkt      : boolean; // Признаки устаноки фильтров
+
+  FilterNZakazDate_D1
+, FilterNZakazDate_D2       : date;
+
+  FilterNZakazDog_NRec
+, FilterNZakazAppDog_NRec
+, FilterNZakazCalPlan_NRec
+, FilterNZakazGrPol_NRec
+, FilterNZakazOtpPunkt_NRec : comp;    // Ссылки для фильтров
+
+  tmpDskAll                 : word;    //временная переменная
+
+  tmpDskComp1
+, tmpDskComp2
+, tmpDskComp3
+, tmpDskComp4
+, tmpDskComp5               : comp;    //временные переменная
+
+  tmpDskDate1
+, tmpDskDate2               : date;
+
+  tmpBool                   : boolean; //временная переменная
+
+
+//-- параметры
+  pNZakUp
+, pNZak
+, isclose                   : comp;
+//--
+  Node                      : comp;
+//-- вспомогательные глобальные переменные
+  MyTree                    : longint;
+  oldTypeDoc                : word;
+  SavedNRec                 : comp;
+  First_Position            : boolean;
+  OldKolDEI                 : double;
+
+  oNotes                    : iNotes;
+  oStatlog                  : vipStatlog;
+#ifdef _CheckKon_VIH_
+  oCheckKon                 : CheckKonObj;
+#end
+
+As select
+  if(NZakaz.Prior = 0, 'нормальный',
+    if(NZakaz.Prior = 1, 'высокий',
+      if(NZakaz.Prior = 2, 'низкий', '!некорр!')))
+    ( FieldName = NZakazPrior )
+
+, if(NZakaz.cDogovor <> 0, '№ ' + Dogovor.NoDoc + DateToStr(Dogovor.dDoc, ' от DD/MM/YYYY'), '')
+    ( FieldName = DogovorName )
+
+, if(NZakaz.cAppDogovor <> 0, '№ ' + AppDogovor.NoDoc + DateToStr(AppDogovor.dDoc, ' от DD/MM/YYYY'), '')
+    ( FieldName = AppDogovorName )
+
+, if(NZakaz.cOwner <> 0, '№ ' + NZakazUp.NoDoc + DateToStr(NZakazUp.dDoc, ' от DD/MM/YYYY'), '')
+    ( FieldName = NZUpName )
+
+, if(IsValid(tnNZakazDown), '№ ' + NZakazDown.NoDoc + DateToStr(NZakazDown.dDoc, ' от DD/MM/YYYY'), '')
+    ( FieldName = NZDownName )
+
+, if(NZakaz.cCalPlan <> 0, CalPlan.NoDoc, '')
+    ( FieldName = CalPlanName )
+
+, if(SpDocs.PrMC = 1, 'МЦ', 'Усл')
+    ( FieldName = SpNZakPMC )
+
+, if(SpDocs.PrMC = 1, GroupMC.Name, GroupUsl.Name)
+    ( FieldName = SpNZakGrName )
+
+, if(SpDocs.PrMC = 1, KatMC.Name, KatUsl.Name)
+    ( FieldName = SpNZakObjName )
+
+, if(NZakaz.TypeDoc = 0, 'О',
+    if(NZakaz.TypeDoc = 1, 'Г',
+      if(NZakaz.TypeDoc = 2, 'Д', 'Н')))
+    ( FieldName = NZakazTypeShort )
+
+, if(IsValid(tnSpOtgOrd), true, false)
+    ( FieldName = IsValidRO )
+
+, if(tmpDskComp1 <> 0, '№ ' + Dogovor_Filter.NoDoc + DateToStr(Dogovor_Filter.dDoc, ' от DD/MM/YYYY'), '')
+    ( FieldName = Dogovor_Filter_ )
+
+, if(tmpDskComp2 <> 0, '№ ' + AppDogovor_Filter.NoDoc + DateToStr(AppDogovor_Filter.dDoc, ' от DD/MM/YYYY'), '')
+    ( FieldName = AppDogovor_Filter_ )
+
+, if(tmpDskComp3 <> 0, CalPlan_Filter.NoDoc, '')
+    ( FieldName = CalPlan_Filter_ )
+
+, if(tmpDskComp4 <> 0, GrPol_Filter.Name, '')
+    ( FieldName = GrPol_Filter_ )
+
+, if(tmpDskComp5 <> 0, OtpPunkt_Filter.Name, '')
+    ( FieldName = OtpPunkt_Filter_ )
+
+, '№ ' + OtgOrder.NoDoc + DateToStr(OtgOrder.dDoc, ' от DD/MM/YYYYг.')
+    ( FieldName = ROInfo )
+
+, KatOrg.Name
+, KatOrg.Code
+, Contributor.Name
+
+From
+  NZakaz
+, SpDocs (Normal, SpDocs02)
+, Dogovor
+, Dogovor AppDogovor
+, CalPlan
+, KatOrg
+, CellVal
+, NZakaz NZakazUp
+, NZakaz NZakazDown
+, KatOrg GrOtp
+, KatOrg GrPol
+, KatOrg Contributor
+, KatOrg OrgPlat
+, KatOrg OrgPol
+, KatBank BankPlat
+, KatBank BankPol
+, MarPunkt GrOtpPunkt
+, MarPunkt GrOtpPunkt2
+, MarPunkt GrPolPunkt
+, MarPunkt OtpPunkt_Filter
+, KatState GrOtpState
+, KatState GrPolState
+, KatCity GrOtpCity
+, KatCity GrPolCity
+, KatPodr MyPodr
+, KatOrg Contr1
+, KatOrg Contr2
+, Shipment SpShipment
+, TipOtg SpTipOtg
+, WayMove SpWayMove
+, SpDocs  SpNZakUp
+, KlVal
+, katmc
+, KatUsl
+, GroupMC
+, GroupUsl
+, KatOtpEd
+, ResOtgr
+, Shipment
+, TipOtg
+, WayMove
+, SpDocs  SpDog
+, SpDocs  SpCalPln
+, MoveCell
+, StatLog
+, KatNotes
+, KatBank
+, MarAvt
+, DocInfo
+, DocInfo DocInfo_1
+, KatNazna
+, OtgOrder
+, SpOtgOrd
+, Dogovor AppDogovor_Filter
+, Dogovor Dogovor_Filter
+, Dogovor Dogovor_VidD
+, CalPlan CalPlan_Filter
+, KatOrg GrPol_Filter
+, KatVidD
+, ActSaldo
+, PickRep
+, MarRel
+, Persons
+, Pick
+, FRNZakaz
+
+Where
+((
+    NZakaz.nRec         ==  SpDocs.cDoc
+and word(440)           ==  SpDocs.TiDk
+and NZakaz.cDogovor     ==  Dogovor.nRec
+and Dogovor.cMyOrg      ==  Contr1.nRec
+and Dogovor.cOrg        ==  Contr2.nRec
+and NZakaz.cCalPlan     ==  CalPlan.nRec
+and NZakaz.cAppDogovor  ==  AppDogovor.nRec
+and NZakaz.cOrg         ==  KatOrg.nRec
+and NZakaz.cGrOtp       ==  GrOtp.nRec
+and NZakaz.cPunktP      ==  GrOtpPunkt.nRec
+and NZakaz.cPunktP      ==  GrOtpPunkt2.nRec
+and NZakaz.cContrib     ==  Contributor.nRec
+and NZakaz.cGrPol       ==  GrPol.nRec
+and NZakaz.cPunktR      ==  GrPolPunkt.nRec
+and NZakaz.cOwner       ==  NZakazUp.nRec
+and NZakazUp.nRec       ==  SpNZakUp.cDoc
+and word(440)           ==  SpNZakUp.TiDk
+and NZakaz.cInstead     ==  NZakazDown.nRec
+and NZakaz.cPodrForm    ==  MyPodr.nRec
+and NZakaz.cShipment    ==  Shipment.nRec
+and NZakaz.cTipOtg      ==  TipOtg.nRec
+and NZakaz.cWayMove     ==  WayMove.nRec
+and NZakaz.cMarAvt      ==  MarAvt.nRec
+and NZakaz.cNote        ==  KatNotes.nRec
+and SpDocs.cGrMCUSL     ==  GroupMC.nRec
+and SpDocs.cGrMCUSL     ==  GroupUsl.nRec
+and SpDocs.cMCUSL       ==  KatMC.nRec
+and SpDocs.cMCUSL       ==  KatUsl.nRec
+and SpDocs.cOtpEd       ==  KatOtpEd.nRec
+and SpDocs.cResOtgr     ==  ResOtgr.nRec
+///////////////////////////////////////////////////////
+and SpDocs.cMoveCell    ==  MoveCell.nRec
+and word(0)             ==  CellVal.PrMC
+and SpDocs.cMCUSL       ==  CellVal.cMC
+and MoveCell.nRec       ==  CellVal.cMoveCell
+////////////////////////////////////////////////////////
+and SpDocs.cShipment    ==  SpShipment.nRec
+and SpDocs.cTipOtg      ==  SpTipOtg.nRec
+and SpDocs.cWayMove     ==  SpWayMove.nRec
+//-- по грузоотправителю
+and GrOtp.cState        ==  GrOtpState.nRec
+and GrOtp.cCity         ==  GrOtpCity.nRec
+//-- по грузоотправителю
+and GrPol.cState        ==  GrPolState.nRec
+and GrPol.cCity         ==  GrPolCity.nRec
+//--для memo-поля
+and NZakaz.nRec         ==  DocInfo.cDoc
+and word(440)           ==  DocInfo.DocType
+//--для Доп.фильтров
+and tmpDskComp1         ==  Dogovor_Filter.nRec
+and tmpDskComp2         ==  AppDogovor_Filter.nRec
+and tmpDskComp3         ==  CalPlan_Filter.nRec
+and tmpDskComp4         ==  GrPol_Filter.nRec
+and tmpDskComp5         ==  OtpPunkt_Filter.nRec
+//--для определения наличия сформированных РО
+and NZakaz.nRec         ==  SpOtgOrd.cNZakaz
+and SpOtgOrd.cOtgOrder  ==  OtgOrder.nRec
+
+))
+
+bounds TreeBound    = Node == NZakaz.cOwner
+
+bounds VscBound     = DscName  == NZakaz.Descr (NoIndex)
+bounds GroupDsc     = DesGroup == NZakaz.DesGr (NoIndex)
+
+bounds dMainBound   = BegDate <<= NZakaz.dDoc  (NoIndex)
+                  and EndDate >>= NZakaz.dDoc  (NoIndex)
+
+bounds NoneDog      = FilterNZakazDog_NRec      == NZakaz.cDogovor    (NoIndex)
+bounds NoneAppDog   = FilterNZakazAppDog_NRec   == NZakaz.cAppDogovor (NoIndex)
+bounds NoneCalPlan  = FilterNZakazCalPlan_NRec  == NZakaz.cCalPlan    (NoIndex)
+
+bounds NoneGrPol    = FilterNZakazGrPol_NRec    == NZakaz.cGrPol  (NoIndex)
+bounds NoneOtpPunkt = FilterNZakazOtpPunkt_NRec == NZakaz.cPunktP (NoIndex)
+
+bounds OrdBnd ordered by NZakaz.dDoc, NZakaz.NoDoc
+!-------------------------------------------------------------------------------
+;
+
+Parameters
+  pNZakUp    //-- вышестоящий наряд-заказ
+, pNZak;     //-- NRec
+
+Form frmNZakaz('nzakaz.out', 'nzakaz');
+//******************************************************************************
+
+#ifdef ATL51
+//главный поток
+DataStream NZakaz
+(
+  [cfh]     CommonFormHeader;
+
+  //-- Контрагент 2
+  [Contr2Name]       Contr2.Name; 
+  [UNN_Name]         sGetTune('KatOrg.FldView.UNN') + ':';
+  [Contr2UNN]        Contr2.UNN;
+  [Contr2OKPO]       Contr2.OKPO;
+  [Contr2Addr]       Contr2.Addr;
+  [Contr2Tel]        Contr2.Tel;
+
+  [MyPodrName]       MyPodr.Name;
+
+  //-- Заявитель
+  [ContributorName]  Contributor.Name;
+  [ContributorUNN]   Contributor.UNN;
+  [ContributorOKPO]  Contributor.OKPO;
+  [ContributorAddr]  Contributor.Addr;
+  [ContributorTel]   Contributor.Tel;
+  //-- Договор
+  [DogovorNoDoc]     Dogovor.NoDoc;
+  [DogovordDoc]      DateToStr(Dogovor.dDoc, 'DD/MM/YYYY');
+  //-- Наряд-заказ
+  [NZakazNoDoc]      NZakaz.NoDoc;
+  //-- Грузополучатель
+  [GrPolPunktName]   GrPolPunkt.Name;
+  //-- способ отгрузки и т.п.
+  [DocInfoTextData]  DocInfo.TextData;
+//-- Группа МЦ/услуг
+  [GroupMCName]      GroupMC.Name;
+
+  Table FrNZakaz
+
+  (
+    [NRec]             FRNZakaz.NRec;
+
+  //-- просмотр спецификации наряд-заказа
+    [SpDocsCode]       FRNZakaz.SpDocsCode;
+
+  //-- МЦ/услуга
+    [KatMcBarKod]      FRNZakaz.KatMcBarKod;
+    [KatMcName]        FRNZakaz.KatMcName;
+
+    [KatOtpEdName]     FRNZakaz.KatOtpEdName;
+    [SpDocsKol]        FRNZakaz.SpDocsKol;
+
+  );
+)
+end;
+#end
+//******************************************************************************
+Function GetDocTreeType : byte;
+{
+  if ( NZakaz.IsLeaf = 1 )
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(MyTree), ntfOpen, ntfClose);
+}
+
+// иконки для отрисовки дерева
+#include DogIcons.vpp
+
+var oChkLink   : CheckLinksObj;
+var piKatDopEd : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+var UseDEI     : boolean; // признак использования ДЕИ
+var AutoDEI    : boolean; // автоформирование ДЕИ
+
+#include rounddog.vpp
+#include serv_str.vpp
+#include direct.vpp
+#include ExClass.vpp
+#include nzfun.vpp  //-- сервисные функции по наряд-заказам
+#include prnnzak.vpp
+#include getmolsk.vpp
+
+Procedure ChangeNotes;
+{
+  StartNewVisual(vtNumericVisual, vfTimer + vfConfirm, 'Конвертация признаков контроля в статусах:', 1);
+
+  PushPos(#KatNotes);
+  PushPos(#NZakaz);
+  ResetBounds(#NZakaz);
+  ResetBounds(#KatNotes);
+  NextVisual;
+
+  _loop KatNotes
+    {
+      NextVisual;
+      case KatNotes.VidDoc of
+        40:
+          if ( ( KatNotes.Status = 3 ) AND ( KatNotes.FilialNo = 2 ) )
+            {
+              KatNotes.FilialNo := 0;
+              update current KatNotes;
+            }
+
+        41, 42, 51, 52:
+          if ( ( KatNotes.Status = 3 ) AND ( KatNotes.FilialNo = 2 ) )
+            {
+              KatNotes.FilialNo := 0;
+              update current KatNotes;
+            }
+
+        100:
+          {
+            if ( ( KatNotes.Status = 3 ) AND ( KatNotes.FilialNo <> 2 ) )
+              {
+                KatNotes.FilialNo := 2;
+                update current KatNotes;
+              }
+            if ( ( KatNotes.Status = 4 ) AND ( KatNotes.FilialNo = 2 ) )
+              {
+                KatNotes.FilialNo := 0;
+                update current KatNotes;
+              }
+          }
+
+        400..401, 403..439:
+          {
+            if ( ( KatNotes.Status = 3 ) AND ( KatNotes.FilialNo <> 2 ) )
+              {
+                KatNotes.FilialNo := 2;
+                update current KatNotes;
+              }
+            if ( ( KatNotes.Status = 4 ) AND ( KatNotes.FilialNo = 2 ) )
+              {
+                KatNotes.FilialNo := 0;
+                update current KatNotes;
+              }
+          }
+
+        440..443:
+          {
+            if ( ( KatNotes.Status = 3 ) AND ( KatNotes.FilialNo <> 2 ) )
+              {
+                KatNotes.FilialNo := 2;
+                update current KatNotes;
+                _loop NZakaz where (( word(3) == NZakaz.Status ))
+                  {
+                    NextVisual;
+                    if (KatNotes.nRec = NZakaz.cNote)
+                      oSpDocs.SpDocs_Set_InUseStatus(NZakaz.nRec, word(440), oNotes.Notes_InUseStatus(NZakaz.cNote));
+                  }
+              }
+            if ( ( KatNotes.Status = 4 ) AND ( KatNotes.FilialNo = 2 ) )
+              {
+                KatNotes.FilialNo := 0;
+                update current KatNotes;
+              }
+          }
+
+        290:
+          {
+            if ( ( KatNotes.Status = 3 ) AND ( KatNotes.FilialNo <> 2 ) )
+              {
+                KatNotes.FilialNo := 2;
+                update current KatNotes;
+              }
+            if ( ( KatNotes.Status = 4 ) AND ( KatNotes.FilialNo = 2 ) )
+              {
+                KatNotes.FilialNo := 0;
+                update current KatNotes;
+              }
+          }
+
+        202:
+           {
+             if ( ( KatNotes.Status = 6 ) AND ( KatNotes.FilialNo = 2 ) )
+               {
+                 KatNotes.FilialNo := 0;
+                 update current KatNotes;
+               }
+           }
+      end;
+    }
+
+  PopPos(#NZakaz);
+  SetBounds(#NZakaz);
+  PopPos(#KatNotes);
+  SetBounds(#KatNotes);
+
+  StopVisual('', 0);
+}
+
+#doc
+Окно с дополнительной информацией по спецификации
+#end
+Window winSpNZak_Add 'Дополнительная информация по спецификации' EscClose;
+  Show at (, 11, , );
+
+Screen scrSpNZak_Add (, hcSpNZakAdd, sci178Esc);
+  Table SpDocs;
+
+Fields
+  SpDocs.Code         ('Номер по порядку', , );
+  SpDocs.PrMC         ('Признак МЦ/услуги', , sci1378Esc) : [LIST 1 'МЦ', 'Услуга'], protect;
+  SpNZakGrName        ('Наименование группы МЦ/услуг', , sci1378Esc) : protect;
+  SpNZakObjName       ('Наименование МЦ/услуги', , sci1378Esc) : protect;
+  SpDocs.Kol          ('Количество по позиции', , ) : [10.3,'\3p[|-]36`666`666.888'], noprotect;
+  KatOtpEd.Name       ('Наименование отпускной единицы измерения', , sci1378Esc) : protect;
+  SpDocs.Price        ('Цена за единицу', , )  : [10.2,'\2p[|-]366`666`666.88'], noprotect;
+  SpDocs.Summa        ('Сумма по позиции', , ) : [10.2,'\2p[|-]366`666`666.88'], protect;
+  MoveCell.Name       ('Наименование единицы подвижного состава', , sci1378Esc) : protect;
+  ResOtgr.Name        ('Наименование ресурса отгрузки', , sci1378Esc) : protect;
+  SpShipment.Name     ('Способ отгрузки', , sci1378Esc) : protect, QuickChoice;
+  SpTipOtg.Name       ('Базис поставки', , sci1378Esc) : protect, QuickChoice;
+  SpWayMove.Name      ('Способ транспортировки', , sci1378Esc) : protect, QuickChoice;
+  SpDocs.ShipAddTerms ('Дополнительные условия отгрузки', , );
+<<
+`Номер позиции`    .@@@@@@@@@@
+`Признак МЦ/услуги`.@@@@@@@@@@            `Группа`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Наименование`     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Количество`       .@@@@@@@@@@ `Отпускная единица`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Цена`             .@@@@@@@@@@@@@@@@@@@`Стоимость`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Единица подвижного состава`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Ресурс отгрузки`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Способ отгрузки`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Базис`            .@@@@@@@@@@@@@@@@@@@`Транспорт`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Дополнительно`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+HandleEvent
+
+cmOpenSearch:
+  {
+    case Curfield of
+      #SpShipment.Name:
+        {
+          QuickChoiceName := 'qcShipmentName';
+          ProcessCommand(cmPick);
+        }
+      #SpTipOtg.Name:
+        {
+          QuickChoiceName := 'qcTipOtgName';
+          ProcessCommand(cmPick);
+        }
+      #SpWayMove.Name:
+        {
+          QuickChoiceName := 'qcWayMoveName';
+          ProcessCommand(cmPick);
+        }
+      #SpDocs.Summa:
+        {
+          ProcessCommand(cmPick);
+          Abort;
+        }
+    else
+      Abort;
+    end;
+  }
+
+end; // HandleEvent
+
+end; // window
+
+#doc
+Окно с примечанием
+#end
+Window EditTextRepr 'Примечание' EscClose;
+  Show at (2, 12, 78, 19);
+
+Panel paEditTextRField
+  Table DocInfo;
+
+Text  DocInfo.TextData;
+
+HandleEvent
+
+cmInsertRecord:
+  insert current DocInfo;
+
+cmUpdateRecord:
+  update current DocInfo;
+
+cmDeleteRecord:
+  if ( message(''#3'Удалить?', Warning + YesNo) = cmYes )
+    delete current DocInfo;
+
+end; // handleEvent
+end; // panel
+end; // window
+
+#doc
+Окно с дополнительной информацией по наряд-заказу
+#end
+Window winNZakaz_AddInfo 'Дополнительная информация по наряд-заказу' escclose;
+  Show at (, 2, , 24);
+
+Screen scrNZakaz03 (, hcNZakazAdd, sci178Esc);
+  Table NZakaz;
+
+Fields
+  NZakaz.DesGr     ('Код группы пользователей', , sci1378Esc) : protect;
+  NZakaz.Descr     ('Дескриптор(идентификатор) пользователя', , sci1378Esc) : protect;
+  NZakaz.dInput    ('Дата ввода документа', , sci1378Esc) : [, 'DD/MM/YYYY'];
+  MyPodr.Name      ('Сформирован в подразделении', , sci1378Esc) : protect, QuickChoice;
+  NZakaz.Sign_Post ('Должность сотрудника, подписавшего документ', , );
+  NZakaz.Sign_FIO  ('ФИО сотрудника, подписавшего документ', , sci1378Esc);
+  NZakaz.Sign_Osn  ('Основание (документ) для подписания', , );
+  NZakaz.Otv_Post  ('Должность сотрудника, подписавшего документ', , );
+  NZakaz.Otv_FIO   ('ФИО сотрудника, подписавшего документ', , sci1378Esc);
+  Shipment.Name    ('Cпособ отгрузки', , sci1378Esc) : protect, QuickChoice;
+  TipOtg.Name      ('Базис поставки', , sci1378Esc) : protect, QuickChoice;
+  WayMove.Name     ('Способ транспортировки', , sci1378Esc) : protect, QuickChoice;
+  NZakaz.AddTerms  ('Дополнительные требования по отгрузке', , ) ;
+  MarAvt.NMarAvt   ('Маршрут', , sci1378Esc) : protect;
+  GrOtp.Name       ('Грузоотправитель', , sci1378Esc) : protect, QuickChoice;
+  GrOtpState.Name  : skip;
+  GrOtpCity.Name   : skip;
+  GrOtp.Addr       : skip;
+  GrOtpPunkt.Name  ('Пункт погрузки', , sci1378Esc) : protect;
+  GrPol.Name       ('Грузополучатель', , sci1378Esc) : protect, QuickChoice;
+  GrPolState.Name  : skip;
+  GrPolCity.Name   : skip;
+  GrPol.Addr       : skip;
+  GrPolPunkt.Name  ('Пункт разгрузки', , sci1378Esc) : protect;
+Buttons
+  cmTextWind, , , 'Примечание';
+<<
+`Группа/Дескриптор` .@@@@@@@@@@/.@@@@@@@@@@@     .@@@@@@@@@@ <. Примечание .>
+`Подразделение`     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Подписан:должность`.@@@@@@@@@@@@@@@@@@@@@@@`ФИО`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Основание`         .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Ответственный:должность`.@@@@@@@@@@@@@@@@@@`ФИО`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Способ отгрузки`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Базис`             .@@@@@@@@@@@@@@@@@@@@@@@`Транспорт`.@@@@@@@@@@@@@@@@@@@@@
+`Дополнительные требования`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Маршрут`           .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Грузоотправитель`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Страна`.@@@@@@@@@@@@@@@`Город`.@@@@@@@@@@@@@@@@`Адрес`.@@@@@@@@@@@@@@@@@@@@@
+`Пункт погрузки`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Грузополучатель`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Страна`.@@@@@@@@@@@@@@@`Город`.@@@@@@@@@@@@@@@@`Адрес`.@@@@@@@@@@@@@@@@@@@@@
+`Пункт разгрузки`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+HandleEvent // Window
+
+cmTextWind:
+  {
+    if UpdateTable
+      if (NZakaz.nRec <> 0)
+        RunWindowModal(EditTextRepr)
+      else
+        message('Заполните документ.', Information);
+  }
+
+cmOpenSearch:
+  {
+    case Curfield of
+     #GrPol.Name, #GrOtp.Name:
+       {
+         if NullVipRef(oChkLink)
+           GetVipRef(oChkLink, 'KatOrg');
+
+         if oChkLink.CheckLinks(coKatOrgDescr)
+           QuickChoiceName := 'qcKatOrgName'
+         else
+           QuickChoiceName := 'qcKatOrgTreeName';
+
+         ProcessCommand(cmPick);
+       }
+
+     #MyPodr.Name:
+       {
+         QuickChoiceName := 'qcKatPodrName';
+         ProcessCommand(cmPick);
+       }
+
+     #Shipment.Name:
+       {
+         QuickChoiceName := 'qcShipmentName';
+         ProcessCommand(cmPick);
+       }
+
+     #TipOtg.Name:
+       {
+         QuickChoiceName := 'qcTipOtgName';
+         ProcessCommand(cmPick);
+       }
+
+     #WayMove.Name:
+       {
+         QuickChoiceName := 'qcWayMoveName';
+         ProcessCommand(cmPick);
+       }
+    else
+      Abort;
+    end;
+  }
+
+end; // HandleEvent Window
+
+end; // window
+//-- window winNZakaz_Edit процедуры
+
+//-- ф-ия обработки события cmValue2
+Procedure OnValue2;
+var tmpStatus, mask : word;
+{
+  tmpStatus := NZakaz.Status;
+  mask := SetStatusMask(NZakaz.nRec);
+  RunInterface('StatLog', word(0), NZakaz.nRec, word(440), tmpStatus, NZakaz.cNote, mask);
+}
+
+//-- просмотр информации по договору
+Procedure OnValue3;
+{
+  if (NZakaz.cDogovor = 0)
+    Exit;
+
+  RunInterface('Dogovor', word(0), word(0), word(0), word(0), comp(0), NZakaz.cDogovor);
+
+  ReReadRecord(#Dogovor);
+}
+
+//-- просмотр информации по соглашению
+Procedure OnValue4;
+{
+  if (NZakaz.cAppDogovor = 0)
+    Exit;
+
+  RunInterface('Dogovor', word(0), word(0), word(0), word(0), AppDogovor.cDogovor, NZakaz.cAppDogovor);
+
+  ReReadRecord(#AppDogovor);
+}
+
+Procedure OnValue5;   //План
+{
+  if (NZakaz.cCalPlan = 0)
+    Exit;
+
+  if (NZakaz.cAppDogovor <> 0)
+    RunInterface('CalPlan', NZakaz.cAppDogovor, NZakaz.cCalPlan)
+  else
+    RunInterface('CalPlan', NZakaz.cDogovor, NZakaz.cCalPlan);
+}
+
+//-- просмотр наряд-заказа по которому сформирован
+Procedure OnValue6;
+{
+  if (NZakaz.cOwner = 0)
+    Exit;
+
+  RunInterface('NZakaz', NZakazUp.cOwner, NZakaz.cOwner);
+}
+
+//-- просмотр наряд-заказа вместо которого сформирован
+Procedure OnValue7;
+{
+  if (NZakaz.cInstead = 0)
+    Exit;
+
+  RunInterface('NZakaz', NZakazDown.cOwner, NZakaz.cInstead);
+}
+
+#include nzserv.vpp //-- функции проверки полей наряд-заказа
+
+#doc
+Окно редактирования наряд-заказа
+#end
+Window winNZakaz_Edit 'Редактирование наряд-заказа' EscClose;
+   Show at (0, 0, 89, 25);
+
+Panel panNZakaz02;
+  Table NZakaz;
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbPrintDoc
+  , F_Common::tbSaveRestoreDoc
+  , F_Common::tbAttrClass
+  , F_Common::tbDopInfo
+#else
+    tbPrintDoc
+  , tbSaveRestoreDoc
+  , tbAttrClass
+  , tbDopInfo
+#end
+;
+Screen scrNZakaz02 (, hcNZakazEdit, sci178Esc);
+  Show at (, , , 16);
+
+Fields
+  NZakaz.NoDoc     ('Номер наряд-заказа', , );
+  NZakaz.dDoc      ('Дата наряд-заказа', , ) : [, 'DD/MM/YYYY'];
+  NZakaz.TypeDoc   ('Тип наряд-заказа', , sci1378Esc) : [LIST 'обычный', 'групповой', 'детальный'], protect;
+  NZakaz.Prior      ('Приоритет исполнения наряд-заказа', , sci1378Esc) : [LIST 'нормальный', 'высокий', 'низкий'], protect;
+  NZakaz.dBeg      ('Дата начала действия наряд-заказа', , ) : [, 'DD/MM/YYYY'];
+  NZakaz.dEnd      ('Дата окончания действия наряд-заказа', , ) : [, 'DD/MM/YYYY'];
+  KatNotes.Name    ('Статус наряд-заказа', , sci1378Esc) : PickButton, protect;
+  DogovorName      ('Договор, по кот. сформирован НЗ. F3 - выбор из списка, Ctrl+F3 - выбор из дерева', , sci1378Esc) : protect;
+  AppDogovorName   ('Соглашение, по кот. сформ-н НЗ. F3 - выбор из списка, Ctrl+F3 - выбор из дерева', , sci1378Esc) : protect;
+  CalPlanName      ('Пункт календарного плана. F3 - выбор из списка, Ctrl+F3 - выбор из дерева', , sci1378Esc) : protect;
+  NZUpName         ('Сформирован по наряд-заказу', , sci1378Esc) : skip;
+  NZDownName       ('Сформирован взамен наряд-заказа', , sci1378Esc) : protect;
+  KatOrg.Name      ('Наименование контрагента', , sci1378Esc) : protect, QuickChoice;
+  Contributor.Name ('Наименование заявителя', , sci1378Esc) : protect, QuickChoice;
+  GrOtpPunkt.Name  ('Пункт погрузки', , sci1378Esc) : protect;
+  IsValidRO        ('Наличие сформированных распоряжений на отгрузку', , sci1378Esc) : skip;
+  ROInfo           : skip;
+Buttons
+  cmValue3, , , 'Просмотр реквизитов договоров'                      , , sci178Esc;
+  cmValue4, , , 'Просмотр реквизитов соглашения'                     , , sci178Esc;
+  cmValue5, , , 'Просмотр реквизитов пункта плана'                   , , sci178Esc;
+  cmValue6, , , 'Просмотр реквизитов н/з по которому сформирован'    , , sci178Esc;
+  cmValue1, , , 'Ввод дополнительных условий'                        , , sci178Esc;
+  cmValue7, , , 'Просмотр реквизитов н/з вместо которого сформирован', , sci178Esc;
+<<
+   `Номер` .@@@@@@@@@@@ `от`.@@@@@@@@@@@    `Тип`.@@@@@@@@@@@`Приоритет`.@@@@@@@@@@@@
+   `Действует с`.@@@@@@@@@@@ `по`.@@@@@@@@@@@@    `Статус`  .@@@@@@@@@@@@@@@@@@@@@@@@
+   <.   Договор   .>    `Договор`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   <.  Соглашение .>    `Соглашение` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   <. Пункт плана .>    `Пункт плана`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   <.   По Н/З    .>    `По Н/З`.@@@@@@@@@@@@@@@@@@@@@@@@@@@<.Расширенная информация.>
+
+   <. Взамен Н/З  .>    `Взамен Н/З` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   `Контрагент`      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   `Заявитель `      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   `Пункт погрузки  `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    Наличие сформированных распоряжений на отгрузку   [.] `   .@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+//--установка опций полей
+Procedure ChangeFieldsStateNZ_Edit; forward;
+
+var pRunDSel : RunDocSelObj;
+
+//-- Формирование НЗ по договору(приложению, кал. плану)
+Procedure NZakazByDog(myType:word);
+var
+  oldDog
+, oldAppDog
+, oldCalPlan
+, newDog     : comp;
+{
+  oldDog     := NZakaz.cDogovor;
+  oldAppDog  := NZakaz.cAppDogovor;
+  oldCalPlan := NZakaz.cCalPlan;
+
+  if NullVipRef(pRunDSel)
+    if not(LoadVipRef(pRunDSel, 'RunDocSelections'))
+      {
+        message(''#3'Не удалось загрузить библиотеку RunDocSelObj', Error);
+        Exit;
+      }
+
+  if (myType < 5)
+    {
+      myType := myType or 8;
+      if (pRunDSel.F3(NZakaz.cDogovor,    // var cDogovor    : comp;
+                      NZakaz.cAppDogovor, // var cAppDogovor : comp;
+                      NZakaz.cCalPlan,    // var cCalPlan    : comp;
+                      myType,             //     isSelect    : word; // откуда вызвали: 1 - договора 2 - соглашение 4 - календарный план
+                      word(2),            //     _wMaska     : word  // 0FFFFh - все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+                      word(0)             // только на продажу
+                     ) = cmCancel)
+        myType := 0;
+    }
+  else
+    {
+      myType := myType - 4;
+      if (pRunDSel.Ctrl_F3(NZakaz.cDogovor,    // var cDogovor    : comp;
+                           NZakaz.cAppDogovor, // var cAppDogovor : comp;
+                           NZakaz.cCalPlan,    // var cCalPlan    : comp;
+                           longint(0),         //     DskParams   : longint; // по умолчанию (=0) фильтр только по исполняемым
+                           myType              //     isSelect    : word; // откуда вызвали: 1 - договора 2 - соглашение 4 - календарный план
+                          ) = cmCancel)
+        myType := 0;
+    }
+
+  NewDog := NZakaz.cDogovor;
+
+  if (GetFirst fastfirstrow Dogovor_VidD where ((NewDog == Dogovor_VidD.nRec)) = tsOK)
+    if (GetFirst fastfirstrow KatVidD where ((Dogovor_VidD.cVidDog == KatVidD.nRec)) = tsOk)
+      if (message('Выбранный договор № ' + Dogovor_VidD.NoDoc + ' имеет вид "' + KatVidD.Name + '". Продолжать?', YesNo) = cmNo)
+        Exit;
+
+  if (myType = 0)
+    {
+      NZakaz.cDogovor    := oldDog;
+      NZakaz.cAppDogovor := oldAppDog;
+      NZakaz.cCalPlan    := oldCalPlan;
+    }
+  else
+    if (NZakaz.cCalPlan <> 0)
+      myType := 3
+    else
+      if (NZakaz.cAppDogovor <> 0)
+        myType := 2
+      else
+        myType := 1;
+
+  if (myType = 1) //-- заполнение из договора
+    if not FillNZakazByDogovor(false, true, false)
+      {
+        set NZakaz.cDogovor    := oldDog;
+        set NZakaz.cAppDogovor := oldAppDog;
+        set NZakaz.cCalPlan    := oldCalPlan;
+      }
+
+  if (myType = 2) //-- заполнение из приложения
+    if not FillNZakazByAppDogovor(false, true, false)
+      {
+        set NZakaz.cDogovor    := oldDog;
+        set NZakaz.cAppDogovor := oldAppDog;
+        set NZakaz.cCalPlan    := oldCalPlan;
+      }
+
+  if (myType = 3) //-- заполнение из календарного плана
+    if not FillNZakazByCalPlan(false, true, false)
+      {
+        set NZakaz.cDogovor    := oldDog;
+        set NZakaz.cAppDogovor := oldAppDog;
+        set NZakaz.cCalPlan    := oldCalPlan;
+      }
+
+  set NZakaz.cDogovor    := NZakaz.cDogovor;
+  set NZakaz.cAppDogovor := NZakaz.cAppDogovor;
+  set NZakaz.cCalPlan    := NZakaz.cCalPlan;
+
+  ReScanPanel(#NZakaz);
+  ReReadRecord(#SpDocs);
+}
+
+Function UpdateOtgrInfoInSpDocs : word;
+{
+  UpdateOtgrInfoInSpDocs := 0;
+
+  if not OkModfOtgrInSpec
+    {
+      mdfShipment := false;
+      mdfTipOtg   := false;
+      mdfWayMove  := false;
+      Exit;
+    }
+
+  if not (mdfShipment OR mdfTipOtg OR mdfWayMove)
+    {
+      OkModfOtgrInSpec := false;
+      Exit;
+    }
+
+  _loop SpDocs
+    if ( mdfShipment OR mdfTipOtg OR mdfWayMove )
+      {
+        SpDocs.cShipment := NZakaz.cShipment;
+        SpDocs.cTipOtg   := NZakaz.cTipOtg;
+        SpDocs.cWayMove  := NZakaz.cWayMove;
+
+        oSpDocs.UpDate_current_SpDocs(SpDocs.BufferP);
+      }
+
+  OkModfOtgrInSpec := false;
+  mdfShipment      := false;
+  mdfTipOtg        := false;
+  mdfWayMove       := false;
+}
+
+Procedure DoAltInsert;
+{
+  if (CurTable = #NZakaz)
+    if (NZakaz.nRec <> 0)
+      {
+        if isCurTreeView
+          TreePushPos(MyTree);
+
+        var pCurPos : comp; pCurPos := NZakaz.nRec;
+
+        if newNZakazFromUp(pCurPos)
+          {
+            if isCurTreeView
+              {
+                var pNode : comp; pNode := pCurPos;
+
+                pCurPos := NZakaz.nRec;
+                TreePopPos(MyTree);
+                TreeOpenNode(MyTree);
+
+                set Node := pNode;
+
+                TreeJumpToRecord(MyTree, pCurPos);
+              }
+            else
+              if isCurTreeView
+                TreeDropPos(MyTree);
+
+            RereadRecord(#NZakaz);
+            SetModified(True);
+          }
+        else
+          if isCurTreeView
+            TreeDropPos(MyTree);
+      }
+}
+
+HandleEvent
+
+cmSetDefault:
+  {
+//-- Установка значений по умолчанию для наряд-заказов
+    ClearBuffer(#NZakaz);
+    SetNZakazDef; //-- обязательные значения по умолчанию
+    NZakaz.dInput := Cur_Date;
+    NZakaz.dDoc   := Cur_Date;
+    NZakaz.dBeg   := Cur_Date;
+    NZakaz.IsLeaf := 0;
+    NZakaz.Status := 0;
+    NZakaz.Prior  := 2;
+    NZakaz.cOwner := 0;
+    ChangeFieldsStateNZ_Edit;
+  }
+
+cmSetCurField :
+  case Target of
+    #KatOrg.Name:
+      if (NZakaz.cOrg = 0)
+        PutCommand(cmPick);
+  end;
+
+cmPick:
+  {
+//-- проверки на возможность модификации полей
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName,
+      #KatOrg.Name,
+      #NZakaz.Descr,
+      #NZakaz.DesGr,
+      #NZDownName,
+      #Contributor.Name,
+      #GrOtp.Name,
+      #GrOtpPunkt.Name,
+      #GrPol.Name,
+      #GrPolPunkt.Name,
+      #MyPodr.Name,
+      #Shipment.Name,
+      #TipOtg.Name,
+      #WayMove.Name,
+      #Contributor.Name,
+      #NZakaz.Otv_Fio,
+      #NZakaz.Sign_Fio,
+      #NZakaz.TypeDoc,
+      #MarAvt.NMarAvt:
+        { //-- проверка по статусу НЗ
+          if (NZakaz.Status <> 0)
+            {
+               message(''#3'Статус наряд-заказа "' + KatNotes.Name + '".'
+                     + ''#13#3'Это поле изменять нельзя', OkButton);
+               Abort;
+               Exit;
+            }
+          else
+            if IsValid(#SpOtgOrd)
+              {
+                message(''#3'Редактирование запрещено.'
+                     + ''#13#3'Имеются распоряжения на отгрузку, '
+                     + ''#13#3'сформированные по наряд-заказу.', Information + OkButton);
+                Abort;
+                Exit
+              }
+        }
+    end;
+
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName,
+      #KatOrg.Name :
+        { //-- проверка на то сформирован ли НЗ по другому НЗ
+           if (NZakaz.cOwner <> 0)
+             {
+               message(''#3'Этот наряд-заказ сформирован'+
+                       ''#13#3'по другому наряд-заказу'+
+                       ''#13#3'Это поле изменять нельзя', okButton);
+               Exit;
+             }
+        }
+    end;
+
+  //-- проверка возможности модификации по наличию спецификации
+    case CurField of
+      #Shipment.Name,
+      #TipOtg.Name,
+      #WayMove.Name:
+        {
+          OkModfOtgrInSpec := false;
+          if IsValid(#SpDocs)
+            {
+              if (message(''#3'У наряд-заказа есть спецификация.'
+                        + ''#13#3'При изменении данного поля будут изменены'
+                        + ''#13#3'соответствующие поля во всей спецификации'
+                        + ''#13#3'Продолжать?', YesNo) = cmYes)
+                OkModfOtgrInSpec := true
+              else
+                Exit;
+            }
+        }
+    end;
+
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName,
+      #NZDownName,
+      #KatOrg.Name :
+        { //-- проверка является ли NZ владельцем
+          if ( isNZak_Owner(NZakaz.nRec) <> 0 )
+            {
+              message(''#3'Для данного наряд-заказа есть нижестоящие !'
+                    + ''#13#3'Данное поле не может быть переопределено.');
+             Exit;
+            }
+        }
+    end;
+//-----------------
+    case CurField of
+      #NZakaz.Descr:
+        RunInterface('GetDescr', NZakaz.Descr, NZakaz.DesGr, word(0));
+
+      #NZakaz.DesGr:
+        RunInterface('GetGrDescr', NZakaz.DesGr, false, false, comp(0));
+
+      #NZakaz.TypeDoc:
+        //-- запоминаем значение поля NZakaz.TypeDoc чтобы потом восстановить при необходимости
+        oldTypeDoc := NZakaz.TypeDoc;
+
+      #KatNotes.Name:
+        {
+          var tmpStatus, mask : word;
+
+          tmpStatus := NZakaz.Status;
+          mask      := SetStatusMask(NZakaz.nRec);
+
+          SetModified(true);
+          UpDateTable;
+
+          if ( RunInterface('StatLog'
+                          , word(1)
+                          , NZakaz.nRec
+                          , word(440)
+                          , tmpStatus
+                          , NZakaz.cNote
+                          , mask) = cmCancel )
+            Exit;
+
+          set NZakaz.Status := tmpStatus;
+          set NZakaz.cNote  := NZakaz.cNote;
+
+          UpDateTable;
+
+          oSpDocs.SpDocs_Set_InUseStatus(NZakaz.nRec, word(440), oNotes.Notes_InUseStatus(NZakaz.cNote));
+        }
+
+      #DogovorName:
+        NZakazByDog(1);
+
+      #AppDogovorName:
+        NZakazByDog(2);
+
+      #CalPlanName:
+        NZakazByDog(4);
+
+      #NZDownName:
+        {
+          var oldInstead : comp;
+          var maskNZak   : word;
+
+          oldInstead := NZakaz.cInstead;
+          maskNZak   := 1000 + 3; //1 + 2 + 4 + 16; //-- разрешить только выбор отмененных договоров
+
+          RunInterface('GetSomNZakaz',
+                         maskNZak,
+                         word(0),
+                         false,
+                         NZakaz.cInstead,
+                         true,
+                         NZakaz.cOwner,
+                         comp(0), comp(0), comp(0));
+
+          if ( NZakaz.nRec = NZakaz.cInstead )
+            {
+              message(''#3'Наряд-заказ не может заменить сам себя', OkButton);
+              set NZakaz.cInstead := oldInstead;
+              Exit;
+            }
+
+          if ( CheckNZakaz2Instead <> 0 )
+            {
+              message(''#3'Выбранный документ не может быть заменен'
+                    + ''#13#3'текущим наряд-заказом', okButton);
+              set NZakaz.cInstead := oldInstead;
+            }
+        }
+
+      #KatOrg.Name:
+        {
+          RunInterface('GetKatOr', NZakaz.cOrg, comp(0), false, comp(0), comp(0));
+          if (NZakaz.cContrib = 0)  //-- Заявитель равен контрагенту(по умолчанию)
+            set NZakaz.cContrib := NZakaz.cOrg;
+        }
+      #Contributor.Name :
+        RunInterface('GetKatOr', NZakaz.cContrib, comp(0), false, comp(0), comp(0));
+
+      #MarAvt.NMarAvt:
+        {
+          if ( RunInterface('Get_Dor',
+                              NZakaz.cMarAvt,
+                              if(NZakaz.cGrPol <> 0, 3, 2),
+                              if(NZakaz.cGrPol <> 0, NZakaz.cGrPol, NZakaz.cOrg),
+                              comp(0), comp(0)) = cmDefault )
+            {
+              set NZakaz.cMarAvt := NZakaz.cMarAvt;
+
+              if not oAutoTrn.isPunktInMar(NZakaz.cMarAvt, NZakaz.cPunktR)
+                if ( NZakaz.cMarAvt <> comp(0) )
+                  set NZakaz.cPunktR := oAutoTrn.getLastPunktInMar(NZakaz.cMarAvt)
+                else
+                  set NZakaz.cPunktR := 0;
+
+              if not oAutoTrn.isPunktInMar(NZakaz.cMarAvt, NZakaz.cPunktP)
+                if ( NZakaz.cMarAvt <> comp(0) )
+                  set NZakaz.cPunktP := oAutoTrn.getFirstPunktInMar(NZakaz.cMarAvt);
+                else
+                  set NZakaz.cPunktP := 0;
+            }
+        }
+
+      #GrOtp.Name:
+        RunInterface('GetKatOr', NZakaz.cGrOtp, comp(0), false, comp(0), comp(0));
+
+      #GrOtpPunkt.Name:
+        {
+          if ( NZakaz.cMarAvt <> 0 )
+            { //-- выбор пункта из маршрута
+              var pMarRel : comp;
+
+              if ( RunInterface('Get_Itws', NZakaz.cMarAvt, pMarRel, word(1)) =cmDefault )
+                if ( GetFirst MarRel where (( pMarRel == MarRel.nRec )) = tsOk )
+                  set NZakaz.cPunktP := MarRel.cMarPunkt;
+            }
+          else
+            {
+              RunInterface('Get_Item', word(1), NZakaz.cPunktP);
+              set NZakaz.cPunktP := NZakaz.cPunktP;
+            }
+        }
+
+      #GrPol.Name:
+        RunInterface('GetKatOr', NZakaz.cGrPol, comp(0), false, comp(0), comp(0));
+
+      #GrPolPunkt.Name:
+        {
+          if ( NZakaz.cMarAvt <> 0 )
+            { //-- выбор пункта из маршрута
+              var pMarRel : comp;
+
+              if ( RunInterface('Get_Itws', NZakaz.cMarAvt, pMarRel, word(1)) = cmDefault )
+                if ( GetFirst MarRel where (( pMarRel == MarRel.nRec )) = tsOk )
+                  set NZakaz.cPunktR := MarRel.cMarPunkt;
+            }
+          else
+            {
+              RunInterface('Get_Item', word(1), NZakaz.cPunktR);
+              set NZakaz.cPunktR := NZakaz.cPunktR;
+            }
+        }
+
+      #MyPodr.Name:
+        RunInterface('GetAnyPodr', NZakaz.cPodrForm, 0);
+
+      #Shipment.Name:
+        if ( RunInterface('GetShipment', NZakaz.cShipment) <> cmCancel )
+          {
+            set NZakaz.cTipOtg  := Shipment.cTipOtg;
+            set NZakaz.cWayMove := Shipment.cWayMove;
+            mdfShipment := true;
+            mdfTipOtg   := true;
+            mdfWayMove  := true;
+          }
+
+      #TipOtg.Name:
+        if ( RunInterface('GetTipOtg', NZakaz.cTipOtg) = cmDefault )
+          {
+            set NZakaz.cShipment := 0;
+            mdfShipment := true;
+            mdfTipOtg   := true;
+          }
+
+      #WayMove.Name:
+        if ( RunInterface('GetWayMove', NZakaz.cWayMove) = cmDefault )
+          {
+            set NZakaz.cShipment := 0;
+            mdfShipment := true;
+            mdfWayMove  := true;
+          }
+
+      #NZakaz.Sign_FIO:
+        {
+          var tmpComp : comp;
+          if ( RunInterface('GetPers', tmpComp) = cmDefault )
+            if ( GetFirst Persons where (( tmpComp == Persons.nRec )) = tsOk )
+              {
+                set NZakaz.Sign_FIO := Persons.FIO;
+                set NZakaz.Sign_Post := get_Person_Post(Persons.nRec);
+              }
+        }
+      #NZakaz.Otv_FIO:
+        {
+          var tmpComp : comp;
+          if (RunInterface('GetPers', tmpComp) = cmDefault)
+            {
+              if ( GetFirst Persons where (( tmpComp == Persons.nRec )) = tsOk )
+                {
+                  set NZakaz.Otv_FIO := Persons.FIO;
+                  set NZakaz.Otv_Post := get_Person_Post(Persons.nRec);
+                }
+            }
+        }
+
+      #NZakaz.NoDoc:
+        PutCommand(cmValue14);
+    end;
+
+    ChangeFieldsStateNZ_Edit;
+  } //-- cmPick
+
+cmDelOnProtect:
+  {
+//-- проверки на возможность модификации полей
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName,
+      #KatOrg.Name,
+      #NZakaz.Descr,
+      #NZakaz.DesGr,
+      #NZDownName,
+      #Contributor.Name,
+      #GrOtp.Name,
+      #GrOtpPunkt.Name,
+      #GrPol.Name,
+      #GrPolPunkt.Name,
+      #MyPodr.Name,
+      #Shipment.Name,
+      #TipOtg.Name,
+      #WayMove.Name,
+      #Contributor.Name,
+      #NZakaz.Otv_Fio,
+      #NZakaz.Sign_Fio,
+      #MarAvt.NMarAvt:
+        { //-- проверка по статусу НЗ
+          if ( NZakaz.Status <> 0 )
+            {
+               message(''#3'Статус наряд-заказа "' + KatNotes.Name + '".'
+                  + ''#13#3'Это поле изменять нельзя', OkButton);
+               Abort;
+               Exit;
+            }
+          else
+            if IsValid(#SpOtgOrd)
+              {
+                message(''#3'Редактирование запрещено.'
+                   + ''#13#3'Имеются распоряжения на отгрузку, '
+                   + ''#13#3'сформированные по наряд-заказу.', Information + OkButton);
+                Abort;
+                Exit
+              }
+        }
+    end;
+
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName,
+      #KatOrg.Name :
+        { //-- проверка на то сформирован ли НЗ по другому НЗ
+           if ( NZakaz.cOwner <> 0 )
+             {
+               message(''#3'Этот наряд-заказ сформирован'
+                  + ''#13#3'по другому наряд-заказу'
+                  + ''#13#3'Это поле изменять нельзя', OkButton);
+               Exit;
+             }
+        }
+    end;
+
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName,
+      #NZDownName,
+      #KatOrg.Name :
+        { //-- проверка является ли NZ владельцем
+          if ( isNZak_Owner(NZakaz.nRec) <> 0 )
+            {
+              message(''#3'Для данного наряд-заказа есть нижестоящие !'
+                 + ''#13#3'Данное поле не может быть переопределено.');
+              Exit;
+            }
+        }
+    end;
+//------------------
+    case CurField of
+      #DogovorName,
+      #AppDogovorName,
+      #CalPlanName:
+        {
+          if ( CurField = #DogovorName )
+            set NZakaz.cDogovor := 0;
+
+          if ( CurField <> #CalPlanName )
+            set NZakaz.cAppDogovor := 0;
+
+          set NZakaz.cCalPlan := 0;
+
+          if ( NZakaz.cOwner = 0 )
+            {
+              if ( RecordExists SpDocs where (( NZakaz.nRec == SpDocs.cDoc and word(440) == SpDocs.TiDk )) = tsOk )
+                if ( message(''#3'Удалить спецификацию'
+                        + ''#13#3'наряд-заказа ?', YesNo) = cmYes )
+                  oSpDocs.SpDocs_Delete(NZakaz.nRec, 440, true)
+                else
+                  oSpDocs.disconUpDocs(NZakaz.nRec, 440);
+
+              RescanPanel(#SpDocs);
+            }
+        }
+
+      #NZUpName:
+        set NZakaz.cOwner := 0;
+
+      #NZDownName:
+        set NZakaz.cInstead := 0;
+
+      #KatOrg.Name:
+        set NZakaz.cOrg := 0;
+
+      #Contributor.Name:
+        set NZakaz.cContrib := 0;
+
+      #MarAvt.NMarAvt:
+        set NZakaz.cMarAvt := 0;
+
+      #KatNotes.Name:
+        Abort;
+
+    end; //-- case
+
+    ChangeFieldsStateNZ_Edit
+  }
+
+cmCheckField:
+  {
+    case CurField of
+      #NZakaz.NoDoc:
+        {
+          var trNum : string;
+          if not CheckNZNum(NZakaz.NoDoc, trNum)
+             message(''#3'Неверный номер наряд-заказа.'
+                + ''#13#3'Ближайший корректный номер "' + trNum + '""');
+        }
+
+      #NZakaz.TypeDoc:
+          if not IsNew
+            if not CheckNZTypeDoc(oldTypeDoc)
+              {
+                message(''#3'Данный тип документа не может быть установлен');
+                set NZakaz.TypeDoc := oldTypeDoc;
+              }
+
+      #NZakaz.dBeg,
+      #NZakaz.dEnd:
+        if ( ( LongInt(NZakaz.dBeg) <> 0 ) AND ( LongInt(NZakaz.dEnd) <> 0 ) AND ( NZakaz.dEnd < NZakaz.dBeg ) )
+          {
+            message(''#3'Дата окончания действия наряд-заказа'
+               + ''#13#3'меньше даты начала действия наряд-заказа.', Warning);
+            Abort
+          }
+    end;
+
+    ChangeFieldsStateNZ_Edit;
+  }
+
+cmCheckRecord:
+  {
+    if ( NZakaz.TypeDoc = 1 )
+      set NZakaz.isLeaf := 0
+    else
+      set NZakaz.isLeaf := 1;
+  }
+
+cmInsertRecord:
+  {
+    insert_current_nzakaz('Сформирован новый наряд-заказ');
+
+    if isCurTreeView
+      TreeJumpToRecord(MyTree, NZakaz.nRec);
+  }
+
+cmUpdateRecord:
+  {
+    update current nzakaz;
+
+    MdfDocinSoprHoz(NZakaz.nRec,
+                    NZakaz.cDogovor,
+                    NZakaz.cAppDogovor,
+                    440,
+                    NZakaz.dInput,
+                    NZakaz.NoDoc,
+                    NZakaz.Descr,
+                    NZakaz.DesGr);
+
+    UpdateOtgrInfoInSpDocs;
+  }
+
+cmDeleteRecord:
+  {
+    if ( NZakaz.Status <> 1 )
+      {
+        if IsValid(#SpOtgOrd)
+          message(''#3'Удаление невозможно.'
+             + ''#13#3'Имеются распоряжения на отгрузку, '
+             + ''#13#3'сформированные по наряд-заказу.', Information + OkButton)
+        else
+          if ( message(''#3'Удалить наряд-заказ?', YesNo) = cmYes )
+            {
+              NZakaz_Delete(NZakaz.nRec, true);
+              RescanPanel(#NZakaz);
+            }
+      }
+    else
+      message(''#3'Наряд-заказ в статусе "исполняемый".'
+         + ''#13#3'Удаление невозможно.', Information + OkButton);
+  }
+
+cmPositionChanged:
+  {
+    if First_Position
+      {
+        First_Position := false;
+        Exit;
+      }
+
+    if (CurWindow <> -1)
+      ChangeFieldsStateNZ_Edit;
+  }
+
+end; // handleevent
+end; // panel
+
+
+//******************************************************************************
+//-- Процедуры для спецификации наряд-заказов
+//-- Спецификация наряд-заказа
+Panel SpNZak01;
+  Show at (, 17, , );
+  Table SpDocs;
+
+Browse brSpNZak01 (, hcSpNZakEdit, sci178Esc);
+Fields
+  SpDocs.Code   #3'№',#3'п/п' ('Номер по порядку', , ) : [3];
+  SpDocs.PrMC   #3'МЦ/',#3'Услуга' ('Признак товара/услуги', , sci1378Esc) : [LIST 1 'МЦ', 'Усл'], [6], protect;
+  SpNZakGrName  #3'Группа' ('Наименование группы МЦ/услуг', , sci1378Esc) : [16], protect;
+  SpNZakObjName #3'Наименование' ('Наименование МЦ/услуги', , sci1378Esc) : [17], protect;
+  KatOtpEd.Name #3'ЕдИзм',#3'(отпуск.)' ('Наименование отпускной единицы измерения', , sci1378Esc) : [7], protect;
+  SpDocs.Kol    #3'Количество' ('Количество по позиции', , ) : [10, 3], noprotect;
+  SpDocs.Price  #3'Цена'      ('Цена за единицу', , )  : [10.2,'\2p[|-]366`666`666.88'], noprotect;
+  SpDocs.Summa  #3'Стоимость' ('Сумма по позиции', , ) : [10.2,'\2p[|-]366`666`666.88'], protect;
+  ResOtgr.Name  #3'Ресурс' ('Наименование ресурса отгрузки', , sci1378Esc) : [12], protect;
+end; // browse
+
+//--установка опций полей
+Procedure ChangeFieldsStateNZ_Edit;
+var boNeedProtect: boolean;
+{
+  boNeedProtect := ( NZakaz.Status <> 0 ) OR IsValid(#SpOtgOrd);
+ //-- установка опций полей в зависимости от статуса
+  SetFieldProtected(#NZakaz.dDoc     , boNeedProtect);
+  SetFieldProtected(#NZakaz.dBeg     , boNeedProtect);
+  SetFieldProtected(#NZakaz.dEnd     , boNeedProtect);
+  SetFieldProtected(#NZakaz.dInput   , boNeedProtect);
+  SetFieldProtected(#NZakaz.NoDoc    , boNeedProtect);
+  SetFieldProtected(#NZakaz.Otv_Fio  , boNeedProtect);
+  SetFieldProtected(#NZakaz.Otv_Post , boNeedProtect);
+  SetFieldProtected(#NZakaz.Sign_Fio , boNeedProtect);
+  SetFieldProtected(#NZakaz.Sign_Post, boNeedProtect);
+  SetFieldProtected(#NZakaz.Sign_Osn , boNeedProtect);
+  SetFieldProtected(#NZakaz.AddTerms , boNeedProtect);
+
+  SetHelpAndStatusContext(brSpNZak01,             -1, if(boNeedProtect, sci1Esc, sci178Esc), 0);
+  SetHelpAndStatusContext(brSpNZak01, #SpDocs.PrMC  , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(brSpNZak01, #SpNZakGrName , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(brSpNZak01, #SpNZakObjName, if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(brSpNZak01, #KatOtpEd.Name, if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(brSpNZak01, #ResOtgr.Name , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+
+  SetHelpAndStatusContext(scrSpNZak_Add,               -1, if(boNeedProtect, sci1Esc, sci178Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #SpDocs.PrMC    , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #SpNZakGrName   , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #SpNZakObjName  , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #KatOtpEd.Name  , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #MoveCell.Name  , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #ResOtgr.Name   , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #SpShipment.Name, if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #SpTipOtg.Name  , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+  SetHelpAndStatusContext(scrSpNZak_Add, #SpWayMove.Name , if(boNeedProtect, sci1Esc, sci1378Esc), 0);
+
+  SetFieldSelectable(#KatOrg.Name   , TRUE);
+  SetFieldSelectable(#DogovorName   , TRUE);
+  SetFieldSelectable(#AppDogovorName, TRUE);
+  SetFieldSelectable(#CalPlanName   , TRUE);
+
+  if ( NZakaz.cDogovor = 0 )
+    {
+      SetFieldSelectable(#AppDogovorName, FALSE);
+      SetFieldSelectable(#CalPlanName   , FALSE);
+    }
+  else
+    SetFieldSelectable(#KatOrg.Name, FALSE);
+
+   if ( NZakaz.cDogovor = 0 )
+     SelectableButton(scrNZakaz02, cmValue3, false)
+   else
+     SelectableButton(scrNZakaz02, cmValue3, true);
+   if ( NZakaz.cAppDogovor = 0 )
+     SelectableButton(scrNZakaz02, cmValue4, false)
+   else
+     SelectableButton(scrNZakaz02, cmValue4, true);
+   if ( NZakaz.cCalPlan = 0 )
+     SelectableButton(scrNZakaz02, cmValue5, false)
+   else
+     SelectableButton(scrNZakaz02, cmValue5, true);
+   if ( NZakaz.cOwner = 0 )
+     SelectableButton(scrNZakaz02, cmValue6, false)
+   else
+     SelectableButton(scrNZakaz02, cmValue6, true);
+   if ( NZakaz.cInstead = 0 )
+     SelectableButton(scrNZakaz02, cmValue7, false)
+   else
+     SelectableButton(scrNZakaz02, cmValue7, true);
+
+//-- Контексты полей
+   if ( ( NZakaz.Status = 0 ) and ( wGetTune('Doc.NZ.FormNum') = 2 ) and not IsValid(#SpOtgOrd) )
+     SetHelpAndStatusContext(scrNZakaz02, #NZakaz.NoDoc, sci1378Esc, 0)
+   else
+     SetHelpAndStatusContext(scrNZakaz02, #NZakaz.NoDoc, sci178Esc, 0);
+}
+
+Procedure SetDefSpNZak;
+{
+  //--  устанавливаем значения по умолчанию из наряд-заказа
+  SpDocs.cShipment    := NZakaz.cShipment;
+  SpDocs.cTipOtg      := NZakaz.cTipOtg;
+  SpDocs.cWayMove     := NZakaz.cWayMove;
+  SpDocs.ShipAddTerms := NZakaz.AddTerms;
+  //--  устанавливаем значения по умолчанию
+  SpDocs.Code         := oSpDocs.GetSpDocsCodeNext(NZakaz.nRec, word(440));
+  SpDocs.FilialNo     := oNotes.Notes_InUseStatus(NZakaz.cNote);
+}
+
+HandleEvent
+
+cmSetDefault:
+  {
+    if not oSpDocs.CheckLimitSpec(NZakaz.nRec, 440)
+      {
+        message('В настройке пользователя установлен запрет'#13
+              + 'на ввод более 1 позиции спецификации'#13#13
+              + GetTuneName('Doc.NZ.SpOnePos'));
+        Abort;
+        Exit;
+      }
+
+    if ( NZakaz.Status <> 0 )
+      {
+        Abort;
+        Exit;
+      }
+
+    ClearBuffer(#SpDocs);
+    //--  устанавливаем значения по умолчанию
+    SpDocs.PrMC := 1;
+    SetDefSpNZak;
+  }
+
+cmSetCurfield:
+  OldKolDEI := SpDocs.Kol;
+
+cmPick:
+  {
+    if not IsNew
+      if oSpDocs.SpDocs_isInUse(SpDocs.nRec)
+        {
+          message(''#3'По данной спецификации есть подчиненные.'
+             + ''#13#3'Редактирование невозможно');
+          Exit;
+        }
+    case CurField of
+      #SpDocs.PrMC: //-- изменение признака МЦ\Услуга
+        if ( ( SpDocs.cMCUsl <> 0 ) OR ( SpDocs.cGrMCUsl <> 0 ) )
+          {
+            message(''#3'Нельзя изменить признак МЦ/услуга, т.к. название уже выбрано...', CancelButton);
+            Stop;
+          }
+
+      #SpDocs.Summa:
+        {
+          var getSum : double;
+
+          if ( wGetTune('NZ.IzmCenaKol') = 0 )
+            {
+              message('Установлен запрет на изменение стоимости в наряд-заказах'#13#13+GetTuneName('NZ.IzmCenaKol'));
+              Exit;
+            }
+
+          getSum := SpDocs.Summa;
+
+          if ( ( RunDialog('GetSumTov', getSum) = cmCancel ) OR ( abs(getSum) < 0.000001 ) )
+            Exit;
+
+          set SpDocs.Summa := DogRound(SpDocs.cVal <> 0, getSum);
+
+          case wGetTune('NZ.IzmCenaKol') of
+            1 :
+              {
+                if (SpDocs.Price <> 0)
+                  {
+                    set SpDocs.Kol := getSum / SpDocs.Price;
+
+                    if ( ( KatOtpEd.Diskret = 1 ) AND ( ( SpDocs.Kol - trunc(SpDocs.Kol) ) > 0.0001 ) )
+                      {
+                        message(''#3'Количество не может быть дробным!'
+                           + ''#13#3'Отпускная единица измерения является неделимой.', OkButton);
+                        set SpDocs.Kol := trunc(SpDocs.Kol);
+                      }
+                  }
+              }
+
+            2 :
+              if ( SpDocs.Kol <> 0 )
+                set SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, getSum / SpDocs.Kol);
+          end;
+        }
+
+    #SpNZakGrName: //-- Выбор группы
+      {
+        var tmpC, tmpOwn : comp;
+        var tmpTiDk, tmpDirect : word;
+        tmpTiDk := 0;
+
+        if ( NZakaz.cDogovor <> 0 )
+          {
+            tmpTiDk   := 400;
+            tmpOwn    := NZakaz.cDogovor;
+            tmpDirect := 2 - (Dogovor.Direct mod 2);
+          }
+
+        if ( NZakaz.cAppDogovor <> 0 )
+          {
+            tmpTiDk   := 401;
+            tmpOwn    := NZakaz.cAppDogovor;
+            tmpDirect := 2 - (AppDogovor.Direct mod 2);
+          }
+
+        if ( NZakaz.cCalPlan <> 0 )
+          {
+            tmpTiDk   := 403;
+            tmpOwn    := NZakaz.cCalPlan;
+            tmpDirect := CalPlan.DirectMC;
+          }
+
+        if ( NZakaz.cOwner <> 0 )
+          {
+            tmpTiDk := 440;tmpOwn:=NZakaz.cOwner;tmpDirect:=0;
+          }
+
+        if ( tmpTiDk <> 0 )
+          if ( RunInterface('GetSomeSpDocs1',
+                              IsNew,
+                              tmpOwn,
+                              tmpTiDk,
+                              tmpC,
+                              word(1),
+                              comp(0),
+                              word(1),
+                              tmpDirect
+                           ) = cmDefault )
+            {
+              if IsNew
+                oSpDocs.SpDocs_InsFromMarker(NZakaz.nRec, 440, 0, false)
+              else
+                {
+                  oSpDocs.Delete_current_SpDocs(SpDocs.nRec, true);
+                  oSpDocs.SpDocs_InsCurentFromUpDoc(tmpC,
+                                                    NZakaz.nRec,
+                                                    440,
+                                                    true,
+                                                    0.0,
+                                                    NZakaz.cShipment, NZakaz.cTipOtg, NZakaz.cWayMove,
+                                                    oNotes.Notes_InUseStatus(NZakaz.cNote),
+                                                    word(0),
+                                                    false);
+                }
+            RereadRecord;
+            SelectField(#SpDocs.Kol);
+            Exit;
+          }
+
+        var tmps20     : string[20];
+        var przGrMcUsl : word;
+        var retCod     : word;
+
+        if ( SpDocs.PrMC = 1)
+          {
+            retCod := RunInterface('GetGrMC', SpDocs.cGrMCUSL, tmps20);
+            przGrMcUsl := 3;
+          }
+        else
+          {
+            retCod := RunInterface('GetGrUsl', SpDocs.cGrMCUSL, tmps20);
+            przGrMcUsl := 4;
+          }
+
+        if ( retCod = cmDefault )
+          {
+            set SpDocs.cMCUsl := 0;
+            //-- устанавливаем отпускную ед измерения из МЦ\услуги
+            PushPos(#KatOtpEd);
+            if (GetFirst KatOtpEd where (( SpDocs.cGrMCUSL == KatOtpEd.cMcUsl
+                                       and przGrMcUsl      == KatOtpEd.PrMC
+                                       and word(1)         == KatOtpEd.Akt )) = tsOk)
+              set SpDocs.cOtpEd := KatOtpEd.nRec;
+            PopPos(#KatOtpEd);
+            SelectField(#SpNZakObjName);
+          }
+      }
+
+      #SpNZakObjName: // выбор МЦ\услуги
+        {
+          var tmpC, tmpOwn       : comp;
+          var tmpTiDk, tmpDirect : word;
+          tmpTiDk := 0;
+
+          if ( NZakaz.cDogovor <> 0 )
+            {
+              tmpTiDk   := 400;
+              tmpOwn    := NZakaz.cDogovor;
+              tmpDirect := 2 - (Dogovor.Direct mod 2);
+            }
+
+          if ( NZakaz.cAppDogovor <> 0 )
+            {
+              tmpTiDk   := 401;
+              tmpOwn    := NZakaz.cAppDogovor;
+              tmpDirect := 2 - (AppDogovor.Direct mod 2);
+            }
+
+          if ( NZakaz.cCalPlan <> 0 )
+            {
+              tmpTiDk   := 403;
+              tmpOwn    := NZakaz.cCalPlan;
+              tmpDirect := CalPlan.DirectMC;
+            }
+
+          if ( NZakaz.cOwner <> 0 )
+            {
+              tmpTiDk   := 440;
+              tmpOwn    := NZakaz.cOwner;
+              tmpDirect := 0;
+            }
+
+          if ( tmpTiDk <> 0 )
+            if ( RunInterface('GetSomeSpDocs1',
+                                IsNew,
+                                tmpOwn,
+                                tmpTiDk,
+                                tmpC,
+                                word(1),
+                                comp(0),
+                                word(1),
+                                tmpDirect
+                             ) = cmDefault )
+              {
+                if IsNew
+                  {
+                    //Выбор МЦ/Усл если выбраны Группы
+                    oSpDocs.SpDocs_InsFromMarkerInGr(NZakaz.nRec, 440, true, 0, false);
+                    //вставка выбранных МЦ
+                    oSpDocs.SpDocs_InsFromMarker(NZakaz.nRec, 440, 0, false);
+                  }
+                else
+                  {
+                    //удаление старого
+                    oSpDocs.Delete_current_SpDocs(SpDocs.nRec, true);
+                    //Выбор МЦ/Усл если выбраны Группы
+                    oSpDocs.SpDocs_InsFromMarkerInGr(NZakaz.nRec, 440, false, 0, false);
+                    //вставка выбранных МЦ
+                    oSpDocs.SpDocs_InsCurentFromUpDoc(tmpC,
+                                                      NZakaz.nRec,
+                                                      440,
+                                                      true,
+                                                      0.0,
+                                                      NZakaz.cShipment, NZakaz.cTipOtg, NZakaz.cWayMove,
+                                                      oNotes.Notes_InUseStatus(NZakaz.cNote),
+                                                      word(0),
+                                                      false);
+                  }
+                RescanPanel(#SpDocs);
+                SelectField(#SpDocs.Kol);
+                Exit;
+              }
+          var retCod, ret : word;
+
+          if ( SpDocs.PrMC = 1)
+            {
+              if IsNew
+                {
+                  retCod := RunInterface('GetSomeMC', comp(0));
+
+                  if ( retCod = cmDefault )
+                    {
+                      _loop Pick where (( word(7) == Pick.wList ))
+                        {
+                          if not oSpDocs.CheckLimitSpec(NZakaz.nRec, 440)
+                            {
+                              message('В настройке пользователя установлен запрет'#13
+                                    + 'на ввод более 1 позиции спецификации'#13#13
+                                    + GetTuneName('Doc.NZ.SpOnePos'));
+                              Exit;
+                            }
+
+                          ClearBuffer(#SpDocs);
+                          SetDefSpNZak;
+                          set SpDocs.cDoc   := NZakaz.nRec;
+                          set SpDocs.TiDk   := 440;
+                          set SpDocs.PrMC   := 1;
+                          set SpDocs.cMCUsl := Pick.cRec;
+                          set SpDocs.Kol    := Pick.PickKol;
+                          //-- устанавливаем поле группа
+                          if ( GetFirst fastfirstrow KatMC where (( SpDocs.cMCUSL == KatMC.nRec )) = tsOk )
+                            set SpDocs.cGrMCUsl := KatMC.cGroupMC;
+                          //-- устанавливаем отпускную ед измерения из МЦ\услуги
+                          if ( GetFirst fastfirstrow KatOtpEd where (( SpDocs.PrMC   == KatOtpEd.PrMC
+                                                                   and SpDocs.cMCUSL == KatOtpEd.cMCUSL
+                                                                   and word(1)       == KatOtpEd.Akt
+                                                                    )) = tsOk )
+                            set SpDocs.cOtpEd := KatOtpEd.nRec;
+                          ret := oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+                          ret := delete current Pick;
+                        }
+                     ReReadRecord(#SpDocs);
+                    }
+                }
+              else
+                {
+                  retCod := RunInterface('GetMC', SpDocs.cMCUSL);
+                  if ( retCod = cmDefault )
+                    {
+                     //-- устанавливаем поле группа
+                      if ( GetFirst fastfirstrow KatMC where (( SpDocs.cMCUSL == KatMC.nRec )) = tsOk )
+                        set SpDocs.cGrMCUsl := KatMC.cGroupMC;
+                     //-- устанавливаем отпускную ед измерения из МЦ\услуги
+                      if ( GetFirst fastfirstrow KatOtpEd where (( SpDocs.cMCUSL == KatOtpEd.cMCUSL
+                                                               and SpDocs.PrMC   == KatOtpEd.PrMC )) = tsOk)
+                        set SpDocs.cOtpEd := KatOtpEd.nRec;
+                    }
+                }
+            }
+          else
+            {
+              if IsNew
+                { //-- новая запись
+                  retCod := RunInterface('GetSomeUsl', comp(0));
+                  if ( retCod = cmDefault )
+                    {
+                      _loop Pick where (( word(12) == Pick.wList ))
+                        {
+                          ClearBuffer(#SpDocs);
+                          SetDefSpNZak;
+                          set SpDocs.cDoc   := NZakaz.nRec;
+                          set SpDocs.TiDk   := 440;
+                          set SpDocs.PrMC   := 2;
+                          set SpDocs.cMCUsl := Pick.cRec;
+                          set SpDocs.Kol    := Pick.PickKol;
+                         //-- устанавливаем поле группа
+                          if ( GetFirst fastfirstrow KatUSL where (( SpDocs.cMCUSL == KatUSL.nRec )) = tsOk )
+                            set SpDocs.cGrMCUsl := KatUSL.cGroupUSL;
+                         //-- устанавливаем отпускную ед измерения из МЦ\услуги
+                          if ( GetFirst fastfirstrow KatOtpEd where (( SpDocs.cMCUSL == KatOtpEd.cMCUSL
+                                                                   and SpDocs.PrMC   == KatOtpEd.PrMC )) = tsOk )
+                            set SpDocs.cOtpEd := KatOtpEd.nRec;
+                          ret := oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+                          ret := delete current Pick;
+                        }
+                      RereadRecord(#SpDocs);
+                    }
+                }
+              else
+                { //-- редактируется текущий SpNZak
+                  retCod := RunInterface('GetUsl', SpDocs.cMCUSL);
+                  if ( retCod = cmDefault )
+                    {
+                    //-- устанавливаем поле группа
+                      if ( GetFirst fastfirstrow KatUSL where (( SpDocs.cMCUSL == KatUSL.nRec )) = tsOk )
+                        set SpDocs.cGrMCUsl := KatUSL.cGroupUSL;
+                    //-- устанавливаем отпускную ед измерения из МЦ\услуги
+                      if ( GetFirst fastfirstrow KatOtpEd where (( SpDocs.cMCUSL == KatOtpEd.cMCUSL
+                                                               and SpDocs.PrMC   == KatOtpEd.PrMC )) = tsOk )
+                        set SpDocs.cOtpEd := KatOtpEd.nRec;
+                    }
+                }
+            }
+          if ( retCod = cmDefault )
+            {
+              if ((SpDocs.PrMC <> 1) and (KatUsl.TYPEUSL = 1))
+                {
+                  RunInterface('GETPAR1', 0, SpDocs.Nrec, KatUsl.Nrec, SpDocs.Price, SpDocs.Kol, word(coSpDocs));
+                  set SpDocs.Summa := SpDocs.Price * SpDocs.Kol;
+                  UpDate current SpDocs;
+                };
+
+              RescanPanel(#SpDocs);
+              SelectField(#SpDocs.Kol);
+            }
+        }
+
+      #KatOtpEd.Name: //-- выбор отпускной единицы измерения
+        {
+          var pOldOtpEd : comp;
+          var pOldKol   : double;
+          pOldOtpEd := SpDocs.cOtpEd;
+          pOldKol   := SpDocs.Kol;
+
+          RunInterface('GetOtpEd', SpDocs.cMCUSL, SpDocs.cOtpEd, SpDocs.PrMC);
+          if ( pOldOtpEd <> SpDocs.cOtpEd )
+            {
+              set SpDocs.Kol := fEdIzm.ConvertToSecondEd(pOldKol, pOldOtpEd, SpDocs.cOtpEd);
+              fEdIzm.CheckKolDiskret(SpDocs.Kol, SpDocs.cOtpEd, true, true);
+              SelectField(#SpDocs.Kol);
+              set SpDocs.Kol := SpDocs.Kol;
+              oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer, 2, pOldKol, SpDocs.Kol, 0, SpDocs.TiDK);
+              OldKolDEI := SpDocs.Kol;
+            }
+        }
+
+      #SpDocs.Kol:
+        {
+          if (SpDocs.PrMC = 1)
+          {
+            if (OldKolDEI <> SpDocs.Kol)
+             {
+               oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer, 2, OldKolDEI, SpDocs.Kol, 0, SpDocs.TiDK);
+             }
+            RunInterface('KolDopEd',
+                          word(coSpDocs), // coTable,  код таблицы спецификации
+                          SpDocs.nRec,    // cRec,     ссылка на спецификацию
+                          2,              // wTipKol,  тип количества
+                          'Ввод количества',         // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                          SpDocs.cMCUSL,  // cMCUsl,   NRec МЦ/услуги
+                          SpDocs.PrMC,    // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                          SpDocs.Price,   // Price,    цена за 1-у отпускную единицу
+                          2,       // forPrice, кол-во знаков после запятой в цене
+                          2,       // forSumma, кол-во знаков после запятой в стоимости
+                          Get_cValNZakaz(NZakaz.nRec),        // cVal,     валюта переданной цены
+                          SpDocs.cOtpEd,        // cOtpEd,   ссылка на отпускную единицу измерения
+                          SpDocs.Kol,           // fKol      количество в отпускных единицах (возвращаемый параметр)
+                          longint(1),
+                          word(440)
+                        );
+            OldKolDEI := SpDocs.Kol;
+            ProcessCommand(cmCheckField);
+          }
+        }
+
+      #ResOtgr.Name: //-- выбор резерва отгрузки
+        RunInterface('GetResOtgr', SpDocs.cResOtgr);
+
+      #SpShipment.Name: //-- Выбор способа отгрузки
+        if ( NZakaz.cShipment = 0 )
+          {
+            if ( RunInterface('GetShipment', SpDocs.cShipment) <> cmCancel )
+              {
+                set SpDocs.cTipOtg  := SpShipment.cTipOtg;
+                set SpDocs.cWayMove := SpShipment.cWayMove;
+              }
+          }
+        else
+          message(''#3'Условия отгрузки определены для наряд-заказа в целом и для '
+                    + 'позиции спецификации не могут быть переопределены.', Information + OkButton);
+
+      #SpTipOtg.Name: //-- выбор базиса поставки
+        if ( NZakaz.cTipOtg = 0 )
+          {
+            if ( RunInterface('GetTipOtg', SpDocs.cTipOtg) = cmDefault )
+              set SpDocs.cShipment := 0;
+          }
+        else
+          message(''#3'Базис поставки определен для наряд-заказа в целом и для '
+                    + 'позиции спецификации не может быть переопределен.', Information + OkButton);
+
+      #SpWayMove.Name: //-- выбор способа транспортировки
+        if ( NZakaz.cWayMove = 0 )
+          {
+            if ( RunInterface('GetWayMove', SpDocs.cWayMove) = cmDefault )
+              set SpDocs.cShipment := 0;
+          }
+        else
+          message(''#3'Способ транспортировки определен для наряд-заказа в целом и для '+
+                      'позиции спецификации не может быть переопределен.', Information+OkButton);
+
+      #MoveCell.Name:
+        {
+          var pCellVal : comp;
+          if ( SpDocs.cMCUsl <> 0 )
+            RunInterface('GetCellVal',
+                           SpDocs.cMCUsl
+                         , SpDocs.cMoveCell
+                         , word(0)
+                         , word(0)
+                        );
+
+          set SpDocs.cMoveCell := SpDocs.cMoveCell;
+        }
+    end;
+  }
+
+cmCheckField:
+  {
+    case CurField of
+      #SpDocs.Kol:
+        {
+          if not fEdIzm.CheckKolDiskret(SpDocs.Kol, SpDocs.cOtpEd, false, true)
+            {
+              Stop;
+              Abort;
+              Exit;
+            }
+          set SpDocs.Summa := DogRound(SpDocs.cVal <> 0, SpDocs.Price * SpDocs.Kol);
+           if ( OldKolDEI <> SpDocs.Kol )
+            {
+              oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer, 2, OldKolDEI, SpDocs.Kol, 0, SpDocs.TiDK);
+              OldKolDEI := SpDocs.Kol;
+            }
+        }
+
+      #SpDocs.Price:
+        {
+          set SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, SpDocs.Price);
+          set SpDocs.Summa := DogRound(SpDocs.cVal <> 0, SpDocs.Price * SpDocs.Kol);
+        }
+    end;
+  }
+
+cmInsertRecord:
+  {
+    oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+  }
+
+cmUpdateRecord:
+  {
+    oSpDocs.UpDate_current_SpDocs(SpDocs.BufferP);
+  }
+
+cmDeleteRecord:
+  {
+    if ( NZakaz.Status <> 1 )
+      {
+        if ( message(''#3'Удалить запись из спецификации наряд-заказа?', YesNo) = cmYes )
+          oSpDocs.delete_current_Spdocs(SpDocs.nRec, true);
+      }
+    else
+      message(''#3'Наряд-заказ в статусе "исполняемый".'
+         + ''#13#3'Удаление невозможно.', Information + OkButton);
+  }
+
+cmSetCurTable:
+  {
+    if ( CurTable = #SpDocs )
+      if ( ( NZakaz.Status <> 0 ) OR ( isNZak_Owner(NZakaz.nRec) <> 0 ) OR IsValid(#SpOtgOrd) )
+        ProtectRecord(#SpDocs, true)
+      else
+        ProtectRecord(#SpDocs, false);
+  }
+
+cmPositionChanged:
+  {
+    if ( ( NZakaz.Status <> 0 ) OR ( isNZak_Owner(NZakaz.nRec) <> 0 ) OR IsValid(#SpOtgOrd) )
+      ProtectRecord(#SpDocs, true)
+    else
+      ProtectRecord(#SpDocs, false);
+  }
+
+end; // handleevent
+end; // panel SpNZak01
+
+HandleEvent
+
+cmInit:
+  ChangeFieldsStateNZ_Edit;
+
+cmValue1:
+ {
+  RunWindow(winNZakaz_AddInfo);
+ }
+
+cmValue2:
+  OnValue2();
+
+cmValue3:
+  OnValue3();
+
+cmValue4:
+  OnValue4();
+
+cmValue5:
+  OnValue5();
+
+cmValue6:
+  OnValue6();
+
+cmValue7:
+  OnValue7();
+
+cmValue8 :
+  {
+    var Kol_Max, Kol_Min, Kol_New : double;
+
+    Kol_Max := SpDocs.Kol;
+    Kol_Min := SpDocs.Kol - SpDocs.Ostatok / fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd);
+    Kol_New := Kol_Max;
+
+    if IsValid(#KatOtpEd)
+      if ( KatOtpEd.Diskret = 1 )
+        {
+          if ( RunDialog('GetPickKolDiskr', Kol_New) = cmCancel )
+            Exit;
+        }
+      else
+        if ( RunDialog('GetPickKol', Kol_New) = cmCancel )
+          Exit;
+
+    if ( ( Kol_Min <= Kol_New ) AND ( Kol_New <= Kol_Max ) )
+      {
+        ProtectRecord(#SpDocs, false);
+
+        set SpDocs.Kol     := Kol_New;
+        set SpDocs.Ostatok := SpDocs.Ostatok - fEdIzm.ConvertToUchEd(Kol_Max - Kol_New, SpDocs.cOtpEd);
+
+        if ( NZakaz.Status <> 0 )
+          ProtectRecord(#SpDocs, true)
+        else
+          {
+            SetFieldProtected(#SpDocs.Code, IsValid(#SpOtgOrd) OR ( isNZak_Owner(NZakaz.nRec) <> 0 ));
+
+            ProtectRecord(#SpDocs, false);
+          }
+
+        set NZakaz.dDoc := NZakaz.dDoc;
+      }
+    else
+      message(''#3'Количество по позиции можно изменять только в интервале'
+         + ''#13#3' от ' + string(Kol_Min) + ' до ' + string(Kol_Max) + '!', Information + OkButton);
+  }
+
+cmAttrib:
+  case CurTable of
+    #nzakaz:
+      RunWindow(winNZakaz_AddInfo);
+
+    #SpDocs:
+      RunWindow(winSpNZak_Add);
+  end;
+
+cmHotKeys:
+  {
+    case CurTable of
+      #nzakaz:
+        case CurField of
+          #DogovorName, #AppDogovorName, #CalPlanName:
+            PutHotCommand(RunDynMenu(#AddComp('L_DOGOVOR')'mnuNZakazEdit;SEPARATOR;'
+                                   + #AddComp('L_DOGOVOR')'mnuNZakazSaveDogPick'));
+        else
+            PutHotCommand(RunDynMenu(#AddComp('L_DOGOVOR')'mnuNZakazEdit;SEPARATOR;'
+                                   + #AddComp('L_DOGOVOR')'mnuNZakazSaveRestore'));
+        end;
+      #SpDocs:
+            PutHotCommand(RunMenu('mnuNZakSpEdit'));
+    end;
+  }
+
+cmValFld1:  // лонгирование наряд-заказа
+  {
+    var NewEndDate : date;
+    var strComment : string[80];
+
+    NewEndDate := NZakaz.dEnd;
+
+    if ( RunDialog('LongNZakaz', NewEndDate) <> cmCancel )
+      {
+        if ( NewEndDate <= NZakaz.dEnd )
+          message(''#3'Новая дата окончания срока действия наряд-заказа'
+             + ''#13#3'должна быть больше предыдущей!', Information + OkButton);
+        else
+          {
+            set NZakaz.dEnd := NewEndDate;
+
+            strComment := 'Наряд-заказ продлен до ' + DateToStr(NZakaz.dEnd, 'DD/MM/YYYY');
+
+            if (oStatlog.StatLog_Insert(word(440), NZakaz.nRec, strComment) <> tsOk)
+              {}
+
+          }
+      }
+  }
+
+cmAltInsert: // Формирование н-заказа по данному
+  DoAltInsert;
+
+cmInsert:
+  if ( CurTable = #SpDocs )
+    if ( NZakaz.Status <> 0 )
+      Abort
+    else
+      if IsValid(#SpOtgOrd)
+        {
+          message(''#3'Данная операция запрещена.'
+             + ''#13#3'Имеются распоряжения на отгрузку, '
+             + ''#13#3'сформированные по наряд-заказу.', Information + OkButton);
+          Abort
+        }
+
+cmPrintDoc:
+  {
+    saveMyDsk(VidReport,'VidReport_nzakaz');
+    PrintDocument;
+    VidReport := 0;
+  }
+
+cmValue22:
+  {
+    VidReport := 1;
+    putCommand(cmPrintDoc);
+  }
+
+cmSaveDoc:
+  OnSaveNZakaz;
+
+cmRestoreDoc:
+  {
+    if ( NZakaz.Status <> 0 )
+      {
+         message(''#3'Статус наряд-заказа "' + KatNotes.Name + '".'
+            + ''#13#3'Это поле изменять нельзя', OkButton);
+         Abort;
+         Exit;
+      }
+    else
+      if IsValid(#SpOtgOrd)
+        {
+          message(''#3'Редактирование запрещено.'
+             + ''#13#3'Имеются распоряжения на отгрузку, '
+             + ''#13#3'сформированные по наряд-заказу.', Information + OkButton);
+          Abort;
+          Exit;
+        }
+
+    case CurField of
+      #DogovorName   : NZakazByDog(5);
+      #AppDogovorName: NZakazByDog(6);
+      #CalPlanName   : NZakazByDog(8);
+    else
+      ProcessCommand(cmRestoreDoc);
+    end;
+  }
+
+cmValue10:
+  {
+    if ( ( NZakaz.TypeDoc <> 1 ) OR ( NZakaz.Status <> 1 ) )
+      {
+        message(''#3'Данная операция доступна для'
+           + ''#13#3'группового наряд-заказа'
+           + ''#13#3'со статусом "исполняемый".');
+        Exit;
+      }
+    MakeDetailedNZFromGroup;
+    ChangeFieldsStateNZ_Edit;
+    RereadRecord(#NZakaz);
+  }
+
+cmValue11:
+  {
+    if ( NZakaz.Status <> 3 )
+      {
+        message(''#3'Данная операция доступна для'
+           + ''#13#3'наряд-заказа со статусом "отменен".');
+        Exit;
+      }
+    MakeNewNZakFromOtmen;
+    ChangeFieldsStateNZ_Edit;
+    RereadRecord(#NZakaz);
+  }
+
+cmValue14:
+  {
+   if ( IsValid(#SpOtgOrd) )
+     message(''#3'Данная операция запрещена.'
+        + ''#13#3'Имеются распоряжения на отгрузку, '
+        + ''#13#3'сформированные по наряд-заказу.', Information + OkButton)
+   else
+     if (NZakaz.Status = 0)
+       {
+         PackFields;
+         ExClass_GetNZakazSpecNoDoc(coNZakaz, NZakaz.nRec, KatOrg.Code, NZakaz.dDoc, NZakaz.NoDoc);
+         set NZakaz.NoDoc := NZakaz.NoDoc;
+       }
+     else
+       message(''#3'Данная операция доступна только для'
+          + ''#13#3'наряд-заказов со статусом оформляемый.');
+  }
+
+cmDone:
+  {
+    UpDateTable;
+    RescanPanel(#NZakaz);
+  }
+
+cmPickClass:
+  ProcessCommand(cmPickClass);
+
+cmPickAttr:
+  ProcessCommand(cmPickAttr);
+! -Key------------- <Auto> --------------------------
+cmAbortInsert:
+  if ( ( CurTable = #NZakaz ) AND IsNew )
+    AbortNewDocument;
+
+cmOpenSearch:
+  {
+    case Curfield of
+     #KatOrg.Name, #Contributor.Name:
+       {
+         if NullVipRef(oChkLink)
+           GetVipRef(oChkLink, 'KatOrg');
+
+         if oChkLink.CheckLinks(coKatOrgDescr)
+           QuickChoiceName := 'qcKatOrgName'
+         else
+           QuickChoiceName := 'qcKatOrgTreeName';
+         ProcessCommand(cmPick);
+       }
+     #SpDocs.Summa:
+       {
+         ProcessCommand(cmPick);
+         Abort;
+       }
+    else
+      Abort;
+    end;
+  }
+
+end; // handleevent
+end; // window
+
+Panel NZakaz01;
+  Table nzakaz;
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbBuhFilter
+  , F_Common::tbSaveRestoreDoc
+  , F_Common::tbAttrClass
+  , F_Common::tbTree_brows
+  , F_BuhRep::tbTreeControl
+#else
+    tbBuhFilter
+  , tbSaveRestoreDoc
+  , tbAttrClass
+  , tbTree_brows
+  , tbTreeControl
+#end
+;
+
+Tree trNZakaz01 (, hcNZakazCommon, sci1478EnEscTree);
+  Show at (, , , 14);
+Fields
+//******************************************************************************
+  NZakaz.Descr    #3'Дескр.'
+                  ('Дескриптор(идентификатор) пользователя', , )
+                  : [10], Protect;
+//******************************************************************************
+  NZakaz.NoDoc    #3'Номер'
+                  ('Номер наряд заказа', , )
+                  : [11], Protect;
+//******************************************************************************
+  NZakaz.dDoc     #3'Дата'
+                  ('Дата оформления наряд-заказа', , )
+                  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  NZakaz.dBeg     #3'Действие'#13#3'с'
+                  ('Дата начала действия наряд-заказа', , )
+                  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  NZakaz.dEnd     #3'Действие'#13#3'по'
+                  ('Дата окончания действия наряд-заказа', , )
+                  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  KatNotes.sName  #3'Статус'
+                  ('Статус документа', , )
+                  : [9], skip, Centered, NoAutoSize,
+                  { Font = { Italic = TRUE } };
+//******************************************************************************
+  NZakazPrior     #3'Приоритет'
+                  ('Приоритет исполнения наряд-заказа', , )
+                  : [9], Skip;
+//******************************************************************************
+  NZakazTypeShort #3'Т'
+                  ('Тип документа', , )
+                  : [1], Skip, NoAutoSize;
+//******************************************************************************
+end;
+
+Browse brNZakaz01 (, hcNZakazCommon, sci1478EnEsc);
+  Show at (, , , 14);
+Fields
+//******************************************************************************
+  NZakaz.Descr    #3'Дескр.'
+                  ('Дескриптор(идентификатор) пользователя', , )
+                  : [10], Protect;
+//******************************************************************************
+  NZakaz.NoDoc    #3'Номер'
+                  ('Номер наряд заказа', , )
+                  : [11], Protect;
+//******************************************************************************
+  NZakaz.dDoc     #3'Дата'
+                  ('Дата оформления наряд-заказа', , )
+                  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  NZakaz.dBeg     #3'Действие'#13#3'с'
+                  ('Дата начала действия наряд-заказа', , )
+                  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  NZakaz.dEnd     #3'Действие'#13#3'по'
+                  ('Дата окончания действия наряд-заказа', , )
+                  : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  KatNotes.sName  #3'Статус'
+                  ('Статус документа', , )
+                  : [9], skip, Centered, NoAutoSize,
+                  { Font = { Italic = TRUE } };
+//******************************************************************************
+  NZakazPrior     #3'Приоритет'
+                  ('Приоритет исполнения наряд-заказа', , )
+                  : [9], Skip;
+//******************************************************************************
+  NZakazTypeShort #3'Т'
+                  ('Тип документа', , )
+                  : [1], Skip, NoAutoSize;
+//******************************************************************************
+end;
+
+HandleEvent
+
+cmAddNewRec:
+  PutCommand(cmInsert);
+
+cmInsert:
+  PutCommand(cmEdit);
+
+cmDefault :
+  {
+    RunWindowModal(winNZakaz_Edit);
+    SetFieldProtected(#NZakaz.NoDoc, TRUE);
+    SetFieldProtected(#NZakaz.dDoc , TRUE);
+    SetFieldProtected(#NZakaz.dBeg , TRUE);
+    SetFieldProtected(#NZakaz.dEnd , TRUE);
+    ReDrawPanel(#NZakaz);
+    if (isclose <> 0)
+       ProcessCommand(cmClose);
+  }
+
+cmEdit :
+  PutCommand(cmDefault);
+
+cmTreeTop:
+  Node := 0;
+
+cmTreeUp:
+  Node := NZakaz.cOwner;
+cmTreeDown:
+  Node := NZakaz.nRec;
+cmTreeNodeType:
+ {
+   var DocTreeType : byte;
+   DocTreeType := GetDocTreeType;
+
+   TreeSetNodeType(trNZakaz01, DocTreeType, GetDocTreeIcon(word(440), NZakaz.Status, DocTreeType));
+ }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(MyTree, NZakaz.cOwner);
+
+end; // handleevent
+end; // panel
+
+TabbedSheet BOTTOM tshMain
+  Show at (, 15, , );
+
+Screen scrNZakaz01 'Информация по документу' (, hcNZakazCommon, sci1Esc);
+  Show at (, 15, , );
+
+Fields
+  string(DogovorName)    ('Договор, по которому сформирован наряд-заказ', , sci1Esc) : skip;
+  string(AppDogovorName) ('Соглашение, по которому сформирован наряд-заказ', , sci1Esc) : skip;
+  string(CalPlanName)    ('Пункт календарного плана', , sci1Esc) : skip;
+  Contr1.Name            ('Наименование контрагента 1', , sci1Esc) : skip;
+  GrOtp.Name             ('Наименование грузоотправителя', , sci1Esc) : skip;
+  Contr2.Name            ('Наименование контрагента 2', , sci1Esc) : skip;
+  Contributor.Name       ('Наименование заявителя', , sci1Esc) : skip;
+  NZUpName               ('Сформирован по наряд-заказу', , sci1Esc) : skip;
+  NZDownName             ('Сформирован взамен наряд-заказа', , sci1Esc) : skip;
+  GrOtpPunkt2.Name       ('Пункт погрузки', , sci1Esc) : protect;
+<<
+ Договор .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  Соглашение .@@@@@@@@@@@@@@@@@@@@@@@@@
+ Пункт плана № .@@@@@@@@@@
+ Контрагент 1                            Грузоотправитель
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Контрагент 2                            Заявитель
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ По Н/З .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  Взамен Н/З .@@@@@@@@@@@@@@@@@@@@@@@@@
+`Пункт погрузки`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+Browse brSpNZak02 'Спецификация' (, hcSpNZakEdit, sci1Esc);
+  Show at (, 15, , );
+  Table SpDocs;
+Fields
+  ''+SpDocs.Code    #3'№',#3'п/п' ('Номер по порядку', , ) : [3], protect;
+  ''+SpNZakPMC      #3'МЦ/',#3'Услуга' ('Признак товара/услуги', , sci1Esc) : [6], protect;
+  ''+SpNZakGrName   #3'Группа' ('Наименование группы МЦ/услуг', , sci1Esc) : [16], protect;
+  ''+SpNZakObjName  #3'Наименование' ('Наименование МЦ/услуги', , sci1Esc) : [17], protect;
+  ''+KatOtpEd.Name  #3'ЕдИзм',#3'(отпуск.)' ('Наименование отпускной единицы измерения', , sci1Esc) : [7], protect;
+  SpDocs.Kol        #3'Количество' ('Количество по позиции', , ) : [10,3,'\3p[|-]36`666`666.888'], protect;
+  ''+ResOtgr.Name   #3'Ресурс' ('Наименование ресурса отгрузки', , sci1Esc) : [12], protect;
+end; // browse
+
+end;
+
+Procedure SetWinTitle(num : word);
+var Tit : string;
+{
+  Tit := 'Наряд-заказы';
+  case num of
+    1:
+        Tit := Tit + '. Фильтр(дескр. пользователя)';
+    2:
+        Tit := Tit + '. Фильтр(группа пользователей)';
+    3:
+        Tit := Tit + '. Фильтр(дата:'+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY')+')';
+    4:
+      {
+        Tit := Tit + '. Фильтр(дата:'+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+        Tit := Tit + '; дескр. пользователя)';
+      }
+    5:
+      {
+        Tit := Tit + '. Фильтр(дата:'+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+        Tit := Tit + '; группа пользователей)';
+      }
+  end;
+
+  if FilterNZakazDog
+    if (Tit = 'Наряд-заказы')
+      Tit := Tit + '. Alt-B'
+    else
+      Tit := Tit + '; Alt-B';
+
+  SetTitle(Tit);
+}
+// Установка дескрипторов на накладную
+// и переключение форматов
+Procedure SetDocBound; // Установка ограничений по документу
+var wPar : word;
+{
+  if BoundActive(tbOrdBnd)
+    SubBounds(tbOrdBnd);
+
+  if BoundActive(tbNoneOtpPunkt)
+    SubBounds(tbNoneOtpPunkt);
+  if BoundActive(tbNoneGrPol)
+    SubBounds(tbNoneGrPol);
+  if BoundActive(tbNoneCalPlan)
+    SubBounds(tbNoneCalPlan);
+  if BoundActive(tbNoneAppDog)
+    SubBounds(tbNoneAppDog);
+  if BoundActive(tbNoneDog)
+    SubBounds(tbNoneDog);
+  if BoundActive(tbVscBound)
+    SubBounds(tbVscBound);
+  if BoundActive(tbGroupDsc)
+    SubBounds(tbGroupDsc);
+  if BoundActive(tbdMainBound)
+    SubBounds(tbdMainBound);
+
+  if isCurTreeView
+    {
+      if Not BoundActive(tbTreeBound)
+        AddBounds(tbTreeBound);
+    }
+  else
+    if BoundActive(tbTreeBound)
+      SubBounds(tbTreeBound);
+
+  if FilterNZakazDate
+    AddBounds(tbdMainBound);
+
+  wPar := 0;
+
+  case DscVisible of
+    dcAllModif, dcOwnModifAllRead, dcGrpModifAllRead:
+      {
+        wPar := 0;
+      }
+    dcOwnOnly:
+      {
+        wPar := 1;
+        AddBounds(tbVscBound);
+      }
+    dcGrpRead, dcGrpModif:
+      {
+        wPar := 2;
+        AddBounds(tbGroupDsc);
+      }
+  end;
+
+  SetWinTitle(wPar + if(IsFilter, 3, 0));
+
+  if FilterNZakazDog
+    AddBounds(tbNoneDog);
+  if FilterNZakazAppDog
+    AddBounds(tbNoneAppDog);
+  if FilterNZakazCalPlan
+    AddBounds(tbNoneCalPlan);
+  if FilterNZakazGrPol
+    AddBounds(tbNoneGrPol);
+  if FilterNZakazOtpPunkt
+    AddBounds(tbNoneOtpPunkt);
+
+  AddBounds(tbOrdBnd);
+}
+
+Procedure ChangeViewFormat;
+{
+  if not isCurTreeView
+    {
+      SetFormat(brNZakaz01);
+      RescanPanel(#NZakaz);
+    }
+  else
+    {
+      SetFormat(trNZakaz01);
+      ProcessCommand(cmTreeUp);
+      TreeJumpToRecord(myTree, NZakaz.nRec);
+      RescanPanel(#NZakaz);
+    }
+}
+
+//-- Для выбора значений дол.фильтра на каталог НЗ
+Procedure FilterNZakaz(myType : word);
+var
+  oldDog, oldAppDog, oldCalPlan : comp;
+! myType = 1 - F3 на Dogovor
+! myType = 2 - F3 на AppDogovor
+! myType = 4 - F3 на CalPlan
+! myType = 5 - Ctrl+F3 на Dogovor
+! myType = 6 - Ctrl+F3 на AppDogovor
+! myType = 8 - Ctrl+F3 на CalPlan
+{
+  oldDog     := tmpDskComp1;
+  oldAppDog  := tmpDskComp2;
+  oldCalPlan := tmpDskComp3;
+
+  if NullVipRef(pRunDSel)
+    if not(LoadVipRef(pRunDSel, 'RunDocSelections'))
+      {
+        message(''#3'Не удалось загрузить библиотеку RunDocSelObj', Error);
+        Exit;
+      }
+
+  if ( myType < 5 )
+    {
+      if (pRunDSel.F3(tmpDskComp1, // var cDogovor    : comp;
+                      tmpDskComp2, // var cAppDogovor : comp;
+                      tmpDskComp3, // var cCalPlan    : comp;
+                      myType,      //     isSelect    : word; // откуда вызвали: 1 - договора 2 - соглашение 4 - календарный план
+                      word(2),     //     _wMaska     : word  // 0FFFFh - все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+                      word(0)      // только на продажу
+                     ) = cmCancel)
+        myType := 0;
+    }
+  else
+    {
+      myType := myType - 4;
+      if (pRunDSel.Ctrl_F3(tmpDskComp1, // var cDogovor    : comp;
+                           tmpDskComp2, // var cAppDogovor : comp;
+                           tmpDskComp3, // var cCalPlan    : comp;
+                           longint(0),  //     DskParams   : longint; // по умолчанию (=0) фильтр только по исполняемым
+                           myType       //     isSelect    : word; // откуда вызвали: 1 - договора 2 - соглашение 4 - календарный план
+                          ) = cmCancel)
+        myType := 0;
+    }
+
+ set tmpDskComp1 := tmpDskComp1;
+ set tmpDskComp2 := tmpDskComp2;
+ set tmpDskComp3 := tmpDskComp3;
+
+ if ( tmpDskComp1 = 0 )
+   {
+     if ( (tmpDskAll and 2) <> 0 )
+       set tmpDskAll := (tmpDskAll xor 2);
+   }
+ else
+   if ( (tmpDskAll and 2) = 0 )
+     set tmpDskAll := (tmpDskAll xor 2);
+
+ if ( tmpDskComp2 = 0 )
+   {
+     if ( (tmpDskAll and 4) <> 0 )
+       set tmpDskAll := (tmpDskAll xor 4);
+   }
+  else
+    if ( (tmpDskAll and 4) = 0 )
+      set tmpDskAll := (tmpDskAll xor 4);
+
+ if ( tmpDskComp3 = 0 )
+   {
+     if ( (tmpDskAll and 8) <> 0 )
+       set tmpDskAll := (tmpDskAll xor 8);
+   }
+  else
+    if ( (tmpDskAll and 8) = 0 )
+      set tmpDskAll := (tmpDskAll xor 8);
+}
+
+// Подхватываем установки доп.фильтров (хранятся в DSK)
+Procedure ReadFilterParamsFromDSK;
+var
+  datechanged : boolean;
+  tmpDsk      : word;
+{
+  if not ReadMyDsk(FilterNZakazDate         , 'FilterNZakazDate_DSK'         , boolean(true))
+    FilterNZakazDate     := false;
+
+  if not ReadMyDsk(FilterNZakazDog          , 'FilterNZakazDog_DSK'          , boolean(true))
+    FilterNZakazDog      := false;
+
+  if not ReadMyDsk(FilterNZakazAppDog       , 'FilterNZakazAppDog_DSK'       , boolean(true))
+    FilterNZakazAppDog   := false;
+
+  if not ReadMyDsk(FilterNZakazCalPlan      , 'FilterNZakazCalPlan_DSK'      , boolean(true))
+    FilterNZakazCalPlan  := false;
+
+  if not ReadMyDsk(FilterNZakazGrPol        , 'FilterNZakazGrPol_DSK'        , boolean(true))
+    FilterNZakazGrPol    := false;
+
+  if not ReadMyDsk(FilterNZakazOtpPunkt     , 'FilterNZakazOtpPunkt_DSK'     , boolean(true))
+    FilterNZakazOtpPunkt := false;
+
+  if not ReadMyDsk(FilterNZakazDog_NRec     , 'FilterNZakazDog_NRec_DSK'     , boolean(true))
+    FilterNZakazDog_NRec      := 0;
+
+  if not ReadMyDsk(FilterNZakazAppDog_NRec  , 'FilterNZakazAppDog_NRec_DSK'  , boolean(true))
+    FilterNZakazAppDog_NRec   := 0;
+
+  if not ReadMyDsk(FilterNZakazCalPlan_NRec , 'FilterNZakazCalPlan_NRec_DSK' , boolean(true))
+    FilterNZakazCalPlan_NRec  := 0;
+
+  if not ReadMyDsk(FilterNZakazGrPol_NRec   , 'FilterNZakazGrPol_NRec_DSK'   , boolean(true))
+    FilterNZakazGrPol_NRec    := 0;
+
+  if not ReadMyDsk(FilterNZakazOtpPunkt_NRec, 'FilterNZakazOtpPunkt_NRec_DSK', boolean(true))
+    FilterNZakazOtpPunkt_NRec := 0;
+
+  if ( boGetTune('User.UseFilter') AND ( dGetTune('User.dFilter1') <= dGetTune('User.dFilter2') ) )
+    {
+      BegDate := dGetTune('User.dFilter1');
+      EndDate := dGetTune('User.dFilter2');
+      FilterNZakazDate := true;
+    }
+  else
+    {
+      if not ReadMyDsk(BegDate, 'FilterNZakazDate_BegDate_DSK', boolean(true))
+        BegDate := Date(0, 0, 0);
+      if not ReadMyDsk(EndDate, 'FilterNZakazDate_EndDate_DSK', boolean(true))
+        EndDate := Date(0, 0, 0);
+    }
+
+  if (ReadMyDsk(tmpDsk, 'NZakaz_isCurTreeView', datechanged))
+    isCurTreeView := ( tmpDsk = 1 );
+
+  case DscVisible of
+    dcOwnOnly, dcGrpRead, dcGrpModif:
+      isCurTreeView := false;
+  else
+    if ( IsFilter OR FilterNZakazDog)
+      isCurTreeView := false;
+  end;
+
+  SetDocBound;
+}
+
+Procedure NewFilterNZakaz;
+var tmpDsk : word;
+{
+  FilterNZakazDate     :=  ( (tmpDskAll and 1 ) <> 0 );
+  FilterNZakazDog      :=  ( (tmpDskAll and 2 ) <> 0 );
+  FilterNZakazAppDog   :=  ( (tmpDskAll and 4 ) <> 0 );
+  FilterNZakazCalPlan  :=  ( (tmpDskAll and 8 ) <> 0 );
+  FilterNZakazGrPol    :=  ( (tmpDskAll and 16) <> 0 );
+  FilterNZakazOtpPunkt :=  ( (tmpDskAll and 32) <> 0 );
+
+  FilterNZakazDog_NRec      := tmpDskComp1;
+  FilterNZakazAppDog_NRec   := tmpDskComp2;
+  FilterNZakazCalPlan_NRec  := tmpDskComp3;
+  FilterNZakazGrPol_NRec    := tmpDskComp4;
+  FilterNZakazOtpPunkt_NRec := tmpDskComp5;
+
+  BegDate := tmpDskDate1;
+  EndDate := tmpDskDate2;
+
+  case DscVisible of
+    dcOwnOnly, dcGrpRead, dcGrpModif:
+      isCurTreeView := False;
+  else
+    if ( IsFilter OR FilterNZakazDog )
+      isCurTreeView := False;
+  end;
+
+  PushPos(#NZakaz);
+  SetDocBound;
+
+  if ( GetFirst NZakaz <> tsOk )
+   {
+     // --- Подхватываем установки доп.фильтров --(хранятся в DSK)---------------
+     ReadFilterParamsFromDSK;
+
+     PopPos(#NZakaz);
+     message(''#3'Нет наряд-заказов согласно выбранного фильтра.');
+     Exit;
+   }
+
+  //--Сохранение в DSK настройки Доп.фильтра----
+  SaveMyDsk(FilterNZakazDog          , 'FilterNZakazDog_DSK'          );
+  SaveMyDsk(FilterNZakazDate         , 'FilterNZakazDate_DSK'         );
+  SaveMyDsk(FilterNZakazAppDog       , 'FilterNZakazAppDog_DSK'       );
+  SaveMyDsk(FilterNZakazCalPlan      , 'FilterNZakazCalPlan_DSK'      );
+  SaveMyDsk(FilterNZakazGrPol        , 'FilterNZakazGrPol_DSK'        );
+  SaveMyDsk(FilterNZakazOtpPunkt     , 'FilterNZakazOtpPunkt_DSK'     );
+
+  SaveMyDsk(FilterNZakazDog_NRec     , 'FilterNZakazDog_NRec_DSK'     );
+  SaveMyDsk(FilterNZakazAppDog_NRec  , 'FilterNZakazAppDog_NRec_DSK'  );
+  SaveMyDsk(FilterNZakazCalPlan_NRec , 'FilterNZakazCalPlan_NRec_DSK' );
+  SaveMyDsk(FilterNZakazGrPol_NRec   , 'FilterNZakazGrPol_NRec_DSK'   );
+  SaveMyDsk(FilterNZakazOtpPunkt_NRec, 'FilterNZakazOtpPunkt_NRec_DSK');
+
+  SaveMyDsk(BegDate                  , 'FilterNZakazDate_BegDate_DSK' );
+  SaveMyDsk(EndDate                  , 'FilterNZakazDate_EndDate_DSK' );
+  //--------------------------------------------
+
+  tmpDsk := if(isCurTreeView, 1, 0);
+  SaveMyDsk(tmpDsk, 'NZakaz_isCurTreeView');
+
+  if (GetLast NZakaz = tsOk)
+    {
+    }
+
+  ReScanPanel(#NZakaz);
+  ReScanPanel(#SpDocs);
+  ChangeViewFormat;
+};
+//----------------------------------------------------------------------------
+procedure SetMyTitle;
+{
+  Var Title,
+      FTitle  : string;
+
+  Var FCount  : word;
+
+  FTitle := '';
+
+  Title := 'Наряд-заказы';
+
+  if BoundActive(tbVscBound)
+    FTitle += if(FTitle <> '', ', ','') + 'дескр. пользователя';
+
+  if BoundActive(tbGroupDsc)
+    FTitle += if(FTitle <> '', ', ','') + 'группе пользователей)';
+
+  if BoundActive(tbdMainBound)
+    FTitle += if(FTitle <> '', ', ','') + 'дате : ' + DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+
+  if BoundActive(tbNoneDog)
+    FTitle += if(FTitle <> '', ', ','') + 'договору';
+
+  if BoundActive(tbNoneAppDog)
+    FTitle += if(FTitle <> '', ', ','') + 'соглашению';
+
+  if BoundActive(tbNoneCalPlan)
+    FTitle += if(FTitle <> '', ', ','') + 'календарному плану';
+
+  if BoundActive(tbNoneGrPol)
+    FTitle += if(FTitle <> '', ', ','') + 'грузополучателю';
+
+  if BoundActive(tbNoneOtpPunkt)
+    FTitle += if(FTitle <> '', ', ','') + 'пункту позгузки';
+
+  FCount := InStr(',', FTitle);
+
+  if ( FTitle = '' )
+    SetTitle(Title);
+  else
+    SetTitle(Title  + ' (установлен' + if(FCount > 1, 'ы', '') +
+                      ' фильтр'      + if(FCount > 1, 'ы', '') +
+                      ' по ' + FTitle + ')');
+}
+
+//-------------------Окно для настройки фильтров------------------------------
+#doc
+Окно настройки ограничений на каталог Наряд-заказов
+#end
+Window winNZakaz_Filter 'Установка фильтров'
+         ('Настройка ограничений на каталог Наряд-заказов', hcdgFiltrAltBSetup, sci1EnEsc) DoAccept, EscClose, Gray;
+  Show at (, , 78, 11);
+
+Panel panNZakaz_Filter;
+
+Screen scNastr ('', , sci1Esc);
+Fields
+  tmpDskAll          ('применить ограничение'): NoProtect;
+  tmpDskDate1        ('Введите начальную дату фильтра по наряд-заказам'): noprotect,
+    {Font = {BackColor = if ( ((tmpDskAll and 1) <> 0) and (BegDate > EndDate), ColorNeed, 0) }};
+  tmpDskDate2        ('Введите конечную дату фильтра по наряд-заказам' ): noprotect,
+    {Font = {BackColor = if ( ((tmpDskAll and 1) <> 0) and (longint(EndDate) = 0), ColorNeed,
+                         if ( ((tmpDskAll and 1) <> 0) and (longint(EndDate) <> 0) and (BegDate > EndDate), ColorError, 0)) }};
+  Dogovor_Filter_    ('F3 - выбор из списка, Ctrl+F3 - выбор из дерева', , sci13Esc):Protect, PickButton;
+  AppDogovor_Filter_ ('F3 - выбор из списка, Ctrl+F3 - выбор из дерева', , sci13Esc):Protect, PickButton;
+  CalPlan_Filter_    ('F3 - выбор из списка, Ctrl+F3 - выбор из дерева', , sci13Esc):Protect, PickButton;
+  GrPol_Filter_      ('F3 - выбор из списка', , sci13Esc):Protect, PickButton;
+  OtpPunkt_Filter_   ('F3 - выбор из списка', , sci13Esc):Protect, PickButton;
+Buttons
+  cmSaveAll  , , , 'Сохранить настройки' , , sci1Esc;
+  cmValueCancel, , , 'Снять ограничения';
+  cmCancelAll, , , 'Выйти без сохранения', , sci1Esc;
+<<
+
+   [.] Дата заключения  ` `с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+   [.] Договор          ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Соглашение       ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Календарный план ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Грузополучатель  ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Пункт погрузки   ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   <.Установить фильтр.>    <.  Снять фильтр   .>    <.     Отмена      .>
+>>
+end; // screen
+
+Handleevent
+
+cmDelOnProtect:
+  {
+    if ( ( CurField = #Dogovor_Filter_ ) AND ( tmpDskComp1 <> 0 ) )
+      {
+         set tmpDskComp1 := 0;
+         set tmpDskComp2 := 0;
+         set tmpDskComp3 := 0;
+         set tmpDskAll   := tmpDskAll and (16+32);
+      }
+    if ( ( CurField = #AppDogovor_Filter_ ) AND ( tmpDskComp2 <> 0 ) )
+      {
+         set tmpDskComp2 := 0;
+         set tmpDskComp3 := 0;
+         if ( (tmpDskAll and 4) <> 0 )
+           set tmpDskAll := (tmpDskAll xor 4);
+         if ( (tmpDskAll and 8) <> 0 )
+           set tmpDskAll := (tmpDskAll xor 8);
+      }
+    if ( ( CurField = #CalPlan_Filter_ ) AND ( tmpDskComp3 <> 0 ) )
+      {
+        set tmpDskComp3 := 0;
+        if ((tmpDskAll and 8) <> 0)
+          set tmpDskAll := (tmpDskAll xor 8);
+      }
+    if ( ( CurField = #GrPol_Filter_ ) AND ( tmpDskComp4 <> 0 ) )
+      {
+        set tmpDskComp4 := 0;
+        if ( (tmpDskAll and 16) <> 0 )
+          set tmpDskAll := (tmpDskAll xor 16);
+      }
+    if ( ( CurField = #OtpPunkt_Filter_ ) AND ( tmpDskComp5 <> 0 ) )
+      {
+        set tmpDskComp5 := 0;
+        if ((tmpDskAll and 32) <> 0)
+          set tmpDskAll := (tmpDskAll xor 32);
+      }
+  }
+
+cmCheckField:
+  {
+    case CurField of
+      #tmpDskAll:
+        {
+          if ( ( (tmpDskAll and 1) <> 0 ) AND ( BegDate > EndDate) )
+            {
+              SelectField(#Dogovor_Filter_);
+              PutCommand(cmPick);
+              Exit;
+            }
+          if ( ( (tmpDskAll and 2) <> 0 ) AND ( tmpDskComp1 = 0 ) )
+            {
+              SelectField(#Dogovor_Filter_);
+              PutCommand(cmPick);
+              Exit;
+            }
+          if ( ( (tmpDskAll and 4) <> 0 ) AND ( tmpDskComp2 = 0 ) )
+            {
+              SelectField(#AppDogovor_Filter_);
+              PutCommand(cmPick);
+              Exit;
+            }
+          if ( ( (tmpDskAll and 8) <> 0 ) AND ( tmpDskComp3 = 0 ) )
+            {
+              SelectField(#CalPlan_Filter_);
+              PutCommand(cmPick);
+              Exit;
+            }
+          if ( ( (tmpDskAll and 16) <> 0 ) AND ( tmpDskComp4 = 0 ) )
+            {
+              SelectField(#GrPol_Filter_);
+              PutCommand(cmPick);
+              Exit;
+            }
+
+          if ( ( (tmpDskAll and 32) <> 0 ) AND ( tmpDskComp5 = 0 ) )
+            {
+              SelectField(#OtpPunkt_Filter_);
+              PutCommand(cmPick);
+              Exit;
+            }
+
+          if ( (tmpDskAll and 2) = 0)
+            set tmpDskAll := tmpDskAll and (1 + 16 + 32);
+
+          if ( ( (tmpDskAll and 8) <> 0 ) AND ( tmpDskComp2 <> 0 ) AND ( (tmpDskAll and 4) = 0) )
+            set tmpDskAll := (tmpDskAll xor 4);
+
+          if ( ( (tmpDskAll and 4) = 0 ) AND ( tmpDskComp2 <> 0 ) AND ( (tmpDskAll and 8) <> 0) )
+            set tmpDskAll := (tmpDskAll xor 8);
+        }
+    end;
+  }
+
+end; // handleevent Panel
+end; // Panel
+
+HandleEvent
+
+cmValueCancel:
+  {
+    tmpDskAll := 0;
+
+    set tmpDskComp1 := 0;
+    set tmpDskComp2 := 0;
+    set tmpDskComp3 := 0;
+    set tmpDskComp4 := 0;
+    set tmpDskComp5 := 0;
+    set tmpDskDate1 := ZeroDate;
+    set tmpDskDate2 := ZeroDate;
+
+    NewFilterNZakaz;
+  }
+
+cmRestoreDoc:
+  {
+    case CurField of
+      #Dogovor_Filter_   : FilterNZakaz(5);
+      #AppDogovor_Filter_: FilterNZakaz(6);
+      #CalPlan_Filter_   : FilterNZakaz(8);
+    end;
+  }
+
+cmPick:
+  {
+    case CurField of
+      #Dogovor_Filter_   : FilterNZakaz(1);
+      #AppDogovor_Filter_: FilterNZakaz(2);
+      #CalPlan_Filter_   : FilterNZakaz(4);
+
+      #GrPol_Filter_:
+        if ( RunInterface('GetKatOr', tmpDskComp4, comp(0), false, comp(0), comp(0)) = cmDefault )
+          set tmpDskAll := (tmpDskAll or 16);
+      #OtpPunkt_Filter_ :
+        if ( RunInterface('Get_Item', word(1), tmpDskComp5) = cmDefault )
+          set tmpDskAll := (tmpDskAll or 32);
+    end;
+  }
+
+cmInit:
+ {
+   VidReport := 0;
+
+   if FilterNZakazDate
+     set tmpDskAll := (tmpDskAll or 1);
+   if FilterNZakazDog
+     set tmpDskAll := (tmpDskAll or 2);
+   if FilterNZakazAppDog
+     set tmpDskAll := (tmpDskAll or 4);
+   if FilterNZakazCalPlan
+     set tmpDskAll := (tmpDskAll or 8);
+   if FilterNZakazGrPol
+     set tmpDskAll := (tmpDskAll or 16);
+   if FilterNZakazOtpPunkt
+     set tmpDskAll := (tmpDskAll or 32);
+
+   set tmpDskComp1 := FilterNZakazDog_NRec;
+   set tmpDskComp2 := FilterNZakazAppDog_NRec;
+   set tmpDskComp3 := FilterNZakazCalPlan_NRec;
+   set tmpDskComp4 := FilterNZakazGrPol_NRec;
+   set tmpDskComp5 := FilterNZakazOtpPunkt_NRec;
+
+   set tmpDskDate1 := BegDate;
+   set tmpDskDate2 := EndDate;
+  }
+
+cmSaveAll:
+  {
+    NewFilterNZakaz;
+    CloseWindow(winNZakaz_Filter);
+  }
+
+cmDefault:
+  if ( message(''#3'Сохранить изменения?', YesNo) = cmYes )
+    NewFilterNZakaz;
+
+cmCancelAll:
+  CloseWindow(winNZakaz_Filter);
+
+end; // handleevent window
+end; // window
+//------------------------------------------------------------------------------
+
+
+HandleEvent
+
+cmInit:
+  {
+    VidReport := 0;
+
+    OkModfOtgrInSpec := false;
+    isclose := pNZak;
+    mdfShipment := false;
+    mdfTipOtg   := false;
+    mdfWayMove  := false;
+
+    MyTree := trNZakaz01;
+
+    SetFieldSelectable(#GrOtpPunkt2.Name, FALSE);
+    InitDocIconsArray;
+
+    DscVisible := wGetTune('Doc.Visible');
+    BegDate    := dGetTune('User.dFilter1');
+    EndDate    := dGetTune('User.dFilter2');
+    isFilter   := boGetTune('User.UseFilter') and ( BegDate <= EndDate );
+    DscName    := sGetTune('User.Descr');
+    DesGroup   := sGetTune('User.DesGr');
+
+    // --- Подхватываем установки доп.фильтров --(хранятся в DSK)---------------
+    ReadFilterParamsFromDSK;
+
+    ChangeViewFormat;
+
+    UseDEI := boGetTune('Doc.DEI.NZ');
+    AutoDEI:= boGetTune('Doc.DEI.Auto.NZ');
+
+    if UseDEI
+     {
+       SetHelpAndStatusContext(brSpNZak01, #SpDocs.Kol, sci1378Esc, 0);
+       SetHelpAndStatusContext(scrSpNZak_Add, #SpDocs.Kol, sci1378Esc, 0);
+     }
+
+   SetFieldProtected(#SpDocs.Price, wGetTune('Doc.NZ.EditCen') = 0);
+  SetFieldSelectable(#SpDocs.Price, wGetTune('Doc.NZ.EditCen') <> 0);
+
+    SetFormat(scrNZakaz01);
+    SpForm := 0;
+    if ( pNZakUp > 0 )
+      Node := pNZakUp
+    else
+      Node := 0;
+    if ( pNZak <> 0 )
+      {
+        if ( GetFirst NZakaz where (( comp(pNZak) == NZakaz.nRec )) = tsOk )
+          {
+            Node := NZakaz.cOwner;
+            if isCurTreeView
+              {
+                TreeJumpToRecord(myTree, NZakaz.nRec);
+                RescanPanel(#NZakaz);
+              }
+            PutCommand(cmEdit);
+          }
+      }
+    else
+      if isCurTreeView
+        TreeGetLast(myTree)
+      else
+        if ( GetLast NZakaz = tsOk )
+          {
+          }
+
+    SetMyTitle;
+
+    First_Position := true;
+  }
+
+cmDone:
+  {
+  }
+
+cmHotKeys:
+  if (CurTable = #NZakaz)
+    {
+      if not isCurTreeView
+      {
+        DisableCommand(cmShowAll);
+        DisableCommand(cmHideAll);
+      }
+
+      PutHotCommand(RunDynMenu(#AddComp('L_DOGOVOR')'mnuNZakazCommon;SEPARATOR;'
+                             + #AddComp('L_DOGOVOR')'mnuNZakazSaveRestore'));
+
+      EnableCommand(cmShowAll);
+      EnableCommand(cmHideAll);
+    }
+
+cmFilterSave: //установка фильтров
+  {
+    PushPos(#NZakaz);
+    RunWindowModal(winNZakaz_Filter);
+    SetFieldProtected(#NZakaz.NoDoc, TRUE);
+    SetFieldProtected(#NZakaz.dDoc , TRUE);
+    SetFieldProtected(#NZakaz.dBeg , TRUE);
+    SetFieldProtected(#NZakaz.dEnd , TRUE);
+    PopPos(#NZakaz);
+    if not IsValidNew(#NZakaz)
+      if ( GetLast NZakaz <> tsOK )
+        {
+        }
+    RereadRecord(#NZakaz);
+
+    SetMyTitle;
+  }
+
+cmAltInsert: // Формирование н-заказа по данному
+  DoAltInsert;
+
+cmSaveDoc:
+  OnSaveNZakaz;
+
+cmRestoreDoc:
+  {
+    if ( SavedNRec = 0 )
+    {
+      message(''#3'Нет запомненного наряд-заказа.'#13
+                + 'Запомнить наряд-заказ для последующего копирования можно с помощью комбинации клавиш Ctrl+F2',
+              OkButton);
+      Exit;
+    }
+
+    if not UpdateTable
+      Exit;
+    OnRestoreNZakaz;
+    SelectPanel(#SpDocs);
+    ReReadRecord(#SpDocs);
+    SelectPanel(#NZakaz);
+    SetFieldProtected(#NZakaz.NoDoc, TRUE);
+    SetFieldProtected(#NZakaz.dDoc , TRUE);
+    SetFieldProtected(#NZakaz.dBeg , TRUE);
+    SetFieldProtected(#NZakaz.dEnd , TRUE);
+    ReReadRecord(#NZakaz);
+  }
+
+cmValue10:
+  {
+    if ( ( NZakaz.TypeDoc <> 1 ) OR ( NZakaz.Status <> 1 ) )
+      {
+        message(''#3'Данная операция доступна для'
+           + ''#13#3'группового наряд-заказа'
+           + ''#13#3'со статусом "исполняемый".'
+               );
+        Exit;
+      }
+    MakeDetailedNZFromGroup;
+    ChangeFieldsStateNZ_Edit;
+    RereadRecord(#NZakaz);
+  }
+
+cmValue11:
+  {
+    if ( NZakaz.Status <> 3 )
+      {
+        message(''#3'Данная операция доступна для'
+           + ''#13#3'наряд-заказа со статусом "отменен".'
+               );
+        Exit;
+      }
+    MakeNewNZakFromOtmen;
+    ChangeFieldsStateNZ_Edit;
+    RereadRecord(#NZakaz);
+    RescanPanel(#SpDocs);
+  }
+
+cmValue20:
+  {
+    if ( message(''#3'Данная операция выполняет переконвертацию'
+            + ''#13#3'статусов.Продолжать?', Warning + YesNo) = cmYes )
+     {
+
+       ChangeNotes;
+       ChangeFieldsStateNZ_Edit;
+       RereadRecord(#NZakaz);
+       message('Операция завершена.');
+     }
+  }
+
+! -Key------------- <Auto> --------------------------
+cmAbortInsert:
+  if ( ( CurTable = #NZakaz ) AND IsNew )
+    AbortNewDocument;
+! - Key-----(Alt+S)----------- (переключение  tree в browser и наоборот)
+cmAccording:
+  {
+    if ( ( DscVisible = dcOwnOnly ) OR ( DscVisible = dcGrpRead ) OR ( DscVisible = dcGrpModif )
+      OR isFilter OR FilterNZakazDog
+       )
+      {
+        message(''#3'Включены фильтры.'
+           + ''#13#3'Переключение формата невозможно.');
+        Abort;
+        Exit;
+      }
+
+    isCurTreeView := not isCurTreeView;
+    Node := NZakaz.cOwner;
+
+    var tmpCur : comp;
+    tmpCur := NZakaz.nRec;
+
+    SetDocBound;
+    ChangeViewFormat;
+    if isCurTreeView
+
+      TreeJumpToRecord(myTree, tmpCur);
+
+    var tmpDsk : word;
+    if isCurTreeView
+       tmpDsk := 1
+    else
+       tmpDsk := 0;
+
+    SaveMyDsk(tmpDsk, 'NZakaz_isCurTreeView');
+  }
+
+cmShowAll: // Раскрыть все ветки
+  {
+    if not isCurTreeView
+      Exit;
+
+    var sav_NRec: comp;
+    sav_NRec := NZakaz.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Раскрытие всех веток...'#13#3, 1);
+
+    if TreeGetFirst(MyTree)
+    do
+      {
+        NextVisual;
+        TreeOpenNode(MyTree);
+      }
+    While TreeGetNext(MyTree);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(MyTree, sav_NRec);
+    ReScanPanel(#NZakaz);
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    if not isCurTreeView
+      Exit;
+
+    var sav_NRec : comp;
+
+    While (NZakaz.cOwner <> 0)
+      TreeJumpToRecord(MyTree, NZakaz.cOwner);
+
+    sav_NRec := NZakaz.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Сворачивание всех веток...'#13#3, 1);
+    if TreeGetFirst(MyTree)
+    do
+      {
+        NextVisual;
+        TreeCloseNode(MyTree);
+      }
+    While TreeGetNext(MyTree);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(MyTree, sav_NRec);
+    ReScanPanel(#NZakaz);
+  }
+
+cmDocBas:
+  {
+    if ( SpForm = 1 )
+      {
+        SetFormat(scrNZakaz01);
+        SpForm := 0;
+      }
+    else
+      {
+        SetFormat(brSpNZak02);
+        SpForm := 1;
+      }
+  }
+
+cmChangeTabbedSheetFormat: // + GetCurrentFormat
+  {
+    case Target of
+      scrNZakaz01: SpForm := 0;
+      brSpNZak02 : SpForm := 1;
+    end;
+  }
+
+! -Key------------ <Alt+C> --------------------------
+cmPickClass:
+  {
+    if IsNew
+      {
+        insert current Nzakaz;
+        SetNew(false);
+      }
+
+    if UpdateTable
+      {
+        if ( ( NZakaz.Status <> 0 ) OR IsValid(#SpOtgOrd) )
+          SaveMyDsk(true, '_CanEditClassifier_');
+        case CurTable of
+          #NZakaz:
+            if ( NZakaz.nRec <> 0 )
+              RunInterface('ExClassifier', word(CurTableCode), NZakaz.nRec);
+
+          #SpDocs:
+            if ( SpDocs.nRec <> 0 )
+              RunInterface('ExClassifier', word(CurTableCode), SpDocs.nRec);
+        end;
+      }
+  }
+! -Key------------ <Alt+A> ----------------------------
+cmPickAttr:
+  {
+
+    if UpdateTable
+      {
+        if ( ( NZakaz.Status <> 0 ) OR IsValid(#SpOtgOrd) )
+          SaveMyDsk(true, '_CanEditAttribute_');
+        case CurTable of
+          #NZakaz:
+            if ( NZakaz.nRec <> 0 )
+              RunInterface('Attribute', word(CurTableCode), NZakaz.nRec);
+          #SpDocs:
+            if ( SpDocs.nRec <> 0 )
+              RunInterface('Attribute', word(CurTableCode), SpDocs.nRec);
+        end;
+      }
+  }
+
+end; // handleevent
+
+end. // interface
+
+#doc
+Элемент локального меню интерфейса <link Interface L_Dogovor::NZakaz>L_Dogovor::NZakaz - Наряд-заказы</link>
+#end
+mnuNZakazSaveRestore Menu
+{
+- 'Сохранение записи', cmSaveDoc, 'Сохранение записи', hcctxSoprSaveDoc, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+- 'Вставка сохраненной записи', cmRestoreDoc, 'Вставка сохраненной записи', hcctxSoprRestoreDoc, 'Ctrl+F3', kbCtrlF3, sci1Esc;
+}
+
+#doc
+Элемент локального меню интерфейса <link Interface L_Dogovor::NZakaz>L_Dogovor::NZakaz - Наряд-заказы</link>
+#end
+mnuNZakazSaveDogPick Menu
+{
+- 'Сохранение записи', cmSaveDoc, 'Сохранение записи', hcctxSoprSaveDoc, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+- 'Выбор из дерева договоров/соглашений/ПКП', cmRestoreDoc, 'Выбор из дерева договоров/соглашений/ПКП', , 'Ctrl+F3', kbCtrlF3, sci1Esc;
+}
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::NZakaz>L_Dogovor::NZakaz - Наряд-заказы</link>
+#end
+mnuNZakazCommon Menu
+{
+- 'Фильтр ...', cmFilterSave, 'Установка/снятие ограничений на просмотр документов', hcdgFiltrAltBSetup, 'Alt+B', kbAltB, sci1Esc;
+-----------;
+- 'Переключение формата отображения', cmAccording, 'Переключение формата отображения с линейного списка на дерево и наоборот', hcdg_perekNZ, 'Alt+S', kbAltS, sci1Esc;
+-----------;
+- 'Новый подчиненный наряд-заказ', cmAltInsert, 'Сформировать новый наряд-заказ, подчиненный текущему', hcMakeAltNewNZakaz, 'Alt+F7', kbAltF7, sci1Esc;
+-----------;
+- 'Формирование детальных наряд-заказов по групповому', cmValue10, 'Формирование детального наряд-заказа по групповому', hcMakeDetNZakaz, , , sci1Esc;
+- 'Формирование наряд-заказа взамен отмененного', cmValue11, 'Формирование наряд-заказа взамен отмененного', hcMakeFromOtmNZakaz, '', , sci1Esc;
+-----------;
+- 'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние ~а~трибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной матценности', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+- 'Раскрыть все ветки', cmShowAll, 'Разворачивает все дерево документов', , 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+- 'Свернуть все ветки', cmHideAll, 'Сворачивает все дерево документов', , 'Ctrl+''-''', kbCtrlGrayMinus, sci1Esc;
+}
+
+#doc
+Локальное меню шапки окна редактирования интерфейса <link Interface L_Dogovor::NZakaz>L_Dogovor::NZakaz - Наряд-заказы</link>
+#end
+mnuNZakazEdit Menu
+{
+- 'Печать документа', cmPrintDoc, 'Печать документа', , 'Ctrl+P', kbCtrlP, sci1Esc;
+- 'Печать документа в FastReport', cmValue22, 'Печать документа в формате FastReport',,,,sci1Esc;
+-----------;
+- 'Новый подчиненный наряд-заказ', cmAltInsert, 'Сформировать новый наряд-заказ, подчиненный текущему', hcMakeAltNewNZakaz, 'Alt+F7', kbAltF7, sci1Esc;
+-----------;
+- 'Формирование детальных наряд-заказов по групповому', cmValue10, 'Сформировать детальный наряд-заказ по групповому', hcMakeDetNZakaz, , , sci1Esc;
+- 'Формирование наряд-заказа взамен отмененного', cmValue11, 'Формирование наряд-заказа взамен отмененного', hcMakeFromOtmNZakaz, '', , sci1Esc;
+-----------;
+- 'Специальная нумерация наряд-заказа', cmValue14, 'Сформировать номер наряд-заказа', hcN_116_128, '', , sci1Esc;
+-----------;
+- 'Лонгирование наряд-заказа', cmValFld1, 'Продление срока действия наряд-заказа', hcLongDog, '', , sci1Esc;
+-----------;
+- 'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние ~а~трибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной матценности', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+}
+
+#doc
+Локальное меню спецификации окна редактирования интерфейса <link Interface L_Dogovor::NZakaz>L_Dogovor::NZakaz - Наряд-заказы</link>
+#end
+mnuNZakSpEdit Menu
+{
+- 'Внешняя ~к~лассификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние ~а~трибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной матценности', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+- 'Изменить количество', cmValue8, 'Изменить количество в спецификации наряд-заказа', hcDg_kol_sp, '', , sci1Esc;
+}
+
+LongNZakaz DIALOG
+!  HelpCtx hcD_LongDogAttac;
+  StatusCtx scGalDial;
+Fields
+  EndDate('Введите новую дату окончания срока действия наряд-заказа'):date [, 'DD/MM/YYYY'];
+Buttons
+  cmOk, Default, , 'Подтверждение ввода';
+  cmCancel, , , 'Выход';
+
+<<'Лонгирование наряд-заказа'
+
+ Продлить срок действия наряд-заказа до .@@@@@@@@@@@
+
+    <.~П~родолжить.>  <. ~О~тмена .>
+>>

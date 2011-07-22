@@ -1,0 +1,161 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║                     (c) 1994,2003 корпорация ГАЛАКТИКА                    ║
+!║ Проект        : ГАЛАКТИКА                                                 ║
+!║ Система       : Оперативный контур                                        ║
+!║ Версия        : 5.8, 7.1                                                  ║
+!║ Назначение    : печать документа на базе прототипа TOVN                   ║
+!║ Параметры     : pNrec     - KatSopr.NRec,                                 ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+//******************************************************************************
+
+#doc
+Назначение:
+  печать формы М-29 (устаревший вариант)
+
+Параметры:
+  pNrec - ссылка на сопр.документ
+#end
+
+//******************************************************************************
+
+Interface PrnM29;
+
+Table STRUCT TmpGroup "Группы МЦ, услуг"
+(
+  PrMc       : word   "признак матценности",
+  Name       : string "наименование группы",
+  cGroup     : comp   "ссылка на группу"
+)
+With Index
+(
+  TmpGr01 = PrMc + cGroup,
+  TmpGr02 = PrMc + Name
+);
+
+Table STRUCT TmpSpec "спецификация отчета"
+(
+  PrMc       : word   "признак матценности",
+  cGroup     : comp   "ссылка на группу",
+  Npp        : word   "номер по порядку",
+  Name       : string "наименование",
+  BarKod     : string "код",
+  OtpEdName  : string "наименование единицы",
+  KolFact    : double "количество"
+)
+With Index
+(
+  TmpSp01 = PrMc + cGroup + Npp
+);
+
+create view
+var
+  pNrec    : comp;    //параметр 1
+
+from
+   KatSopr ,
+   SpSopr  ,
+   KatOrg  ,
+   KatMc   ,
+   KatUsl  ,
+   KatOtpEd,
+   GroupMC ,
+   GroupUsl,
+   TmpGroup,
+   TmpSpec
+
+where
+((
+   pNRec             ==  KatSopr.NRec       and
+   KatSopr.NRec      ==  SpSopr.cSopr       and
+
+   SpSopr.cMCUSL     ==  KatMC.NRec         and
+   SpSopr.cOtpEd     ==  KatOtpEd.NRec      and
+   KatMC.cGroupMC    ==  GroupMC.NRec       and
+
+   SpSopr.cMCUsl     ==  KatUsl.NRec        and
+   KatUsl.cGroupUsl  ==  GroupUsl.NRec
+
+))
+;
+
+Parameters
+ pNRec;
+
+Form FormM29('tovn.out','f_m29') with novisual;
+
+Procedure PrintDocument;
+{
+   FormM29.SetGroup('отчет м-29');
+   if GetFirst KatOrg where ((coGetTune('MyOrg') == KatOrg.NRec )) = tsOk
+     FormM29.write(KatOrg.Name)
+   else
+     FormM29.SkipFormat(1);
+   if GetFirst KatOrg where ((KatSopr.cOrgBase == KatOrg.NRec )) = tsOk
+     FormM29.write(KatOrg.Name)
+   else
+     FormM29.SkipFormat(1);
+
+   FormM29.write(KatSopr.dSopr);
+
+   delete all TmpGroup;
+   delete All TmpSpec;
+   _Loop SpSopr
+   {
+     ClearBuffer(#TmpSpec);
+     TmpSpec.PrMc       := SpSopr.PrMc;
+     TmpSpec.cGroup     := if(SpSopr.PrMc=1,KatMc.cGroupMC,KatUsl.cGRoupUsl);
+     TmpSpec.Npp        := SpSopr.Npp;
+     TmpSpec.Name       := if(SpSopr.PrMc=1,KatMc.name,KatUsl.Name);
+     TmpSpec.BarKod     := if(SpSopr.PrMc=1,KatMc.BarKod,KatUsl.Kod);
+     TmpSpec.OtpEdName  := KatOtpEd.Name;
+     TmpSpec.KolFact    := SpSopr.KolFact;
+     insert current TmpSpec;
+
+     if getfirst TmpGroup where ((SpSopr.PrMc == TmpGroup.PrMc and
+                                  if(SpSopr.PrMc=1,
+                                     KatMc.cGroupMc,
+                                     KatUsl.cGroupUsl) == TmpGroup.cGroup ))<>tsOk
+     {
+       ClearBuffer(#TmpGroup);
+       TmpGroup.PrMc   := SpSopr.PrMc;
+       if (if(SpSopr.PrMc=1,KatMc.cGroupMc,KatUsl.cGroupUsl) <> 0)
+       {
+         TmpGroup.Name   := if(SpSopr.PrMc=1,GroupMC.Name,GRoupUsl.Name);
+         TmpGroup.cGroup := if(SpSopr.PrMc=1,GroupMC.NRec,GRoupUsl.NRec);
+       }
+       insert current TmpGroup;
+     }
+   }
+
+
+  _Loop TmpGroup ordered by index TmpGr02
+  {
+     FormM29.write(TmpGroup.Name);
+     _Loop TmpSpec where ((TmpGroup.PrMc   == TmpSpec.PrMc and
+                           TmpGroup.cGroup == TmpSpec.cGroup ))
+     {
+       FormM29.write(TmpSpec.Npp);
+       FormM29.write(TmpSpec.BarKod);
+       FormM29.write(TmpSpec.Name);
+       FormM29.write(TmpSpec.OtpEdName);
+       FormM29.write(TmpSpec.KolFact,2);
+       FormM29.write(TmpSpec.KolFact,2);
+     }
+     FormM29.PutEvent(feBreak);
+  }
+
+  FormM29.PutEvent(feBreak);
+  if (not FormM29.Error)
+        FormM29.ShowFile('');
+
+}
+Handleevent
+ cmInit:
+ {
+   abort;
+   PrintDocument;
+ }
+
+end;
+End.

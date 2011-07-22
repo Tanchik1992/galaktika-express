@@ -1,0 +1,1037 @@
+function MakeSpecOnlyFromOwner: boolean;
+{
+  MakeSpecOnlyFromOwner := false;
+
+  if ( CalPlan.cCalPlan <> 0 )
+    {
+      DocUpSpec  := CalPlan.cCalPlan;
+      TiDkUpSpec := word(403);
+
+      MakeSpecOnlyFromOwner :=
+        (RecordExists SpDocs where (( word(403)        == SpDocs.TiDk  and
+                                      CalPlan.cCalPlan == SpDocs.cDoc )) = tsOK);
+    }
+  else
+    if ( RecordExists SpDocs where (( Dogovor.TiDk     == SpDocs.TiDk  and
+                                      CalPlan.cDogovor == SpDocs.cDoc )) = tsOK )
+      {
+        MakeSpecOnlyFromOwner := (Dogovor.SpecStatus = 0);
+
+        TiDkUpSpec := Dogovor.TiDk;
+        DocUpSpec  := Dogovor.nRec;
+      }
+}
+
+Procedure SetFieldStates(TabNum : integer; pTermDefBy : word; pDefBy : word);
+{
+  var tf1, tf2, tf3 : integer;
+  var f1,f2 : integer;
+  var tf4 : integer;
+  tf4 := 0;
+  case ( TabNum ) of
+    #CalPlan : {
+      tf1 := #CalPlan.dFrom;
+      tf2 := #CalPlan.dTo;
+      tf3 := #CalPlan.nDays;
+      tf4 := #PredPlanInfoOtgr;
+
+      f1  := 0;
+      f2  := 0;
+
+      SetFieldSelectable(#ValutFullName    , Dogovor.TipMoney <> 1);
+      SetFieldSelectable(#CalPlan.dValCurse, Dogovor.TipMoney <> 1);
+      SetFieldSelectable(#CalPlan.dCond    , CalPlan.CondStatus = 2);
+    }
+    #PlanPaysAvan : {
+      tf1 := #PlanPaysAvan.dFrom;
+      tf2 := #PlanPaysAvan.dTo;
+      tf3 := #PlanPaysAvan.nDays;
+      f1  := #PlanPaysAvan.Summa;
+      f2  := #PlanPaysAvan.Percent;
+    }
+    #PlanPaysAdd : {
+      tf1 := #PlanPaysAdd.dFrom;
+      tf2 := #PlanPaysAdd.dTo;
+      tf3 := #PlanPaysAdd.nDays;
+      f1  := #PlanPaysAdd.Summa;
+      f2  := #PlanPaysAdd.Percent;
+    }
+    #PlanPaysMain : {
+      tf1 := #PlanPaysMain.dFrom;
+      tf2 := #PlanPaysMain.dTo;
+      tf3 := #PlanPaysMain.nDays;
+      f1  := #PlanPaysMain.Summa;
+      f2  := #PlanPaysMain.Percent;
+    }
+  end;
+
+  SetFieldVisible(tf1, pTermDefBy = 0);
+  SetFieldVisible(tf2, pTermDefBy = 0);
+  SetFieldVisible(tf3, pTermDefBy > 0);
+  SetFieldVisible(tf4, (pTermDefBy > 0) AND (tf4 <> 0));
+
+  case ( TabNum ) of
+    #PlanPaysAvan, #PlanPaysAdd:
+      {
+        SetFieldSelectable(f1, pDefBy = 1);
+        SetFieldSelectable(f2, pDefBy > 1);
+      }
+  end;
+}
+
+Procedure SetCalPlanFieldStates;
+{
+  SetFieldVisible(#CalPlanDirectMC  , CalPlan.DirectMC   <> 0);
+  SetFieldVisible(#CalPlan.SummaSpec, CalPlan.DirectMC   <> 0);
+  SetFieldVisible(#CalPlanDirectPlat, CalPlan.DirectPlat <> 0);
+  SetFieldVisible(#CalPlan.Summa    , CalPlan.DirectPlat <> 0);
+}
+
+function CheckDates(d11: Date; d21: Date; d12: Date; d22: Date;
+  Fld1: integer; Fld2: integer): boolean;
+{
+  CheckDates := true;
+  if (d11 <> Date(0,0,0) and (d21 <> Date(0,0,0)) and (d11 < d21)) {
+    message('Начальная дата не должна быть меньше '+
+            DateToStr(d21, 'DD/MM/YYYYг. - начальной даты вышестоящего ПКП!'), Warning);
+    SelectField(Fld1);
+    CheckDates := false;
+    Exit;
+  }
+  if (d12 <> Date(0,0,0) and (d22 <> Date(0,0,0)) and (d12 > d22)) {
+    message('Конечная дата не должна превышать '+
+            DateToStr(d22, 'DD/MM/YYYYг. - конечная даты вышестоящего ПКП!'), Warning);
+    SelectField(Fld2);
+    CheckDates := false;
+    Exit;
+  }
+}
+
+panel panCalPlan_OplAvance table PlanPaysAvan;
+handleevent
+  cmSetDefault : {
+    if not OnSetDefaultPlanPaysAvan {
+      Abort;
+      Exit;
+    }
+  }
+  cmInsertRecord : {
+    insert current PlanPaysAvan;
+    set CalPlan.TermDefBy := PlanPaysAvan.TermDefBy;
+    CalPlan.dFrom := PlanPaysAvan.dFrom;
+    CalPlan.dTo := PlanPaysAvan.dTo;
+    CalPlan.nDays := PlanPaysAvan.nDays;
+  }
+  cmUpdateRecord : {
+    update current PlanPaysAvan;
+    set CalPlan.TermDefBy := PlanPaysAvan.TermDefBy;
+    CalPlan.dFrom := PlanPaysAvan.dFrom;
+    CalPlan.dTo := PlanPaysAvan.dTo;
+    CalPlan.nDays := PlanPaysAvan.nDays;
+  }
+
+  cmDeleteRecord :
+    if ( message(''#3'Удалить информацию об авансовых платежах',YesNo) = cmYes )
+      delete current PlanPaysAvan;
+
+  cmCheckRecord: {
+    if (longint(PlanPaysAvan.dFrom) = 0) {
+      message('Необходимо указать начальную дату периода платежа!', Warning);
+      SelectField(#PlanPaysAvan.dFrom);
+      Abort;
+      Exit;
+    }
+    if (longint(PlanPaysAvan.dTo) = 0) {
+      message('Необходимо указать конечную дату периода платежа!', Warning);
+      SelectField(#PlanPaysAvan.dTo);
+      Abort;
+      Exit;
+    }
+    if (PlanPaysAvan.dTo < PlanPaysAvan.dFrom) {
+      message('Начальная дата периода платежа не должна быть больше конечной!', Warning);
+      SelectField(#PlanPaysAvan.dFrom);
+      Abort;
+      Exit;
+    }
+    if (CalPlan.cCalPlan <> 0) and (OwnerCP.DirectMC <> 100) {
+      if ((PlanPaysAvan.Summa - OwnerCP.Summa) > 0.000001) {
+        message('Сумма платежа не должна превышать '+
+                    string(OwnerCP.Summa)+
+                    ' - сумму платежа из вышестоящего ПКП!', Warning);
+        SelectField(#PlanPaysAvan.Summa);
+        Abort;
+        Exit;
+      }
+      var d1, d2: Date;
+      iIerCP.GetCalPlanDateRange(CalPlan.cCalPlan, d1, d2);
+      if not CheckDates(PlanPaysAvan.dFrom, d1, PlanPaysAvan.dTo, d2,
+                    #PlanPaysAvan.dFrom, #PlanPaysAvan.dTo) {
+        Abort;
+        Exit;
+      }
+    }
+    else
+      if ( ( PlanPaysAvan.TermDefBy = 0 ) and
+            ( longint(Dogovor.dBeg) <> 0 ) and ( longint(Dogovor.dEnd) <> 0 ) ) and
+            (CalPlan.cCalPlan = 0)
+        if ( PlanPaysAvan.dFrom > PlanPaysAvan.dTo ) or ( PlanPaysAvan.dFrom < Dogovor.dBeg ) or
+            ( PlanPaysAvan.dTo > Dogovor.dEnd ) {
+          message(''#3'Период платежа должен быть корректно определен и не должен '+
+                      'выходить за рамки действия договора!'+
+                  ''#13#3'Период действия договора - c '+DateToStr(Dogovor.dBeg,'DD/MM/YYYY') +
+                      ' по '+DateToStr(Dogovor.dEnd,'DD/MM/YYYY'),OkButton);
+          SelectField(#PlanPaysAvan.dFrom);
+          Abort;
+          Exit;
+        }
+  }
+
+end; // handleevent
+end; // panel
+
+panel panCalPlan_OplAdd table PlanPaysAdd;
+HandleEvent
+  cmCheckField : {
+    case ( curfield ) of
+      #PlanPaysAdd.nDays : {
+        PlanPaysAdd.dTo := oCF.AddWorkDay(CalPlan.cDogovor
+                                        , PlanPaysAdd.dFrom
+                                        , if(PlanPaysAdd.nDays = 0, 0, PlanPaysAdd.nDays - 1));
+        set CalPlan.dFrom := PlanPaysAdd.dFrom;
+            CalPlan.dTo   := PlanPaysAdd.dTo;
+      }
+    end;
+  }
+
+  cmSetDefault : {
+    if not OnSetDefaultPlanPaysAdd {
+      Abort;
+      Exit;
+    }
+  }
+
+  cmInsertRecord : {
+    insert current PlanPaysAdd;
+    set CalPlan.TermDefBy := PlanPaysAdd.TermDefBy;
+    CalPlan.dFrom := PlanPaysAdd.dFrom;
+    CalPlan.dTo := PlanPaysAdd.dTo;
+    CalPlan.nDays := PlanPaysAdd.nDays;
+  }
+
+  cmUpdateRecord : {
+    update current PlanPaysAdd;
+    set CalPlan.TermDefBy := PlanPaysAdd.TermDefBy;
+    CalPlan.dFrom := PlanPaysAdd.dFrom;
+    CalPlan.dTo := PlanPaysAdd.dTo;
+    CalPlan.nDays := PlanPaysAdd.nDays;
+  }
+
+  cmDeleteRecord :
+    if ( message(''#3'Удалить информацию о дополнительных платежах?',YesNo) = cmYes )
+      delete current PlanPaysAdd;
+
+  cmCheckRecord: {
+    if (CalPlan.cCalPlan <> 0) and (OwnerCP.DirectMC <> 100) {
+      if ((PlanPaysAdd.Summa - OwnerCP.Summa) > 0.000001) {
+        message('Сумма платежа не должна превышать '+
+                    string(OwnerCP.Summa)+
+                    ' - сумму платежа из вышестоящего ПКП!', Warning);
+        SelectField(#PlanPaysAdd.Summa);
+        Abort;
+        Exit;
+      }
+      if (PlanPaysAdd.nDays > OwnerCP.nDays) {
+        message('Количество дней не должно превышать '+
+                    string(OwnerCP.nDays)+
+                    ' - значения из вышестоящего ПКП!', Warning);
+        SelectField(#PlanPaysAdd.nDays);
+        Abort;
+        Exit;
+      }
+    }
+    else
+      if ( ( PlanPaysAdd.TermDefBy = 0 ) and
+            ( longint(Dogovor.dBeg) <> 0 ) and ( longint(Dogovor.dEnd) <> 0 ) ) and
+            (CalPlan.cCalPlan = 0)
+        if ( PlanPaysAdd.dFrom > PlanPaysAdd.dTo ) or ( PlanPaysAdd.dFrom < Dogovor.dBeg ) or
+            ( PlanPaysAdd.dTo > Dogovor.dEnd ) {
+          message('Период платежа должен быть корректно определен и не должен '+
+                      'выходить за рамки действия договора!'+
+                  ''#13'Период действия договора - c '+DateToStr(Dogovor.dBeg,'DD/MM/YYYY') +
+                      ' по '+DateToStr(Dogovor.dEnd,'DD/MM/YYYY'),OkButton);
+          SelectField(#PlanPaysAdd.dFrom);
+          Abort;
+          Exit;
+        }
+  }
+
+end;  // handleevent
+end;  // panel
+
+panel pSpDocs table SpDocs;
+handleevent
+  cmSetDefault :
+    {
+      ClearBuffer(#SpDocs);
+      SpDocs.PrMC      := if(CalPlan.DirectMC = 1, wGetTune('Doc.TypeSpSell'), wGetTune('Doc.TypeSpBuy')) + 1;
+      SpDocs.TiDk      := 403;
+      SpDocs.cDoc      := CalPlan.nRec;
+      SpDocs.cShipment := CalPlan.cShipment;
+      SpDocs.cTipOtg   := CalPlan.cTipOtg;
+      SpDocs.cWayMove  := CalPlan.cWayMove;
+      SpDocs.Code      := oSpDocs.GetSpDocsCodeNext(CalPlan.nRec,word(403));
+      SpDocs.cVal      := CalPlan.cVal;
+      SpDocs.Kol       := 1;
+      OldSpCalPlnSumma := 0;
+      SpDocs.FilialNo  := oNotes.Notes_InUseStatus(CalPlan.cNote);
+      SpDocs.Direct    := CalPlan.DirectMC;
+      SpDocs.nRec      := GetNextNRec(#SpDocs, 0);
+
+      SelectField(#SpCalPlnObjName);
+      MySetFieldSpDocs;
+      PutCommand(cmPick);
+
+      if ( KatVidD.Direct = 1 )
+        oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.SELL'));
+      else
+        if ( KatVidD.Direct = 2 )
+          oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.BUY'));
+    }
+  cmSetCurfield: OldKolDEI := SpDocs.Kol;
+
+  cmCheckField :
+    {
+      case ( curfield ) of
+        #SpDocs.PrMC :
+        {
+          MySetFieldSpDocs;
+
+          if ((SpDocs.PrMC = 4) or (SpDocs.PrMC = 5))
+          {
+            set SpDocs.Price := 0;
+            set SpDocs.Summa := 0;
+            set SpDocs.SumNDS := 0;
+          }
+        }
+        #SpDocs.Price, #SpDocs.Kol :
+          {
+            if (CurField = #SpDocs.Kol)
+            {
+              if ((KatOtpEd.Diskret = 1) and (trunc(SpDocs.Kol) <> SpDocs.Kol))
+              {
+                message(''#3'Данная отпускная единица неделима! Введите целое число!',
+                 Information);
+                abort;
+                exit;
+              }
+            }
+            else
+              set SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, SpDocs.Price);
+            set SpDocs.summa := DogRound(SpDocs.cVal <> 0, SpDocs.price * SpDocs.kol);
+            OldSpCalPlnSumma := SpDocs.Summa;
+            if (UpdateTable) {}
+            oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+            SetSummaSpec;
+          }
+        #SpDocs.Summa :
+          {
+            set SpDocs.Summa := DogRound(SpDocs.cVal <> 0, SpDocs.Summa);
+            if (SpDocs.Price = 0)
+              set SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, SpDocs.Summa / SpDocs.Kol);
+            else
+              set SpDocs.Kol := SpDocs.Summa / SpDocs.Price;
+            OldSpCalPlnSumma := SpDocs.Summa;
+            if (UpdateTable) {}
+            oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+            SetSummaSpec;
+          }
+         #SpDocs.minSumma, #SpDocs.maxSumma:
+            { if (SpDocs.maxSumma >0) and (SpDocs.minSumma > SpDocs.maxSumma)
+               { message(''#3'Неверно задан минимальный и максимальный'#13#3+
+                         'объем разовой отгрузки');
+                 abort; exit; }
+            }
+         #SpDocs.minValue, #SpDocs.maxValue:
+            { if (SpDocs.maxValue >0) and (SpDocs.minValue > SpDocs.maxValue)
+               { message(''#3'Неверно задан минимальный и максимальный'#13#3+
+                         'объем разовой отгрузки');
+                 abort; exit; }
+            }
+      end;
+      if (OldKolDEI <> SpDocs.Kol)
+       {
+         oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer,2,OldKolDEI,SpDocs.Kol,0,SpDocs.TiDK);
+         OldKolDEI := SpDocs.Kol
+       }
+  }
+
+  cmPick : {
+
+    if (CurField <> #KatNotes.Name)
+      {
+        if (NOT EditPlanPosEnabled(true))
+          {
+            abort;
+            exit;
+          }
+      }
+
+    if boGetTune('DOC.EDITSPCALPLAN')
+    if (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOK)
+      {
+        Message(''#3'По данному пункту календарного плана'+chr(13)+
+                'сформированы сопроводительные документы.'+chr(13)+chr(13)+
+                'Редактирование спецификации невозможно !',
+                Information+OkButton);
+
+        abort;
+        exit;
+      }
+
+    case ( curfield ) of
+      #NormaName:
+      {var varcBaseDoc, varcKatDSNor : comp;
+       var varKolNorm : double;
+       var varListPick : word;
+
+       varcBaseDoc  := -1;
+       varcKatDSNor := SpDocs.cNorma;
+       varListPick := 0;
+       if (RunInterface('M_DVS::DsNormRed', varcBaseDoc, varcKatDSNor, 1, varKolNorm, varListPick) <> cmCancel )
+          {
+           SpDocs.cNorma := varcKatDSNor;
+           set SpDocs.PrNorma := toKatDSNor;
+           if (UpDateTable) {}
+          }
+      }
+      #SpDocs.PrMc:
+        if (SpDocs.cMCUsl <> 0) or (SpDocs.cGrMCUsl <> 0) Abort;
+      #SpCalPlnGrName, #SpCalPlnObjName : {
+        if MakeSpecOnlyFromOwner PutCommand(cmValFld3)
+        else { var Cmd: word;
+
+          SetCommandEnabled(cmValFld6, Dogovor.VidDog = 12);
+
+          Cmd := RunMenu('mnuCalPlanSpSogl');
+          case cmd of
+            cmValFld3..cmValFld6, cmMulSelDO: PutCommand(Cmd);
+          end;
+        }
+      }
+    #SmetaMy,
+    #SmetaSpMy:
+      {
+        RunInterface(iVSmeta, SpDocs.nRec, word(coSpDocs));
+        ReReadRecord(#SpDocs);
+      }
+  //--------------
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+      }
+
+      #KatOtpEd.Abbr:
+        {
+          var Koef : double; Koef := KatOtpEd.Koef;
+
+          if ( SpDocs.cMCUSL = 0 )
+            Exit;
+
+          if ( RunInterface('GetOtpEd',SpDocs.cMCUSL, SpDocs.cOtpEd, SpDocs.PrMC) = cmCancel )
+            Exit;
+
+          set SpDocs.cOtpEd := SpDocs.cOtpEd;
+
+          set SpDocs.Kol := SpDocs.Kol * Koef / KatOtpEd.Koef;
+
+          if ( ( KatOtpEd.Diskret = 1 ) AND not f_KolEqual(SpDocs.Kol, trunc(SpDocs.Kol)) )
+            set SpDocs.Kol := trunc(SpDocs.Kol) + 1;
+
+          if not f_KolIsZero(SpDocs.Kol)
+            set SpDocs.Price := DogRound(SpDocs.cVal <> 0, SpDocs.Summa / SpDocs.Kol);
+
+          oSpDocs.Ch_KolSpDocs(SpDocs.nRec, SpDocs.Kol, SpDocs.cOtpEd);
+          oSpDocs.SpDocs_UpDate_UpDoc(SpDocs.nRec, SpDocs.Kol, SpDocs.cOtpEd, FALSE);
+
+          if ( OldKolDEI <> SpDocs.Kol )
+            {
+              oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer, 2, OldKolDEI, SpDocs.Kol, 0, SpDocs.TiDK);
+              OldKolDEI := SpDocs.Kol;
+            }
+        }
+
+      #ResOtgr.Name :
+      {
+        if (Dogovor.VidDog = 15)
+          RunInterface('GetResOtgr_W', SpDocs.cResOtgr, 1)
+        else
+          RunInterface('GetResOtgr', SpDocs.cResOtgr);
+      }
+
+      #ShipmentSP.Name :
+        if ( CalPlan.cShipment = 0 ) {
+          if ( RunInterface(GetShipment,SpDocs.cShipment) <> cmCancel ) {
+            set SpDocs.cTipOtg  := ShipmentSP.cTipOtg;
+            set SpDocs.cWayMove := ShipmentSP.cWayMove;
+          }
+        }
+        else message(''#3'Условия отгрузки определены для всего документа! '+
+                         'Переопределить для спецификации нельзя.',
+                         Information+OkButton);
+      #TipOtgSp.Name :
+        if ( CalPlan.cTipOtg = 0 ) {
+          if ( RunInterface(GetTipOtg,SpDocs.cTipOtg) = cmDefault )
+            set SpDocs.cShipment := 0;
+        }
+        else message(''#3'Базис определен для всего документа! '+
+                         'Переопределить для спецификации нельзя.',
+                         Information+OkButton);
+      #WayMoveSp.Name :
+        if ( CalPlan.cWayMove = 0 ) {
+          if ( RunInterface(GetWayMove,SpDocs.cWayMove) = cmDefault )
+            set SpDocs.cShipment := 0;
+        }
+        else message(''#3'Способ транспортировки определен для всего документа! '+
+                         'Переопределить для спецификации нельзя.',
+                          Information+OkButton);
+      #GrNal.Name :
+        if (RunInterface('GetGrNal',SpDocs.cGrNal,if(SpDocs.PrMC=1,1,2))<>cmCancel)
+          {
+            SpDocs.ManualTax  := 0;
+            set SpDocs.cGrNal := SpDocs.cGrNal;
+//Удаление налогов перед их пересчетом
+            delete safe SpDocNal;
+            if (Updatetable) {};
+            oSpDocs.ChangePosSpDocs(SpDocs.TiDk, SpDocs.cDoc, SpDocs.nRec);
+            SetSummaSpec;
+            RereadRecord(#SpDocs);
+            RereadRecord(#SpDocNal);
+          }
+      #MoveCell.Name :
+        if ( SpDocs.PrMC = 1 ) and ( SpDocs.cMCUSL <> 0 )
+          RunInterface(GetCellVal,SpDocs.cMCUSL,SpDocs.cMoveCell, word(0), word(0));
+        else
+          message(''#3'Единицу подвижного состава можно выбрать только для МЦ!',OkButton);
+      #SpDocs.Kol :
+        if ( SpDocs.PrMC = 1 ) AND UseDEI
+         {
+           if (OldKolDEI <> SpDocs.Kol)
+            {
+              oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer,2,OldKolDEI,SpDocs.Kol,0,SpDocs.TiDK);
+            }
+
+           RunInterface('KolDopEd',
+                         word(coSpDocs), // coTable,  код таблицы спецификации
+                         SpDocs.NRec,    // cRec,     ссылка на спецификацию
+                         2,              // wTipKol,  тип количества
+                         'Ввод количества',         // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                         SpDocs.cMCUSL,  // cMCUsl,   NRec МЦ/услуги
+                         SpDocs.PrMC,    // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                         SpDocs.Price,   // Price,    цена за 1-у отпускную единицу
+                         2,       // forPrice, кол-во знаков после запятой в цене
+                         2,       // forSumma, кол-во знаков после запятой в стоимости
+                         CalPlan.cVal,        // cVal,     валюта переданной цены
+                         SpDocs.cOtpEd,        // cOtpEd,   ссылка на отпускную единицу измерения
+                         SpDocs.Kol,           // fKol      количество в отпускных единицах (возвращаемый параметр)
+                         longint(0),
+                         word(403)
+                       );
+           OldKolDEI := SpDocs.Kol;
+           ProcessCommand(cmCheckField);
+           Stop;
+         }
+      #rltObjName :
+      {
+        if not UpdateTable Exit;
+        var oRltInfo : RltFuncs;
+        var wVidObj  : word;
+        var pObj     : comp;
+        oRltInfo.DoLinkRltObj2SpDocs(Dogovor.nRec, comp(0), SpDocs.nRec, Dogovor.dBeg, wVidObj, pObj);
+        ReReadRecord(#SpDocs);
+      }
+    end;
+  }
+
+  cmDelOnProtect :
+    case CurField of
+      #rltObjName :
+      {
+        if IsValid(#rltLinks)
+          if (message('Отвязать позицию от объекта недвижимости ?', Confirmation + YesNo) = cmYes)
+            delete safe rltLinks;
+        ReDrawPanel(#SpDocs);
+      }
+    end;
+
+  cmPositionChanged :
+    {
+      OldSpCalPlnSumma := SpDocs.Summa;
+      MySetFieldSpDocs;
+
+      if ( CurTable = #SpDocs and IsValid(#SpDocs) )
+        if ( not EditPlanPosEnabled(false) )
+          oLinkMTR2Spec.SetObjParam(word(coSpDocs), SpDocs.nRec, 1);
+        else
+          oLinkMTR2Spec.SetObjParam(word(coSpDocs), SpDocs.nRec, if(IsValid(#SpDocs2), 1, if(IsValid(#SmetaStroy), 2, 0)));
+    }
+  cmInsertRecord :
+    {
+      oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+    }
+
+  cmUpdateRecord :
+    {
+      oSpDocs.UpDate_current_SpDocs(SpDocs.BufferP);
+    }
+
+  cmDeleteRecord :
+#ifdef __SMETA__
+    if (message(if(not IsValid(#SpDocSmeta),''#3'Удалить позицию спецификации календарного плана?',
+        ''#3'Удалить записи спецификации, связанные с позицией сметы ?'),yesno+mfSwapButtons)=yes)
+#else
+    if ( message(''#3'Удалить позицию спецификации календарного плана?',YesNo) = cmYes )
+#end
+      {
+        oSpDocs.delete_current_spdocs(SpDocs.NRec,true);
+        SetSummaSpec;
+      }
+
+end; // handleevent
+end; // panel
+
+panel pCalPlan table CalPlan;
+handleevent
+  cmCheckRecord: {
+    if (CalPlan.DirectPlat = 0)
+    if (CalPlan.TermDefBy = 0) {
+      if (longint(CalPlan.dFrom) = 0) {
+        message('Необходимо указать начальную дату периода платежа!', Warning);
+        SelectField(#CalPlan.dFrom);
+        Abort;
+        Exit;
+      }
+      if (longint(CalPlan.dTo) = 0) {
+        message('Необходимо указать конечную дату периода платежа!', Warning);
+        SelectField(#CalPlan.dTo);
+        Abort;
+        Exit;
+      }
+      if (CalPlan.dTo < CalPlan.dFrom) {
+        message('Начальная дата периода платежа не должна быть больше конечной!', Warning);
+        SelectField(#CalPlan.dFrom);
+        Abort;
+        Exit;
+      }
+    }
+    if (CalPlan.DirectPlat = 0) {
+      if (CalPlan.TermDefBy = 1) {
+        if not IsValid(#PredPlan) {
+          message('Необходимо указать предшествующий ПКП!', Warning);
+          SelectField(#PredPlanInfoOtgr);
+          Abort;
+          Exit;
+        }
+        if (CalPlan.nDays = 0) {
+          message('Необходимо задать количество дней!', Warning);
+          SelectField(#CalPlan.nDays);
+          Abort;
+          Exit;
+        }
+        if (CalPlan.cCalPlan <> 0) and (OwnerCP.DirectMC <> 100)
+          if (CalPlan.nDays > OwnerCP.nDays) {
+            message('Количество дней не должно превышать '+
+                        string(OwnerCP.nDays)+
+                        ' - значения из вышестоящего ПКП!', Warning);
+            SelectField(#CalPlan.nDays);
+            Abort;
+            Exit;
+          }
+      }
+      else
+        if (CalPlan.cCalPlan <> 0) and (OwnerCP.DirectMC <> 100)
+          if not CheckDates(CalPlan.dFrom, OwnerCP.dFrom,
+                        CalPlan.dTo, OwnerCP.dTo,
+                        #CalPlan.dFrom, #CalPlan.dTo) {
+            Abort;
+            Exit;
+          }
+    }
+    if ( ( CalPlan.TermDefBy = 0 ) and
+          ( longint(Dogovor.dBeg) <> 0 ) and ( longint(Dogovor.dEnd) <> 0 ) )
+          and (CalPlan.cCalPlan = 0) and (CalPlan.DirectPlat = 0)
+      if ( CalPlan.dFrom > CalPlan.dTo ) or ( CalPlan.dFrom < Dogovor.dBeg ) or
+          ( CalPlan.dTo > Dogovor.dEnd ) {
+        message(''#3'Период отгрузки должен быть корректно определен и не должен '+
+                    'выходить за рамки действия договора!'+
+                ''#13#3'Период действия договора - c '+DateToStr(Dogovor.dBeg,'DD/MM/YYYY') +
+                    ' по '+DateToStr(Dogovor.dEnd,'DD/MM/YYYY'),OkButton);
+        SelectField(#CalPlan.dFrom);
+        Abort;
+        Exit;
+      }
+  }
+  cmSetDefault : {
+    SetDefaultCalPlan;
+    SetFieldStates(#CalPlan,CalPlan.TermDefBy,word(0));
+    SetCalPlanFieldStates;
+    if ( CurWindow = -1 ) SelectField(#CalPlan.NoDoc);
+    else SelectField(#CalPlan.TermDefBy);
+  }
+  cmDelOnProtect:
+  {
+    if (NOT EditPlanPosEnabled(false))
+    or (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOK)
+    and boGetTune('DOC.EDITSPCALPLAN')
+    {
+      Abort;
+      Stop;
+      Exit;
+    }
+    if CurField = #PredPlanInfoOtgr
+      set CalPlan.cPredPlan := 0;
+  }
+  cmPick :
+  {
+    if NotEditPlanPos(true)
+      {
+        abort;
+        Exit;
+      }
+
+    if ((CurField <> #HozOperViewName) and (CurField <> #KatNotes.Name))
+      {
+        if NotEditPlanPosStatus(true)
+          {
+            abort;
+            Exit;
+          }
+      }
+
+    case ( CurWindow ) of
+      winCalPlan_Opl,
+      winCalPlan_Common, winCalPlan_Otgr : {
+        case ( CurField ) of
+          #PredPlanInfoOtgr : {
+            var OldPredPlan: comp;
+            OldPredPlan := CalPlan.cPredPlan;
+            RunInterface(GetCalPlan,
+                         word(0FFFFh),
+                         word(0),
+                         CalPlan.cDogovor,
+                         CalPlan.cPredPlan);
+            if iIerCP.CheckF3(CalPlan.nRec, CalPlan.cPredPlan) {
+              set CalPlan.cPredPlan := CalPlan.cPredPlan;
+                  CalPlan.dFrom     := aDD_dAY(PredPlan.dTo, 1);
+                  CalPlan.dTo       := oCF.AddWorkDay(CalPlan.cDogovor
+                                                    , CalPlan.dFrom
+                                                    , if(CalPlan.nDays = 0, 0, CalPlan.nDays - 1));
+            }
+            else {
+              message('Нельзя выбрать данный ПКП.'+
+                 ''#13'Произойдет зацикливание ссылок!', Information);
+              set CalPlan.cPredPlan := OldPredPlan;
+            }
+          }
+          #CalPlan.Descr :
+            {
+              RunInterface(GetDescr, CalPlan.Descr, CalPlan.DesGr, word(0));
+            }
+          #CalPlan.DesGr :
+            {
+              RunInterface(GetGrDescr, CalPlan.DesGr,false,false,comp(0));
+            }
+          #KatNotes.Name : {
+            if (CalPlan.cCalPlan <> 0) and (OwnerCP.DirectMC <> 100) {
+              message('Изменение статусов разрешено только у ПКП верхнего уровня!', Information);
+              Exit;
+            }
+
+            var wMaska : word;   wMaska := 0;
+
+            if boGetTune('Dog.CloseIspPKP')
+              {
+                var SumDolg : double; SumDolg := 0;
+
+                // расчет суммы отгрузок по ПКП на дату
+                if (CalPlan.DirectMC <> 0)
+                  {
+                    if iDolg_DG.GetSumOtgr_Plan(CalPLan.cDogovor,
+                                                CalPlan.NRec,
+                                                Cur_Date,
+                                                double(0),
+                                                SumDolg)
+                      {
+                        if (SumDolg > 0.01)
+                          wMaska := 16;
+                      }
+                  }
+
+                 // расчет сумм поступивших платежей по ПКП
+                 if (CalPlan.DirectPlat <> 0)
+                  {
+                    if iDolg_DG.GetSumOpl_Plan(CalPLan.cDogovor,
+                                               CalPlan.NRec,
+                                               Cur_Date,
+                                               double(0),
+                                               double(0),
+                                               double(0),
+                                               SumDolg)
+                      {
+                        if (SumDolg > 0.01)
+                          wMaska := 16;
+                      }
+                  }
+              }
+
+            RunInterface(StatLog,word(1024+1),CalPlan.nRec,word(403),CalPlan.Status,
+                                 CalPlan.cNote,wMaska);
+
+            var Flag: boolean; Flag := false;
+
+            if (CalPlan.cCalPlan = 0)
+              Flag := true
+            else
+              Flag := (OwnerCP.DirectMC = 100);
+
+            if Flag
+              iIerCP.DoSynchr_PKP_Status(CalPlan.cDogovor, CalPlan.nRec, CalPlan.Status);
+            if (CalPlan.DirectPlat = 0)
+              SetProtectCalPlanMC(FALSE);
+            if (CalPlan.DirectMC = 0)
+              SetProtectCalPlanFin(FALSE);
+            SetProtectCalPlanSpDocs;
+           }
+          #CalPlanDirectMC : {
+            set CalPlan.DirectMC := if ( CalPlan.DirectMC = 1, 2,
+                                      if ( CalPlan.DirectMC = 2, 1, 0));
+            var tmpComp : comp;  // замена плательщика и получателя
+            tmpComp := CalPlan.cPlat;
+            set CalPlan.cPlat := CalPlan.cPol;
+            set CalPlan.cPol  := tmpComp;
+            tmpComp := CalPlan.cPlatBank;
+            set CalPlan.cPlatBank := CalPlan.cPolBank;
+            set CalPlan.cPolBank  := tmpComp;
+            if ( ( CalPlan.cGrOtp <> 0 ) or ( CalPlan.cGrPol <> 0 ) ) {
+              tmpComp := CalPlan.cGrOtp;
+              CalPlan.cGrOtp := CalPlan.cGrPol;
+              CalPlan.cGrPol := tmpComp;
+              tmpComp := CalPlan.cPunktP;
+              CalPlan.cPunktP := CalPlan.cPunktR;
+              CalPlan.cPunktR := tmpComp;
+            }
+            else {
+              if ( CalPlan.DirectMC = 1 ) {
+                CalPlan.cGrOtp    := Dogovor.cMyOrg;
+                CalPlan.cGrPol    := Dogovor.cOrg;
+              }
+              else {
+                CalPlan.cGrOtp    := Dogovor.cOrg;
+                CalPlan.cGrPol    := Dogovor.cMyOrg;
+              }
+            }
+          }
+          #CalPlanDirectPlat :
+            set CalPlan.DirectPlat := if ( CalPlan.DirectPlat = 1, 2,
+                                        if ( CalPlan.DirectPlat = 2, 1, 0));
+          #ValutFullName, #CalPlan.dValCurse : {
+            var tmpCurse : double;
+            var tmpDate  : date;
+            if ( RunInterface(GetValCu,CalPlan.cVal,Dogovor.dEnd,double(0.0),double(0.0),tmpCurse,tmpDate) = cmDefault )
+              {
+                set CalPlan.dValCurse := tmpDate;
+
+                if (isValid(#SpDocs))
+                  {
+                    UpdateTable;
+
+                    oSpDocs.ReCalcSpec(word(403), CalPlan.nRec);
+                    RereadRecord(#SpDocs);
+                  }
+              }
+            Stop;
+          }
+          #OrgPlat.Name :
+            RunInterface(GetKatOr,CalPlan.cPlat,comp(0),false,comp(0),CalPlan.cPlatBank);
+          #OrgPol.Name :
+            RunInterface(GetKatOr,CalPlan.cPol,comp(0),false,comp(0), CalPlan.cPolBank);
+          #PlatBank.Name :
+            RunInterface(GetBank,CalPlan.cPlat,CalPlan.cPlatBank);
+          #PolBank.Name :
+            RunInterface(GetBank,CalPlan.cPol,CalPlan.cPolBank);
+          #TipOtg.Name :
+            RunInterface(GetTipOtg,CalPlan.cTipOtg);
+          #WayMove.Name :
+            RunInterface(GetWayMove,CalPlan.cWayMove);
+          #GrOtp.Name :
+            {
+              RunInterface(GetKatOr,CalPlan.cGrOtp,comp(0),false,comp(0),comp(0));
+
+              set CalPlan.cGrOtp := CalPlan.cGrOtp;
+
+!              if (GetFirst MarPunkt
+!                     where (( GrOtp.cState == MarPunkt.cState and
+!                              GrOtp.cCity  == MarPunkt.cCity )) = tsOk)
+!                set CalPlan.cPunktP := MarPunkt.nRec;
+              set CalPlan.cPunktP:=0;
+              if (GetFirst MarAvt
+                     where (( word(1) == Maravt.TipMar_avt        and
+                              CalPlan.cGrOtp == MarAvt.cOrgAvt)) = tsOk)
+                {
+                  if (GetLast MarRel
+                         where (( MarAvt.nRec == MarRel.cMarAvt))
+                         ordered by index MarRel03 = tsOk)
+                    {
+                      if (GetFirst MarPunkt
+                             where (( MarRel.cMarPunkt == MarPunkt.Nrec )) = tsOk)
+                        {
+                          set CalPlan.cPunktP := MarPunkt.nRec;
+                        }
+                    }
+                }
+            }
+          #GrPol.Name :
+            {
+              RunInterface(GetKatOr,CalPlan.cGrPol,comp(0),false,comp(0),comp(0));
+
+              set CalPlan.cGrPol := CalPlan.cGrPol;
+
+              set CalPlan.cPunktR := 0;
+              if (GetFirst MarAvt
+                     where ((  word(1) == Maravt.TipMar    and
+                               CalPlan.cGrPol == MarAvt.cOrg)) = tsOk)
+                {
+                  if (GetLast MarRel
+                         where (( MarAvt.nRec == MarRel.cMarAvt))
+                         ordered by index MarRel03 = tsOk)
+                    {
+                      if (GetFirst MarPunkt
+                             where (( MarRel.cMarPunkt == MarPunkt.Nrec )) = tsOk)
+                        {
+                          set CalPlan.cPunktR := MarPunkt.nRec;
+                        }
+                    }
+                }
+            }
+          #OtpPunkt.Name :
+            RunInterface(Get_Item,word(1),CalPlan.cPunktP);
+          #PolPunkt.Name :
+            RunInterface(Get_Item,word(1),CalPlan.cPunktR);
+          #Shipment.Name :
+            if ( RunInterface(GetShipment,CalPlan.cShipment) <> cmCancel ) {
+              set CalPlan.cTipOtg := Shipment.cTipOtg;
+              set CalPlan.cWayMove := Shipment.cWayMove;
+            }
+        end;
+      }
+    end;  // case curwindow
+  }
+
+  cmCheckField : {
+    case ( curfield ) of
+      #CalPlan.nDays : {
+        if (CalPlan.TermDefBy = 1)
+          CalPlan.dTo := oCF.AddWorkDay(CalPlan.cDogovor
+                                      , CalPlan.dFrom
+                                      , if(CalPlan.nDays = 0, 0, CalPlan.nDays - 1));
+      }
+
+      #CalPlan.TermDefBy : {
+        SetFieldStates(#CalPlan,CalPlan.TermDefBy,word(0));
+        if CalPlan.TermDefBy = 0
+          set CalPlan.cPredPlan := 0
+        else {
+          if (CalPlan.cCalPlan = 0) {
+            CalPlan.dFrom := Add_Day(Dogovor.dEnd, 1);
+            CalPlan.dTo   := oCF.AddWorkDay(CalPlan.cDogovor
+                                          , CalPlan.dFrom
+                                          , if(CalPlan.nDays = 0, 0, CalPlan.nDays - 1));
+          }
+          else {
+            CalPlan.dFrom := Add_Day(OwnerCP.dTo, 1);
+            CalPlan.dTo   := oCF.AddWorkDay(CalPlan.cDogovor
+                                          , CalPlan.dFrom
+                                          , if(CalPlan.nDays = 0, 0, CalPlan.nDays - 1));
+          }
+        }
+      }
+      #CalPlan.CondStatus:
+        {
+          SetFieldVisible(#CalPlan.dCond, CalPlan.CondStatus = 2);
+
+          if ( CalPlan.CondStatus = 2 )
+            {
+              if ( CalPlan.dCond = ZeroDate )
+                set CalPlan.dCond := cur_date;
+            }
+          else
+            set CalPlan.dCond := 0;
+        }
+
+      #CalPlan.Summa : {
+        if ( isValid(#PlanPaysMain) ) {
+          PlanPaysMain.Summa := CalPlan.Summa - CalPlanAvanSumma - CalPlanAddSumma;
+          update current PlanPaysMain;
+        }
+        else {
+          ClearBuffer(#PlanPaysMain);
+          PlanPaysMain.VidPlat := 0;
+          PlanPaysMain.cCalPlan := CalPlan.nRec;
+          PlanPaysMain.Summa := CalPlan.Summa;
+          PlanPaysMain.cVal  := CalPlan.cVal;
+        }
+      }
+    end;
+  }
+
+  cmInsertRecord : {
+    InsertCalPlan(true);
+  }
+
+  cmUpdateRecord : {
+    if UpdateCalPlan
+      iIerCP.UpdateDates(CalPlan.nRec);
+  }
+
+  cmDeleteRecord :
+    {
+      if IsValid(#CPAttach)
+        {
+          Message('ПКП удалить нельзя!'#13
+                + 'На основании его сформированы подчиненные ПКП.',
+                  Information + OkButton);
+          Abort;
+          Exit;
+        }
+
+      if ( CalPlan.Status <> 0 )
+        {
+          Message(''#3'ПКП можно удалить только в статусе "оформляемый" !', Information + OkButton);
+          Abort;
+          Exit;
+        }
+
+      if ( message('Удалить пункт календарного плана?', Confirmation + YesNo) = cmYes )
+        DeleteCalPlan;
+    }
+
+end; // handleevent
+end; // panel
+
+panel pCalPlan1 table CalPlan1;
+handleevent
+  cmPositionChanged : {
+    SetFieldStates(#CalPlan,CalPlan.TermDefBy,word(0));
+    SetCalPlanFieldStates;
+  }
+end;
+end;

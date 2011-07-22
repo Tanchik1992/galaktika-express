@@ -1,0 +1,327 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Выбор из прайс-листа МЦ/Услуг #NamTovar, #Nomenkl
+//********************************************************************************
+
+#include DEIfuns.var
+
+#ifNdef __vschet__
+  #ifNdef __consig__
+    #define need_define_Chrust_Mode
+  #end
+#else
+  #ifdef __vschetb__
+    #define need_define_Chrust_Mode
+  #end
+#end
+
+#ifdef need_define_Chrust_Mode
+  #undef need_define_Chrust_Mode
+  var Chrust_Mode: boolean;  Chrust_Mode := FALSE;
+#end
+
+  PrNrec := coGetTune('Price.cPrice');
+
+  if GetFirst KlPrice where (( PrNrec == KlPrice.nRec )) <> tsOk
+    PrNrec := 0;
+  else
+    if (SpStep.PrMC <> (KlPrice.Tip+1))
+      PrNrec := 0;
+
+  var pPrMC: word;  pPrMC := if(boGetTune('Pick.AutoFilterInPrice'), SpStep.PrMC, word(0));
+
+  if ((PrNrec = 0) AND boGetTune('Price.GrKontr'))  // искать прайс по группе
+    if not GetKlPriceOnGroup(BaseDoc.cOrg, prNrec, word(0), word(1), pPrMC)
+      Exit;
+
+  if (PrNrec = 0)
+    if (RunInterface(GetKlPr, PrNrec,
+                              word(0),
+                              word(1),
+                              if(Chrust_Mode, word(1), pPrMC)) = cmCancel)
+      {
+        PrNrec := 0;         // пока неизвестен код прайс-листа
+        Abort
+      }
+
+  // отпуск на консигнацию или выбор из резерва - только для МЦ
+  if ((VidDoc = 202) OR (Chrust_Mode))
+    if (GetFirst KlPrice where (( PrNrec == KlPrice.Nrec )) = tsOk)
+      if (KlPrice.Tip <> 0)
+        {
+          if (coGetTune('Price.cPrice') <> 0)
+            Message(''#3'В настройке у Вас установлен прайс-лист по умолчанию не на МЦ.')
+          else
+            if Chrust_Mode
+              Message(''#3'Формирование спецификации с резервированием '+
+                          'возможно только по прайс-листам на МЦ', CancelButton);
+            else
+              Message(''#3'В документе отпуска на консигнацию можно работать '+
+                          'только с прайс-листами на МЦ', CancelButton);
+          PrNrec := 0;         // пока неизвестен код прайс-листа
+          Abort
+        }
+
+  if (PrNrec <> 0) // **************** Вставка кучей сразу ****************
+    {
+      Delete all PickPric;
+
+      var NRecSaved  : comp;  NRecSaved := 0;
+      var wMP        : word;  wMP := SpStep.wMcProp;
+
+      var Res, tempw: word;
+
+
+      if (GetFirst KlPrice where ((PrNrec == klPrice.NRec)) = tsOk)
+        {}
+
+      Chrust_Mode := (KlPrice.Tip = 0) AND Chrust_Mode;
+      RVhod := KlPrice.VhodNal;
+
+      if not Chrust_Mode
+        Res := RunInterface(GetPrice, PrNrec, if(BaseDoc.Direct = 1, BaseDoc.cParty, comp(0)), tempw, FALSE);
+      else
+        {
+          var MarkerZ: longint;
+
+          MarkerZ := InitMarker('__DoRes_Chng__', 8, 20, 5, FALSE);
+          ClearMarker(MarkerZ);
+          DoneMarker(MarkerZ, '__DoRes_Chng__');
+
+          RunInterface(GetPrice, PrNrec, StepDoc.nRec, tempw, TRUE);
+
+          MarkerZ := InitMarker('__DoRes_Chng__', 8, 20, 5, false);
+          Res := if(GetMarkerCount(MarkerZ) > 0, cmDefault, cmCancel);
+          DoneMarker(MarkerZ, '__DoRes_Chng__');
+
+          PushPos(#SpStep);
+          RereadRecord(#BaseDoc);
+          PopPos(#SpStep);
+
+          SelectPanel(#SpStep);
+        }
+
+      if (Res = cmCancel)
+        Abort
+      else
+        if (GetFirst PickPric = tsOk)
+          {
+            if (not IsNew) AND not Chrust_Mode
+              {
+#ifdef __SMETA__
+                var cSmet: comp;
+                var cDO: comp;
+
+                if (GetFirst SpDocSmeta where ((coSpStep == SpDocSmeta.coTable AND
+                                             SpStep.nRec == SpDocSmeta.cSpec)) = tsOk)
+                  {
+                    cSmet := SpDocSmeta.cPosition;
+                    cDO := SpStep.cStepDoc;
+
+                    _LOOP SpDocSmeta1 where ((coSpStep == SpDocSmeta1.coTable AND
+                                              cDO == SpDocSmeta1.cDoc AND
+                                              cSmet == SpDocSmeta1.cPosition))
+                      {
+                        if (GetFirst SpStep where ((SpDocSmeta1.cSpec == SpStep.nRec)) = tsOk) {};
+                        // Удаление актов реализации
+                        if (BaseDoc.VidDoc = 202)
+                          DelAtks ( StepDoc.Nrec );
+
+                        if (BaseDoc.Direct = 1)
+                          SubResTov(SpStep.Reserv); // Снятие резерва по МЦ
+
+                        if (BaseDoc.VidDoc = 201 OR BaseDoc.VidDoc = 1420)
+                          {
+                            SubResRazRez;          // Снятие резерва по складу
+                            delete safe dores;
+                          }
+
+                        delete safe spdocnal;
+
+                        if (GetFirst SpOtpEd where ((SpStep.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+                          oDOTara.DeleteTara(SpStep.cStepDoc, SpStep.cOtpEd, SpStep.NRec, SpStep.KolSkl);
+
+                        oDOfuns.SpStep_Delete(SpStep.nRec);
+                      }
+                  }
+                else
+#end
+                  {
+                    // Удаление актов реализации
+                    if (BaseDoc.VidDoc = 202)
+                      DelAtks ( StepDoc.Nrec );
+
+                    if (BaseDoc.Direct = 1)
+                      SubResTov(SpStep.Reserv); // Снятие резерва по МЦ
+
+                    if (BaseDoc.VidDoc = 201 OR BaseDoc.VidDoc = 1420)
+                      {
+                        SubResRazRez;          // Снятие резерва по складу
+                        delete safe dores;
+                      }
+
+                    delete safe spdocnal;
+
+                    if (GetFirst SpOtpEd where ((SpStep.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+                      oDOTara.DeleteTara(SpStep.cStepDoc, SpStep.cOtpEd, SpStep.NRec, SpStep.KolSkl);
+
+                    oDOfuns.SpStep_Delete(SpStep.nRec);
+                  }
+              }
+
+            var oExtAtr: iExtAttr;
+            var oExtCls: iExtClass;
+
+            StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+                         ''#3'Пополнение спецификации документа выбранными '+
+                         'позициями прайс-листа...'#13#3, 1);
+
+            var MarkerZ: longint;
+
+            if Chrust_Mode
+              MarkerZ := InitMarker('__DoRes_Chng__', 8, 20, 5, FALSE);
+
+            _LOOP PickPric
+              if (GetFirst FastFirstRow KlPrice where ((PrNrec == klPrice.NRec)) = tsOk)
+                {
+                  if Chrust_Mode
+                    {
+                      _LOOP SpStep where (( StepDoc.nRec       == SpStep.cStepDoc AND
+                                            PickPric.PickThing == SpStep.cMCUSL   AND
+                                            word(1)            == SpStep.PrMC     AND
+                                            PickPric.PickParty == SpStep.cParty   AND
+                                           (    PrNrec          = SpStep.cPriceList
+                                            AND PickPric.PickEd = SpStep.cOtpEd)
+                                         ))
+                        {
+                          var Ind: longint;
+
+                          if ( Not SearchMarker(MarkerZ, SpStep.nRec, Ind) )
+                            Continue;
+
+                          var kk: double; kk := fTekRun.GetSumDoRes(SpStep.nRec);
+
+                          if (kk > 0.0)
+                            {
+                              SpStep.PrSkid  := 1;
+                              SpStep.KolSkl  := kk;
+                              SpStep.Kol     := SpStep.KolSkl;
+                              SpStep.ProcUb  := 0;
+                              SpStep.Reserv  := kk;
+                              InitPriceSpStep(RVhod, fnal, PickPric.PickPrc, PickPric.PickPrcV);
+                              update current SpStep;
+
+                              if GetFirst SpStepC where (( SpStep.cStepDoc == SpStepC.cStepDoc  AND
+                                                           SpStep.NRec     == SpStepC.cOwner )) = tsOk // есть позиции с нагрузкой
+                              {
+                                oDOTara.UpdateKolTara(SpStep.cStepDoc, SpStep.cOtpEd, SpStep.NRec, SpStep.KolSkl, old_kol);
+                                ReReadRecord(#SpStep);
+                              }
+                            }
+                          else
+                            {
+                              SubResTov(SpStep.Reserv); // Снятие резерва по МЦ
+                              SubResRazRez;             // Снятие резерва по складу
+                              delete safe dores;
+                              delete safe spdocnal;
+
+                              if (GetFirst SpOtpEd where ((SpStep.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+                                oDOTara.DeleteTara(SpStep.cStepDoc, SpStep.cOtpEd, SpStep.NRec, SpStep.KolSkl);
+
+                              oDOfuns.SpStep_Delete(SpStep.nRec);
+                              Continue;
+                            }
+                        }
+                    }
+                  else
+                    {
+                      BaseDoc.dPrice := KlPrice.dPrice;
+                      InitSpStep(tempw);
+                      InitPriceSpStep(RVhod, fnal, PickPric.PickPrc, PickPric.PickPrcV);
+                      SpStep.wMcProp := wMP;
+#ifdef __vschet__
+#include DOUKS.vpp
+  #ifndef __vschetb__
+                      if boGetTune ('Doc.Sell.DO.CalcGrMForDO')
+                        if (SpStep.PrMc = 1)
+                          ProcKolGrMDO ( SpStep.cMCUsl, SpStep.cOtpEdGrM, 
+                                         SpStep.cOtpEd, SpStep.KolSkl, SpStep.KolGrM );
+  #end
+#end
+                      insert current SpStep;
+
+                      if boGetTune('Oper.ExClassPriceLs2Docs') // Копировать в ДО внешние атрибуты спецификации
+                        {
+                          oExtAtr.CopyAllAttrEx    (word(coPrices), PickPric.PickRec, word(coSpStep), SpStep.nRec);
+                          oExtCls.CopyAllClassValEx(word(coPrices), PickPric.PickRec, word(coSpStep), SpStep.nRec);
+                        }
+
+                      if ((BaseDoc.Direct = 1) AND boGetTune('Tara.AutoPaste')) OR
+                         ((BaseDoc.Direct = 2) AND boGetTune('Tara.AutoPaste_Buy'))
+                      {
+                        oDOTara.InsertTara(SpStep.cOtpEd, SpStep.NRec, SpStep.cStepDoc, SpStep.KolSkl, SpStep.cParty);
+                        oDOTara.ChangeNppStepDoc(SpStep.cStepDoc);
+                        ReReadRecord(#SpStep);
+                      }
+
+                      if (NrecSaved = 0)
+                        NRecSaved := SpStep.Nrec;
+
+                      if ((SpStep.PrMC <>1) AND (KatUsl.TYPEUSL = 1))  // SVG
+                        {
+                          RunInterface('GETPAR1', 0, SpStep.Nrec, KatUsl.Nrec, SpStep.Price, SpStep.KolSkl, word(coSpStep));
+                          SpStep.Kol := SpStep.KolSkl;
+                          UpDate current SpStep;
+                        }
+
+                      if UseDEI
+                        {
+                          oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, 0, SpStep.KolSkl, longint(0), BaseDoc.VidDoc);
+                          oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, 0, SpStep.Kol, longint(0), BaseDoc.VidDoc);
+                          oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 3, 0, SpStep.KolOpl, longint(0), BaseDoc.VidDoc);
+                        }
+
+                      oCalcFuns.ValNac_MakeFromPL(PickPric.PickRec, StepDoc.NRec, SpStep.NRec, coSpStep);
+                    }
+                }
+
+            ClearMarker(MarkerZ);
+            DoneMarker(MarkerZ, '__DoRes_Chng__');
+
+            StopVisual('', 0);
+
+            RereadRecord(#SpStep); //Пир [102.11345] Ошибка визуализации (глюк-задублирование новой вставки) ShV-02/04/2001
+
+            StartNewVisual(vtRotateVisual, vfTimer, 'Пересчет суммы по документу...', 1);
+
+            GetTotalSkid(false);  //полный пересчет
+
+            NextVisual;
+
+            if ( boGetTune('Reserv.SchReserv') AND
+               not Chrust_Mode AND
+               (BaseDoc.Direct = 1) AND
+               (BaseDoc.Status = 2) AND
+               (BaseDoc.VidDoc <> 211) AND
+               (SpStep.PrMc = 1) )
+              {
+                SetVisualHeader(''#3'Резервирование...');
+                Proc20;                       // резервирование
+              }
+
+            if (NrecSaved > 0)
+              {                // перейти на первую вставленную позицию
+                SetVisualHeader(''#3'Позиционирование на первую добавленную запись...');
+                if (GetFirst SpStep where ((NrecSaved == SpStep.Nrec)) <> tsOk)
+                 {}
+              }
+            else
+              if (GetFirst SpStep <> tsOk)
+                {};
+
+            RereadRecord(#SpStep);
+            SelectField(#SpStep.KolSkl);
+            StopVisual('', 0);
+          } // if GetFirst PickPric
+    } // if PrNrec <> 0

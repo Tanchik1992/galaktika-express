@@ -1,0 +1,180 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Процедуры обработки налогов в сопроводительных документах ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+#ifndef _SOPRN00_VPP
+#define _SOPRN00_VPP
+
+//округление
+#include fsround.vpp
+
+#ifdef _RETTARA_
+Procedure DelSpSoprDocNalNDS;
+{
+  if (GetFirst SpDocNal
+             where ((SpSopr.NRec                  == SpDocNal.cSpDoc and
+                     KatSopr.VidSopr              == SpDocNal.TipDoc and
+                     coGetTune('Nalog.cNalogNDS') == SpDocNal.cNalog)) = tsOK)
+    {
+      SpSopr.SumNDS := SpSopr.SumNDS  - SpDocNal.Summa;
+      SpSopr.SumVNDS:= SpSopr.SumVNDS - SpDocNal.SumVal;
+      SpSopr.ManualTax:= 1;
+      update current SpSopr;
+      delete current SpDocNal;
+    }
+}
+#end
+
+
+function GetDefNalogGroup : comp;
+{
+  GetDefNalogGroup := 0;
+  if (SpSopr.PrMC = 1)
+    {
+      if (GetFirst KatMC = tsOk)
+        GetDefNalogGroup := KatMC.cGrNal;
+    }
+  else
+    if (GetFirst KatUsl = tsOk)
+      GetDefNalogGroup := KatUsl.cGrNal;
+}
+
+function CheckKatSoprVhodNAL(cMCUSL:comp;PrMc:word;KatSopr_VhodNal:word):word;
+{
+  CheckKatSoprVhodNAL := KatSopr_VhodNal;
+
+  if ( ( PrMC <> 1 ) OR ( cMCUSL = 0 ) )
+    Exit;
+
+  if ( ( KatSopr_VhodNal = 1 ) OR ( KatSopr.VidSopr <> 201 ) )
+    Exit;
+
+#ifdef _SOPRDOC_VIP
+  if (not DocTuneNDS)
+    Exit;//РЕГУЛИРУЕМАЯ СТАВКА НДС В ОТЧЕТАХ
+
+  var  piExAttr : iExtAttr;
+
+  if ( piExAttr.doGetAttr(coKatMC, cMCUSL, 'РЕГУЛИРУЕМАЯ СТАВКА НДС В ОТЧЕТАХ') <> 0 )
+    CheckKatSoprVhodNAL := 1 //если фикс.ставка налог всегда входит в цену МЦ (для РБ)
+#end
+}
+
+procedure RecalcNalogs(aGrNal: comp; chGrNal: comp);
+var vaGrNal  : comp;
+var WDate    : date;
+{
+  if (SpSopr.ManualTax <> 0)
+    Exit; // Если налоги ручные, то выход...
+
+  case wGetTune('Doc.DateForRecalcNalogs') of
+    0 : WDate := if (longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+    1 : WDate := if (longint(KatSopr.dSopr) <> 0, KatSopr.dSopr, KatSopr.dPrice);
+  end;
+
+  if (chGrNal = 0)
+    {
+      if (GetFirst SpDocNal = tsOk)
+        vaGrNal := if (SpDocNal.cGrNal <> 0, SpDocNal.cGrNal, aGrNal);
+      else
+        vaGrNal := aGrNal;
+    }
+  else
+    vaGrNal := chGrNal;
+
+  SpSopr.cGrNal := vaGrNal;
+
+  var ResBool: boolean;
+  if (KatSopr.VidSopr = 201)
+    ResBool := CheckKatSoprVhodNAL(SpSopr.cMCUSL,SpSopr.PrMc,KatSopr.VhodNal) = 1
+  else
+    ResBool := KatSopr.VhodNal = 1;
+
+  var tBaseNalogNDE: double;
+  var tBaseNalogVal: double;
+
+  tBaseNalogNDE := FSRoundRub(oSDFuns.GetBaseNalog(KatSopr.Buffer, SpSopr.Buffer,
+                                                   if (SpSopr.PrMC = 1, KatMC.kGroupMC, 0), 0));
+  tBaseNalogVal := FSRoundVal(oSDFuns.GetBaseNalog(KatSopr.Buffer, SpSopr.Buffer,
+                                                   if (SpSopr.PrMC = 1, KatMC.kGroupMC, 0), 1));
+
+  if (ResBool)
+  {
+    CountBasePrice(KatSopr.NRec
+                 , SpSopr.NRec
+                 , KatSopr.VidSopr
+                 , vaGrNal
+                 , KatSopr.cOrgBase
+                 , if (SpSopr.PrMc > 2, 0, SpSopr.KolFact), if (SpSopr.PrMc > 2, 0, SpSopr.cOtpEd)
+                 , wDate
+                 , KatSopr.cValut
+                 , 0
+                 , if (SpSopr.PrMc > 2, SpSopr.Price , tBaseNalogNDE)
+                 , if (SpSopr.PrMc > 2, SpSopr.VPrice, tBaseNalogVal)
+                 , KatSopr.cPayment
+                   );
+
+     SpSopr.SumNDS  := if (SpSopr.PrMc > 2, SpSopr.Price , tBaseNalogNDE) - GetBasePrice;
+     SpSopr.SumVNDS := if (SpSopr.PrMc > 2, SpSopr.VPrice, tBaseNalogVal) - GetBaseValPrice;
+  }
+  else
+  {
+    CountNalogPrice(KatSopr.NRec
+                  , SpSopr.NRec
+                  , KatSopr.VidSopr
+                  , vaGrNal
+                  , KatSopr.cOrgBase
+                  , if (SpSopr.PrMc > 2, 0, SpSopr.KolFact)
+                  , if (SpSopr.PrMc > 2, 0, SpSopr.cOtpEd)
+                  , wDate
+                  , KatSopr.cValut
+                  , 0
+                  , if (SpSopr.PrMc > 2, SpSopr.Price , tBaseNalogNDE)
+                  , if (SpSopr.PrMc > 2, SpSopr.VPrice, tBaseNalogVal)
+                  , KatSopr.cPayment
+                    );
+
+    SpSopr.SumNDS  := GetNalogPrice    - if (SpSopr.PrMc > 2, SpSopr.Price , tBaseNalogNDE);
+    SpSopr.SumVNDS := GetNalogValPrice - if (SpSopr.PrMc > 2, SpSopr.VPrice, tBaseNalogVal);
+  }
+
+#ifdef _RETTARA_
+  if (SpSopr.PrVoz = 1)
+   case KatSopr.VidSopr of
+!  _SOPRDOCB_VIP
+    101,//Накладная на прием МЦ
+    102,//Накладная на возврат МЦ от консигнатора
+    103,//Накладная на прием МЦ от консигнанта
+    108,//Накладная на прием молочного сырья
+    1411,//УЛХ. Дневник приемки работ
+!  _SOPRDOC_VIP
+    201,//Накладная на отпуск МЦ
+    202,//Накладная на отпуск МЦ консигнатору
+    203,//Накладная на возврат МЦ консигнанту
+    210,//Акт передачи оборудования в монтаж
+    229,//Акт передачи материалов на строительство
+    1421,//УЛХ. Накладная на отпуск лесопродукции
+!  _AKTREC_VIP
+    106,//Рекламационная накладная от покупателя на возврат МЦ
+    629,//Отчет по форме М-29
+    610,//Реестр смонтированного оборудования
+    1610,//Ведомость оборудования, монтаж которого начат
+    206://Рекламационная накладная на возврат МЦ продавцу
+      DelSpSoprDocNalNDS;
+   end;
+#end
+}
+
+// Перерасчет сумм налогов по позиции накладной
+procedure CalcSumNalogs;
+{
+  SpSopr.SumNDS := 0;
+  SpSopr.SumVNDS := 0;
+  _LOOP SpDocNal
+    if (SpDocNal.cOrg = KatSopr.cOrgBase)
+      {
+        SpSopr.SumNDS := SpSopr.SumNDS +SpDocNal.Summa;
+        SpSopr.SumVNDS := SpSopr.SumVNDS + SpDocNal.SumVal;
+      }
+}
+
+#end //_SOPRN00_VPP

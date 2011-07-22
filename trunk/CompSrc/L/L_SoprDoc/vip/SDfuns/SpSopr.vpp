@@ -1,0 +1,234 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// удаление с поддержкой целостности таблицы SpSopr
+//******************************************************************************
+
+#ifNdef __SDfuns_vip__
+#error Вместо #include spsopr.vpp  следует использовать методы из SDfuns.vih
+#end
+
+Create view loDelSpSopr  // дополнительная логическая таблица
+Var
+  pSpSopr: comp;
+From
+  SpSopr
+, SpSopr SpSopr1
+, SpStepRem
+, SpSopHoz
+, KatSopr
+, SpDocs, SoprOrdB, SpDocNal, SpSklad
+, SpecZatr
+, InBoxP
+, SpDocSmeta
+, Koeff4Act
+#ifdef Kachestvo
+, KachvoEx
+, QPMove
+#end
+, RsvReg
+#ifdef _RPrice_
+, RPrice
+#end
+, SpecZatr
+Where
+((
+      pSpSopr           ==  SpSopr.NRec
+  AND SpSopr.NRec       ==  SpSopHoz.cSpSopr
+  AND SpSopr.cSopr      ==  KatSopr.NRec
+  AND SpSopr.cSpDocs    ==  SpDocs.NRec
+))
+;
+
+//******************************************************************************
+
+#ifNdef __piKatDopEd__
+#define __piKatDopEd__
+var piKatDopEd: iKatDEI;
+#endif
+
+//******************************************************************************
+Procedure BeforeSpSoprDelete;
+{
+  oWoodFuns.DelWoodSpView(coKatSopr, loDelSpSopr.SpSopr.NRec);
+}
+
+//******************************************************************************
+Function SpSopr_Delete (_NRec: comp): word;
+{
+  SpSopr_Delete := tsOk + 1;
+  loDelSpSopr.pSpSopr := _NRec;
+
+  if (loDelSpSopr.GetFirst FastFirstRow SpSopr <> tsOk)
+    {
+      SpSopr_Delete := tsOk;
+      Exit;
+    }
+
+  //-- удаление фактических параметров расчетной услуги
+  oCalcFuns.ClcUsl_DeleteFactPar(_NRec, coSpSopr);
+
+  //-- удаление привязанных ДЕИ
+  piKatDopEd.SpDopEd_Delete(coSpSopr, _NRec, loDelSpSopr.SpSopr.VidSopr);
+
+  if (TTNDoc_Delete(coSpSopr, _NRec) <> tsOk)
+    {
+      Message('Не удалось удалить транспортный раздел для спецификации накладной!'#13 +
+              'Операция удаления отменена...', CancelButton+Warning);
+      Exit;
+    }
+
+  loDelSpSopr.delete safe SpSopHoz;
+
+  var pNotes: iNotes;
+
+  // Увеличиваем остаток в SpDocs (если есть и нужен контроль)
+  if (loDelSpSopr.SpSopr.cSpDocs <> 0)
+    if (loDelSpSopr.GetFirst FastFirstRow KatSopr = tsOk)
+      if (pNotes.Notes_InUseStatus(loDelSpSopr.KatSopr.cNote) = 1) // контролировать остатки
+        if (loDelSpSopr.GetFirst FastFirstRow SpDocs = tsOk)
+          {
+            //  В SpDocs ОСТАТОК В УЧЁТНЫХ ЕДИНИЦАХ!
+            loDelSpSopr.SpDocs.Ostatok := loDelSpSopr.SpDocs.Ostatok +
+                                          loDelSpSopr.SpSopr.KolFact * fEdIzm.GetKoefOtpEd(loDelSpSopr.SpSopr.cOtpEd);
+
+            var d: double; d := (loDelSpSopr.SpDocs.Kol * fEdIzm.GetKoefOtpEd(loDelSpSopr.SpDocs.cOtpEd));
+            if (loDelSpSopr.SpDocs.Ostatok > d)
+              loDelSpSopr.SpDocs.Ostatok := d;
+
+            loDelSpSopr.update current SpDocs;
+          }
+
+  //удаление распределения по разрезам для приходных накладных
+  if (loDelSpSopr.Delete noVisual SoprOrdB where ((loDelSpSopr.SpSopr.NRec == SoprOrdB.cSpSopr)) = tsOk)
+    { }
+
+  //удаление налогов
+  if (loDelSpSopr.Delete noVisual SpDocNal where
+        (( loDelSpSopr.SpSopr.NRec == SpDocNal.cSpDoc AND
+        loDelSpSopr.SpSopr.vidSopr == SpDocNal.TipDoc)) = tsOk)
+    { }
+
+  if (loDelSpSopr.delete NoVisual InBoxP where
+        ((loDelSpSopr.SpSopr.NRec == InBoxP.cSpSopr)) = tsOk)
+    { }
+
+  //------------------------------------------------------------------------------
+  // удаление подцепленных записей к SpSopr в производстве
+  var MnfNakPrc: iMnfDO_Proc; // objMnfDO_Proc;
+  MnfNakPrc.Delete_SpSopr_ForMnfTable(loDelSpSopr.SpSopr.NRec);
+
+
+  if loDelSpSopr.delete NoVisual SpSklad where
+                 ((coSpSopr                ==  SpSklad.wTable AND
+                   loDelSpSopr.SpSopr.NRec ==  SpSklad.cRec)) = tsOk
+    { }
+
+  var vcSmeta : comp;
+  var vlKolSm : longint;
+  vlKolSm := 0;
+  if loDelSpSopr.GetFirst SpDocSmeta where ((coSpSopr          ==  SpDocSmeta.coTable
+                                   AND loDelSpSopr.SpSopr.NRec ==  SpDocSmeta.cSpec)) = tsOk
+  {
+    vcSmeta := loDelSpSopr.SpDocSmeta.cSmeta;
+    if (loDelSpSopr.SpDocSmeta.TipRes <> 5 and loDelSpSopr.SpDocSmeta.TipRes <> 6)
+    {
+      if loDelSpSopr.delete NoVisual Koeff4Act where ((loDelSpSopr.SpSopr.cSopr         == Koeff4Act.cDoc
+                                                   AND loDelSpSopr.SpDocSmeta.cPosition == Koeff4Act.cPosition))<>tsOk
+        { }
+
+      if loDelSpSopr.delete NoVisual Koeff4Act where ((loDelSpSopr.SpSopr.cSopr         == Koeff4Act.cDoc
+                                                   AND loDelSpSopr.SpDocSmeta.cResource == Koeff4Act.cPosition))<>tsOk
+        { }
+    }
+  }
+
+  if loDelSpSopr.delete NoVisual SpDocSmeta where
+            ((coSpSopr                ==  SpDocSmeta.coTable
+          AND loDelSpSopr.SpSopr.NRec ==  SpDocSmeta.cSpec))<>tsOk
+    { }
+
+  loDelSpSopr._Loop SpDocSmeta where ((coSpSopr                 == SpDocSmeta.coTable
+                                   AND loDelSpSopr.SpSopr.cSopr == SpDocSmeta.cDoc))
+    if (loDelSpSopr.SpDocSmeta.cSmeta = vcSmeta and loDelSpSopr.SpDocSmeta.TipRes <> 7)
+    {
+      inc(vlKolSm);
+      Break;
+    }
+
+  if vlKolSm = 0
+  {
+    if loDelSpSopr.delete NoVisual Koeff4Act where ((loDelSpSopr.SpSopr.cSopr == Koeff4Act.cDoc
+                                                 AND vcSmeta                  == Koeff4Act.cPosition))<>tsOk
+      { }
+
+    loDelSpSopr._Loop SpDocSmeta where ((coSpSopr                 == SpDocSmeta.coTable
+                                     AND loDelSpSopr.SpSopr.cSopr == SpDocSmeta.cDoc))
+      if loDelSpSopr.delete NoVisual SpSopr1 where ((loDelSpSopr.SpDocSmeta.cSpec == SpSopr1.nRec))<>tsOk
+        { }
+
+    if loDelSpSopr.delete SpDocSmeta where ((coSpSopr                 == SpDocSmeta.coTable
+                                         AND loDelSpSopr.SpSopr.cSopr == SpDocSmeta.cDoc))<>tsOk
+      { }
+  }
+  //------------------------------------------------------------------------------
+  // удаление привязанных проб качества
+  #ifdef Kachestvo
+  if loDelSpSopr.delete NoVisual KachvoEx where
+            ((toSpSopr                ==  KachvoEx.wTable
+          AND loDelSpSopr.SpSopr.NRec ==  KachvoEx.cOwner)) = tsOk
+    { }
+
+  if loDelSpSopr.delete NoVisual QPMove where
+            ((toKatSopr                ==  QPMove.TypeDoc
+          AND loDelSpSopr.SpSopr.cSopr ==  QPMove.cDoc
+          AND toSpSopr                 ==  QPMove.TypeSpDoc
+          AND loDelSpSopr.SpSopr.NRec  ==  QPMove.cSpDoc)) = tsOk
+    { }
+  #end // #ifdef Kachestvo
+  //------------------------------------------------------------------------------
+
+  if ((loDelSpSopr.SpSopr.VidSopr = 101 or loDelSpSopr.SpSopr.VidSopr = 108) AND boGetTune('Party.AutoDelParty'))
+    or (loDelSpSopr.SpSopr.VidSopr = 630 AND boGetTune('Sklad.Peresort.AutoDelParty'))  // для пересортицы
+      or (loDelSpSopr.SpSopr.VidSopr = 1411 AND boGetTune('Doc.Wood.Journ.AutoDelParty'))  // для пересортицы
+      RunInterface('iDeleteParty', loDelSpSopr.SpSopr.NRec); //удаление партии по позиции
+
+  if loDelSpSopr.delete NoVisual SpecZatr where
+            ((coSpSopr                ==  SpecZatr.coTable
+          AND loDelSpSopr.SpSopr.NRec ==  SpecZatr.cSpec))<>tsOk
+    { }
+
+  #ifdef _SOPRDOC_VIP
+  if ( ( wGetTune('Reserv.PrSchSklad') = 0 ) AND ((loDelSpSopr.SpSopr.VidSopr = 201) OR (loDelSpSopr.SpSopr.VidSopr = 1421 ))
+    fTekRun.DelDoResOnSpSopr(loDelSpSopr.SpSopr.nRec);
+  #end
+
+#ifdef __MTR_TO_SPEC__
+  oMTRFun.DelSpecMTR(coSpSopr, loDelSpSopr.SpSopr.NRec);
+#end
+  if loDelSpSopr.GetFirst SpStepRem where ((loDelSpSopr.SpSopr.nRec == SpStepRem.cSpStep and
+                                             word(1)                 == SpStepRem.TipDoc)) = tsOk
+    if loDelSpSopr.delete current SpStepRem = tsOk
+      { }
+
+  // обработка связей с "Журналом резервирования"
+#ifdef __RsvReg__
+  ipRsvRegObj.DelRsvRegByPos(toKatSopr,loDelSpSopr.SpSopr.nRec);
+#endif
+
+  // удаление связей между приходной накладной и М-7
+  case loDelSpSopr.SpSopr.VidSopr of
+    115: {
+           loDelSpSopr.delete SpecZatr where ((loDelSpSopr.SpSopr.NRec == SpecZatr.cUKS));
+         }
+    101, 108, 1411: {
+           loDelSpSopr.delete SpecZatr where ((loDelSpSopr.SpSopr.NRec == SpecZatr.cAddSumTune));
+         }
+  end; // case
+
+  BeforeSpSoprDelete;
+
+  SpSopr_Delete := loDelSpSopr.delete current SpSopr;
+} // Function SpSopr_Delete
+
+//******************************************************************************

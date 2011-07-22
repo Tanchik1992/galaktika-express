@@ -1,0 +1,112 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : процедуры/функции для работы в сопроводительных документах║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#ifNdef SOPINMOV_VIP
+Create view SPSOP1
+var
+  cKS: comp;
+From
+  Spsopr;
+#endif
+
+#include soprc00.vpp
+
+Procedure CheckSumma(full: boolean);
+var
+  _result: boolean;
+  cRecSopUsl, cRecSpSopr: comp;
+  _Method: word;
+{
+  if CurTable<>#KatSopr
+    Update current KatSopr;
+
+  UpdateTable;
+
+  cRecSpSopr := 0;
+  cRecSopUsl := 0;
+
+  if (not full)
+    if (curtable = #spsopusl)
+      {
+        cRecSpSopr := if(isValid(#SpSopr),  SpSopr.NRec,  0);
+        cRecSopUsl := if(isValid(#SpSopUsl), SpSopUsl.NRec, 0);
+      }
+    else
+      {
+        cRecSpSopr := if(isValid(#SpSopr),  SpSopr.NRec,  0);
+        cRecSopUsl := 0;
+      }
+
+  _Method := CheckPriceMethod(CurField);
+
+  RunInterface( iChkSumB,                //chkSum.vip
+                KatSopr.NRec,            //сопроводительный документ
+                cRecSpSopr,              //позиция спецификации,
+                                         //если 0 - пересчет по всему документу
+                cRecSopUsl,              //позиция соп.услуги,
+                                         //если 0 - пересчет по всем услугам
+                FALSE,                   //только услуги по ДО (true)
+                _Method,                 //метод пересчета суммы в валюте по текущему курсу
+                _result                  //резутьтат выполнения (был ли пересчет) [возвращаемый]
+              );
+
+  if (_result)
+    {
+      RereadRecord(#SpSopUsl);
+      RereadRecord(#SpSopr);
+      RereadRecord(#KatSopr);
+      set KatSopr.NRec := KatSopr.NRec;//для того, чтоб сработал ChekRecord
+      if (not full)
+        if boGetTune('Oper.NalUch')
+          //перерисовать поле "Сумма для НУ"
+          case CurTable of
+            #SpSopusl:
+               set sumNalUch := SpSopUsl.priceN*SpSopUsl.kolFact;
+            #SpSopr:
+               set sumNalUch := SpSopr.priceN*SpSopr.kolFact;
+          end;
+  #ifNdef SOPINMOV_VIP
+      if (KatSopr.cSchFact <> 0)
+        SchFactFlag := TRUE; //была модификация запрос на пересмотр счет-фактуры
+  #end
+
+  #ifdef _SOPRDOCB_VIP
+      if ( ( KatSopr.VidSopr = 101 ) and (boGetTune('Oper.Buy.Nakl.AutocalcRelatedAkt')) )
+        iRecalcK.RecalcAll(KatSopr.NRec, _Method);
+  #end
+    }
+}
+
+Procedure MakeSopUslFromDO;
+var
+  _result: boolean;
+  _Method: word;
+{
+  if CurTable<>#KatSopr
+    Update current KatSopr;
+  UpdateTable;
+
+  _Method := CheckPriceMethod(CurField);
+  RunInterface( iChkSumB, KatSopr.NRec, 0, 0, TRUE, _Method, _result );
+
+  if (_result)
+    {
+      RereadRecord(#SpSopUsl);
+      RereadRecord(#SpSopr);
+      RereadRecord(#KatSopr);
+      set KatSopr.NRec := KatSopr.NRec;//для того, чтоб сработал ChekRecord
+  #ifNdef SOPINMOV_VIP
+      if (KatSopr.cSchFact <> 0)
+        SchFactFlag := TRUE; //была модификация запрос на пересмотр счет-фактуры
+  #end
+    }
+}
+
+#include soprc20.vpp

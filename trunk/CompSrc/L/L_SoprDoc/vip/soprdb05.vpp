@@ -1,0 +1,534 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : HandleEvent из soprdocb.vip                               ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#include SOPRC13.VPP
+
+cmPick:
+  {
+    #include soprc12.vpp
+  }
+
+cmDelOnProtect:
+  case curfield of
+    #BDNomDes, 
+    #OrgVzr.Name, 
+    #KatOrgt.Name:
+      If not  CanChangeDoc(3)
+        {       
+          ReReadrecord(CurTable);       
+          stop;       
+          exit;     
+        };
+    #KatOrg.Name,#KatOrg.UNN, #KatOrg.Code:
+      {
+        abort;//поле обязательное,значит и незачем удалять
+        exit;
+      }
+  end;
+
+cmInit:
+  LastDocType := -1; // для оптимизации быстродействия
+
+#include soprc22.vpp //katsopr.dprice
+#define _SOPRDOCB_
+#include inpsopr.vpp // Общая обработка для всех сопроводительных документов
+#undef _SOPRDOCB_
+
+cmInsertEditKN:      // ------ для функционала Корректирующей накладной -----
+  if (KatSopr.wADoc = adSoprDocKN)
+    SearchPN(KatSopr.cADoc);  // ищем ПН по КН
+  else
+    InsertEditKN;
+
+cmSetDefault : 
+  { // ------ для функционала Корректирующей накладной -----
+    If CurTable=#SpSopr or CurTable=#SpSopUsl or CurTable=#SoprOrdB
+      if not OtkatToOldState(false,word(0))
+        {
+          stop;
+          exit;
+        }
+    TuneEditSopr;
+  } // cmSetDefault
+
+cmPositionChanged :   // ------ для функционала Корректирующей накладной -----
+{
+  TuneEditSopr;
+
+   if isEditSoprVisible
+     {
+        PosChange;
+        ON_OFF_TYPE(false);
+     }
+
+  if isEditSoprVisible
+    {
+//      NOAktRec:=CheckAktRec;//номер рекламационной накладной
+      CursV:=GetCursPrice;
+    }
+  //пир 180.992
+  if (boGetTune('DOC.BUY.AUTOMakePartyKN') = 0 and KatSopr.wADoc = adSoprDocKN)
+   set AutoSetParty := 0;
+  else
+   set AutoSetParty := 1;
+} // cmPositionChanged
+
+cmSetCurfield :
+  {
+    if not OtkatToOldState(false,word(0))
+      exit;
+    Case Target of
+      #KatOrg.Name, 
+      #KatOrg.UNN, 
+      #KatOrg.Code :
+        if (CurWindow = EditSopr)
+          if (KatSopr.cOrgBase = 0)
+            PutCommand(cmPick);
+    end;
+
+    if not boGetTune('Pick.AutoPickinInterface')  
+      Exit;
+
+    var np : boolean; np := false;
+    Case Target of
+      #Persons.FIO:
+        if (KatSopr.cPerson = 0)
+          PickFIO;
+      #KatNazna.Name:
+        np := (KatSopr.cNazna = 0);
+      #OrgVzr.Name:
+        np := (KatSopr.cOrg = 0);
+      #KatOrgT.Name:
+        np := (KatSopr.cGruzTo = 0);
+      #KatOrgF.Name:
+        np := (KatSopr.cGruzFrom = 0);
+      #KatSopr.sDover:
+        np := (KatSopr.cDovFIO = 0) and (KatSopr.sDover='');
+      #KatSopr.nDover :
+        np := (KatSopr.cDover = 0)  and (KatSopr.nDover='');
+      #KatSopr.NVagon:
+        np := (KatSopr.NVagon = '');
+      #BDnomdes:
+        np := not isvalid(#BaseDoc);
+      #KatSopr.Name :
+        np := (KatSopr.Name = '');
+      #KatPayment.Name:
+        np := (Katsopr.cPayment = 0);
+      #OtvPodr.Name:
+        np := (KatSopr.cOtvPodr = 0);
+      #MoveCellUzbek.Name:
+        np := (KatSopr.cCellVal = 0);
+    end; // case
+    if np
+      PutCommand(cmPick);    
+  }
+
+cmCheckRecord :
+  {
+    if (not CheckDocument) 
+      Exit;
+
+    CheckSchFact(2);
+
+    if (KatSopr.VidSopr = 101 or KatSopr.VidSopr = 108) and not Loaded
+      if IsValid(#BaseDoc)
+        oChkSchem.CheckSchem(BaseDoc.nRec, word(41), KatSopr.nRec, KatSopr.VidSopr, true)
+      else
+        if (KatSopr.cCalPlan <> 0)
+          oChkSchem.CheckSchem(KatSopr.cCalPlan, word(403), KatSopr.nRec, KatSopr.VidSopr, true)
+        else
+          if (KatSopr.cAppDogovor <> 0)
+            oChkSchem.CheckSchem(KatSopr.cAppDogovor, word(401), KatSopr.nRec, KatSopr.VidSopr, true)
+          else
+            if (KatSopr.cDogovor <> 0)
+              oChkSchem.CheckSchem(KatSopr.cDogovor, word(400), KatSopr.nRec, KatSopr.VidSopr, true);
+
+   checkValidKatPayment;
+  }
+
+cmPick :
+  Case CurField of
+    #KatSopr.TypeDoc :
+      If not CanModifyLstSortNakl 
+        Abort;
+    #MoveCellUzbek.Name : PickMoveCell;
+    #KatSopr.nVagon : PicknVagon;
+
+    #OtvPodr.Name :
+      {
+        var tmp_OtvPodr_2 : comp;
+        tmp_OtvPodr_2 := KatSopr.cOtvPodr;
+        if RunInterface('GetCO', word(cgiPick), comp(0), comp(0), tmp_OtvPodr_2) <> cmCancel
+          {
+            Case TypeSopr of
+              201, 211:
+                if (boGetTune('FN.isNumOtvPodr'))
+                  {
+                    DelLastNumD_(TypeSopr, string(KatSopr.cOtvPodr), KatSopr.NSopr)
+                    Set KatSopr.NSopr := GetLastNumD_(TypeSopr, string(tmp_OtvPodr_2));
+                  }
+            end;
+            set KatSopr.cOtvPodr := tmp_OtvPodr_2;
+          }
+      }
+
+#include soprc40.vpp // обработчик для поля #AttrVKaz.vString
+
+    #BDNomDes : 
+      PickBDNomDES;
+
+    #KatNotesName : 
+      PickKatNotes;
+
+    #KatSopr.Descr:  
+      PickDesCr;
+
+    #KatSopr.DesGr:  
+      PickDesGr;
+
+    #KatSopr.Name :
+      PickKatSoprName;
+
+    #DOCNALSUMMA : 
+      MakeKatSoprNal;
+
+    #KatOrg.Name,
+    #KatOrg.UNN,
+    #KatOrg.Code :  
+      PickKatOrgName;
+
+    #OrgVzr.Name :  
+      PickOrgVzr;
+
+    #KatOrgF.Name : 
+      PickKatOrgF;
+
+    #KatOrgT.Name : 
+      PickKatOrgT;
+
+    #VhNal :
+      {
+        set KatSopr.VhodNal := if (KatSopr.VhodNal = 1,2,1);
+        CheckSumma(true);
+      }
+
+    #Persons.FIO : 
+      PickFIO;
+
+    #KatSopr.sDover :
+     PickDover;
+
+    #KatSopr.nDover:
+      PicknDover(1);
+
+    #Trp :
+      {
+        set KatSopr.Transp := if (KatSopr.Transp = 0,1,0);
+        #ifdef Gal7_1
+        WrInPut(word(0))
+        #else
+        if getFirst SysTran = tsok
+          if SysTran.Temp1 =1 
+            WrInPut;
+        #end
+      }
+
+    #SchFactNum :
+      {
+        if (wGetTune('Country')<>2)
+          MakeSchFact
+        else
+          if (UpDateTable)
+            if (IsValid(tnKatSopr))
+              {
+                RunInterface('NalNakl_View',word(coKatSopr),KatSopr.VidSopr,KatSopr.nRec,Date(0,0,0));
+                RereadRecord;
+              }
+      }
+
+    #KatPayment.Name : 
+      CheckSumma(true);
+
+    #Dogovor.NoDoc,
+    #Dogovor.dDoc,
+    #AppDogovor.NoDoc,
+    #AppDogovor.dDoc,
+    #CalPlan.NoDoc,
+    #CalPlan.dInput :
+      {
+        If QuickChoiceName='qcDogovor'or
+           QuickChoiceName='qcDogovorDate'or
+           QuickChoiceName='qcAppDogovor'or
+           QuickChoiceName='qcAppDogovorDate'or
+           QuickChoiceName='qcCalPlan'or
+           QuickChoiceName='qcCalPlanDate'
+           {
+             var OldOrg : comp;
+                 OldOrg := KatSopr.cOrgBase;
+
+             if DogovorQuickChoice
+               {
+                 ChangeSpDocNalOrg(OldOrg, KatSopr.cOrgBase);
+                 CheckSumma(true);
+               }
+             QuickChoiceName:='';
+            }
+        else
+          {
+            case curfield of
+             #Dogovor.NoDoc,
+             #Dogovor.dDoc:
+               SaveMyDsk(word(1),'_ISSELECT_DSK_');
+             #AppDogovor.NoDoc,
+             #AppDogovor.dDoc:
+               SaveMyDsk(word(2),'_ISSELECT_DSK_');
+             #CalPlan.NoDoc,
+             #CalPlan.dInput:
+               SaveMyDsk(word(4),'_ISSELECT_DSK_');
+             else  
+               SaveMyDsk(word(4),'_ISSELECT_DSK_');
+            end;
+            var OldOrg : comp;  OldOrg := KatSopr.cOrgBase;
+
+            if DogovorcmPick
+              {
+                ChangeSpDocNalOrg(OldOrg, KatSopr.cOrgBase);
+                CheckSumma(true);
+              }
+          }//else
+        Abort;//прервать вызов календаря
+      }
+  end;
+ 
+cmCheckField :
+  Case CurField of
+    #KatSopr.dSopr :
+      if CheckdSopr
+        SetSchFactFlag;
+
+    #KatSopr.nSopr: 
+      {   
+        if not funCheckNODOC
+           { abort; exit;}
+        // обеспечение синхронизации номеров корректирующей и сторнирующей накладных
+        var PNnRec  : comp;
+        var KNnSopr : string;
+        // если накладная является корректирующей,
+        // то необходимо выполнить дополнительные действия для сторнирующей накладной
+        if (KatSopr.wADoc = adSoprDocKN) 
+          {
+            PushPos(#KatSopr);
+            PNnRec  := KatSopr.cADoc;
+            KNnSopr := KatSopr.nSopr;
+            // ищем сторнирующую накладную...
+            PopCondition(tcNo_SN_KatSopr); // иначе не найдем сторнирующую накладную
+            if (GetFirst KatSopr where ((adSoprDocSN == KatSopr.wADoc and PNnRec == KatSopr.cADoc))=tsOk) 
+              {
+                KatSopr.nSopr := KNnSopr;
+                Update current KatSopr;
+              }
+            PopPos(#KatSopr);
+            PushCondition(tcNo_SN_KatSopr);
+            RedrawPanel(tnKatSopr);
+          } // if
+      }
+
+   #KatSopr.sDover :
+      set KatSopr.cDovFio := 0;
+
+   #KatSopr.nDover :
+     {
+       //очистка отметки выполнение
+       ClearStatusDover;
+
+       set KatSopr.cDover := 0;
+       if (KatSopr.nDover = '')
+         set KatSopr.dDover = 0;
+       else
+         set KatSopr.dDover = Cur_Date;
+     }
+
+    #MoveCellUzbek:
+      EditSpSoprUzbek (word(2));
+
+    #KatSopr.TypeDoc :
+      on_off_type(true);
+
+    #KatSopr.nVagon:
+      EditSpSoprUzbek (word(2));
+
+  end; // Case CurField in cmCheckField
+
+cmDelOnProtect :
+  Case CurField of
+    #AttrVKaz.vString: 
+      {
+        set AttrVKaz.vString := '';
+        stop;
+      }
+
+    #OtvPodr.Name :
+      {
+        Case TypeSopr of
+         201:
+           if (boGetTune('FN.isNumOtvPodr'))
+             {
+               DelLastNumD_(TypeSopr, string(KatSopr.cOtvPodr), KatSopr.NSopr)
+               Set KatSopr.NSopr := GetLastNumD_(TypeSopr, string(comp(0)));
+             }
+        end;
+        set KatSopr.cOtvPodr := comp(0);
+      }
+
+   #KatSopr.dOpr : 
+     DelKatSoprDopr;
+
+   #KatOrg.Name,#KatOrg.UNN, #KatOrg.Code:
+     {
+       abort;//поле обязательное,значит и незачем удалять
+       exit;
+     }
+   #KatSopr.nDover:
+     {
+       //очистка отметки выполнение
+       ClearStatusDover;
+
+       set KatSopr.cDover := 0;
+       set KatSopr.dDover := 0;
+       set KatSopr.nDover := '';
+       set KatSopr.sDover := '';
+       set KatSopr.cDovFio:= 0;
+     }
+
+   #KatSopr.sDover:
+     {
+       set KatSopr.sDover := '';
+       set KatSopr.cDovFIO := 0
+     }
+
+   #SchFactNum :
+     {
+       if (wGetTune('Country')<>2)
+         DelSchFact
+       else
+        if (UpDateTable)
+         if (IsValid(tnKatSopr))
+          {
+            RunInterface('NalNakl_View',word(coKatSopr),KatSopr.VidSopr,KatSopr.nRec,Date(0,0,0));
+            RereadRecord;
+          }
+       Abort;
+     }
+   
+   #Dogovor.NoDoc,
+   #Dogovor.dDoc :
+     {
+      set KatSopr.cDogovor    := 0;
+      set KatSopr.cAppDogovor := 0;
+      set KatSopr.cCalPlan    := 0;
+     }
+   
+   #AppDogovor.NoDoc,
+   #AppDogovor.dDoc :
+     if (KatSopr.cAppDogovor <> 0)
+       {
+         set KatSopr.cAppDogovor := 0;
+         set KatSopr.cCalPlan    := 0;
+       }
+     else
+       set KatSopr.cAppDogovor := 0;
+
+   #CalPlan.NoDoc,
+   #CalPlan.dInput :
+     set KatSopr.cCalPlan := 0;
+
+   #MoveCellUzbek.Name:
+     {
+       set KatSopr.nVagon := '';
+       set KatSopr.cNMoveCell := 0;
+       set KatSopr.cCellVal := 0;
+       #ifDef Gal7_1
+       set Katsopr.cTransp  := 0;
+       #end
+       SetFieldOption(#SpSopr.nVagon, ofSelectable);
+       SetFieldOption(#TTNMoveCell.Name, ofSelectable);
+     }
+
+   #KatSopr.nVagon:
+     {
+       set KatSopr.nVagon := '';
+       set KatSopr.cNMoveCell := 0;
+       #ifDef Gal7_1
+       set Katsopr.cTransp  := 0;
+       #end
+       SetFieldOption(#SpSopr.nVagon, ofSelectable);
+       RedrawPanel(#KatSopr);
+       stop;
+     }
+  end; // case CurField in cmDelOnProtect
+
+cmDelOnProtect :
+  if (CurField = #BDNomDes)
+    {
+      if (KatSopr.cStepDoc <> 0)
+        {
+          PushPos(#Spsopr);
+
+          if GetFirst SpSopr = tsOk
+            if Message('Отвязать спецификацию документа от ДО?', YesNo) = cmYes
+              {
+
+                ResetBounds(#SpSopr);
+
+                _LOOP SpSopr  where ((KatSopr.NRec == SpSopr.cSopr))
+                  {
+                    SpSopr.cSpStep := 0;
+                    Update current SpSopr;
+                  }
+
+                SetBounds(#SpSopr)
+              }
+
+          PopPos(#SpSopr);
+        }
+
+      set KatSopr.cStepDoc    := 0;
+      set KatSopr.cDogovor    := 0;
+      set KatSopr.cAppDogovor := 0;
+      set KatSopr.cCalPlan    := 0;
+
+      RescanPanel(#SpSopr);
+    }
+
+cmDelOnProtect:
+  case (curfield) of
+    
+    #KatSopr.DesGr : 
+      set KatSopr.DesGr := '';
+
+    #KatSopr.Name  : 
+      set KatSopr.Name  := '';
+
+    #KatPayment.Name :
+      {
+        set KatSopr.cPayment := 0;
+        CheckSumma(true);
+        stop;
+      }
+    
+    #KatNotesName:
+        stop;
+  end;
+
+//обновление данных
+cmPick:
+  Update_Record_KatSopr;
+
+cmCheckField:
+  Update_Record_KatSopr;
+
+cmDelOnProtect:
+  Update_Record_KatSopr;
+
+cmValue14: RunInterface('MakePos201fromKN',KatSopr.nRec);

@@ -1,0 +1,826 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Настройка алгоритма формирования внутреннего номера договора
+//
+//********************************************************************************
+
+#define OBJINT_ALGORITM
+#define OBJINT_SETGETVID
+#define OBJINT_ACCOUNT
+
+#include objintpl.vin
+#include oCommonFunAlg.vih
+
+VipInterface AlgoritmSetup_5001 Implements oAlgoritmSetup
+
+#ifdef ATL51
+Licensed (FREE)    Parameters (cFormPl : comp)
+#end
+;
+
+//********************************************************************************
+
+Table Struct TemplSeg
+(
+  nRec       : comp
+, Name       : string
+, wKod       : word
+)
+With Index
+(
+  TemplSeg01 = NRec (Unique, Surrogate)
+, TemplSeg02 = wKod
+);
+
+Table Struct TemplNum
+(
+  nRec       : comp
+, cRec       : comp
+, wNpp       : word
+, wParam     : word
+, sDelimiter : string
+, sDateDl    : string
+, sConst     : string
+)
+With Index
+(
+  TemplNum01 = nRec (Unique, Surrogate)
+, TemplNum02 = wNpp
+, TemplNum03 = cRec
+);
+
+Table Struct TemplCurSeg
+(
+  cRec       : comp
+);
+
+//********************************************************************************
+
+#doc
+Настройка алгоритма автоформирования внутреннего номера договора
+#end
+Interface AlgoritmSetup_5001 'Настройка алгоритма' (, hcNoContext, sci1Esc) EscClose;
+
+  Show at (,, 66, 18);
+
+Create View
+
+Var
+  sNumEx
+, sDl
+, sCn
+, sDateDl
+               : string;
+
+  cFormPl
+, cTS
+, cKatVid
+               : comp;
+
+  wDateFm
+, wNumLen
+, wSoglLen
+               : word;
+
+  bAllVids
+               : boolean;
+
+As Select
+
+  if (TemplSeg.wKod<>8, TemplSeg.Name, TemplSeg.Name + ' (' + TemplNum.sConst + ')')
+                                                ( FieldName = fSegName )
+
+, if ( cKatVid<>0
+     , KatVidD.Name
+     , if ( bAllVids
+          , 'для всех видов'
+          , 'множественный выбор'
+          )
+     )
+                                                ( FieldName = fFilterVid )
+
+From
+  FormPl
+, TemplSeg
+, TemplSeg TemplSegS
+, TemplSeg TemplSeg2
+, TemplSeg TemplSeg3
+, TemplNum (TemplNum02)
+, TemplNum TemplNum2 (TemplNum02)
+, TemplCurSeg
+, Dogovor
+, KatOrg
+, KatNazna
+, Shipment
+, KatVidD
+
+Where
+((
+    cFormPl           == FormPl.NRec
+and TemplNum.cRec     == TemplSeg.nRec
+and TemplNum2.cRec    == TemplSeg2.nRec
+and TemplCurSeg.cRec  == TemplSegS.nRec
+and cKatVid           == KatVidD.nRec
+))
+;
+
+Parameters
+  cFormPl;
+
+#include AlgSet_St_Impl.vpp  //реализация интерфейса настройки - заглушка
+#include alg_5001.vpp
+
+//********************************************************************************
+
+Procedure InitSegTable;
+{
+  insert TemplSeg set TemplSeg.Name := 'внешний номер документа'
+                    , TemplSeg.wKod := 1;
+
+  insert TemplSeg set TemplSeg.Name := 'дескриптор пользователя'
+                    , TemplSeg.wKod := 2;
+
+  insert TemplSeg set TemplSeg.Name := 'дескриптор группы пользователей'
+                    , TemplSeg.wKod := 3;
+
+  insert TemplSeg set TemplSeg.Name := 'код подразделения'
+                    , TemplSeg.wKod := 4;
+
+  insert TemplSeg set TemplSeg.Name := 'дата внешняя'
+                    , TemplSeg.wKod := 21;
+
+  insert TemplSeg set TemplSeg.Name := 'дата ввода'
+                    , TemplSeg.wKod := 22;
+
+  insert TemplSeg set TemplSeg.Name := 'дата начала периода действия'
+                    , TemplSeg.wKod := 23;
+
+  insert TemplSeg set TemplSeg.Name := 'дата окончания периода действия'
+                    , TemplSeg.wKod := 24;
+
+  insert TemplSeg set TemplSeg.Name := 'внутренний учетный номер контрагента '
+                    , TemplSeg.wKod := 5;
+
+  insert TemplSeg set TemplSeg.Name := 'код назначения договора'
+                    , TemplSeg.wKod := 6;
+
+  insert TemplSeg set TemplSeg.Name := 'код способа отгрузки'
+                    , TemplSeg.wKod := 7;
+
+  insert TemplSeg set TemplSeg.Name := 'константа'
+                    , TemplSeg.wKod := 8;
+
+  insert TemplSeg set TemplSeg.Name := 'номер'
+                    , TemplSeg.wKod := 9;
+}
+
+//********************************************************************************
+
+Procedure InitNumTable;
+Var
+  i
+, wk
+, wVRindex
+            : word;
+{
+  for(i := 1; i <= 20; i := i + 1)
+    {
+      if ( FormPl.ResWord[i] = 0 )
+        break;
+
+      wk := FormPl.ResWord[i] and 00FFh;
+      wVRindex := wk - 20;
+
+      if ( GetFirst TemplSeg where (( wk == TemplSeg.wKod )) = tsOk )
+        {
+          insert TemplNum set TemplNum.cRec       := TemplSeg.nRec
+                            , TemplNum.wNpp       := i
+                            , TemplNum.wParam     := FormPl.ResWord[i] and 0FF00h
+                            , TemplNum.sDelimiter := FormPl.ResCode[i]
+                            , TemplNum.sConst     := FormPl.ResName[i]
+                            ;
+
+          if ( (wVRindex > 0) and (wVRindex < 10) )
+            update current TemplNum set TemplNum.sDateDl := FormPl.sValRes60[wVRindex]
+        }
+
+    }
+
+  wNumLen  := FormPl.ResWord[21];
+  wSoglLen := FormPl.ResWord[22];
+}
+
+//********************************************************************************
+
+Procedure SaveNumTable;
+Var
+  i
+, wVRindex
+            : word;
+{
+  i := 1;
+
+  _loop TemplNum2
+    {
+      wVRindex := TemplSeg2.wKod - 20;
+
+      set FormPl.ResWord[i]          := TemplNum2.wParam or TemplSeg2.wKod;
+      set FormPl.ResCode[i]          := TemplNum2.sDelimiter;
+      set FormPl.ResName[i]          := TemplNum2.sConst;
+
+      if ( (wVRindex > 0) and (wVRindex < 10) )
+        set FormPl.sValRes60[wVRindex] := TemplNum2.sDateDl;
+
+      i := i + 1;
+    }
+
+  set FormPl.ResWord[i]  := 0;
+  set FormPl.ResWord[21] := wNumLen;
+  set FormPl.ResWord[22] := wSoglLen;
+
+  update current FormPl;
+}
+
+//********************************************************************************
+
+Procedure DoReNumber;
+Var i : word;
+{
+  i := 1;
+
+  _loop TemplNum
+    {
+      update current TemplNum set TemplNum.wNpp := i;
+      i := i + 1;
+    }
+}
+
+//********************************************************************************
+
+Procedure GenNumExam;
+Var
+  i   : word;
+  res : string;
+  bF  : boolean;
+{
+  res := '';
+  SaveNumTable;
+  bF := true;
+
+  for(i := 1; i <= 20; i := i + 1)
+    {
+      if ( FormPl.ResWord[i] = 0 )
+        break;
+
+      res := res + GetSegValue(i, 0, bF, false);
+      bF  := false;
+    }
+
+  set sNumEx := SubStr(res, 1, 20);
+
+  RescanPanel(#FormPl);
+}
+
+//********************************************************************************
+
+Procedure MoveLevel(bDir : boolean);
+Var
+  w1
+, w2
+      : word;
+
+  c1
+      : comp;
+{
+  w1 := TemplNum.wNpp;
+  c1 := TemplNum.nRec;
+
+  if ( bDir )
+    {
+      if ( GetPrev TemplNum <> tsOk )
+        exit;
+    }
+  else
+    {
+      if ( GetNext TemplNum <> tsOk )
+        exit;
+    }
+
+  w2 := TemplNum.wNpp;
+  update current TemplNum set TemplNum.wNpp := w1;
+
+  if ( GetFirst TemplNum where (( c1 == TemplNum.nRec )) = tsOk )
+    update current TemplNum set TemplNum.wNpp := w2;
+
+  RescanPanel(#TemplNum);
+  GenNumExam;
+}
+
+//********************************************************************************
+
+Browse brSegs ('',, sci1478Esc)
+  Show At (,, 54, 12)
+  Table TemplNum;
+
+Fields
+
+  fSegName  #3'Сегменты шаблона' : Protect;
+
+end;
+
+//********************************************************************************
+
+Screen scBtns
+  Show At ( 55,,, 12)
+
+Buttons
+  cmValue1 ,,, '';
+  cmValue2 ,,, '';
+
+<<
+<. Вверх .>
+
+<. Вниз  .>
+>>
+
+end;
+
+//********************************************************************************
+
+Panel pFlt;
+  Table FormPl;
+
+Screen scFlt
+  Show At (, 13,, 15)
+
+Fields
+
+  fFilterVid           ('Del - удалить выбор') : Protect, PickButton;
+//  FormPl.sValRes60[10] : NoProtect; // Разделитель в номерах соглашений     .@@
+//  wSoglLen             : NoProtect; // Длина сегмента номера в соглашении   .@@
+<<
+
+ Только для указанных видов договоров .@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+
+end;
+
+Screen scExmpl
+  Show At (, 16,,)
+
+Fields
+
+  sNumEx : [25], Skip, Protect;
+
+<<
+
+ Пример номера договора (20 символов макс.):.@@@@@@@@@@@@@@@@@@@@
+>>
+
+end;
+
+end;
+
+//********************************************************************************
+
+Procedure FillCurSegTable;
+{
+  delete all TemplCurSeg;
+
+  _loop TemplSeg3
+    {
+      if (  (TemplSeg3.wKod = 8)
+         or (GetFirst TemplNum2 where (( TemplSeg3.nRec == TemplNum2.cRec )) <> tsOk)
+         )
+        insert TemplCurSeg set TemplCurSeg.cRec := TemplSeg3.nRec;
+    }
+}
+
+//********************************************************************************
+
+Window wnSegLst 'Выбор сегмента шаблона' (,, sci1Esc) DoAccept, EscClose;
+  Show At (,, 60, 13);
+
+Panel pS
+  Table TemplCurSeg;
+
+Browse brTS
+  Table TemplCurSeg;
+
+Fields
+  TemplSegS.Name  #3'Сегменты шаблона' : Protect;
+
+end;
+
+end;
+
+HandleEvent
+
+cmInit :
+  {
+    cTS := 0;
+    FillCurSegTable;
+  }
+
+cmDefault :
+  {
+    cTS := TemplSegS.nRec;
+  }
+
+end;
+
+end;
+
+//********************************************************************************
+
+Window wnParamDate 'Настройка отображения даты' (,, sci1Esc) DoAccept, EscClose;
+  Show At (,, 40, 7);
+
+Screen scDateSetup
+
+Fields
+
+  wDateFm  ('Формат даты')
+           : [ LIST 0 'ДД/ММ/ГГ'
+             ,        'ДД/ММ/ГГГГ'
+             ,        'ММ/ГГ'
+             ,        'ММ/ГГГГ'
+             ,        'ДД/ММ'
+             ,        'ГГ'
+             ,        'ГГГГ'
+             ], Protect;
+
+  sDateDl  ('Разделитель даты')     : NoProtect;
+
+  sDl      ('Разделитель сегмента') : NoProtect;
+
+<<
+
+   Формат даты           .@@@@@@@@@@
+
+   Разделитель даты:     .@@
+
+   Разделитель сегмента: .@@
+>>
+
+end;
+
+HandleEvent
+
+cmInit :
+  {
+    set wDateFm := (TemplNum.wParam shr 8) and 00FFh;
+    set sDateDl := TemplNum.sDateDl;
+    set sDl     := TemplNum.sDelimiter;
+  }
+
+cmDefault :
+  {
+    update current TemplNum set TemplNum.sDelimiter := sDl
+                              , TemplNum.sDateDl    := SubStr(sDateDl, 1, 1)
+                              , TemplNum.wParam     := (wDateFm shl 8) and 0FF00h
+                              ;
+  }
+
+end;
+
+end;
+
+//********************************************************************************
+
+Window wnDelimiter 'Настройка сегмента' (,, sci1Esc) DoAccept, EscClose;
+  Show At (,, 20, 3);
+
+Screen scDlmtr
+
+Fields
+
+  sDl  ('Разделитель') : NoProtect;
+
+<<
+
+ Разделитель : .@@
+>>
+end;
+
+HandleEvent
+
+cmInit :
+  {
+    set sDl := TemplNum.sDelimiter;
+  }
+
+cmDefault :
+  {
+    update current TemplNum set TemplNum.sDelimiter := sDl;
+  }
+
+end;
+
+end;
+
+//********************************************************************************
+
+Window wnConstVal 'Настройка сегмента' (,, sci1Esc) DoAccept, EscClose;
+  Show At (,, 30, 5);
+
+Screen scConst
+
+Fields
+
+  sCn  ('Константа')   : NoProtect;
+  sDl  ('Разделитель') : NoProtect;
+
+<<
+
+  Константа :   .@@@@@@@@@@
+
+  Разделитель : .@@
+>>
+end;
+
+HandleEvent
+
+cmInit :
+  {
+    set sDl := TemplNum.sDelimiter;
+    set sCn := TemplNum.sConst;
+  }
+
+cmDefault :
+  {
+    update current TemplNum set TemplNum.sDelimiter := sDl
+                              , TemplNum.sConst     := sCn;
+  }
+
+end;
+
+end;
+
+//********************************************************************************
+
+Window wnNppSeg 'Настройка сегмента' (,, sci1Esc) DoAccept, EscClose;
+  Show At (,, 25, 5);
+
+Screen scNpp
+
+Fields
+
+  wNumLen  ('Маскимальная длина номера') : NoProtect;
+  sDl      ('Разделитель') : NoProtect;
+
+<<
+
+  Длина :       .@@
+
+  Разделитель : .@@
+>>
+end;
+
+HandleEvent
+
+cmInit :
+  {
+    set sDl := TemplNum.sDelimiter;
+  }
+
+cmDefault :
+  {
+    update current TemplNum set TemplNum.sDelimiter := sDl;
+  }
+
+end;
+
+end;
+
+//********************************************************************************
+
+Panel pN
+  Table TemplNum;
+
+HandleEvent
+
+cmSetDefault :
+  {
+    var wn : word;
+
+    if ( (GetLast TemplNum = tsOk) and (TemplNum.wNpp > 19) )
+      {
+        message('Шаблон может содержать не более 20 сегментов', Information);
+        Abort;
+      }
+
+    if ( RunWindowModal(wnSegLst) <> cmCancel )
+      if ( cTS <> 0 )
+        {
+          if ( GetLast TemplNum = tsOk )
+            wn := TemplNum.wNpp + 1;
+          else
+            wn := 1;
+
+          insert TemplNum set TemplNum.cRec := cTS
+                            , wNpp := wn;
+
+          GenNumExam;
+          Exit;
+        }
+
+    Abort;
+  }
+
+cmEdit :
+  {
+    case TemplSeg.wKod of
+
+      8 :
+        RunWindowModal(wnConstVal);
+
+      9 :
+        RunWindowModal(wnNppSeg);
+
+      21, 22, 23, 24 :
+        RunWindowModal(wnParamDate);
+
+    else
+      RunWindowModal(wnDelimiter);
+
+    end;
+
+    GenNumExam;
+  }
+
+cmDeleteRecord :
+  {
+    if ( Message(''#3'Удалить запись ?', YesNo) = Yes )
+      {
+        Delete Current TemplNum;
+        DoReNumber;
+        GenNumExam;
+      }
+  }
+
+end;
+
+end;
+
+//********************************************************************************
+
+HandleEvent
+
+cmInit :
+  {
+    Var i  : longint;
+    Var b1 : boolean;
+
+    InitSegTable;
+    InitNumTable;
+
+    cKatVid  := 0;
+    bAllVids := true;
+    b1 := false;
+
+    for(i := 1; i <= 40 ; i := i + 1)
+      {
+        if ( FormPl.ResComp[i] = comp(0) )
+          break;
+
+        bAllVids := false;
+
+        if ( b1 )
+          cKatVid := comp(0);
+        else
+          {
+            cKatVid := FormPl.ResComp[i];
+            b1 := true;
+          }
+      }
+
+    GenNumExam;
+  }
+
+cmCancel :
+  {
+    SaveNumTable;
+  }
+
+cmClose :
+  {
+    SaveNumTable;
+  }
+
+cmDefault :
+  {
+    SaveNumTable;
+  }
+
+cmValue1 :
+  {
+    MoveLevel(true);
+  }
+
+cmValue2 :
+  {
+    MoveLevel(false);
+  }
+
+cmCheckField :
+  {
+    case CurField of
+
+      #wNumLen, #wSoglLen, #FormPl.sValRes60[10] :
+        GenNumExam;
+
+    end;
+  }
+
+cmPick :
+  {
+    case CurField of
+
+      #fFilterVid :
+        {
+          var i, MarkerVidD, mcnt : longint;
+          var b1 : boolean;
+
+          MarkerVidD := InitMarker('MKatVidD', 8, 100, 10);
+          ClearMarker(MarkerVidD);
+
+          for(i := 1; i <= 40 ; i := i + 1)
+            {
+              if ( FormPl.ResComp[i] = comp(0) )
+                break;
+
+              InsertMarker(MarkerVidD, FormPl.ResComp[i]);
+            }
+
+          DoneMarker(MarkerVidD, 'MKatVidD');
+
+          if ( RunInterface('GetSomVidD'
+                           , word(0)
+                           , word(0)
+                           , true
+                           , cKatVid
+                           , word(0) ) <> cmCancel )
+            {
+              MarkerVidD := InitMarker('MKatVidD', 8, 100, 10);
+
+              cKatVid  := 0;
+              bAllVids := true;
+              b1 := false;
+
+              mcnt := GetMarkerCount(MarkerVidD);
+
+              for(i := 0; i < mcnt ; i := i + 1)
+                {
+                  if ( i > 39 )
+                    break;
+
+                  GetMarker(MarkerVidD, i, FormPl.ResComp[i + 1]);
+
+                  bAllVids := false;
+
+                  if ( b1 )
+                    cKatVid := comp(0);
+                  else
+                    {
+                      set cKatVid := FormPl.ResComp[i + 1];
+                      b1 := true;
+                    }
+                }
+
+              if ( i < 40 )
+                FormPl.ResComp[i + 1] := comp(0);
+
+              DoneMarker(MarkerVidD, 'MKatVidD');
+              RescanPanel(#FormPl);
+            }
+        }
+
+    end;
+  }
+
+cmDelOnProtect :
+  {
+    case CurField of
+
+      #fFilterVid :
+        {
+          if ( not bAllVids )
+            if ( Message(''#3'Удалить выбор?', YesNo + mfSwapButtons) = cmYes )
+              {
+                FormPl.ResComp[1] := comp(0);
+                cKatVid  := 0;
+                bAllVids := true;
+                RescanPanel(#FormPl);
+              }
+
+          Stop;
+        }
+
+    end;
+  }
+
+End;
+
+End.

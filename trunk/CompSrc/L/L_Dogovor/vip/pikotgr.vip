@@ -1,0 +1,97 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Перегон выбора из маркера в Pick для GetGrOtgOrder        ║
+ ║ Ответственный : Глушаков Дмитрий Сергеевич                                ║
+ ║ Параметры     : есть                                                      ║
+ ║     pStatus     // 0 - выбирать все, иначе битовая маска запрещенных      ║
+ ║     OkOne       // TRUE-груповой выбор, FALSE-только один (+возвращаемый) ║
+ ║     prmOtgOrder // возвращаемый указатель на распоряжение на отгрузку     ║
+ ║     OneLevel    // показывать записи одного уровня-true, false- нет       ║
+ ║     pOwn        // ссылка на влдельца уровня(действует если OneLevel=true)║
+ ║                                                                           ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Интерфейс сохранения выбора распоряжений на отгрузку из маркера в Pick
+#end
+Interface PickOtgOrder 'Выбор распоряжений на отгрузку' DoAccept,EscClose,cyan;
+  show at (4,2,76,23);
+Create View
+var
+//--параметры
+  pStatus        : word;
+  OkOne          : boolean ;
+  prmOtgOrder    : comp;
+  OneLevel       : boolean;
+  pOwn           : Comp;
+//--
+  Marker         : longint; // указатель на маркер
+  MarkerCount, i : longint; // счетчики записей в маркере
+  pickrec        : comp;
+As select
+  Pick.wList
+from
+  Pick
+where
+  ((
+    word(441) == Pick.wList
+  ))
+;
+Parameters
+  pStatus    , // 0 - выбирать все документы, иначе битовая маска запрещенных статусов документов
+  OkOne      , // TRUE - груповой выбор FALSE - только один/ ЕСЛИ возвращает TRUE-помечены все распоряжения!
+  prmOtgOrder, // возвращаемый указатель на распоряжение на отгрузку
+  OneLevel   , // показывать записи одного уровня - true, false - нет
+  pOwn         // ссылка на владельца уровня(действует если OneLevel = true)
+  ;
+
+HandleEvent
+cmInit    :
+{
+var ret:word;
+  Marker:=InitMarker('MOtgOrder',8,100,10);
+  ClearMarker(Marker);
+  _loop Pick
+  {
+    InsertMarker(Marker,Pick.cRec);
+  }
+  DoneMarker(Marker,'MOtgOrder');
+
+  if RunInterface('GetGrOtgOrder',
+                  pStatus    , // 0 - выбирать все документы, иначе битовая маска запрещенных статусов документов
+                  OkOne      , // TRUE - груповой выбор FALSE - только один/ ЕСЛИ возвращает TRUE-помечены все распоряжения!
+                  prmOtgOrder, // возвращаемый указатель на распоряжение на отгрузку
+                  OneLevel   , // показывать записи одного уровня - true, false - нет
+                  pOwn         // ссылка на владельца уровня(действует если OneLevel = true)
+                  ) = cmCancel  // если там Cancel - то и здесь Cancel
+    {
+    Abort;
+    Exit;
+    }
+  delete safe Pick;
+  StartNewVisual(vtRotateVisual, vfTimer,
+               ''#3'Формирование элементов выбора ...'#13#3, 1);
+  Marker:=InitMarker('MOtgOrder',8,100,10);
+  MarkerCount:=GetMarkerCount(Marker);
+  FOR ( i:=0; i<MarkerCount; i:=i+1 )
+    {
+    if GetMarker(Marker,i,pickrec)
+      {
+      Pick.wList := 441;
+      Pick.PickKol:=i;
+      Pick.cRec:=pickrec;
+      insert current Pick;
+      }
+    NextVisual;
+    }
+  DoneMarker(Marker,'MOtgOrder');
+  StopVisual('',0);
+  PutCommand(cmDefault);
+}
+end;  // HandleEvent
+end.  // Interface

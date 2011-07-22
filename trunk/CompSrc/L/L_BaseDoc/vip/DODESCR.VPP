@@ -1,0 +1,335 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Установка фильтров по дескрипторам и группам для ДО
+//******************************************************************************
+
+#ifNdef __DoDescr_vpp__
+#define __DoDescr_vpp__
+
+//******************************************************************************
+Function CanModifyBaseDoc: boolean;
+{
+  CanModifyBaseDoc := oSDfuns.CanModifyDocument(BaseDoc.NRec, oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc), FALSE) OR _CanModify;
+}
+
+//******************************************************************************
+
+Function CanEditInClosePeriod(boAuto: boolean): boolean;
+var
+  tmpNN : word;
+  tmpDat: date;
+  _nRec : comp;
+  tmpStr: string;
+{
+  CanEditInClosePeriod := TRUE;
+
+  case BaseDoc.VidDoc of
+    101 // ДО на закупку
+  , 201 // ДО на продажу
+  , 111 // ДО на предоплату закупок
+  , 211 // ДО на предоплату продаж
+  , 102 // ДО на прием на консигнацию
+  , 202 // ДО на отпуск на консигнацию
+  , 1410 // Наряд-акт
+  , 1420 // Счет лесопользователя
+       : {}
+  else
+    Exit;
+  end;
+
+  // дата документа не определена
+  if ( BaseDoc.dDoc = ZeroDate )
+    Exit;
+
+  tmpNN := wGetTune('Oper.ModifyBaseDocInClosePeriod');
+
+  // разрешать модификацию данных в закр.периоде
+  if ( tmpNN = 0 )
+    Exit;
+
+  TmpDat := dGetTune('Oper.DateClosePeriod');
+
+  // закрытый период не определен или дата документа не попадает в закр.период
+  if ( ( TmpDat = ZeroDate ) OR ( BaseDoc.dDoc > TmpDat ) )
+    Exit;
+
+  if ReadMyDSK(_nRec, 'ClosePeriod_BaseDocNRec', TRUE)
+    if ( BaseDoc.nRec =_nRec )
+      if ReadMyDSK(CanEditInClosePeriod, 'CheckMessageCloseBuhPeriodBaseDocNRec', TRUE)
+        Exit;
+
+  tmpStr := 'Вводить новые данные или редактировать'#13'ранее введенные можно только с датой'#13
+          + 'обработки, большей чем, ' + DateToStr(TmpDat, 'DD/MM/YYYY г.') + ''#13
+          + 'Текущая запись относится к закрытому'#13'для обработки периоду!';
+
+  if ( tmpNN = 2 )
+    {
+      CanEditInClosePeriod := FALSE;
+
+      if NOT boAuto
+        Message(tmpStr + ''#13'Запрещено модифицировать данные'#13'в закрытом периоде!', OkButton);
+    }
+  else
+    if NOT boAuto
+      CanEditInClosePeriod := ( Message(tmpStr + ''#13'Дата создания документа попадает в закрытый период'
+                                               + ''#13'Изменить текущий документ?', YesNo) = cmYes )
+    else
+      {
+        CanEditInClosePeriod := FALSE;
+        Exit;
+      }
+
+  SaveMyDSK(BaseDoc.nRec        , 'ClosePeriod_BaseDocNRec');
+  SaveMyDSK(CanEditInClosePeriod, 'CheckMessageCloseBuhPeriodBaseDocNRec');
+}
+
+Function NotEditPos (msg: boolean): boolean; // TRUE - запрещать
+{
+  if (
+       NOT CanModifyBaseDoc
+     OR
+       NOT boGetTune('Doc.ModDo')
+     OR
+       (BaseDoc.DesGr <> curdesGr) AND
+        ((Curvisib = dcGrpModif) OR (Curvisib = dcGrpModifAllRead))
+     OR
+       (BaseDoc.Descr <> curdescr) AND
+        (
+         (Curvisib = dcOwnOnly) or
+         (Curvisib = dcGrpRead) or
+         (Curvisib = dcOwnModifAllRead)
+        )
+     )
+    {
+      if (msg)
+        Message('Настройка ограничивает Ваши права по использованию данной функции!', Information);
+
+      NotEditPos := TRUE;
+    }
+  else
+    NotEditPos := NOT CanEditInClosePeriod(TRUE);
+}
+
+// то же что и NotEditPos только выдается запрос,
+// если в настройке - выдавать запрос на модификацию
+Function NotEditPos2 : boolean; // TRUE - запрещать
+{
+  if not (oSDfuns.CanModifyDocument(BaseDoc.NRec, oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc), TRUE)
+          OR _CanModify)
+    {
+      NotEditPos2 := TRUE;
+      Exit;
+    }
+
+  if
+       (NOT boGetTune('Doc.ModDo')
+     OR
+       (BaseDoc.DesGr <> curdesGr) AND
+        ((Curvisib = dcGrpModif) OR (Curvisib = dcGrpModifAllRead))
+     OR
+       (BaseDoc.Descr <> curdescr) AND
+        (
+         (Curvisib = dcOwnOnly) or
+         (Curvisib = dcGrpRead) or
+         (Curvisib = dcOwnModifAllRead)
+        )
+     )
+    {
+      NotEditPos2 := TRUE;
+    }
+  else
+    NotEditPos2 := NOT CanEditInClosePeriod(false);
+}
+
+//******************************************************************************
+// Проверка возможности редактирования по статусу
+Function NotEditPosStatus (msg: boolean): boolean; // TRUE - запрещать
+var
+  code: boolean;
+  TiDk_DO: word;
+{
+  code := FALSE;
+
+  TiDk_DO := oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc);
+
+  if (oStatUser.Stat_Nastr(TiDk_DO))
+    code := (not oStatUser.Descr_Stat_D(false, TiDk_DO, CurDescr, BaseDoc.cNote))
+  else
+    code := ((boGetTune('Doc.StatusDoSopr')) AND (BaseDoc.Status <> 1))
+
+  if (code AND msg)
+    Message('Вам запрещено редактировать документ-основание в статусе "' +
+            KatNotes.Name + '" !', Information+OkButton);
+
+  NotEditPosStatus := code;
+}
+
+//******************************************************************************
+
+Function EditDOPosEnabled(msg1, msg2: boolean): boolean; // FALSE - запрещено редактирование документа
+{
+  EditDOPosEnabled := true;
+
+  if NotEditPos(msg1)
+    EditDOPosEnabled := false
+  else
+    if NotEditPosStatus(msg2)
+      EditDOPosEnabled := false;
+}
+
+//******************************************************************************
+
+Procedure SetDescrBounds;
+{
+  case tipDo of
+  //-----------
+    101: strnum := 'Основания на закупку ';
+  //-----------
+    201
+  , 919: strnum := 'Основания на продажу ';
+  //-----------
+    102: strnum := 'Прием на консигнацию ';
+  //-----------
+    202: strnum := 'Отпуск на консигнацию ';
+  //-----------
+    111: strnum := 'Основания на предоплату закупок ';
+  //-----------
+    211: strnum := 'Основания на предоплату продаж ';
+  //-----------
+    1410: strnum := 'Наряд-акт (УЛХ) ';
+  //-----------
+    1420: strnum := 'Счет лесопользователя ';
+  //-----------
+  end;
+
+  d1 := dGetTune('User.dFilter1');
+  d2 := dGetTune('User.dFilter2');
+
+  if boGetTune('User.UseFilter')
+    if (longint(d2) > longint(d1))
+      IsFilter := TRUE
+    else
+      Message('Фильтр в настройке пользователя некорректен!', Information);
+
+/*
+  dcAllModif        = 0; // все права
+  dcOwnOnly         = 1; // только со своим дескриптором
+  dcGrpRead         = 2; // свои-изменение, по группе - чтение
+  dcGrpModif        = 3; // все права в рамках группы
+  dcOwnModifAllRead = 4; // свои - изменение, по всем - чтение
+  dcGrpModifAllRead = 5; // все права в рамках группы, по всем - чтение
+*/
+
+  case curVisib of
+    dcAllModif        // все права
+   ,dcOwnModifAllRead // свои - изменение, по всем - чтение
+   ,dcGrpModifAllRead:// все права в рамках группы, по всем - чтение
+      {
+        SetFieldSelectable(#BaseDoc.Descr, TRUE);
+        SetFieldSelectable(#BaseDoc.DesGr, TRUE);
+      }
+    dcOwnOnly:        // только со своим дескриптором
+      {
+        SetFieldSelectable(#BaseDoc.Descr, FALSE);
+        SetFieldSelectable(#BaseDoc.DesGr, FALSE);
+      }
+    dcGrpRead         // свои-изменение, по группе - чтение
+   ,dcGrpModif:       // все права в рамках группы
+      {
+        SetFieldSelectable(#BaseDoc.Descr, TRUE);
+        SetFieldSelectable(#BaseDoc.DesGr, FALSE);
+      }
+  end;
+
+  if ((curVisib = dcOwnOnly) or
+      (curVisib = dcGrpRead) or
+      (curVisib = dcGrpModif))
+    {
+      if (curVisib = dcOwnOnly)  // видимость своих ДО
+        {
+          strnum := strnum +trim(curdescr)+' ';
+          PushBounds(if (IsFilter, tbdVscBound, tbVscBound));
+        }
+      else    // видимость ДО группы  (visible = dcGrpRead, dcGrpModif)
+        {
+          strnum := strnum + 'ГР' + trim(curdesGr)+' ';
+          PushBounds(if (IsFilter, tbdVscGrBound, tbVscGrBound));
+        }
+    }
+  else           // видимость всех ДО
+    if ( IsFilter )
+      PushBounds(tbdMainBound);
+    else
+      {
+        if ( wSortField = 1 )
+          PushBounds(tbMainBoundONoDoc);
+        else
+          PushBounds(tbMainBoundOdDoc);
+      }
+
+  if (IsFilter)
+    strnum := strnum +'с '+string(d1)+' по '+string(d2);
+
+  SetWindowTitle(wnMainWindow, strnum);
+}
+
+#ifndef __vschetr__
+//******************************************************************************
+// Доступ к изменению привязки ДО к договору/соглашению/ПКП по настройке
+//******************************************************************************
+Function CanLinkDogovor(Msg: boolean): boolean;
+{
+  CanLinkDogovor := FALSE;
+
+  case CurField of
+    #Dogovor.NoDoc   , #Dogovor.dDoc
+  , #AppDogovor.NoDoc, #AppDogovor.dDoc
+  , #CalPlan.NoDoc   , #CalPlan.dInput
+      : {}
+  else
+    Exit;
+  end;
+
+  if Not boGetTune('Doc.DO.CanLinkDogovor')
+    Exit;
+
+  if ( ( BaseDoc.cDogovor <> 0 ) AND Msg )
+    if ( Message('Документ уже связан с договором/соглашением/ПКП.'#13'Продолжить?', Confirmation + YesNo) <> cmYes )
+     Exit;
+
+  CanLinkDogovor := TRUE;
+}
+
+//******************************************************************************
+// Доступ к изменению по F3 при запрете редактирования ДО
+//******************************************************************************
+Procedure DoProcessPick;
+{
+  ProtectRecord(#BaseDoc, FALSE);
+  ProtectRecord(#StepDoc, FALSE);
+  ProtectRecord(#SpStep , FALSE);
+
+  ProcessCommand(cmPick);
+
+  UpdateTable;
+
+  var b: boolean; b:= FALSE;
+
+  if ( NotEditPosStatus(FALSE))
+    b := TRUE
+  else
+    if boGetTune('Doc.Buy.NotEditDO')
+      if ( IsValid(tnBaseFin) OR IsValid(tnKatSopr) )
+        b := TRUE;
+
+  ProtectRecord(#BaseDoc, b);
+  ProtectRecord(#StepDoc, b);
+  ProtectRecord(#SpStep , b);
+}
+
+//******************************************************************************
+
+#end // __vschetr__
+
+#end // #define __DoDescr_vpp__

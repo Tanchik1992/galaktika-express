@@ -1,0 +1,245 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+// Групповой выбор МЦ (Услуг) из каталога для приходных накладных
+//******************************************************************************
+
+#ifNdef _GMCKAT_P_VPP
+#define _GMCKAT_P_VPP
+
+//******************************************************************************
+// вставка выбранных МЦ/услуг
+Procedure GetMCUSLKat;
+var
+  cz   : comp;
+  wLst : word;
+  mu   : comp;
+  PrNom: word;
+  sv_: word;
+  bInsTara: boolean;
+{
+  if (CurTable <> #SpSopr)
+    Exit;
+
+  bInsTara := FALSE;
+  wLst := if (SpSopr.PrMC = 1, 7, 12);
+
+  Delete Pick where ((wLst == Pick.wList));
+
+  if KatSopr.vidSopr >=600 AND KatSopr.vidSopr <=606
+    {
+      ReadMyDsk(sv_, 'PickMC_EdIzm_Okr', TRUE);
+      SaveMyDsk(wGetTune('Pick.cOtpEdForPick'), 'PickMC_EdIzm_Okr');
+    }
+
+  if KatSopr.vidSopr = 630 OR KatSopr.vidSopr = 632
+    {
+      ReadMyDsk(sv_, 'PickMC_EdIzm_Okr', TRUE);
+      SaveMyDsk(1, 'PickMC_EdIzm_Okr');
+    }
+
+  mu    := SpSopr.cMCUsl;
+  PrNom := SpSopr.PrMC;
+
+  var ResPick: word;
+  if (PrNom = 1)
+    ResPick := RunInterface(GetSomeMC, mu)
+  else
+    ResPick := RunInterface(GetSomeUsl, mu);
+
+  if (KatSopr.vidSopr >=600 AND KatSopr.vidSopr <=606) OR KatSopr.vidSopr = 630 OR KatSopr.vidSopr = 632
+    SaveMyDsk(sv_, 'PickMC_EdIzm_Okr');
+
+  if (ResPick = cmCancel)
+    Exit;
+
+  if (GetFirst Pick where ((wLst == Pick.wList)) ordered by index Pick02 = tsOk)
+  {
+    var cpRemPos : comp;
+    cpRemPos := comp(0);
+    if (NOT isNew)
+    {
+     #IFDEF NAK502
+      if(GetFirst SSopr
+            where((KatSopr.nRec == SSopr.cGpSopr
+              and  SpSopr.nRec  == SSopr.cSpSopr
+                 ))=tsOk)
+      {
+        if(Message('Удалить распределение для текущей позиции ?', YesNo)=cmNo)
+        {
+          cpRemPos := GetNextNRec(#SpSopr,0);
+          update SSopr where((KatSopr.nRec == SSopr.cGpSopr
+                         and  SpSopr.nRec  == SSopr.cSpSopr))
+          set SSopr.cSpSopr := cpRemPos;
+        };//if
+      };//if
+     #ENDIF//NAK502
+      DoDeleteCurrentSpSopr; // замена текущей записи
+    };//if
+
+#ifdef _LINKMTR2SPEC_
+#ifdef __MTR_TO_SPEC__
+    else
+      oLinkMTR2Spec.DelVal(word(coSpSopr), SpSopr.nRec);
+#end
+#end
+
+    StartNewVisual(vtNumericVisual, vfTimer, 'Пополнение спецификации: ', 1);
+
+    _LOOP Pick where ((wLst == Pick.wList)) ordered by index Pick02
+    {
+      NextVisual;
+      ClearBuffer(#SpSopr);
+
+      if (KatSopr.VidSopr <> 611) AND (KatSopr.VidSopr <> 612) AND (KatSopr.vidSopr <> 630) AND (KatSopr.vidSopr <> 632)
+      {
+        SpSopr.cOtpEd := fEdIzm.GetAktOtpEdNRec(Pick.cRec, if(PrNom = 1, 1, 2));
+        //проверка на допустимость ввода дробных значений в зависимости
+        //от делимости или нет отпускной единицы (Пир 102.11663) ShV 20.09.00
+        if (Pick.PickKol<>0)
+           fEdIzm.CheckKolDiskret(Pick.PickKol, SpSopr.cOtpEd, TRUE, TRUE);
+      }
+
+      if KatSopr.VidSopr = 502 AND wGetTune('Manuf.Nakl502.OtpEd') <> 0
+      {
+        //учетная
+        if wGetTune('Manuf.Nakl502.OtpEd') = 2
+          if GetFirst KatMc where ((Pick.cRec == KatMC.NRec)) = tsOk
+            if GetFirst KatEd where ((KatMC.cEd == Kated.nrec)) = tsok
+               AND GetFirst KatOtpEd  where (( Pick.cRec  == KatOtpEd.cMcUsl AND
+                                               PrNom      == KatOtpEd.PrMc   AND
+                                               KatEd.Abbr == KatOtpEd.Abbr
+                                            )) = tsOk
+              SpSopr.cOtpEd := KatOtpEd.NRec;
+       //производственная
+       if wGetTune('Manuf.Nakl502.OtpEd') = 1
+         if GetFirst KatOtpEd where((Pick.cRec ==  KatOtpEd.cMcUsl AND
+                                     PrNom     ==  KatOtpEd.PrMc   AND
+                                     word(1)   ==  KatOtpEd.Pr
+                                    )) = tsOK
+           SpSopr.cOtpEd := KatOtpEd.NRec;
+
+        if (Pick.PickKol<>0)
+          fEdIzm.CheckKolDiskret(Pick.PickKol, SpSopr.cOtpEd, TRUE, TRUE);
+      }
+
+      SpSopr.PrMC    := PrNom;
+      SpSopr.cSopr   := KatSopr.NRec;
+      SpSopr.Kol     := Pick.PickKol;
+      SpSopr.VidSopr := KatSopr.VidSopr;
+      SpSopr.KolFact := Pick.PickKol;
+      SpSopr.dSopr   := KatSopr.dSopr;
+      SpSopr.dOprttn := KatSopr.dOpr;
+      SpSopr.cVal    := KatSopr.cValut;
+      SpSopr.KolOpl  := Pick.PickKol;
+      SpSopr.cMcUsl  := Pick.cRec;
+
+      if (SpSopr.PrMC = 1)
+        if (GetFirst FastFirstRow KatMC where ((SpSopr.cMcUsl == KatMC.NRec)) = tsOk)
+        {
+          SpSopr.ProcUb := oSDfuns.GetNormUbFromKatalog(SpSopr.VidSopr, 0, KatMC.NormUb);
+          SpSopr.KolOpl := Pick.PickKol * (1 - SpSopr.ProcUb / 100);
+          SpSopr.Netto  := KatMC.Massa;
+          SpSopr.mTara  := KatMC.mTara;
+
+          if (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108)
+          {
+            if (GetFirst FastFirstRow KauReff where ((coKatMC        == KauReff.coTable  AND
+                                                      KatMC.NRec     ==  KauReff.cRec    AND
+                                                      cgKau_ObjBuild == KauReff.wKau)) = tsOk)
+              if (GetFirst FastFirstRow KatStroy where ((KauReff.cKau == KatStroy.NRec)) = tsOk)
+                if (KatStroy.LevelObj = 1) // объект
+                  SpSopr.cUKS := KauReff.cKau;
+
+            if (GetFirst FastFirstRow KauReff where ((coKatMC      == KauReff.coTable  AND
+                                                      KatMC.NRec   == KauReff.cRec     AND
+                                                      cgKau_StZatr == KauReff.wKau)) = tsOk)
+            {
+              cz := 0;
+
+              if (GetFirst FastFirstRow AddSumTune where ((KauReff.cKau == AddSumTune.NRec)) = tsOk)
+              {
+                cz := AddSumTune.NRec;
+
+                if (GetFirst FastFirstRow AddSumTune where ((cz == AddSumTune.cNode)) <> tsOk) // не группа
+                  cz := KauReff.cKau
+                else
+                  cz := 0;
+              }
+            }
+          }
+        }
+
+     #ifdef _SOPRDOCB_VIP
+      #include ukschsum.vpp
+     #end
+
+      SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+
+      // расчет грузовых мест
+      ReCalcGrM;
+
+      if (Insert current SpSopr = tsOk)
+        if ( cz <> 0 AND ( (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108) ) )
+          Insert SpecZatr Set SpecZatr.coTable     := coSpSopr,
+                              SpecZatr.cSpec       := SpSopr.NRec,
+                              SpecZatr.cAddSumTune := cz;
+     #IFDEF NAK502
+      if(cpRemPos<>0)
+      {
+        update SSopr where((KatSopr.nRec == SSopr.cGpSopr
+                       and  cpRemPos    == SSopr.cSpSopr))
+        set SSopr.cSpSopr := SpSopr.nRec;
+        cpRemPos:=0;
+      };//if
+     #ENDIF//NAK502
+
+#ifdef _LINKMTR2SPEC_
+#ifdef __MTR_TO_SPEC__
+      case TypeSopr of
+        201, 106, 211, 114  : oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.SELL'), false);
+        101, 108, 206, 111  : oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.BUY'), false);
+      end;
+
+      oLinkMTR2Spec.SelFormat(true);
+#end
+#end
+      // вставка тары
+      if (boGetTune('Tara.AutoPaste_Buy'))
+        if (GetFirst fastfirstrow SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+        {
+          oSoprTara.InsertTara (SpSopr.cOtpEd, SpSopr.NRec, SpSopr.cSopr, SpSopr.KolFact, comp(0));
+          bInsTara := TRUE;
+        }
+
+      if (SpSopr.PrMC = 1 )
+      {
+        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 1, 0, SpSopr.Kolfact, longint(0));
+        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 2, 0, SpSopr.Kol,    longint(0));
+        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 3, 0, SpSopr.KolOpl, longint(0));
+      }
+
+      KatSopr.Summa  := KatSopr.Summa  + SpSopr.Price  * SpSopr.KolOpl;
+      KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+    } // _LOOP pick
+
+    KatSopr.Summa  := FSRoundRub(KatSopr.Summa);
+    KatSopr.SumVal := FSRoundVal(KatSopr.SumVal);
+
+    Update_Current_KatSopr;
+
+    RereadRecord(#KatSopr);
+
+    // пересчет номеров (группировка тары в спецификации)
+    if (bInsTara)
+      oSoprTara.ChangeNppSopr (KatSopr.NRec);
+
+    RereadRecord(#SpSopr);
+
+    StopVisual('', 0);
+  }
+
+  SelectField(#SpSopr.KolFact);
+}
+
+#end //_GMCKAT_P_VPP

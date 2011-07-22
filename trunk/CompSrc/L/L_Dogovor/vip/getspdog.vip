@@ -1,0 +1,700 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Выбор спецификации из накладных
+//******************************************************************************
+
+#include ExtAttrClass.vih
+#include oEdIzm.vih
+
+//********************************************************************************
+
+#doc
+Назначение:
+   Выбор спецификации из накладных
+
+
+Параметры:
+  pNRec     - ссылка на договор/соглашение
+  wPrMC     - тип спецификации (мц/услуга)
+  wFiltr    - определяет из какой спецификации производить выбор:
+                0 - из спецификации календарного плана;
+                1 - из спецификации договора/соглашения;
+                2 - автоматически выбирается вся доступная спецификация из спецификации календарного плана;
+                3 - автоматически выбирается вся доступная спецификация из спецификации договора/соглашения;
+  wPList    - пик
+#end
+
+//********************************************************************************
+
+Interface GetSpDog 'Выбор спецификации из договора' ( , hcBSTO_Vb_MC_Reestr, ) doAccept, EscClose, cyan;
+Show at (, , 100, 14);
+
+Table STRUCT TmpSpDocs ""
+(
+  cUpRec   : comp   "",
+  Code     : string "", 
+  cSpDocs  : comp   "",
+  cMCUsl   : comp   "",
+  PrMC     : word   "",
+  cOtpEd   : comp   "",
+  cVal     : comp   "",
+  Kol      : double "",
+  Price    : double "",
+  Dostup   : double "",
+  KolFact  : double "",
+  isLeaf   : word   ""
+)
+With index
+(
+  TmpSpDocs01 = cUpRec + Code
+, TmpSpDocs02 = cSpDocs
+, TmpSpDocs03 = isLeaf
+)
+
+;
+
+
+#include oEdIzm.var
+
+Create View
+Var
+  CurGroup
+, sav_NRec
+, pNRec       : comp;     // ссылка на документ
+
+  MainTree    : longint;
+
+  wFiltr
+, wPList
+, wPrMC       : word;
+
+  s_SimvRub   : string;
+
+  MinKol      : double;
+
+As Select
+//******************************************************************************
+  if (isValid(tnPick), '√', '')
+    ( FieldName = isPicked )
+//******************************************************************************
+, if (TmpSpDocs.PrMC = 1, if (isValid(tnKatMC), KatMC.Name, '? МЦ ' + string(TmpSpDocs.cMCUsl))
+                        , if (isValid(tnKatUsl), KatUsl.Name, '? услуга ' + string(TmpSpDocs.cMCUsl)))
+    ( FieldName = NamePos )
+//******************************************************************************
+, if (TmpSpDocs.PrMC = 1, if (isValid(tnKatMC), KatMC.BarKod, '? МЦ ' + string(TmpSpDocs.cMCUsl))
+                        , if (isValid(tnKatUsl), KatUsl.Kod, '? услуга ' + string(TmpSpDocs.cMCUsl)))
+    ( FieldName = BarKodPos )
+//******************************************************************************
+, if(TmpSpDocs.PrMC = 1, 'Т', 'У')
+    ( FieldName = PrMCUsl )
+//******************************************************************************
+, if (TmpSpDocs.cVal = 0,
+    if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+    ( FieldName = Valut )
+//******************************************************************************
+, if(TmpSpDocs.cOtpEd = 0, KatEd.Name, if (wGetTune('Doc.BrAbbrEd')=0, KatOtpEd.ABBR, KatOtpEd.Name))
+    ( FieldName = OtpEd )
+//******************************************************************************
+
+From
+  Dogovor
+, CalPlan
+, IerCalPl
+, SpDocs
+, SpDocs SpDocs2
+, KlVal
+, Pick
+, Pick Pick2
+, KatMC
+, KatUsl
+, KatSopr
+, KatSopr KSopr
+, SpSopr
+, KatEd
+, KatOtpEd
+, TmpSpDocs
+, TmpSpDocs TmpSpDocs2
+
+where
+((
+    pNRec                ==  Dogovor.NRec
+AND pNRec                ==  IerCalPl.cDogovor
+AND word(1)              ==  IerCalPl.isLeaf
+AND IerCalPl.cRec        ==  CalPlan.nRec
+
+AND CurGroup             ==  TmpSpDocs.cUpRec
+AND TmpSpDocs.cMCUsl     ==  KatMC.nRec
+AND TmpSpDocs.cMCUsl     ==  KatUsl.nRec
+
+AND if(TmpSpDocs.PrMc = 1,
+      KatMc.cEd, KatUsl.cEd) ==  KatEd.NRec
+
+AND TmpSpDocs.cOtpEd     ==  KatOtpEd.NRec
+AND TmpSpDocs.cVal       ==  KlVal.nRec
+AND wPList               ==  Pick.wList
+AND TmpSpDocs.cSpDocs    ==  Pick.cRec
+
+))
+
+bounds byMcUsl =
+       Dogovor.TiDk == SpDocs.TiDk
+   AND Dogovor.nRec == SpDocs.cDoc
+   AND wPrMC        == SpDocs.PrMC
+
+bounds bySpDocs =
+       Dogovor.TiDk == SpDocs.TiDk
+   AND Dogovor.nRec == SpDocs.cDoc
+
+bounds byMcUslCP =
+       word(403)    == SpDocs.TiDk
+   AND CalPlan.nRec == SpDocs.cDoc
+   AND wPrMC        == SpDocs.PrMC
+
+bounds bySpDocsCP =
+       word(403)    == SpDocs.TiDk
+   AND CalPlan.nRec == SpDocs.cDoc
+
+;
+
+Parameters
+  pNRec
+, wPrMC
+, wFiltr
+, wPList
+;
+
+
+Panel pnSpecif
+  Table TmpSpDocs;
+
+Tree 2 trSpecif ('', hcBSTO_Vb_MC_Reestr, sci1EnInsTree)
+  Show at (, , , )
+Fields
+  {Font = {Color  = if (isPicked <> '', ColorMark, 
+                      if (TmpSpDocs.Dostup < MinKol, ColorGray, 0));
+           Italic = if (TmpSpDocs.Dostup < MinKol, TRUE, FALSE) }};
+  isPicked         #3''                             : [ 1], NoAutoSize, Skip;
+  PrMCUsl          #3'Т'#13#3'У' ('Товар/услуга')   : [ 1], Skip , NoAutoSize;
+  NamePos          #3'Наименование'                 : [35], Protect, NoDel;
+  BarKodPos        #3'Ном.номер' ('Номенклатурный номер / баркод')
+                                                    : [10], Protect, NoDel, NoAutoSize;
+  OtpEd            #3'ЕдИзм'                        : [ 5], Protect, NoDel, NoAutoSize;
+  TmpSpDocs.Kol    #3'Количество'                   : [10.3, '\3p[|-]3666`666`666`666.888'], Protect, NoDel, NoAutoSize;
+  TmpSpDocs.Price  #3'Цена'                         : [11.2, '\2p[|-]3666`666`666`666.88'] , Protect, NoDel, NoAutoSize;
+  Valut            #3'Вал.'                         : [ 5], Protect, NoDel, NoAutoSize;
+  TmpSpDocs.Dostup #3'Остаток' ('Доступное к выбору количество')
+                                                    : [10.3, '\3p[|-]3666`666`666`666.888'], Protect, NoDel, NoAutoSize;
+  Pick.PickKol     #3'Выбрано'                      : [10.3, '\3p[|-]3666`666`666`666.888'], Protect, NoAutoSize, LessNull;
+end;
+
+HandleEvent
+
+cmTreeTop         : CurGroup := 0;
+
+cmTreeUp          : CurGroup := TmpSpDocs.cUpRec;
+
+cmTreeDown        : CurGroup := TmpSpDocs.cSpDocs;
+
+cmTreeNodeType    : if (TmpSpDocs.isLeaf = 1)
+                      TreeSetNodeType(trSpecif, 2);
+
+cmTreeNeedOwner   : TreeJumpToRecord (trSpecif, TmpSpDocs.cUpRec);
+
+end;
+
+end;
+
+//******************************************************************************
+
+//******************************************************************************
+
+Procedure KillPick;
+{
+  ResetBounds(#Pick);
+  delete Pick where ((wPList == Pick.wList));
+  SetBounds(#Pick);
+}
+
+//******************************************************************************
+
+Procedure InsertTmpSpDocs;
+var 
+  code : word;
+{
+  _LOOP SpDocs
+    {
+      if ( SpDocs.cMCUsl = comp(0) )
+        Continue;
+
+      code := 1;
+
+      _LOOP SpDocs2 where (( word(438)   == SpDocs2.TiDk AND
+                             SpDocs.nRec == SpDocs2.cDoc ))
+        {
+          if ( SpDocs2.cMCUsl = comp(0) )
+            Continue;
+
+          code := 0;
+
+          insert current TmpSpDocs
+             set TmpSpDocs.cUpRec  := SpDocs2.cDoc
+               , TmpSpDocs.Code    := SpDocs.Code + '.'+ SpDocs2.Code
+               , TmpSpDocs.cSpDocs := SpDocs2.nRec
+               , TmpSpDocs.cMCUsl  := SpDocs2.cMCUsl
+               , TmpSpDocs.cOtpEd  := SpDocs2.cOtpEd
+               , TmpSpDocs.PrMC    := SpDocs2.PrMC
+               , TmpSpDocs.cVal    := SpDocs2.cVal
+               , TmpSpDocs.Kol     := SpDocs2.Kol * SpDocs.Kol
+               , TmpSpDocs.Price   := SpDocs2.Price
+               , TmpSpDocs.isLeaf  := 1;
+        }
+
+      insert current TmpSpDocs
+         set TmpSpDocs.cUpRec  := 0
+           , TmpSpDocs.Code    := SpDocs.Code
+           , TmpSpDocs.cSpDocs := SpDocs.nRec
+           , TmpSpDocs.cMCUsl  := SpDocs.cMCUsl
+           , TmpSpDocs.cOtpEd  := SpDocs.cOtpEd
+           , TmpSpDocs.PrMC    := SpDocs.PrMC
+           , TmpSpDocs.cVal    := SpDocs.cVal
+           , TmpSpDocs.Kol     := SpDocs.Kol
+           , TmpSpDocs.Price   := SpDocs.Price
+           , TmpSpDocs.isLeaf  := code;
+    }
+}
+
+//******************************************************************************
+
+Procedure CalcKolDostup;
+var
+  tmpKol, Kol0 : double;
+{
+  _LOOP TmpSpDocs
+    {
+      tmpKol := 0;
+
+      _LOOP SpSopr where ((TmpSpDocs.cSpDocs == SpSopr.cSpDocs))
+        {
+          case SpSopr.VidSopr of
+          442: {
+                 tmpKol := tmpKol + SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+               }
+          115: {
+                 if ( GetFirst fastfirstrow KatSopr where ((SpSopr.cSopr == KatSopr.nRec)) = tsOk )
+                   if ( KatSopr.cKatSopr = word(0) )
+                     tmpKol := tmpKol + SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+               }
+          end; // case
+        }
+
+      tmpKol := tmpKol / fEdIzm.GetKoefOtpEd(TmpSpDocs.cOtpEd);
+
+      fEdIzm.CheckKolDiskret(tmpKol, TmpSpDocs.cOtpEd, TRUE, FALSE);
+
+      TmpSpDocs.KolFact := tmpKol;
+      TmpSpDocs.Dostup  := TmpSpDocs.Kol - TmpSpDocs.KolFact;
+
+      if ( update current TmpSpDocs <> tsOk) {}
+    }
+
+  _LOOP TmpSpDocs
+    {
+      tmpKol := TmpSpDocs.Dostup;
+
+      if (TmpSpDocs.cUpRec <> 0) // составляющая комплекта
+        {
+          if ( GetFirst TmpSpDocs2 where (( TmpSpDocs.cUpRec == TmpSpDocs2.cSpDocs )) = tsOk )
+            tmpKol := TmpSpDocs.Dostup - TmpSpDocs2.KolFact * TmpSpDocs.Kol / TmpSpDocs2.Kol;
+        }
+      else
+        {
+          _LOOP TmpSpDocs2 where (( TmpSpDocs.cSpDocs == TmpSpDocs2.cUpRec ))
+            {
+              Kol0 := TmpSpDocs.Dostup - TmpSpDocs2.KolFact * TmpSpDocs.Kol / TmpSpDocs2.Kol;
+
+              if (tmpKol > Kol0)
+                tmpKol := Kol0;
+            }
+        }
+
+      tmpKol := if ( tmpKol > MinKol, tmpKol, 0)
+
+      if ( fEdIzm.GetDiskrOtpEd(TmpSpDocs.cOtpEd) = 1 )
+        tmpKol := Trunc(tmpKol);
+
+      update current TmpSpDocs set TmpSpDocs.Dostup := tmpKol;
+    }
+
+//  _LOOP TmpSpDocs where (( word(0) == TmpSpDocs.isLeaf ))
+//    if ( GetFirst TmpSpDocs2 where (( TmpSpDocs.cSpDocs == TmpSpDocs2.cUpRec )) <> tsOk )
+//      delete current TmpSpDocs;
+}
+
+//******************************************************************************
+
+function CurKolDostup (Kol : double) : double;
+var
+  Koef, Koef0, tmpKol, Kol0 : double;
+{
+  tmpKol := TmpSpDocs.Dostup;
+
+  if (tmpKol > Kol)
+    tmpKol := Kol;
+
+  fEdIzm.CheckKolDiskret(tmpKol, TmpSpDocs.cOtpEd, TRUE, FALSE);
+
+  update current TmpSpDocs set TmpSpDocs.Dostup := TmpSpDocs.Dostup - tmpKol;
+
+  if (TmpSpDocs.cUpRec <> 0)
+    { // составляющая комплекта
+      if ( GetFirst TmpSpDocs2 where (( TmpSpDocs.cUpRec == TmpSpDocs2.cSpDocs )) <> tsOk )
+        Exit;
+
+      Koef := 1;
+
+      _LOOP TmpSpDocs2 where (( TmpSpDocs.cUpRec == TmpSpDocs2.cUpRec ))
+        {
+          Koef0 := TmpSpDocs2.Dostup / TmpSpDocs2.Kol;
+
+          if (Koef > Koef0)
+            Koef := Koef0;
+        }
+
+      if ( GetFirst TmpSpDocs2 where (( TmpSpDocs.cUpRec == TmpSpDocs2.cSpDocs )) = tsOk )
+        {
+          Kol0 := Koef * TmpSpDocs2.Kol;
+
+          if ( fEdIzm.GetDiskrOtpEd(TmpSpDocs2.cOtpEd) = 1 )
+            Kol0 := Trunc(Kol0);
+        
+          update current TmpSpDocs2 set TmpSpDocs2.Dostup := Kol0;
+        }
+    }
+  else
+    { // комплектная МЦ
+      _LOOP TmpSpDocs2 where ((TmpSpDocs.cSpDocs == TmpSpDocs2.cUpRec))
+        {
+          Koef := TmpSpDocs2.Kol / TmpSpDocs.Kol;
+
+          Kol0 := TmpSpDocs2.Dostup - Koef * tmpKol;
+
+          if ( fEdIzm.GetDiskrOtpEd(TmpSpDocs2.cOtpEd) = 1 )
+            Kol0 := Trunc(Kol0);
+
+          update current TmpSpDocs2 set TmpSpDocs2.Dostup := Kol0;
+        }
+    }
+
+  CurKolDostup := tmpKol;
+}
+
+//******************************************************************************
+
+procedure TreeShowAll; // Раскрыть все ветки
+{
+  sav_NRec := TmpSpDocs.cSpDocs;
+
+  StartNewVisual(vtRotateVisual, vfTimer, ''#3'Раскрытие всех веток ...'#13#3,1);
+
+  if (TreeGetFirst(trSpecif))
+    do
+      {
+        NextVisual;
+        TreeOpenNode(trSpecif);
+      }
+    while TreeGetNext(trSpecif);
+  
+  StopVisual('', 0);
+
+  TreeJumpToRecord(trSpecif, sav_NRec);
+
+  ReScanPanel(#TmpSpDocs);
+}
+
+//******************************************************************************
+
+procedure TreeHideAll; // Свернуть все ветки
+{
+  StartNewVisual(vtRotateVisual, vfTimer, ''#3'Сворачивание всех веток ...'#13#3,1);
+
+  while (TmpSpDocs.cUpRec <> 0)
+    {
+      NextVisual;
+      TreeJumpToRecord(trSpecif, TmpSpDocs.cUpRec);
+    }
+
+  sav_NRec := TmpSpDocs.cSpDocs;
+
+  if (TreeGetFirst(trSpecif))
+    do
+      {
+        NextVisual;
+        TreeCloseNode(trSpecif);
+      }
+    while TreeGetNext(trSpecif);
+
+  StopVisual('', 0);
+
+  TreeJumpToRecord (trSpecif, sav_NRec);
+
+  ReScanPanel(#TmpSpDocs);
+}
+
+//******************************************************************************
+
+HandleEvent
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    MinKol    := doGetTune('OPER.MINKOLMC');
+
+    CurGroup := 0;
+
+    KillPick;
+
+    if ((wFiltr and 1) = 1)
+      { // по спецификации договора/соглашения
+        if (wPrMC <> 0)
+          {
+            AddBounds(tbByMcUsl);
+            SetFieldVisible(#PrMCUsl, FALSE);
+          }
+        else
+          AddBounds(tbbySpDocs);
+
+        SetTitle('Выбор спецификации по ' + if (Dogovor.TiDk = 400, 'договору ', 'соглашению ') + PrintNumber(Dogovor.Descr, Dogovor.NoDoc));
+
+        InsertTmpSpDocs;
+      }
+    else
+      { // по спецификации календарного плана
+        if (wPrMC <> 0)
+          {
+            AddBounds(tbByMcUslCP);
+            SetFieldVisible(#PrMCUsl, FALSE);
+          }
+        else
+          AddBounds(tbbySpDocsCP);
+
+        SetTitle('Выбор спецификации по календарному плану ' + if (Dogovor.TiDk = 400, 'договора ', 'соглашения ') + PrintNumber(Dogovor.Descr, Dogovor.NoDoc));
+
+        _LOOP IerCalPl
+          {
+            if ( CalPlan.Status <> 1 )
+              Continue;
+
+            InsertTmpSpDocs;
+          }
+      }
+
+    ResetBounds(#SpDocs);
+    ResetBounds(#TmpSpDocs);
+
+    CalcKolDostup;
+
+    if (GetFirst TmpSpDocs <> tsOk)
+      {
+        Message('В спецификации ' + if (wFiltr = 1, '', 'календарного плана ')
+                                  + if (Dogovor.TiDk = 400, 'договора', 'соглашения')
+                                  + ' нет позиций для выбора!');
+
+        Abort;
+        Exit;
+      }
+
+    SetBounds(#TmpSpDocs);
+
+    // автоматический выбор всей доступной спецификации
+    if ((wFiltr and 2) = 2)
+      {
+        TreeShowAll;
+
+        ResetBounds(#TmpSpDocs);
+
+        var Kol_New : double;
+
+        _LOOP TmpSpDocs
+          if (TmpSpDocs.isLeaf = 1)
+            {
+              Kol_New := CurKolDostup(TmpSpDocs.Dostup);
+
+              Pick.wList   := wPList;
+              Pick.PickKol := Kol_New;
+              Pick.cRec    := TmpSpDocs.cSpDocs;
+              insert current Pick;
+            }
+
+         Abort;
+         Exit;
+      }
+
+    TreeGetFirst(trSpecif);
+  }
+
+cmOpenSearch:
+  {
+    if (CurField <> #Pick.PickKol)
+      Exit;
+
+    var Kol_New  : double; 
+    var Kol_New2 : double; 
+    
+    if ( GetFirst Pick <> tsOk )
+      {
+        Kol_New := 0;
+      }
+    else
+      {
+        Kol_New  := Pick.PickKol;
+        Kol_New2 := CurKolDostup(-Kol_New);
+      }
+
+    if RunDialog('GetPickKol', Kol_New) <> cmCancel
+      {
+        if NOT fEdIzm.CheckKolDiskret(Kol_New, TmpSpDocs.cOtpEd, TRUE, TRUE)
+          Exit;
+
+        Kol_New2 := CurKolDostup(Kol_New);
+
+        if ( GetFirst Pick = tsOk )
+          update current Pick set Pick.PickKol := Kol_New2
+        else
+          insert Pick 
+             set Pick.cRec    := TmpSpDocs.cSpDocs 
+               , Pick.PickKol := Kol_New2 
+               , Pick.wList   := wPList;
+      }
+
+    ReReadRecord(#Pick);
+    ReReadRecord(#TmpSpDocs);
+   }
+
+cmDelOnProtect:
+  {
+    var Kol_New : double;
+
+    if (IsValid(#Pick))
+      {
+        Kol_New := CurKolDostup(-Pick.PickKol);
+
+        delete current Pick;
+      }
+
+    TreeGetNext(trSpecif);
+
+    RescanPanel(#TmpSpDocs);
+  }
+
+cmMarkUnMark:
+  {
+    var Kol_New : double;
+
+    if (IsValid(#Pick))
+      {
+        Kol_New := CurKolDostup(-Pick.PickKol);
+
+        delete current Pick;
+      }
+    else
+      {
+        if (TmpSpDocs.Dostup > MinKol)
+          {
+            Pick.wList   := wPList;
+            Pick.PickKol := CurKolDostup(TmpSpDocs.Dostup);
+            Pick.cRec    := TmpSpDocs.cSpDocs;
+            insert current Pick;
+          }
+      }
+
+    TreeGetNext(trSpecif);
+
+    RescanPanel(#TmpSpDocs);
+  }
+
+cmSelectAll:
+  {
+    TreeShowAll;
+
+    StartNewVisual(vtRotateVisual
+                   , vfTimer+vfBreak+vfConfirm
+                   , 'Помечается вся спецификация ...'#13#3
+                   , 1);
+
+    KillPick;
+
+    PushPos(#TmpSpDocs);
+    ResetBounds(#TmpSpDocs);
+
+    CalcKolDostup;
+
+    _LOOP TmpSpDocs
+      if (NOT NextVisual)
+        Break;
+      else
+        {
+          if ( (TmpSpDocs.isLeaf = 1) and (TmpSpDocs.Dostup > MinKol) )
+            {
+              Pick.wList   := wPList;
+              Pick.PickKol := CurKolDostup(TmpSpDocs.Dostup);
+              Pick.cRec    := TmpSpDocs.cSpDocs;
+              insert current Pick;
+            }
+        }
+
+     SetBounds(#TmpSpDocs);
+     PopPos(#TmpSpDocs);
+     ReReadRecord;
+     RescanPanel(#TmpSpDocs);
+     StopVisual('', 0);
+  }
+
+cmUnSelectAll:
+  {
+    KillPick;
+
+    PushPos(#TmpSpDocs);
+    ResetBounds(#TmpSpDocs);
+
+    CalcKolDostup;
+
+    SetBounds(#TmpSpDocs);
+    PopPos(#TmpSpDocs);
+
+    RescanPanel(#TmpSpDocs);
+    ReReadRecord;
+  }
+
+
+cmShowAll: // Раскрыть все ветки
+  {
+    TreeShowAll;
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    TreeHideAll;
+  }
+
+cmDefault:
+  {
+    if (UpdateTable)
+      {
+        ResetBounds(#Pick);
+
+        if (GetFirst Pick where ((wPList == Pick.wList)) <> tsOk)
+          {
+            if (TmpSpDocs.Dostup > MinKol)
+              {
+                ClearBuffer(#Pick);
+                Pick.wList   := wPList;
+                Pick.cRec    := TmpSpDocs.cSpDocs;
+                Pick.PickKol := CurKolDostup(TmpSpDocs.Dostup);
+                insert current Pick;
+              }
+          }
+      }
+  }
+
+End; // HandleEvent
+End. // interface

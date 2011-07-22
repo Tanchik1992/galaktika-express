@@ -1,0 +1,263 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Пакетная разноска объектов целевого учета по спецификации товарных ПКП
+//******************************************************************************
+
+#include MTRFuncs.vih           // функции целевого учета
+#include LinkMTR2Spec.vih       // функции целевого учета
+
+#doc
+Пакетная разноска объектов целевого учета по спецификации товарных ПКП
+#end
+Interface BatchCopyMTR 'Пакетная привязка к объекту ЦУ' EscClose, Cyan;
+  Show at (,, 37, 8)
+
+#include MTRFuncs.var           // функции целевого учета
+
+Create view
+
+Var
+  pSourceSpDocs
+, pDogovor
+    : comp;
+
+  hMarker
+, hInd
+    : longint;
+
+  wParam
+    : word;
+
+From
+  CalPlan
+, SpDocs
+, SpDocs SpDocs2
+, SpDocSmeta
+, SmetaStroy
+, SpecMTR
+, SaldTune
+
+Where
+((
+    pDogovor          == CalPlan.cDogovor
+AND word(0)           == CalPlan.Status
+AND word(403)         == SpDocs.TiDk
+AND CalPlan.nRec      == SpDocs.cDoc
+AND SpDocs.cSpMC      == SpDocs2.nRec
+AND SpDocs.nRec       == SpDocSmeta.cSpec
+AND SpDocSmeta.cSmeta == SmetaStroy.NRec
+))
+;
+
+Parameters
+  pDogovor
+, hMarker
+;
+
+Form frmReport('BatchCopyMTR.OUT', 'ERRR');
+
+Function ExistsCURef: boolean;
+{
+  ExistsCURef := FALSE;
+
+  if ( RecordExists SpecMTR where (( coSpDocs == SpecMTR.coTable AND SpDocs.nRec == SpecMTR.cSpec )) = tsOk )
+    if ( RecordExists SaldTune where (( SpecMTR.cSaldTune == SaldTune.nRec )) = tsOk )
+      ExistsCURef := TRUE;
+}
+
+Procedure PrintCalPlanInfo;
+{
+  frmReport.write(PadCh('', '=', 80));
+  frmReport.write('ПКП №' + CalPlan.NoDoc + DateToStr(CalPlan.dInput, ' от DD.MM.YYYY г.'));
+  frmReport.write(PadCh('', '-', 80));
+}
+
+Function ProcessOneCalPlan: boolean;
+{
+  ProcessOneCalPlan := FALSE;
+
+  _LOOP SpDocs
+    {
+      frmReport.write('Позиция спецификации №' + SpDocs.Code);
+
+      if IsValid(#SpDocs2)
+        {
+          frmReport.write('  - является сопутствующей - привязка будет наследоваться');
+          Continue;
+        }
+
+      if ExistsCURef
+        {
+          frmReport.write('  - уже имеется привязка к объекту ЦУ');
+          Continue;
+        }
+
+      if ( pSourceSpDocs = 0 )
+        {
+          RunInterface('EditMtr2Spec', if(IsValid(#SmetaStroy), 2, 0), 0, word(coSpDocs), SpDocs.nRec);
+
+          if ExistsCURef
+            {
+              if ( Message('Задана привязка к объекту ЦУ.'#13'Продолжить?', YesNo + Confirmation ) <> cmYes )
+                {
+                  oMTRFun.DelSpecMTR(coSpDocs, SpDocs.nRec);
+                  Exit;
+                }
+
+              frmReport.write('  - привязка осуществлена');
+              pSourceSpDocs := SpDocs.nRec;
+
+              // для сопутствующих услуг те же привязки
+              _LOOP SpDocs2
+                {
+                  frmReport.write('Позиция спецификации №' + SpDocs2.Code);
+                  oMTRFun.CopySpecMTR(coSpDocs, pSourceSpDocs, coSpDocs, SpDocs2.nRec);
+                  frmReport.write('  - привязка осуществлена копированием из вышестоящей позиции');
+                }
+
+              Continue;
+            }
+
+          if ( pSourceSpDocs = 0 )
+            Exit; // отказались от привязки объекта ЦУ
+        }
+      else
+        {
+          oMTRFun.CopySpecMTR(coSpDocs, pSourceSpDocs, coSpDocs, SpDocs.nRec);
+          frmReport.write('  - привязка осуществлена');
+
+          // для сопутствующих услуг те же привязки
+          _LOOP SpDocs2
+            {
+              frmReport.write('Позиция спецификации №' + SpDocs2.Code);
+              oMTRFun.CopySpecMTR(coSpDocs, pSourceSpDocs, coSpDocs, SpDocs2.nRec);
+              frmReport.write('  - привязка осуществлена копированием из вышестоящей позиции');
+            }
+        }
+    }
+
+  ProcessOneCalPlan := TRUE;
+}
+
+Function doBatchUpdate: boolean;
+{
+  doBatchUpdate := FALSE;
+
+  pSourceSpDocs := 0;
+
+  if ( ( wParam = 1 ) AND ( GetMarkerCount(hMarker) > 0 ) )
+    {
+      StartNewVisual(vtIndicatorVisual, vfTimer, 'Привязка ПКП к объекту ЦУ...', GetMarkerCount(hMarker));
+
+      var pCalPlan: comp;
+
+      FOR(hInd := 0; hInd < GetMarkerCount(hMarker); hInd := hInd + 1)
+        {
+          NextVisual;
+
+          if GetMarker(hMarker, hInd, pCalPlan)
+            if ( GetFirst FastfirstRow CalPlan where (( pCalPlan == CalPlan.nRec )) = tsOk )
+              {
+                PrintCalPlanInfo;
+
+                if ( CalPlan.DirectPlat <> 0 )
+                  {
+                    frmReport.write('  -  не является товарным ПКП');
+                    Continue;
+                  }
+
+                if ( CalPlan.Status <> 0 )
+                  {
+                    frmReport.write('  -  не находится в статусе "оформляемый"');
+                    Continue;
+                  }
+
+                if not ProcessOneCalPlan
+                  {
+                    StopVisual('', 0);
+                    frmReport.AbortForm;
+                    Exit;
+                  }
+              }
+        }
+
+      StopVisual('', 0);
+    }
+  else
+    {
+      hInd := 0;
+
+      _LOOP CalPlan
+        hInd := hInd + 1;
+
+      StartNewVisual(vtIndicatorVisual, vfTimer, 'Привязка ПКП к объекту ЦУ...', hInd);
+
+      _LOOP CalPlan
+        {
+          NextVisual;
+
+          if ( CalPlan.DirectPlat <> 0 )
+            Continue;
+
+          PrintCalPlanInfo;
+
+          if not ProcessOneCalPlan
+            {
+              StopVisual('', 0);
+              frmReport.AbortForm;
+              Exit;
+            }
+        }
+
+      StopVisual('', 0);
+    }
+
+  if ( pSourceSpDocs = 0 )
+    Message('Не найдено документов для привязки к объекту ЦУ!', Information);
+
+  doBatchUpdate := TRUE;
+}
+
+Screen sParams (, hci_dogov_Priv_Pak_PKP, )
+Fields
+  wParam: NoProtect;
+Buttons
+  cmOk, Default;
+  cmCancel;
+<<
+
+  `Изменение привязки к объекту ЦУ`
+
+  [.] только для помеченных ПКП`
+
+  <. Продолжить .> <. Отмена     .>
+>>
+end;
+
+HandleEvent
+
+cmInit:
+{
+  if ( GetMarkerCount(hMarker) = 0 )
+    SetFieldSelectable(#wParam, FALSE);
+
+  ReadMyDsk(wParam, 'BatchCopyMTR_wParam', TRUE);
+}
+
+cmDone:
+{
+  SaveMyDsk(wParam, 'BatchCopyMTR_wParam');
+}
+
+cmOk:
+{
+  if doBatchUpdate
+    frmReport.ShowFile('Протокол изменения ПКП');
+
+  CloseInterface(cmDefault);
+}
+
+end;
+
+end.

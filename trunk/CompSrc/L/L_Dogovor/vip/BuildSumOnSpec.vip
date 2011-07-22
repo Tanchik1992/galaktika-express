@@ -1,0 +1,271 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Формирование схемы расчетов по платежам в кал. плане      ║
+ ║ Ответственный : Бартош Евгений Анатольевич (BAR)                          ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include SpDocs.vih
+
+#doc
+Формирование суммы по спецификации товарного ПКП
+#end
+interface BuildSumOnSpec 'Формирование суммы по спецификации товарного ПКП' doAccept, EscClose, Cyan;
+show at (,,,15);
+
+#include SpDocs.var
+
+create view
+var
+  pPaySchem : comp;
+  SumLimit,
+  _Percent,
+  PickedSumma, PickedSummaNDS : double;
+  Marker, MarkerPercent, MarkerInd : longint;
+  NeedToLimit : boolean;
+  (
+    Picked
+   ,ValutName
+   ,SpCalPlnGrName
+   ,SpCalPlnObjName
+   ,SpCalPlnObjKod
+   ,PickPercent
+   ,SpDocsNDSPos
+   ,SpDocsSumPos
+  )
+as select
+  SearchMarker(Marker, SpDocs.nRec, MarkerInd),
+  if (CalPlan.cVal = 0, sGetTune('NDE.SimvRub'), KlVal.SimvolV),
+  if ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), GroupUsl.Name, GroupMC.Name),
+  if ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), KatUsl.Name, KatMC.Name),
+  if ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), KatUsl.Kod, KatMC.BarKod),
+  if (GetMarker(MarkerPercent, MarkerInd, _Percent), DoubleToStr(_Percent, '\2p[|-]3666.88'), '0'),
+  SpDocs.SumNDS,
+  SpDocs.Summa + if(CalPlan.VhodNal = 1, 0.0, SpDocsNDSPos),
+  *
+from
+  CalPlan,
+  PaySchem,
+  SpDocs,
+  KatOtpEd,
+  KlVal,
+  GroupMC,
+  GroupUsl,
+  KatMC,
+  KatUsl,
+  PlanPays SpecPos,
+  CalPlan FinPlan
+where
+((
+  pPaySchem         == PaySchem.nRec    and
+  PaySchem.cMCPlan  == CalPlan.nRec     and
+  PaySchem.cCalPlan == FinPlan.nRec     and
+  CalPlan.cVal      == KlVal.nRec       and
+  word(403)         == SpDocs.TiDk      and
+  PaySchem.cMCPlan  == SpDocs.cDoc      and
+  SpDocs.cGrMCUsl   == GroupMC.nRec     and
+  SpDocs.cGrMCUsl   == GroupUsl.nRec    and
+  SpDocs.cMCUSL     == KatMC.nRec       and
+  SpDocs.cMCUSL     == KatUsl.nRec      and
+  SpDocs.cOtpEd     == KatOtpEd.nRec    and
+  PaySchem.nRec     == SpecPos.cCalPlan and
+  word(99)          == SpecPos.VidPlat
+));
+
+parameters pPaySchem, SumLimit, NeedToLimit;
+
+procedure OneMarkPick;
+{
+  InsertMarker(Marker, SpDocs.nRec);
+  InsertMarker(MarkerPercent, double(100));
+  set PickedSumma    := PickedSumma    + SpDocsSumPos;
+  set PickedSummaNDS := PickedSummaNDS + SpDocsNDSPos;
+  ReDrawPanel(#SpDocs);
+}
+
+procedure OneUnMarkPick;
+var tmpDouble : double;
+{
+  if not SearchMarker(Marker, SpDocs.nRec, MarkerInd) Exit;
+  DeleteMarker(Marker, SpDocs.nRec);
+  if GetMarker(MarkerPercent, MarkerInd, tmpDouble)
+    AtDeleteMarker(MarkerPercent, MarkerInd)
+  else
+    tmpDouble := 100;
+  set PickedSumma    := PickedSumma    - SpDocsSumPos*tmpDouble/100;
+  set PickedSummaNDS := PickedSummaNDS - SpDocsNDSPos*tmpDouble/100;
+  RereadRecord(#SpDocs);
+}
+
+panel pBuildSumOnSpec Table SpDocs;
+browse brBuildSumOnSpec(,,sciEnEsc1Ins) show at (,,,12);
+fields
+  {Font = {Color = if(not Picked, ColorGray, 0); Italic =  not Picked}};
+  SpDocs.Code     '№'           ('Номер позиции спецификации') : [4], protect;
+  SpDocs.PrMc     'МЦ/У'        ('Признак МЦ или услуги') :
+    [LIST 1 'МЦ', 'Усл' ,'УП' ,'ДС' ,'ГП'], [5], skip;
+  SpCalPlnGrName  'Группа'      ('Группа МЦ/услуг') : [12], protect;
+  SpCalPlnObjName 'Наименование'('Наименование МЦ/услуги') : [18], protect;
+  KatOtpEd.Name   'Отп.ед.'     ('Наименование отпускной единицы измерения') : [5], protect;
+  if(SpDocs.Direct = 1,'1->2', '2->1') ''(''): [5], skip;
+  PickPercent     'Выбор','в %' ('Выбор суммы по позиции в %') : [7], noprotect,
+  {Font = {Color = ColorSysBlack; Bold = Picked; Italic = false }};
+  SpDocsSumPos*double(PickPercent)/100  'Выбор на сумму' ('Выбор суммы по позиции') : [12.2,'\2p[|-]36`666`666`666`666.88'], skip,
+  {Font = {Color = ColorSysBlack; Bold = Picked; Italic = false }};
+  SpDocs.Kol      'Количество'  ('Количество МЦ/услуг') : [8,3], protect;
+  SpDocs.Price    'Цена'        ('Цена за единицу МЦ/услуги') : [8.2,'\2p[|-]3666`666`666`666.88'], protect;
+  SpDocs.Summa    'Сумма'       ('Сумма по позиции') : [12.2,'\2p[|-]36`666`666`666`666.88'], protect;
+  SpDocs.SumNDS   'Налоги'      ('Налоги по позиции') : [8.2,'\2p[|-]36`666`666`666`666.88'], skip;
+end; // browse
+
+screen scrBuildSumOnSpec show at (,13,,) Table SpDocs;
+fields
+  PickedSumma : [12.2,'\2p[|-]36`666`666`666`666.88'], skip,
+    {Font = {Color = if(NeedToLimit and (PickedSumma > SumLimit), ColorError, 0); Bold = true }};
+  ValutName : skip, {Font = {Bold = true }};
+  PickedSummaNDS : [12.2,'\2p[|-]36`666`666`666`666.88'], skip, {Font = {Bold = true }};
+<<
+ Выбрано позиций на сумму: .@@@@@@@@@@@@@@ .@@@@@ в т.ч налоги: .@@@@@@@@@@@@@@
+>>
+end; // screen
+
+HandleEvent
+  cmExprFieldChanged:
+  {
+    if (Curfield = #PickPercent)
+    {
+      var kk: double;
+      kk := double(ExprFieldValue);
+      if (kk < 0) kk := 0
+      else
+        if (kk > 100) kk := 100;
+      if (kk > 0.0)
+      {
+        if not SearchMarker(Marker, SpDocs.nRec, MarkerInd)
+          OneMarkPick;
+        if SearchMarker(Marker, SpDocs.nRec, MarkerInd)
+        {
+          var tmpDouble: double;
+          if GetMarker(MarkerPercent, MarkerInd, tmpDouble)
+          {
+            set PickedSumma    := PickedSumma    - SpDocsSumPos*tmpDouble/100;
+            set PickedSummaNDS := PickedSummaNDS - SpDocsNDSPos*tmpDouble/100;
+          }
+          UpDateMarker(MarkerPercent, MarkerInd, kk);
+          set PickedSumma    := PickedSumma    + SpDocsSumPos*kk/100;
+          set PickedSummaNDS := PickedSummaNDS + SpDocsNDSPos*kk/100;
+        }
+        RereadRecord;
+      }
+      else
+        OneUnMarkPick;
+    }
+  }
+end;
+end; // Panel
+
+HandleEvent
+
+cmInit:
+{
+  if (GetFirst SpDocs <> tsOK)
+  {
+    message('Указанный товарный ПКП не имеет спецификации!', Information);
+    Abort;
+    Exit;
+  }
+  SumLimit := oValFunc.GetAnyCurrency(PaySchem.cVal,
+                                      SumLimit,
+                                      oSpDocs.GetTrueDateValCurse(FinPlan.dValCurse, FinPlan.dFrom, FinPlan.dInput),
+                                      FinPlan.cVal);
+
+  Marker := InitMarker('$$$_SchemOpl_$$$', 8, 50, 10, false);
+  ClearMarker(Marker);
+  MarkerPercent := InitMarker('$$$_SchemOplPercent_$$$', 8, 50, 10, false);
+  ClearMarker(MarkerPercent);
+  _loop SpecPos
+  {
+    if GetFirst fastfirstrow SpDocs where (( SpecPos.cPlanMC == SpDocs.nRec )) = tsOK
+    {
+      InsertMarker(Marker, SpecPos.cPlanMC);
+      InsertMarker(MarkerPercent, double(SpecPos.Percent));
+      set PickedSumma    := PickedSumma    + SpDocsSumPos*SpecPos.Percent/100;
+      set PickedSummaNDS := PickedSummaNDS + SpDocsNDSPos*SpecPos.Percent/100;
+    }
+  }
+}
+
+cmDone:
+{
+  DoneMarker(Marker       , '');
+  DoneMarker(MarkerPercent, '');
+}
+
+cmDefault:
+{
+  if (GetMarkerCount(Marker) = 0) OneMarkPick;
+
+  if (PickedSumma > SumLimit) and NeedToLimit
+  {
+    message('Выбранная сумма не должна превышать '+DoubleToStr(SumLimit, '\2p[|-]3666`666`666`666.88'), Warning);
+    Abort;
+    Exit;
+  }
+  delete safe SpecPos;
+  var tmpComp: comp;
+  var tmpDouble: double;
+  for(MarkerInd := 1; MarkerInd <= GetMarkerCount(Marker); inc(MarkerInd))
+  {
+    if GetMarker(Marker, MarkerInd-1, tmpComp)
+    {
+      if GetMarker(MarkerPercent, MarkerInd-1, tmpDouble)
+      {
+        ClearBuffer(#SpecPos);
+        SpecPos.cPlanMC := tmpComp; // ссылка на SpDocs.nRec
+        SpecPos.Percent := tmpDouble;
+        if (insert current SpecPos <> tsOK) {}
+      }
+    }
+  }
+}
+
+cmMarkUnMark:
+{
+  if Picked
+    OneUnMarkPick
+  else
+    OneMarkPick;
+#ifdef ATL51
+  RedrawCurrentAndGo(GetCurrentFormat, true);
+#else
+  if (GetNext SpDocs = tsOk) CallToNeighBours(#SpDocs, cmPosDown);
+  RescanPanel(#SpDocs);
+#end
+}
+
+cmSelectAll:
+{
+  ClearMarker(Marker);
+  ClearMarker(MarkerPercent);
+  PushPos(#SpDocs);
+  _loop SpDocs OneMarkPick;
+  PopPos(#SpDocs);
+  RescanPanel(#SpDocs);
+}
+
+cmUnSelectAll:
+{
+  ClearMarker(Marker);
+  ClearMarker(MarkerPercent);
+  set PickedSumma    := 0.0;
+  set PickedSummaNDS := 0.0;
+  RescanPanel(#SpDocs);
+}
+
+end;
+end.

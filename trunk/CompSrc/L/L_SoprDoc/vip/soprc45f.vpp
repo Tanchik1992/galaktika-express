@@ -1,0 +1,425 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+
+Procedure MakeMTabOtchet_KatSopr(_TDoc: word;_TDocStr: string;KSnRec: comp;NPP: word);
+{
+  If GetFirst KatSopr4 where((KSnRec == KatSopr4.nRec)) = tsOk{};
+
+  if (_TDoc = 6002) AND (KatSopr4.Reserved <= 0) Exit;//нет резерва по НВП
+
+  ClearBuffer(#MTabOtchet);
+  MTabOtchet.TDoc        := _TDoc;
+  MTabOtchet.TDocStr     := _TDocStr;
+  MTabOtchet.TDocnRec    := KatSopr4.nRec;
+  MTabOtchet.Descr       := KatSopr4.Descr;
+  MTabOtchet.dSopr       := KatSopr4.dSopr;
+  MTabOtchet.nSopr       := KatSopr4.nSopr;
+  If GetFirst KatOrg where((KatSopr4.cOrgBase == KatOrg.nRec)) = tsOk
+   MTabOtchet.KatOrgName := KatOrg.Name;
+  MTabOtchet.summa       := if(KatSopr4.cVal = 0, KatSopr4.Summa, KatSopr4.SumVal);
+  If KatSopr4.cVal<>0
+    If GetFirst KlVal where ((KatSopr4.cVal == KlVal.nRec)) = tsOk{};
+  MTabOtchet.valut := if(KatSopr4.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV);
+  case _TDoc of
+   101, 108, 600: {If GetFirst  KatPodr where((KatSopr4.cpodrTo == KatPodr.nRec)) = tsOk
+         MTabOtchet.Skl := KatPodr.Name;
+      If GetFirst  KatMol where((KatSopr4.cMolTo == KatMol.nRec)) = tsOk
+         MTabOtchet.Mol := KatMol.Name
+     }
+   201, 204, 6002: {If GetFirst  KatPodr where((KatSopr4.cpodrFrom == KatPodr.nRec)) = tsOk
+         MTabOtchet.Skl := KatPodr.Name;
+      If GetFirst  KatMol where((KatSopr4.cMolFrom == KatMol.nRec)) = tsOk
+         MTabOtchet.Mol := KatMol.Name
+     }
+  end;
+  MTabOtchet.npp       := NPP;//необходимо для сортировки
+  Insert current MTabOtchet;
+}
+
+Procedure MakeMTabOtchet_SklOrder(_TDoc: word;_TDocStr: string;KSnRec: comp;NPP: word);
+{
+  If GetFirst KatSopr4 where((KSnRec == KatSopr4.nRec)) = tsOk{};
+
+  ClearBuffer(#MTabOtchet);
+  MTabOtchet.TDoc        := _TDoc;
+  MTabOtchet.TDocStr     := _TDocStr;
+  MTabOtchet.TDocnRec    := SklOrder.nRec;
+  MTabOtchet.Descr       := SKLORDER.DESCR;
+  MTabOtchet.dSopr       := SKLORDER.DORD;
+  MTabOtchet.nSopr       := SKLORDER.NORDER;
+ _LOOP SpOrder where((SklOrder.Nrec  == SpOrder.cSklOrder))
+  {
+    MTabOtchet.summa := if(KatSopr4.cVal = 0, MTabOtchet.summa+SpOrder.SrPrice*SpOrder.kol, MTabOtchet.summa+SpOrder.VPrice*SpOrder.kol);
+  }
+  If KatSopr4.cVal<>0
+    If GetFirst KlVal where ((KatSopr4.cVal == KlVal.nRec)) = tsOk{};
+      MTabOtchet.valut := if(KatSopr4.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV);
+  If GetFirst  KatPodr where((SklOrder.cPodr == KatPodr.nRec)) = tsOk
+     MTabOtchet.Skl := KatPodr.Name;
+  If GetFirst  KatMol where((SklOrder.cMOL == KatMol.nRec)) = tsOk
+     MTabOtchet.Mol := KatMol.Name;
+  MTabOtchet.npp       := NPP;
+  Insert current MTabOtchet;
+}
+
+
+Procedure Make101KatSopr(_cParty: comp);
+{
+  delete all MTabKatSopr;
+var _cSopr: comp; _cSopr := 0;
+var npp: word; npp := 0;
+
+ _LOOP SpSopr where(( 101     == SpSopr.VidSopr AND
+                      _cParty == SpSopr.cParty ))
+ {
+   if (SpSopr.cSopr<> _cSopr)
+   {
+      _cSopr := SpSopr.cSopr;
+     If GetFirst KatSopr where (( SpSopr.cSopr == KatSopr.nRec)) = tsOk
+      If (KatSopr.wADoc <> adSoprDocSN) AND (KatSopr.wADoc <> adSoprDocKN)
+       {
+         ClearBuffer(#MTabKatSopr);
+         MTabKatSopr.VidSopr     := KatSopr.VidSopr;
+         MTabKatSopr.dSopr       := KatSopr.dSopr;
+         MTabKatSopr.nSopr       := KatSopr.nSopr;
+         MTabKatSopr.KatSoprnRec := KatSopr.nRec;
+         insert current MTabKatSopr;
+       }
+   }
+ }//_LOOP SpSopr where(( 101     == SpSopr.VidSopr AND
+
+ var tmpnSopr: string; tmpnSopr := '';
+
+ _LOOP MTabKatSopr  ordered by index TMP01indexmem
+  if MTabKatSopr.nSopr<>tmpnSopr
+ {
+   tmpnSopr := MTabKatSopr.nSopr;//исбежать дублирование документов
+
+   If GetFirst KatSopr where ((MTabKatSopr.KatSoprnRec == KatSopr.nRec )) = tsOk
+     {
+        MakeMTabOtchet_KatSopr(101, 'ПН', KatSopr.nRec, npp); npp := npp+1;
+
+       _LOOP SklOrder where ((KatSopr.NRec == SklOrder.cSopr))
+       {
+         MakeMTabOtchet_SklOrder(101, 'ПСО', KatSopr.nRec, npp); npp := npp+1;
+       }
+      //сторнирующая накладная
+       if (GetFirst KatSopr2 where ((KatSopr.nRec == KatSopr2.cADoc AND adSoprDocSN == KatSopr2.wADoc)) = tsOk )
+        {
+           MakeMTabOtchet_KatSopr(101, 'ПН(-КН)', KatSopr2.nRec, npp); npp := npp+1;
+
+          _LOOP SklOrder where ((KatSopr2.NRec == SklOrder.cSopr))
+          {
+            MakeMTabOtchet_SklOrder(101, 'ПСО(-КН)', KatSopr2.nRec, npp); npp := npp+1;
+          }
+        } // GetFirst KatSopr2 wher
+      //корректирующая накладная
+       if (GetFirst KatSopr2 where ((KatSopr.nRec == KatSopr2.cADoc AND adSoprDocKN == KatSopr2.wADoc)) = tsOk )
+        {
+           MakeMTabOtchet_KatSopr(101, 'ПН(КН)', KatSopr2.nRec, npp); npp := npp+1;
+
+          _LOOP SklOrder where ((KatSopr2.NRec == SklOrder.cSopr))
+          {
+            MakeMTabOtchet_SklOrder(101, 'ПСО(КН)', KatSopr2.nRec, npp); npp := npp+1;
+          }
+        } // GetFirst KatSopr2 wher
+
+     }//If GetFirst KatSopr where ((MTabKatSopr.KatSoprnRec == KatSopr.nRec )) = tsO
+
+ }//_LOOP MTabKatSopr  ordered by index TMP01indexmem
+}//Make101KatSopr
+
+
+Procedure MakeNNNKatSopr(_cParty: comp;NNN: word);
+{
+  delete all MTabKatSopr;
+var _cSopr: comp; _cSopr := 0;
+var npp: word; npp := 0;
+
+ _LOOP SpSopr where(( NNN     == SpSopr.VidSopr AND
+                      _cParty == SpSopr.cParty ))
+ {
+   if (SpSopr.cSopr<> _cSopr)
+   {
+      _cSopr := SpSopr.cSopr;
+     If GetFirst KatSopr where (( SpSopr.cSopr == KatSopr.nRec)) = tsOk
+       {
+         ClearBuffer(#MTabKatSopr);
+         MTabKatSopr.VidSopr     := KatSopr.VidSopr;
+         MTabKatSopr.dSopr       := KatSopr.dSopr;
+         MTabKatSopr.nSopr       := KatSopr.nSopr;
+         MTabKatSopr.KatSoprnRec := KatSopr.nRec;
+         insert current MTabKatSopr;
+       }
+   }
+ }//_LOOP SpSopr where(( 201     == SpSopr.VidSopr AND
+
+ var tmpnSopr: string; tmpnSopr := '';
+
+ _LOOP MTabKatSopr  ordered by index TMP01indexmem
+  if MTabKatSopr.nSopr<>tmpnSopr
+ {
+   tmpnSopr := MTabKatSopr.nSopr;//исбежать дублирование документов
+
+   If GetFirst KatSopr where ((MTabKatSopr.KatSoprnRec == KatSopr.nRec )) = tsOk
+     {
+        var tmpstr, s1, s2: string; tmpstr := '';s1 := '';s2 := '';
+
+        IF InStr('(-КН', KatSopr.nSopr) > 0 tmpstr := '(-КН)';
+        IF InStr('(КН', KatSopr.nSopr) > 0 tmpstr := '(КН)';//может быть КН2, КН3...
+
+        case NNN of
+         201: s1 := 'РН';
+         600: s1 := 'НВП';
+         204: s1 := 'АС';
+        end;
+
+        MakeMTabOtchet_KatSopr(NNN, s1+tmpstr, KatSopr.nRec, npp); npp := npp+1;
+
+       _LOOP SklOrder where ((KatSopr.NRec == SklOrder.cSopr))
+       {
+         If (SklOrder.vidOrder = 1)//расходный ордер
+            s2 := 'РСО'
+         else
+            s2 := 'ПСО';
+//           Message('SKLORDER.NORDER = '+SKLORDER.NORDER+ 'SKLORDER.NRec = '+SKLORDER.NRec);
+         MakeMTabOtchet_SklOrder(NNN, s2+tmpstr, KatSopr.nRec, npp); npp := npp+1;
+       }
+     }//If GetFirst KatSopr where ((MTabKatSopr.KatSoprnRec == KatSopr.nRec )) = tsO
+
+ }//_LOOP MTabKatSopr  ordered by index TMP01indexmem
+}//Make201KatSopr
+
+
+Procedure MakeRezervFromDO(_cParty: comp);
+{
+ _LOOP SpStep where ((_cParty == SpStep.cParty))
+ {
+   if (SpStep.Reserv <= 0) continue;
+
+    If GetFirst StepDoc where((SpStep.cStepDoc  == StepDoc.NRec)) = tsOk
+      If GetFirst BaseDoc where((StepDoc.cBaseDoc == BaseDoc.NRec)) = tsOk{};
+
+     _LOOP DoRes where((SpStep.NRec == DoRes.cSpStep))
+     {
+       If (DORES.KOL = 0) continue;// пропустить позиции с нулевым количеством резерва
+
+        ClearBuffer(#MTabOtchet);
+        MTabOtchet.TDoc        := 2012;
+        MTabOtchet.TDocStr     := 'ДО';
+        MTabOtchet.TDocnRec    := SpStep.nRec;
+        MTabOtchet.Descr       := BaseDoc.Descr;
+        MTabOtchet.dSopr       := BaseDoc.dDoc;
+        MTabOtchet.nSopr       := BaseDoc.nodoc;
+        If GetFirst KatOrg where((BaseDoc.cOrg  == KatOrg.NRec)) = tsOk
+          MTabOtchet.KatOrgName := KatOrg.Name;
+//        MTabOtchet.summa       := SpStep.Kol*SpStep.Price;
+        MTabOtchet.summa       := BASEDOC.TOTAL;
+
+        If (BaseDoc.cVal <> 0)
+          If GetFirst KlVal where ((BaseDoc.cVal == KlVal.Nrec)) = tsOk{};
+        MTabOtchet.valut := if ( BaseDoc.cVal = 0,    s_SimvRub,   KlVal.SimVolV);
+
+        If( GetFirst KatPodr where((DoRes.cPodr == KatPodr.NRec)) = tsOk )
+           MTabOtchet.Skl := KatPodr.Name;
+       If( GetFirst KatMol where((DoRes.cMol == KatMol.NRec)) = tsOk )
+           MTabOtchet.Mol := KatMol.Name;
+//        MTabOtchet.npp       := NPP;
+        Insert current MTabOtchet;
+     }
+
+ }
+}//MakeRezervFromDO(_cParty: comp)
+
+
+Procedure MakeRezervFromNVP(_cParty: comp);
+{
+ _LOOP SpSopr where(( 600     == SpSopr.VidSopr AND
+                      _cParty == SpSopr.cParty ))
+ {
+   MakeMTabOtchet_KatSopr(6002, 'НВП', SpSopr.cSopr, 0);
+ }
+}//MakeRezervFromNVP(_cParty: comp)
+
+Procedure WriteSpecificDoc;
+{
+  soprc45f.write(MTabOtchet.TDocStr);
+  soprc45f.write(MTabOtchet.Descr);
+  soprc45f.write(MTabOtchet.dSopr);
+  soprc45f.write(' '+MTabOtchet.nSopr);//без пробела в отчет попадает номер вместо 00001 -> обрубает нули 1
+  soprc45f.write(MTabOtchet.KatOrgName);
+  soprc45f.write(MTabOtchet.summa);
+  soprc45f.write(MTabOtchet.valut);
+  soprc45f.write(MTabOtchet.Skl);
+  soprc45f.write(MTabOtchet.Mol);
+} //WriteSpecificDoc;
+
+Procedure PrintDocument;
+{
+  var _cParty: comp; _cParty := 0;
+
+  case CurTable of
+   #MTabReestrforKN:
+   {
+    If GetFirst SpSopr where(( MTabReestrforKN.SpSoprnRec == SpSopr.nRec)) = tsOk
+       _cParty := SpSopr.cParty;
+    }
+   #MTabReestrforKN2:
+   {
+    If GetFirst SpSopr where(( MTabReestrforKN2.SpSopr2nRec == SpSopr.nRec)) = tsOk
+       _cParty := SpSopr.cParty;
+   }
+   #MTabReestrforKN3:
+   {
+    If GetFirst SpSopr where(( MTabReestrforKN3.SpSopr3nRec == SpSopr.nRec)) = tsOk
+       _cParty := SpSopr.cParty;
+   }
+  end;//case CurTable of
+
+   StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+    'Печать отчета.', 1);
+
+   Make101KatSopr(_cParty);
+     if not NextVisual
+      {
+        StopVisual('', 0);
+        delete all MTabKatSopr;
+        delete all MTabOtchet;
+        Exit;
+      }
+   MakeNNNKatSopr(_cParty, 201);
+     if not NextVisual
+      {
+        StopVisual('', 0);
+        delete all MTabKatSopr;
+        delete all MTabOtchet;
+        Exit;
+      }
+   MakeNNNKatSopr(_cParty, 600);
+     if not NextVisual
+      {
+        StopVisual('', 0);
+        delete all MTabKatSopr;
+        delete all MTabOtchet;
+        Exit;
+      }
+   MakeNNNKatSopr(_cParty, 204);
+     if not NextVisual
+      {
+        StopVisual('', 0);
+        delete all MTabKatSopr;
+        delete all MTabOtchet;
+        Exit;
+      }
+   MakeRezervFromDO(_cParty);
+     if not NextVisual
+      {
+        StopVisual('', 0);
+        delete all MTabKatSopr;
+        delete all MTabOtchet;
+        Exit;
+      }
+   MakeRezervFromNVP(_cParty);
+     if not NextVisual
+      {
+        StopVisual('', 0);
+        delete all MTabKatSopr;
+        delete all MTabOtchet;
+        Exit;
+      }
+
+  If GetFirst Katparty where ((_cParty == KatParty.nRec)) = tsOk{};
+     soprc45f.write(KatParty.Name);
+
+   If GetFirst MTabOtchet where ((word(101) == MTabOtchet.TDoc))<>tsOk
+     soprc45f.skipformat(9);
+    else
+     _LOOP MTabOtchet where ((word(101) == MTabOtchet.TDoc)) ordered by index TMP01indexmem
+     {
+       WriteSpecificDoc;
+     }
+     soprc45f.putevent(feBreak);
+ //накладные на отпуск
+   If GetFirst MTabOtchet where ((word(201) == MTabOtchet.TDoc))<>tsOk
+     soprc45f.skipformat(9);
+    else
+     _LOOP MTabOtchet where ((word(201) == MTabOtchet.TDoc)) ordered by index TMP01indexmem
+     {
+       WriteSpecificDoc;
+     }
+     soprc45f.putevent(feBreak);
+ // внутреннее перемещение
+   If GetFirst MTabOtchet where ((word(600) == MTabOtchet.TDoc))<>tsOk
+     soprc45f.skipformat(9);
+    else
+     _LOOP MTabOtchet where ((word(600) == MTabOtchet.TDoc)) ordered by index TMP01indexmem
+     {
+       WriteSpecificDoc;
+     }
+     soprc45f.putevent(feBreak);
+//Акты списания
+   If GetFirst MTabOtchet where ((word(204) == MTabOtchet.TDoc))<>tsOk
+     soprc45f.skipformat(9);
+    else
+     _LOOP MTabOtchet where ((word(204) == MTabOtchet.TDoc)) ordered by index TMP01indexmem
+     {
+       WriteSpecificDoc;
+     }
+     soprc45f.putevent(feBreak);
+
+//Резервы по ДО
+   If GetFirst MTabOtchet where ((word(2012) == MTabOtchet.TDoc))<>tsOk
+     soprc45f.skipformat(9);
+    else
+    {
+      var tmpSkl: string;tmpSkl := '';
+      var tmpMol: string;tmpMol := '';
+     _LOOP MTabOtchet where ((word(2012) == MTabOtchet.TDoc)) ordered by index TMP03indexmem
+     {
+     //исбавляюсь от одинаковых позиций в отчете
+      IF (MTabOtchet.Skl<>tmpSkl or MTabOtchet.Mol<>tmpMol)
+        {
+         WriteSpecificDoc;
+         tmpSkl := MTabOtchet.Skl;
+         tmpMol := MTabOtchet.Mol;
+        }
+     }//_LOOP
+    }//else
+     soprc45f.putevent(feBreak);
+
+//Резервы по НВП
+   If GetFirst MTabOtchet where ((word(6002) == MTabOtchet.TDoc))<>tsOk
+     soprc45f.skipformat(9);
+    else
+    {
+     var tmpComp: comp;tmpComp := 0;
+     _LOOP MTabOtchet where ((word(6002) == MTabOtchet.TDoc)) ordered by index TMP02indexmem
+     {
+      IF MTabOtchet.TDocnRec<>tmpComp //исбавляюсь от одинаковых позиций в отчете
+        {
+          WriteSpecificDoc;
+          tmpComp := MTabOtchet.TDocnRec;
+        }
+      }//_LOOP
+     }//else
+     soprc45f.putevent(feBreak);
+
+  //ФИО текущего пользователя
+    if ((GetFirst X$Users where
+        (sGetTune('User.OwnName') = sGetTuneEx('User.Descr', UserOfficeFilial(X$Users.atl_nRec), X$Users.atl_nRec))) = tsOk){};
+         soprc45f.Write(sGetTune('User.FIO'));
+
+     StopVisual('', 0);
+
+  if (soprc45f.Error)
+    soprc45f.AbortForm
+  else
+    soprc45f.ShowFile('Отфактуровка отпуска МЦ');
+
+   delete all MTabKatSopr;
+   delete all MTabOtchet;
+}//PrintDocument

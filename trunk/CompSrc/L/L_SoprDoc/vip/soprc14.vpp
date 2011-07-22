@@ -1,0 +1,132 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// общие процедуры/функции в сопроводительных документах
+//******************************************************************************
+
+//******************************************************************************
+//выбор организации-контрагента
+//******************************************************************************
+Procedure PickKatOrgName;
+var OldOrg: comp;
+{
+  OldOrg := KatSopr.cOrg;
+
+  if (KatSopr.cDogovor <> 0) //ПиР 101.19773
+    if ((KatSopr.VidSopr = 110) OR (KatSopr.VidSopr = 210) OR (KatSopr.VidSopr = 229))
+      {
+        Message('Не допускается изменять контрагента - с актом связан договор!', Information);
+        Exit;
+      }
+
+  if (boGetTune('Doc.NotEditOrgWithSpec') and IsValid(#SpSopr) )
+    {
+      Message('Не допускается изменять контрагента при заполненной спецификации!'#13 + GetTuneName('Doc.NotEditOrgWithSpec'));
+      Exit;
+    }
+
+  case KatSopr.VidSopr of
+  //******************************************************************************
+    114, 110, 101, 102, 103, 108, 111, 115, 1411, 551, 552:
+      if (RunInterface('GetKatOr', KatSopr.cOrgBase, comp(0), FALSE, comp(0), comp(0)) <> cmCancel)
+        {
+          set KatSopr.cOrg      := KatSopr.cOrgBase;
+          set KatSopr.cGruzFrom := KatSopr.cOrgBase;
+        }
+  //******************************************************************************
+    210, 229, 201, 202, 203, 211, 1421:
+      {
+        pNRec := KatSopr.cOrgBase;
+
+        if (RunInterface('GetKatOr', KatSopr.cOrgBase, comp(0), FALSE, comp(0), comp(0)) <> cmCancel)
+          {
+            if ((KatSopr.cOrgPlat = pNRec) OR (KatSopr.cOrgPlat = 0))
+              if ((wGetTune('Doc.Sell.OrgPlat') = 0) AND KatSopr.VidSopr <> 1421) OR
+                 ((wGetTune('Doc.Wood.Nakl.OrgPlat') = 0) AND KatSopr.VidSopr = 1421)
+                set KatSopr.cOrgPlat := KatSopr.cOrgBase
+              else
+                set KatSopr.cOrgPlat := KatSopr.cGruzFrom;
+
+            if ((KatSopr.cOrg = pNRec) OR (KatSopr.cOrg = 0))
+              {
+                set KatSopr.cOrg := KatSopr.cOrgBase;
+                //-- проверка задолженности контрагента
+                if (NOT CheckDolgKonSopr(FALSE))
+                  EXIT;
+              }
+
+            if ((KatSopr.cGruzTo = pNRec) or (KatSopr.cGruzTo = 0))
+              set KatSopr.cGruzTo := KatSopr.cOrgBase;
+
+            if ( (KatSopr.VidSopr = 210) or (KatSopr.VidSopr = 229) )
+              if (GetFirst fastfirstrow KatPodr2 where ((KatSopr.cOrgBase == KatPodr2.cOrg)) = tsOk)
+                set KatSopr.cPodrTo := KatPodr2.nRec;
+          }
+      }
+  //******************************************************************************
+  end;
+
+  if (OldOrg <> KatSopr.cOrg)
+    iGrPl.InsSpGrPlD_Default(KatSopr.VidSopr, KatSopr.nRec, KatSopr.cOrg);
+
+  if (wGetTune('Doc.AvtoCEC') = 1)
+    cEC.CopyExClass4Table(coKatOrg, KatOrg.NRec, coKatSopr, KatSopr.NRec);
+
+   if ChangeSpDocNalOrg(OldOrg, KatSopr.cOrg)
+     CheckSumma(TRUE);
+}
+
+//******************************************************************************
+//выбор организации-контрагента взаиморасчетов
+//******************************************************************************
+Procedure PickOrgVzr;
+var OldOrg: comp;
+{
+  OldOrg := KatSopr.cOrg;
+
+  case KatSopr.VidSopr of
+  //******************************************************************************
+    110, 114, 101, 102, 103, 108, 111, 1411:
+      RunInterface('GetKatOr', KatSopr.cOrg, comp(0), FALSE, comp(0), comp(0));
+  //******************************************************************************
+    201, 202, 203, 211, 1421:
+      if (RunInterface('GetKatOr', KatSopr.cOrg, comp(0), FALSE, comp(0), comp(0)) <> cmCancel)
+        {
+          #ifdef _SOPRDOC_VIP
+          if NullVipRef(oCheckKon)
+            GetVipRef(oCheckKon, 'KatOrg');
+
+          if (not oCheckKon.CheckDolgKon(if(KatSopr.cOrg <> 0, KatSopr.cOrg, KatSopr.cOrgBase),
+                                         KatSopr.dSopr,
+                                         if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal), KatSopr.cVal))
+            {
+              RereadRecord(#KatSopr)
+              Exit;
+            }
+          #end // _SOPRDOC_VIP
+
+          #ifdef _AKTUSL_VIP
+          if NullVipRef(oCheckKon)
+            GetVipRef(oCheckKon, 'KatOrg');
+
+          if (not oCheckKon.CheckDolgKon(if(KatSopr.cOrg <> 0, KatSopr.cOrg, KatSopr.cOrgBase),
+                                         KatSopr.dSopr,
+                                         if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal), KatSopr.cVal))
+            {
+              RereadRecord(#KatSopr)
+              Exit;
+            }
+          #end // _AKTUSL_VIP
+       }
+  //******************************************************************************
+  end;
+
+  if (OldOrg <> KatSopr.cOrg)
+    iGrPl.InsSpGrPlD_Default(KatSopr.VidSopr, KatSopr.nRec, KatSopr.cOrg);
+
+  if (KatSopr.VhodNal = 1 )
+    Exit; //налоги входят в цену
+
+  if ChangeSpDocNalOrg(OldOrg, KatSopr.cOrg)
+    CheckSumma(TRUE);
+}

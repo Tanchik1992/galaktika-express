@@ -1,0 +1,1255 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Групповой выбор наряд-заказов с использованием маркера    ║
+ ║ Ответственный : Глушаков Дмитрий Сергеевич                                ║
+ ║ Параметры     : есть                                                      ║
+ ║    pStatus   // 0 - выбирать все, иначе битовая маска запрещенных         ║
+ ║    pTypeDoc  // 0 - выбирать все, иначе битовая маска запрещенных         ║
+ ║    OkOne     // TRUE - груповой выбор, FALSE-только один                  ║
+ ║    prmNZakaz // возвращаемый указатель на наряд-заказ                     ║
+ ║    OneLevel  // показывать записи одного уровня - true, false - нет       ║
+ ║    pOwn      // ссылка на влдельца уровня(действует если OneLevel = true) ║
+ ║    pPunktP   // если не ноль, то фильтр по пункту погрузки                ║
+ ║    pKontr2   // если не ноль, то фильтр по контрагенту                    ║
+ ║    pGruzTo   // если не ноль, то фильтр по грузополучателю                ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include temp_tab.vih
+
+#doc
+Интерфейс выбора наряд-заказа
+#end
+Interface GetSomNZakaz 'Выбор наряд-заказа' escclose, doaccept, cyan;
+   Show at (0,0,80,24);
+
+create view vwGetNZakaz
+var
+//--параметры
+  pStatus,
+  pTypeDoc           : word;
+  OkOne              : boolean;
+  prmNZakaz          : comp;
+  OneLevel           : boolean;
+  pOwn               : comp;
+//--
+  Node               : comp;
+  OnlyStat           : word;
+  MarkerNZ           : longint;
+  IndexNZ            : longint;
+  isTreeFormat       : boolean; // признак в каком виде интерфейс true-дерево,false-brows
+  optView1,optView2,
+  oldView1,oldView2,
+  filAuto1,filAuto2,
+  oldAuto1,oldAuto2  : word;
+
+  pPunktP_2,
+  pKontr2_2,
+  pGruzTo_2,
+  pKontr2,_pKontr2,
+  pPunktP,_pPunktP,
+  pContr,_pContr,
+  pGruzFrom,_pGruzFrom,
+  pGruzTo,_pGruzTo,
+  pDog,_pDog,
+  pAppDog,_pAppDog,
+  pResOtg,_pResOtg   : comp;
+  (
+    picked,
+    nZakazPrior,        // 1
+!    nZakazStatus,       // 2
+    nZakazType,         // 3
+    DogovorName,        // 4
+    AppDogovorName,     // 5
+    NZUpName,           // 6
+    NZDownName,         // 7
+    CalPlanName,        // 8
+    nZakazTypeShort,    // 9
+    sDogovor,           // 10
+    sAppDogovor         // 11
+  )
+as select
+  if(SearchMarker(MarkerNZ,NZakaz.NRec,IndexNZ), '√', ''),
+  // 1
+  if ( nZakaz.Prior = 0,   'нормальный',
+    if ( nZakaz.Prior = 1, 'высокий',
+    if ( nZakaz.Prior = 2, 'низкий',
+    '!некорр!'))),
+!  // 2
+!  if ( nZakaz.status = 0,   'оформляемый',
+!    if ( nZakaz.Status = 1, 'исполняемый',
+!    if ( nZakaz.Status = 2, 'приостановленный',
+!    if ( nZakaz.Status = 3, 'отмененный',
+!    if ( nZakaz.Status = 4, 'закрытый',
+!    '!некорр!'))))),
+  // 3
+  if ( nZakaz.TypeDoc = 0,   'обычный',
+    if ( nZakaz.TypeDoc = 1, 'групповой',
+    if ( nZakaz.TypeDoc = 2, 'детальный',
+    'некорр!'))),
+  // 4
+  if ( nZakaz.cDogovor <> 0, '№ '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY'), ''),
+  // 5
+  if ( nZakaz.cAppDogovor <> 0, '№ '+AppDogovor.NoDoc+' от '+DateToStr(AppDogovor.dDoc,'DD/MM/YYYY'),''),
+  // 6
+  if ( nZakaz.cOwner <> 0, '№ '+nZakazUp.NoDoc+' от '+DateToStr(nZakazUp.dDoc,'DD/MM/YYYY'),''),
+  // 7
+  if ( isValid(tnNZakazDown), '№ '+nZakazDown.NoDoc+' от '+DateToStr(nZakazDown.dDoc,'DD/MM/YYYY'),''),
+  // 8
+  if ( nZakaz.cCalPlan <> 0, CalPlan.NoDoc, ''),
+  // 9
+  if ( nZakaz.TypeDoc = 0, 'О',
+    if ( nZakaz.TypeDoc = 1, 'Г',
+    if ( nZakaz.TypeDoc = 2, 'Д',
+    'Н'))),
+  // 10
+  if ( isValid(tnDogovor2)   , '№ '+Dogovor2.NoDoc+' от '+DateToStr(Dogovor2.dDoc,'DD/MM/YYYY'), ''),
+  // 11
+  if ( isValid(tnAppDogovor2), '№ '+AppDogovor2.NoDoc+' от '+DateToStr(AppDogovor2.dDoc,'DD/MM/YYYY'),'')
+
+from
+  nZakaz                         ,
+  SpDocs                         ,
+  Dogovor                        ,
+  CalPlan                        ,
+  KatNotes                       ,
+  MarPunkt                       ,
+  ResOtgr                        ,
+  TMP01                          ,
+  synonym Dogovor Dogovor2       ,
+  synonym Dogovor AppDogovor     ,
+  synonym Dogovor AppDogovor2    ,
+  synonym NZakaz  NZakazUp       ,
+  synonym NZakaz  NZakazDown     ,
+  synonym KatOrg  Contr1         ,
+  synonym KatOrg  Contr2         ,
+  synonym KatOrg  Contr22        ,
+  synonym KatOrg  GrOtp          ,
+  synonym KatOrg  Contributor    ,
+
+  synonym KatOrg   Kontrag2      ,
+  synonym MarPunkt MarPunkt2     ,
+  synonym KatOrg   Contributor2  ,
+  synonym KatOrg   GruzoOtpr2    ,
+  synonym KatOrg   GruzoPol2
+where ((
+  nZakaz.cDogovor      == Dogovor.nRec           and
+  nZakaz.cAppDogovor   == AppDogovor.nRec        and
+  nZakaz.cOwner        == nZakazUp.nRec          and
+  nZakaz.cInstead      == NZakazDown.NRec        and
+  nZakaz.cCalPlan      == CalPlan.nRec           and
+  Dogovor.cMyOrg       == Contr1.nRec            and
+  Dogovor.cOrg         == Contr2.nRec            and
+  nZakaz.cOrg          == Contr22.nRec           and
+  nZakaz.cGrOtp        == GrOtp.nRec             and
+  nZakaz.cNote         == KatNotes.nRec          and
+  nZakaz.cPunktP       == MarPunkt.NRec          and
+  nZakaz.cContrib      == Contributor.nRec       and
+
+  _pKontr2             == Kontrag2.NRec          and
+  _pPunktP             == MarPunkt2.NRec         and
+  _pContr              == Contributor2.NRec      and
+  _pGruzFrom           == GruzoOtpr2.NRec        and
+  _pGruzTo             == GruzoPol2.NRec         and
+  _pDog                == Dogovor2.nRec          and
+  _pAppDog             == AppDogovor2.nRec       and
+  _pResOtg             == ResOtgr.nRec
+))
+
+Bounds Node       = Node             == nZakaz.cOwner      (NoIndex)
+
+Bounds OnlyStatus = OnlyStat         == NZakaz.Status      (NoIndex)
+
+Bounds pKontr2    = pKontr2          == NZakaz.cOrg        (NoIndex)
+
+Bounds pPunktP    = pPunktP          == NZakaz.cPunktP     (NoIndex)
+
+Bounds pContr     = pContr           == NZakaz.cContrib    (NoIndex)
+
+Bounds pGruzFrom  = pGruzFrom        == NZakaz.cGrOtp      (NoIndex)
+
+Bounds pGruzTo    = pGruzTo          == NZakaz.cGrPol      (NoIndex)
+
+
+Bounds pDog       = pDog             == NZakaz.cDogovor    (NoIndex)
+
+Bounds pAppDog    = pAppDog          == NZakaz.cAppDogovor (NoIndex)
+
+Bounds pResOtg0   = nZakaz.NRec      == SpDocs.cDoc                  and
+                    word(440)        == SpDocs.TiDk
+
+Bounds pResOtg    = nZakaz.NRec     /== SpDocs.cDoc                  and
+                    word(440)        == SpDocs.TiDk                  and
+                    pResOtg          == SpDocs.cResOtgr    (NoIndex)
+
+Bounds Dscr       = sGetTune('User.Descr')   == NZakaz.Descr       (NoIndex)
+;
+
+Parameters
+  pStatus,   // 0 - выбирать все документы, иначе битовая маска запрещенных статусов документов
+             // если 1000+status, то bounds только по этому статусу (status == NZakaz.Status)
+  pTypeDoc,  // 0 - выбирать все документы, иначе битовая маска запрещенных типов документов
+  OkOne,     // TRUE - груповой выбор FALSE - только один
+  prmNZakaz, // возвращаемый указатель на наряд-заказ
+  OneLevel,  // показывать записи одного уровня - true, false - нет
+  pOwn,      // ссылка на влдельца уровня(действует если OneLevel = true)
+  pPunktP,   // если не ноль, то фильтр по пункту погрузки // ВОЗВРАЩАЮТ ПЕРВЫЙ ВЫБРАННЫЙ
+  pKontr2,   // если не ноль, то фильтр по контрагенту     // ВОЗВРАЩАЮТ ПЕРВЫЙ ВЫБРАННЫЙ
+  pGruzTo    // если не ноль, то фильтр по грузополучателю // ВОЗВРАЩАЮТ ПЕРВЫЙ ВЫБРАННЫЙ
+  ;
+
+QuickChoice qcNZakNomDes
+  {
+   AcceptField = TMP01.nRec    ;
+   ViewField   = TMP01.st20_1  ;
+   ViewField   = TMP01.st20_2  ;
+   ViewField   = TMP01.data1   ;
+   ViewField   = TMP01.st1     ;
+   SearchField = TMP01.st20_1  ;
+
+   OnOpen  :  _LOOP nZakaz
+                {
+                 ClearBuffer(tnTMP01) ;
+                 TMP01.nrec  :=  nZakaz.nRec  ;
+                 TMP01.st20_1:=  nZakaz.NoDoc ;
+                 TMP01.data1 :=  nZakaz.dDoc  ;
+                 TMP01.st20_2:=  picked       ;
+                 TMP01.st1   :=  Contr22.Name ;
+                 insert current TMP01;
+                }
+   OnClose :  {
+                prmNZakaz := TMP01.nrec ;
+                delete all TMP01;
+              }
+  };
+!-------------------------------------------------------------------------------
+//-- Установить заголовок окна
+Procedure SetMyTitle;
+  {
+  if (OkOne)
+    SetTitle('Групповой выбор наряд-заказов (помечено: ' + string(GetMarkerCount(MarkerNZ)) + ')');
+  else
+    SetTitle('Выбор наряд-заказа');
+  }
+
+Procedure RemoveAutoFilBounds(Rescan : boolean);
+  {
+  if ((filAuto1 and 1) > 0)  // Выбор контрагента
+    {
+    if (BoundActive(tbpKontr2))   SubBounds(tbpKontr2);
+    set pKontr2 := 0;
+    optView1 := optView1 and (  2+4+8+16);
+    }
+  if ((filAuto1 and 2) > 0)  // Выбор пункта погрузки
+    {
+    if (BoundActive(tbpPunktP))   SubBounds(tbpPunktP);
+    set pPunktP := 0;
+    optView1 := optView1 and (1+  4+8+16);
+    }
+  if ((filAuto1 and 4) > 0)  // Выбор заявителя
+    {
+    if (BoundActive(tbpContr))    SubBounds(tbpContr);
+    set pContr := 0;
+    optView1 := optView1 and (1+2+  8+16);
+    }
+  if ((filAuto1 and 8) > 0)  // Выбор грузоотправителя
+    {
+    if (BoundActive(tbpGruzFrom)) SubBounds(tbpGruzFrom);
+    set pGruzFrom := 0;
+    optView1 := optView1 and (1+2+4+  16);
+    }
+  if ((filAuto1 and 16) > 0)  // Выбор грузополучателя
+    {
+    if (BoundActive(tbpGruzTo))   SubBounds(tbpGruzTo);
+    set pGruzTo := 0;
+    optView1 := optView1 and (1+2+4+8   );
+    }
+!-------------------------------
+  if ((filAuto2 and  1) > 0)  // Выбор договора
+    {
+    if (BoundActive(tbpDog   ))   SubBounds(tbpDog   );
+    set pDog := 0;
+    optView2 := optView2 and (  2+4);
+    }
+  if ((filAuto2 and  2) > 0)  // Выбор соглашения
+    {
+    if (BoundActive(tbpAppDog))   SubBounds(tbpAppDog);
+    set pAppDog := 0;
+    optView2 := optView2 and (1+  4);
+    }
+  if ((filAuto2 and  4) > 0)  // Выбор ресурса отгрузки
+    {
+    if (BoundActive(tbpResOtg))   SubBounds(tbpResOtg);
+    set pResOtg := 0;
+    optView2 := optView2 and (1+2  );
+    }
+  if ( ((filAuto1 <> 0) or (filAuto2 <> 0)) and Rescan )
+    {
+    PushPos(#nZakaz);
+    if (GetLast nZakaz = tsOk) {};
+    PopPos(#nZakaz);
+    ReReadRecord(#nZakaz);
+    }
+  }
+
+//-- Отменить выделение
+Procedure KillPick;
+  {
+  ClearMarker(MarkerNZ);
+  SetMyTitle;
+  }
+
+#include accesden.vpp
+
+//-- пометить одну позицию
+function OneMarkPick (ShowMess:boolean) : boolean;
+  {
+  OneMarkPick := false;
+  if ItemAccessDenided (pStatus,NZakaz.Status)
+    {
+    if (ShowMess)
+      message('Нельзя пометить наряд-заказ с данным статусом !');
+    EXIT;
+    }
+  if ItemAccessDenided (pTypeDoc,NZakaz.TypeDoc)
+    {
+    if (ShowMess)
+      message('Нельзя пометить наряд-заказ с данным типом документа !');
+    EXIT;
+    }
+  if(not SearchMarker(MarkerNZ,NZakaz.NRec,IndexNZ))
+    InsertMarker(MarkerNZ,NZakaz.NRec);
+  if (GetMarkercount(MarkerNZ) = 1)
+    {
+    pPunktP_2 := NZakaz.cPunktP;
+    pKontr2_2 := NZakaz.cOrg;
+    pGruzTo_2 := NZakaz.cGrPol;
+
+    if ((filAuto1 and 1) > 0)  // Выбор контрагента
+      {
+      set pKontr2   := NZakaz.cOrg;
+      if (not BoundActive(tbpKontr2))   AddBounds(tbpKontr2);
+      optView1 := optView1 or 1 ;
+      }
+    if ((filAuto1 and 2) > 0)  // Выбор пункта погрузки
+      {
+      set pPunktP   := NZakaz.cPunktP;
+      if (not BoundActive(tbpPunktP))   AddBounds(tbpPunktP);
+      optView1 := optView1 or 2 ;
+      }
+    if ((filAuto1 and 4) > 0)  // Выбор заявителя
+      {
+      set pContr    := NZakaz.cContrib;
+      if (not BoundActive(tbpContr))    AddBounds(tbpContr);
+      optView1 := optView1 or 4 ;
+      }
+    if ((filAuto1 and 8) > 0)  // Выбор грузоотправителя
+      {
+      set pGruzFrom := NZakaz.cGrOtp;
+      if (not BoundActive(tbpGruzFrom)) AddBounds(tbpGruzFrom);
+      optView1 := optView1 or 8 ;
+      }
+    if ((filAuto1 and 16) > 0)  // Выбор грузополучателя
+      {
+      set pGruzTo   := NZakaz.cGrPol;
+      if (not BoundActive(tbpGruzTo))   AddBounds(tbpGruzTo);
+      optView1 := optView1 or 16 ;
+      }
+!-------------------------------
+    if ((filAuto2 and  1) > 0)  // Выбор договора
+      {
+      set pDog      := NZakaz.cDogovor;
+      if (not BoundActive(tbpDog   ))   AddBounds(tbpDog   );
+      optView2 := optView2 or 1 ;
+      }
+    if ((filAuto2 and  2) > 0)  // Выбор соглашения
+      {
+      set pAppDog   := NZakaz.cAppDogovor;
+      if (not BoundActive(tbpAppDog))   AddBounds(tbpAppDog);
+      optView2 := optView2 or 2 ;
+      }
+    if ((filAuto2 and  4) > 0)  // Выбор ресурса отгрузки
+      {
+      AddBounds(tbpResOtg0);
+      set pResOtg   := if (GetFirst SpDocs = tsOk,SpDocs.cResOtgr,0);
+      SubBounds(tbpResOtg0);
+      if (not BoundActive(tbpResOtg))   AddBounds(tbpResOtg);
+      optView2 := optView2 or 4 ;
+      }
+    if ( ((filAuto1 <> 0) or (filAuto2 <> 0)) and ShowMess )
+      {
+      PushPos(#nZakaz);
+      if (GetFirst nZakaz = tsOk) {};
+      PopPos(#nZakaz);
+      ReReadRecord(#nZakaz);
+      }
+    }
+  OneMarkPick := true;
+  }
+
+!-------------------------------------------------------------------------------
+Window wSetFilters 'Установка фильтров' EscClose DoAccept ;
+  Show at (8,4,71,18);
+Panel nZakazFilters;
+Screen scrFilter ('',,sci13Esc);
+Fields
+  optView1          ('Установить фильтр',,sci1Esc) : noprotect;
+  Kontrag2.Name     ('Выбор контрагента'         ) : PickButton,protect;
+  filAuto1          ('Накладывать выбранный фильтр при выборе первого НЗ',
+                      hcGetSomNZakaz_filAuto,    ) : noprotect;
+  MarPunkt2.Name    ('Выбор пункта погрузки'     ) : PickButton,protect;
+  Contributor2.Name ('Выбор заявителя'           ) : PickButton,protect;
+  GruzoOtpr2.Name   ('Выбор грузоотправителя'    ) : PickButton,protect;
+  Gruzopol2.Name    ('Выбор грузополучателя'     ) : PickButton,protect;
+
+  optView2          ('Установить фильтр',,sci1Esc) : noprotect;
+  sDogovor          ('Выбор договора'            ) : PickButton,protect;
+  filAuto2          ('Накладывать выбранный фильтр при выборе первого НЗ',
+                      hcGetSomNZakaz_filAuto,    ) : noprotect;
+  sAppDogovor       ('Выбор соглашения'          ) : PickButton,protect;
+  ResOtgr.Name      ('Выбор ресурса отгрузки'    ) : PickButton,protect;
+Buttons
+  cmOK,Default,,'Ввод - принять выбор',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+
+ Использовать фильтры:                             Автофильтр:
+  [.] Контрагент      `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+  [.] Пункт погрузки  `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+  [.] Заявитель       `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+  [.] Грузоотправитель`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+  [.] Грузополучатель `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+
+  [.] Договор         `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+  [.] Соглашение      `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+  [.] Ресурс отгрузки `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   [.] `
+
+           <. Продолжить .>      <.   Отмена   .>
+
+>>
+end; // Screen
+HandleEvent // Panel
+cmPick:
+  {
+  CASE CurField OF
+    #Kontrag2.Name :
+      { // Выбор контрагента
+      if (RunInterface('GetKatOr',_pKontr2,comp(0),false,comp(0),comp(0)) = cmDefault)
+        if (GetFirst Kontrag2 = tsOk)
+          set optView1 := optView1 or 1 ;
+      }
+    #MarPunkt2.Name :
+      { // Выбор пункта погрузки
+      if (RunInterface('Get_Item',word(1),_pPunktP) = cmDefault)
+        if (GetFirst MarPunkt2 = tsOk)
+          set optView1 := optView1 or 2 ;
+      }
+    #Contributor2.Name :
+      { // Выбор заявителя
+      if (RunInterface('GetKatOr',_pContr,comp(0),false,comp(0),comp(0)) = cmDefault)
+        if (GetFirst Contributor2 = tsOk)
+          set optView1 := optView1 or 4 ;
+      }
+    #GruzoOtpr2.Name :
+      { // Выбор грузоотправителя
+      if (RunInterface('GetKatOr',_pGruzFrom,comp(0),false,comp(0),comp(0)) = cmDefault)
+        if (GetFirst GruzoOtpr2 = tsOk)
+          set optView1 := optView1 or 8 ;
+      }
+    #GruzoPol2.Name :
+      { // Выбор грузополучателя
+      if (RunInterface('GetKatOr',_pGruzTo,comp(0),false,comp(0),comp(0)) = cmDefault)
+        if (GetFirst GruzoPol2 = tsOk)
+          set optView1 := optView1 or 16 ;
+      }
+
+    #sDogovor :
+      { // Выбор договора
+      var pOwn : comp; pOwn := 0;
+      if (RunInterface('GetSomeDogovor',
+                       word(0),          // вид документа - если задан будет установлен фильтр
+                       word(2),          // 0 - выбирать все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+                       word(0),          // 0 - выбирать все документы, 1 - только на продажу, 2 - только на закупку
+                       word(0),          // 0 - выбирать соглашения нельзя, 1 - можно, 2 - только соглашения
+                       false,            // TRUE - груповой выбор FALSE - только один
+                       _pDog,            // возвращаемый указатель на договор
+                       false,            // показывать записи одного уровня (true), false - нет
+                       pOwn              // ссылка на владельца уровня (действует если OneLevel = true) - ВОЗВРАЩАЕМЫЙ!
+                      ) <> cmCancel)
+        if (GetFirst Dogovor2 = tsOk)
+          {
+          set optView2 := optView2 or 1 ;
+          if (isValid(#AppDogovor2))
+            if (Dogovor2.NRec <> AppDogovor2.cDogovor)
+              {
+              set _pAppDog := 0;
+              set optView2 := optView2 and (1+  4);
+              }
+          }
+      }
+    #sAppDogovor :
+      { // Выбор соглашения
+      var pOwn : comp; pOwn := _pDog;
+      if (RunInterface('GetSomeDogovor',
+                       word(0),          // вид документа - если задан будет установлен фильтр
+                       word(2),          // 0 - выбирать все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+                       word(0),          // 0 - выбирать все документы, 1 - только на продажу, 2 - только на закупку
+                       word(2),          // 0 - выбирать соглашения нельзя, 1 - можно, 2 - только соглашения
+                       false,            // TRUE - груповой выбор FALSE - только один
+                       _pAppDog,         // возвращаемый указатель на договор
+                       if(_pDog=0,false,true), // показывать записи одного уровня (true), false - нет
+                       pOwn              // ссылка на владельца уровня (действует если OneLevel = true) - ВОЗВРАЩАЕМЫЙ!
+                      ) <> cmCancel)
+        if (GetFirst AppDogovor2 = tsOk)
+          set optView2 := optView2 or 2 ;
+      }
+    #ResOtgr.Name :
+      { // Выбор ресурса отгрузки
+      if (RunInterface('GetResOtgr',_pResOtg) <> cmCancel)
+        if (GetFirst ResOtgr = tsOk)
+          set optView2 := optView2 or 4 ;
+      }
+  END ; // CASE
+  ReScanPanel(CurTable);
+  }
+
+cmDelOnProtect :
+  {
+  CASE CurField OF
+    #Kontrag2.Name :
+      {
+      set _pKontr2 := 0;
+      set optView1 := optView1 and (  2+4+8+16);
+      }
+    #MarPunkt2.Name :
+      {
+      set _pPunktP := 0;
+      set optView1 := optView1 and (1+  4+8+16);
+      }
+    #Contributor2.Name :
+      {
+      set _pContr := 0;
+      set optView1 := optView1 and (1+2+  8+16);
+      }
+    #GruzoOtpr2.Name :
+      {
+      set _pGruzFrom := 0;
+      set optView1 := optView1 and (1+2+4+  16);
+      }
+    #GruzoPol2.Name :
+      {
+      set _pGruzTo := 0;
+      set optView1 := optView1 and (1+2+4+8   );
+      }
+
+    #sDogovor :
+      {
+      set _pDog := 0;
+      set optView2 := optView2 and (  2+4);
+      }
+    #sAppDogovor :
+      {
+      set _pAppDog := 0;
+      set optView2 := optView2 and (1+  4);
+      }
+    #ResOtgr.Name :
+      {
+      set _pResOtg := 0;
+      set optView2 := optView2 and (1+2  );
+      }
+  END ;
+  ReScanPanel(CurTable);
+  }
+
+cmCheckField:
+  CASE CurField OF
+    #optView1 :
+      {
+      var wtmp : word ;
+      wtmp := optView1 xor word(OldFieldValue) ;
+      if (wtmp > 0)
+        CASE wtmp OF
+          1 : if ((optView1 and  1) > 0)
+                {
+                SelectField(#Kontrag2.Name) ;
+                if (_pKontr2 = 0) PutCommand(cmPick) ;
+                }
+          2 : if ((optView1 and  2) > 0)
+                {
+                SelectField(#MarPunkt2.Name) ;
+                if (_pPunktP = 0) PutCommand(cmPick) ;
+                }
+          4 : if ((optView1 and  4) > 0)
+                {
+                SelectField(#Contributor2.Name) ;
+                if (_pContr = 0) PutCommand(cmPick) ;
+                }
+          8 : if ((optView1 and  8) > 0)
+                {
+                SelectField(#GruzoOtpr2.Name) ;
+                if (_pGruzFrom = 0) PutCommand(cmPick) ;
+                }
+         16 : if ((optView1 and 16) > 0)
+                {
+                SelectField(#GruzoPol2.Name) ;
+                if (_pGruzTo = 0) PutCommand(cmPick) ;
+                }
+        END ;
+      }
+    #optView2 :
+      {
+      var wtmp : word ;
+      wtmp := optView2 xor word(OldFieldValue) ;
+      if (wtmp > 0)
+        CASE wtmp OF
+          1 : if ((optView2 and  1) > 0)
+                {
+                SelectField(#sDogovor) ;
+                if (_pDog = 0) PutCommand(cmPick) ;
+                }
+          2 : if ((optView2 and  2) > 0)
+                {
+                SelectField(#sAppDogovor) ;
+                if (_pAppDog = 0) PutCommand(cmPick) ;
+                }
+          4 : if ((optView2 and  4) > 0)
+                {
+                SelectField(#ResOtgr.Name) ;
+                if (_pResOtg = 0) PutCommand(cmPick) ;
+                }
+        END ;
+      }
+  END ;
+
+end; // HandleEvent Panel
+end; // Panel
+
+HandleEvent // Window
+cmInit:
+  {
+  set oldView1   := optView1;
+  set oldView2   := optView2;
+  set oldAuto1   := filAuto1;
+  set oldAuto2   := filAuto2;
+  set _pKontr2   := pKontr2;
+  set _pPunktP   := pPunktP;
+  set _pContr    := pContr;
+  set _pGruzFrom := pGruzFrom;
+  set _pGruzTo   := pGruzTo;
+  set _pDog      := pDog;
+  set _pAppDog   := pAppDog;
+  set _pResOtg   := pResOtg;
+  }
+
+cmOK:
+  {
+  pKontr2   := _pKontr2;
+  pPunktP   := _pPunktP;
+  pContr    := _pContr;
+  pGruzFrom := _pGruzFrom;
+  pGruzTo   := _pGruzTo;
+  pDog      := _pDog;
+  pAppDog   := _pAppDog;
+  pResOtg   := _pResOtg;
+  if ((optView1 and 1) > 0)  // Выбор контрагента
+    {
+    if (not BoundActive(tbpKontr2))   AddBounds(tbpKontr2);
+    }
+  else
+    if (    BoundActive(tbpKontr2))   SubBounds(tbpKontr2);
+  if ((optView1 and 2) > 0)  // Выбор пункта погрузки
+    {
+    if (not BoundActive(tbpPunktP))   AddBounds(tbpPunktP);
+    }
+  else
+    if (    BoundActive(tbpPunktP))   SubBounds(tbpPunktP);
+  if ((optView1 and 4) > 0)  // Выбор заявителя
+    {
+    if (not BoundActive(tbpContr))    AddBounds(tbpContr);
+    }
+  else
+    if (    BoundActive(tbpContr))    SubBounds(tbpContr);
+  if ((optView1 and 8) > 0)  // Выбор грузоотправителя
+    {
+    if (not BoundActive(tbpGruzFrom)) AddBounds(tbpGruzFrom);
+    }
+  else
+    if (    BoundActive(tbpGruzFrom)) SubBounds(tbpGruzFrom);
+  if ((optView1 and 16) > 0)  // Выбор грузополучателя
+    {
+    if (not BoundActive(tbpGruzTo))   AddBounds(tbpGruzTo);
+    }
+  else
+    if (    BoundActive(tbpGruzTo))   SubBounds(tbpGruzTo);
+!-------------------------------
+  if ((optView2 and  1) > 0)  // Выбор договора
+    {
+    if (not BoundActive(tbpDog   ))   AddBounds(tbpDog   );
+    }
+  else
+    if (    BoundActive(tbpDog   ))   SubBounds(tbpDog   );
+  if ((optView2 and  2) > 0)  // Выбор соглашения
+    {
+    if (not BoundActive(tbpAppDog))   AddBounds(tbpAppDog);
+    }
+  else
+    if (    BoundActive(tbpAppDog))   SubBounds(tbpAppDog);
+  if ((optView2 and  4) > 0)  // Выбор ресурса отгрузки
+    {
+    if (not BoundActive(tbpResOtg))   AddBounds(tbpResOtg);
+    }
+  else
+    if (    BoundActive(tbpResOtg))   SubBounds(tbpResOtg);
+  oldView1 := optView1;
+  oldView2 := optView2;
+  oldAuto1 := filAuto1;
+  oldAuto2 := filAuto2;
+  PutCommand(cmDefault);
+  }
+
+cmDone :
+  {
+  optView1 := oldView1;
+  optView2 := oldView2;
+  filAuto1 := oldAuto1;
+  filAuto2 := oldAuto2;
+  if ((optView1 and  1) = 0) pKontr2   := _pKontr2;
+  if ((optView1 and  2) = 0) pPunktP   := _pPunktP;
+  if ((optView1 and  4) = 0) pContr    := _pContr;
+  if ((optView1 and  8) = 0) pGruzFrom := _pGruzFrom;
+  if ((optView1 and 16) = 0) pGruzTo   := _pGruzTo;
+
+  if ((optView2 and  1) = 0) pDog      := _pDog;
+  if ((optView2 and  2) = 0) pAppDog   := _pAppDog;
+  if ((optView2 and  4) = 0) pResOtg   := _pResOtg;
+  }
+
+end; // HandleEvent Window
+End; // Window
+
+Panel nZakaz01;
+table nzakaz;
+Tree 1 trNZakaz (,hcGetSomNZakaz1,);
+show at (,,,15);
+fields
+  picked       '√'                                                :[1 ], Skip,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.Descr 'Дескр.'('Дескриптор(идентификатор) пользователя',,)                 :[10], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.NoDoc 'Номер' ('Номер наряд заказа',,)                   :[6 ], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.dDoc  'От...' ('Дата оформления наряд-заказа',,)         :[10,'DD/MM/YYYY'], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.dBeg  'с...'  ('Дата начала действия наряд-заказа',,)    :[10,'DD/MM/YYYY'], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.dEnd  'по...' ('Дата окончания действия наряд-заказа',,) :[10,'DD/MM/YYYY'], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  Contr22.Name 'Контрагент'('Наименование контрагента наряд-заказа') :[10], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  MarPunkt.Name 'Пункт погрузки'('Пункт погрузки',,)              :[10], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  KatNotes.Name 'Статус'('Статус документа',,)                    :[ 9], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakazPrior  'Приоритет'('Приоритет исполнения наряд-заказа',,) :[ 8], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakazTypeShort 'Т'  ('Тип документа',,)                        :[1 ], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+end;
+
+Browse brNZakaz (,hcGetSomNZakaz1,);
+show at (,,,15);
+fields
+  picked       '√'                                                 :[1 ], Skip,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.Descr 'Дескр.'('Дескриптор(идентификатор) пользователя',,)                  :[10], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.NoDoc 'Номер' ('Номер наряд заказа',,)                    :[6 ], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.dDoc  'От...' ('Дата оформления наряд-заказа',,)          :[10,'DD/MM/YYYY'], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.dBeg  'с...'  ('Дата начала действия наряд-заказа',,)     :[10,'DD/MM/YYYY'], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakaz.dEnd  'по...' ('Дата окончания действия наряд-заказа',,)  :[10,'DD/MM/YYYY'], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  Contr22.Name 'Контрагент'('Наименование контрагента наряд-заказа') :[10], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  MarPunkt.Name 'Пункт погрузки'('Пункт погрузки',,)               :[10], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  KatNotes.Name 'Статус'('Статус документа',,)                     :[ 9], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakazPrior  'Приоритет' ('Приоритет исполнения наряд-заказа',,) :[ 8], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+  nZakazTypeShort 'Т'  ('Тип документа',,)                         :[1 ], protect,
+    {Font = {Color = if (picked='√',ColorMark,0) }};
+end;
+
+Screen scrNZakaz01;
+show at (,16,,19);
+fields
+  DogovorName    ('Договор, по которому сформирован наряд-заказ',,sci178EnEsc)    : skip;
+  AppDogovorName ('Соглашение, по которому сформирован наряд-заказ',,sci178EnEsc) : skip;
+  CalPlanName    ('Пункт календарного плана',,sci178EnEsc)        : skip;
+  Contr1.Name    ('Наименование контрагента 1 по договору',,sci178EnEsc)      : skip;
+  Contr2.Name    ('Наименование контрагента 2 по договору',,sci178EnEsc)      : skip;
+<<
+ Договор .@@@@@@@@@@@@@@@@@@@@@@@@@@@ Соглашение .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                                                      Пункт плана №.@@@@@@@@@@
+ Контрагент 1:                          Контрагент 2:
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+Screen scrNZakaz02;
+show at (,20,,23);
+fields
+  Contr22.Name   ('Наименование контрагента наряд-заказа')        : skip;
+  GrOtp.Name     ('Наименование грузоотправителя',,sci178EnEsc)   : skip;
+  Contributor.Name ('Наименование заявителя',,sci178EnEsc)        : skip;
+  NZUpName       ('Сформирован по наряд-заказу',,sci178EnEsc)     : skip;
+  NZDownName     ('Сформирован взамен наряд-заказа',,sci178EnEsc) : skip;
+<<
+ Контрагент:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Грузоотправитель:                      Заявитель:
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ По Н/З .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  Взамен Н/З .@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+!-------------------------------------------------------------------------------
+procedure SetMyFormat;
+  {
+  isTreeFormat := true;
+
+  SetFieldVisible(#picked, OkOne)
+
+#ifdef Atl52
+  SetHelpAndStatusContext(trNZakaz,-1,
+                          if (OkOne,sci1EnInsTree,sci1EnEscTree),
+!                          if (OkOne,'GetSomNZakaz1','DogViewListZakaz'));
+                          'GetSomNZakaz1');
+  SetHelpAndStatusContext(brNZakaz,-1,
+                          if (OkOne,sci1EnIns,sci1EnEsc),
+!                          if (OkOne,'GetSomNZakaz1','DogViewListZakaz'));
+                          'GetSomNZakaz1');
+#else
+  SetHelpAndStatusContext(trNZakaz,-1,
+                          if (OkOne,sci1EnInsTree,sci1EnEscTree),
+!                          if (OkOne,'GetSomNZakaz1','DogViewListZakaz'));
+                          hcGetSomNZakaz1);
+  SetHelpAndStatusContext(brNZakaz,-1,
+                          if (OkOne,sci1EnIns,sci1EnEsc),
+!                          if (OkOne,'GetSomNZakaz1','DogViewListZakaz'));
+                          hcGetSomNZakaz1);
+#end
+
+  if (OneLevel)   // показывать записи одного уровня
+    {
+    Node := pOwn;
+    isTreeFormat := false;
+    SetFormat(brNZakaz);
+    }
+  else
+    SetFormat(trNZakaz)
+  SetMyTitle;
+  }
+
+//--  Пометить группу
+procedure MarkGroup;
+var LevelClosed: boolean;
+    n          : word;
+    i          : word;
+    SaveNrec   : Comp;
+  {
+  OneMarkPick(false);
+  if TreeCloseNode(trNZakaz)
+    LevelClosed:=true;
+  else
+    LevelClosed:=false;
+  PushPos(#NZakaz);
+  n:=0;
+  if TreeGetNext(trNZakaz)
+    {
+    SaveNrec := NZakaz.NRec;
+    TreeGetPrev(trNZakaz);
+    }
+  if TreeOpenNode(trNZakaz)
+    {
+    n:=n+1;
+    PushPos(#NZakaz);
+    }
+  if TreeGetNext(trNZakaz)
+    do
+      {
+      if (NZakaz.NRec = SaveNrec)
+        Break;
+      OneMarkPick(false);
+      if (TreeOpenNode(trNZakaz))
+        {
+        n:=n+1;
+        PushPos(#NZakaz);
+        }
+      }
+    while TreeGetNext(trNZakaz);
+  FOR ( i:=1; i<=n; i:=i+1 )
+    {
+    PopPos(#NZakaz);
+    TreeCloseNode(trNZakaz);
+    }
+  PopPos(#NZakaz);
+  if (LevelClosed)
+    TreeOpenNode(trNZakaz);
+  TreeJumpToRecord (trNZakaz,NZakaz.nRec);
+  RescanPanel(#NZakaz);
+  }
+
+//--  Отменить пометку группы
+procedure UnMarkGroup;
+var LevelClosed: boolean;
+    n          : word;
+    i          : word;
+    SaveNrec   : Comp;
+  {
+  DeleteMarker(MarkerNZ,NZakaz.NRec);
+  if TreeCloseNode(trNZakaz)
+    LevelClosed:=true;
+  else
+    LevelClosed:=false
+  PushPos(#NZakaz);
+  n:=0;
+  if TreeGetNext(trNZakaz)
+    {
+    SaveNrec := NZakaz.NRec;
+    TreeGetPrev(trNZakaz);
+    }
+  if TreeOpenNode(trNZakaz)
+    {
+    n:=n+1;
+    PushPos(#NZakaz);
+    }
+  if TreeGetNext(trNZakaz)
+    do
+      {
+      if (NZakaz.NRec = SaveNrec)
+        Break;
+      DeleteMarker(MarkerNZ,NZakaz.NRec);
+      if (TreeOpenNode(trNZakaz))
+        {
+        n:=n+1;
+        PushPos(#NZakaz);
+        }
+      }
+    while TreeGetNext(trNZakaz);
+  FOR (i:=1; i<=n; i:=i+1)
+    {
+    PopPos(#NZakaz);
+    TreeCloseNode(trNZakaz);
+    }
+  PopPos(#NZakaz);
+  if (LevelClosed)
+    TreeOpenNode(trNZakaz);
+  TreeJumpToRecord (trNZakaz,NZakaz.nRec);
+  RescanPanel(#NZakaz);
+  }
+
+HandleEvent
+
+cmTreeTop       : Node := 0;
+cmTreeUp        : Node := nZakaz.cOwner;
+cmTreeDown      : Node := nZakaz.nRec;
+cmTreeNodeType  : if (NZakaz.isLeaf = 1)TreeSetNodeType(trNZakaz,2);
+cmTreeNeedOwner : TreeJumpToRecord (trNZakaz,NZakaz.cOwner);
+
+cmPickClass: // Alt-C
+  if ((UpdateTable) and (NZakaz.NRec <> 0))
+    RunInterface('ExClassifier', word(CurTableCode), NZakaz.NRec);
+
+cmPickAttr: // Alt-A
+  if ((UpdateTable) and (NZakaz.NRec <> 0))
+    RunInterface('Attribute', word(CurTableCode), NZakaz.NRec);
+
+cmDelOnProtect :
+  {
+    abort; exit;
+  }
+
+end; // HandleEvent
+
+end; // panel
+
+HandleEvent
+
+cmInit :
+  {
+  if (GetFirst NZakaz <> tsOk)
+    {
+     Message('Нет требуемых документов.');
+     Abort;
+     Exit;
+    }
+
+  Init_arraySHL;
+  Node := 0;
+  OnlyStat := 2000;
+  if (pStatus > 999)
+    {
+    OnlyStat := pStatus - 1000;
+    AddBounds(tbOnlyStatus);
+    pStatus := 0;
+!    pStatus := word('FFFFh') xor arraySHL[OnlyStat];
+    }
+  MarkerNZ:=InitMarker('NZakaz',8,100,10);
+  var MarkerCount, i : longint; // счетчики записей в маркере
+  var pickrec        : comp;
+  MarkerCount:=GetMarkerCount(MarkerNZ);
+  FOR ( i:=0; i<MarkerCount; i:=i+1 )
+    {
+    if GetMarker(MarkerNZ,i,pickrec)
+      if (GetFirst nZakaz where ((pickrec == nZakaz.NRec)) = tsOk )
+        if ( ItemAccessDenided (pStatus,nZakaz.Status) or
+             ItemAccessDenided (pTypeDoc,nZakaz.TypeDoc) )
+          {
+          AtDeleteMarker(MarkerNZ,i);
+          dec(i);
+          dec(MarkerCount);
+          }
+    }
+  if (OnlyStat<>2000)
+    if (not BoundActive(tbOnlyStatus)) AddBounds(tbOnlyStatus);
+  if (pPunktP <> 0)
+    {
+    AddBounds(tbpPunktP);
+    optView1 := optView1 or 2;
+    }
+  if (pKontr2 <> 0)
+    {
+    AddBounds(tbpKontr2);
+    optView1 := optView1 or 1;
+    }
+  if (pGruzTo <> 0)
+    {
+    AddBounds(tbpGruzTo);
+    optView1 := optView1 or 16;
+    }
+
+  if (wGetTune('Doc.Visible') = 1)
+    AddBounds(tbDscr);
+
+  AddBounds(tbNode);
+
+  if (GetFirst NZakaz where (( prmNZakaz == NZakaz.nRec )) = tsOk)
+    {
+      if OneLevel and (NZakaz.cOwner <> 0)
+        if (GetLast NZakaz <> tsOk)
+          {
+          }
+      if not OneLevel
+        {
+          Node := NZakaz.cOwner;
+          TreeJumpToRecord(trNZakaz, prmNZakaz);
+        }
+    }
+  else
+    if (GetLast NZakaz <> tsOk)
+      {
+      }
+
+  SetMyFormat;
+  var datechanged : boolean;
+  if (not ReadMyDsk(filAuto1 ,'GetSomNZakaz_filAuto1' ,datechanged)) filAuto1  := 0;
+  if (not ReadMyDsk(filAuto2 ,'GetSomNZakaz_filAuto2' ,datechanged)) filAuto2  := 0;
+  if (pKontr2 = 0)
+  if (not ReadMyDsk(pKontr2  ,'GetSomNZakaz_pKontr2'  ,datechanged)) pKontr2   := 0;
+  if (pPunktP = 0)
+  if (not ReadMyDsk(pPunktP  ,'GetSomNZakaz_pPunktP'  ,datechanged)) pPunktP   := 0;
+  if (not ReadMyDsk(pContr   ,'GetSomNZakaz_pContr'   ,datechanged)) pContr    := 0;
+  if (not ReadMyDsk(pGruzFrom,'GetSomNZakaz_pGruzFrom',datechanged)) pGruzFrom := 0;
+  if (pGruzTo = 0)
+  if (not ReadMyDsk(pGruzTo  ,'GetSomNZakaz_pGruzTo'  ,datechanged)) pGruzTo   := 0;
+  if (not ReadMyDsk(pDog     ,'GetSomNZakaz_pDog'     ,datechanged)) pDog      := 0;
+  if (not ReadMyDsk(pAppDog  ,'GetSomNZakaz_pAppDog'  ,datechanged)) pAppDog   := 0;
+  if (not ReadMyDsk(pResOtg  ,'GetSomNZakaz_pResOtg'  ,datechanged)) pResOtg   := 0;
+
+  }
+
+cmDefault :
+  {
+  prmNZakaz := nZakaz.nRec;
+  if ( (not OkOne) and isValid(#NZakaz) )
+    {
+    if ItemAccessDenided (pStatus,NZakaz.Status)
+      {
+      message('Нельзя пометить наряд-заказ с данным статусом !');
+      Abort;
+      EXIT;
+      }
+    if ItemAccessDenided (pTypeDoc,NZakaz.TypeDoc)
+      {
+      message('Нельзя пометить наряд-заказ с данным типом документа !');
+      Abort;
+      EXIT;
+      }
+    }
+  if (OkOne)
+    if ( (GetMarkerCount(MarkerNZ) = 0) and
+         isValid(#NZakaz) )
+      if (OneMarkPick(true) = false)
+        {
+        Abort;
+        EXIT;
+        }
+  pPunktP := pPunktP_2;
+  pKontr2 := pKontr2_2;
+  pGruzTo := pGruzTo_2;
+  }
+
+cmDone :
+  {
+  SaveMyDsk(filAuto1 ,'GetSomNZakaz_filAuto1' );
+  SaveMyDsk(filAuto2 ,'GetSomNZakaz_filAuto2' );
+  SaveMyDsk(pKontr2  ,'GetSomNZakaz_pKontr2'  );
+  SaveMyDsk(pPunktP  ,'GetSomNZakaz_pPunktP'  );
+  SaveMyDsk(pContr   ,'GetSomNZakaz_pContr'   );
+  SaveMyDsk(pGruzFrom,'GetSomNZakaz_pGruzFrom');
+  SaveMyDsk(pGruzTo  ,'GetSomNZakaz_pGruzTo'  );
+  SaveMyDsk(pDog     ,'GetSomNZakaz_pDog'     );
+  SaveMyDsk(pAppDog  ,'GetSomNZakaz_pAppDog'  );
+  SaveMyDsk(pResOtg  ,'GetSomNZakaz_pResOtg'  );
+  DoneMarker(MarkerNZ,'NZakaz');
+  }
+
+cmMarkUnMark : // Если на группа то выбирать все из группы
+  {
+  if (SearchMarker(MarkerNZ,NZakaz.NRec,IndexNZ))
+    {
+    DeleteMarker(MarkerNZ,NZakaz.NRec)
+    if (GetMarkerCount(MarkerNZ) = 0)
+      {
+      pPunktP_2 := 0;
+      pKontr2_2 := 0;
+      pGruzTo_2 := 0;
+      RemoveAutoFilBounds(true);
+      }
+    }
+  else
+    OneMarkPick(true);
+  SetMyTitle;
+  if (isTreeFormat)
+    TreeGetNext(trNZakaz)
+  RescanPanel(#NZakaz);
+  }
+
+cmSelectAll :
+  {
+  PushPos(#NZakaz);
+  var ret  : word;
+  var Priz : boolean; Priz := false;
+  if (BoundActive(tbNode))
+    {
+    Priz := true;
+    SubBounds(tbNode);
+    }
+  if (GetMarkercount(MarkerNZ) = 0)
+    OneMarkPick(false);
+  _loop NZakaz
+    {
+    if (NZakaz.NRec <> 0)
+      {
+      OneMarkPick(false);
+      }
+    }
+!  if (OnlyStat<>2000)
+!    if (not BoundActive(tbOnlyStatus)) AddBounds(tbOnlyStatus);
+  if Priz AddBounds(tbNode);
+  SetMyTitle;
+  PopPos(#NZakaz);
+  ReReadRecord(#NZakaz);
+  }
+
+cmUnSelectAll :
+  {
+  KillPick;
+  RemoveAutoFilBounds(true);
+  ReReadRecord(#NZakaz);
+  pPunktP_2 := 0;
+  pKontr2_2 := 0;
+  pGruzTo_2 := 0;
+  }
+
+cmShowAll:
+  {
+  if (isTreeFormat = false)
+    EXIT;
+  var sav_NRec : comp;
+  sav_NRec := NZakaz.NRec;
+
+  StartNewVisual(vtRotateVisual, vfTimer, ''#3'Раскрытие всех веток...'#13#3,1);
+  if (TreeGetFirst(trNZakaz))
+  do
+  {
+    NextVisual;
+    TreeOpenNode(trNZakaz);
+  }
+  While TreeGetNext(trNZakaz);
+  StopVisual('', 0);
+
+  TreeJumpToRecord (trNZakaz,sav_NRec);
+  ReScanPanel(#NZakaz);
+
+  }
+
+cmHideAll:
+  {
+  if (isTreeFormat = false)
+    EXIT;
+  var sav_NRec : comp;
+
+  While (NZakaz.cOwner <> 0)
+    TreeJumpToRecord (trNZakaz,NZakaz.cOwner);
+  sav_NRec := NZakaz.NRec;
+
+  StartNewVisual(vtRotateVisual, vfTimer, ''#3'Сворачивание всех веток...'#13#3,1);
+  if (TreeGetFirst(trNZakaz))
+  do
+  {
+    NextVisual;
+    TreeCloseNode(trNZakaz);
+!    TreeCloseAllOpenedNode(trNZakaz);
+  }
+  While TreeGetNext(trNZakaz);
+  StopVisual('', 0);
+
+  TreeJumpToRecord (trNZakaz,sav_NRec);
+  ReScanPanel(#NZakaz);
+  }
+
+cmFilterSave :
+  {
+  RunWindowModal(wSetFilters) ;
+  if (OneLevel)
+    {
+    if (GetLast NZakaz = tsOk) {};
+    }
+  else
+    TreeGetLast(trNZakaz);
+  ReReadRecord(#nZakaz);
+  }
+
+cmHotKeys :
+  {
+  PutHotCommand(RunMenu('mnuGetSomNZakaz'));
+  }
+
+end; // HandleEvent Interface
+
+end. // Interface
+
+mnuGetSomNZakaz Menu
+{
+- 'Фильтр по наряд-заказам',cmFilterSave,'Установка фильтров на данные',hcHotKeyFiltr,'Alt-B',kbAltB,sci1Esc;
+-----------;
+- 'Раскрыть все ветки',cmShowAll,'Разворачивает все дерево документов',,'Ctrl +',kbCtrlGrayPlus,sci1Esc;
+- 'Свернуть все ветки',cmHideAll,'Сворачивает все дерево документов',,'Ctrl -',kbCtrlGrayMinus,sci1Esc;
+}

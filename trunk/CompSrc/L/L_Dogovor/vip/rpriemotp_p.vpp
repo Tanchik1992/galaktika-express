@@ -1,0 +1,800 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Формирование распоряжения на прием-отпуск
+//******************************************************************************
+
+Panel panOtgOrder;
+  Table KatSopr;
+
+HandleEvent
+
+cmPick:
+{
+  if (CurWindow < 0)
+    {
+      Abort;
+      Exit;
+    }
+
+  if (IsNew)
+    {
+      Insert Current KatSopr;
+      SetNew(FALSE);
+    }
+
+  if ( (CurTable <> #KatSopr) or (IsProtected(#KatSopr)) )
+    Exit;
+
+  if ( CurField = #KatNotes.Name )
+    {
+    //  UpdateTable;
+
+      if ( RunInterface(StatLog, Word(1), KatSopr.nRec, word(442), KatSopr.Status, KatSopr.cNote, word(0)) = cmCancel )
+        {
+          Abort;
+          Exit;
+        }
+
+      set KatSopr.Status := KatSopr.Status;
+      set KatSopr.cNote  := KatSopr.cNote;
+
+      UpdateTable;
+
+      CheckProtect;
+    }
+
+  if (KatSopr.Status > 0)
+    {
+      Abort;
+      Exit;
+    }
+
+  case CurField of
+
+    #KatSopr.DesGr:
+      {
+        if ( RunInterface(GetGrDescr, KatSopr.DesGr, false, false, comp(0)) <> cmCancel )
+          set KatSopr.DesGr := KatSopr.DesGr;
+      }
+
+    #KatSopr.Descr:
+      {
+        if ( RunInterface(GetDescr, KatSopr.Descr, KatSopr.DesGr, word(0)) <> cmCancel )
+          {
+            set KatSopr.Descr := KatSopr.Descr;
+            set KatSopr.DesGr := KatSopr.DesGr;
+          }
+      }
+
+    #KatPodrP.Name:
+      {
+        if ( RunInterface(GetAnyPodr, KatSopr.cPodrFrom, 0) <> cmCancel )
+          {
+            set KatSopr.cPodrFrom := KatSopr.cPodrFrom;
+            set KatSopr.cPodrTo   := KatSopr.cPodrFrom;
+          }
+      }
+
+    #KatOrgP_Post.Name:
+      {
+        if ( RunInterface(GetKatOr, KatSopr.cOrgBase, comp(0), false, comp(0), comp(0)) <> cmCancel )
+          set KatSopr.cOrgBase := KatSopr.cOrgBase;
+      }
+
+    #fNameDogovorP:
+      {
+        if ( SelectDog )
+          PickMCSogl;
+      }
+
+    #fNameSoglP:
+      {
+        if ( SelectSogl )
+          PickMCSogl;
+      }
+
+    #KatOrgP_Gotp.Name:
+      {
+        if ( RunInterface(GetKatOr, KatSopr.cGruzFrom, comp(0), false, comp(0), comp(0)) <> cmCancel )
+          set KatSopr.cGruzFrom := KatSopr.cGruzFrom;
+      }
+
+    #KatOrgP_Gpol.Name:
+      {
+        if ( RunInterface(GetKatOr, KatSopr.cGruzTo, comp(0), false, comp(0), comp(0)) <> cmCancel )
+          set KatSopr.cGruzTo := KatSopr.cGruzTo;
+      }
+
+    #MarPunktP.Name:
+      {
+        if ( RunInterface(Get_Item, 1, KatSopr.cNZakaz) <> cmCancel )
+          set KatSopr.cNZakaz := KatSopr.cNZakaz;
+      }
+
+    #MoveCell.Name:
+      {
+        if (RunInterface('GetMoveCellMC', KatSopr.cCellVal) <> cmCancel)
+          {
+            set KatSopr.cCellVal := KatSopr.cCellVal;
+
+            if (Vagon.cMoveCell <> KatSopr.cCellVal)
+              {
+                set KatSopr.cNMoveCell := 0;
+                set KatSopr.nVagon     := '';
+                set KatSopr.cTransp    := 0;
+              }
+
+            CopyVagonSpec;
+          }
+      }
+
+    #GroupMC.Name:
+      {
+        if ( RunInterface(GetGrMCS, KatSopr.cGrSopr, '', false) <> cmCancel )
+          KatSopr.cGrSopr := KatSopr.cGrSopr;
+      }
+
+    #KatPodrR.Name:
+      {
+        if ( RunInterface(GetAnyPodr, KatSopr.cPodrTo, 0) <> cmCancel )
+          set KatSopr.cPodrTo := KatSopr.cPodrTo;
+      }
+
+    #KatMolR.Name:
+      {
+        if ( RunInterface(GetMOL, KatSopr.cMolTo, KatSopr.cPodrTo) <> cmCancel )
+          set KatSopr.cMolTo := KatSopr.cMolTo;
+      }
+
+    #KatMolP.Name:
+      {
+        if ( RunInterface(GetMOL, KatSopr.cMolFrom, KatSopr.cPodrFrom) <> cmCancel )
+          set KatSopr.cMolFrom := KatSopr.cMolFrom;
+      }
+
+    #KatOrgR_Podr.Name:
+      {
+        if ( RunInterface(GetKatOr, KatSopr.cOrg, comp(0), false, comp(0), comp(0)) <> cmCancel )
+          set KatSopr.cOrg := KatSopr.cOrg;
+      }
+
+    #fNameDogovorR:
+      {
+        if ( NullVipRef(pRunDSel) )
+          if ( not (LoadVipRef(pRunDSel, 'RunDocSelections')) )
+            {
+              Message('Не удалось загрузить библиотеку RunDocSelObj', Error);
+              Exit;
+            }
+
+        if ( pRunDSel.F3( KatSopr.cDover
+                        , comp(0)
+                        , comp(0)
+                        , 1                // откуда вызвали: 1 - договор, 2 - соглашение
+                        , 2                // фильтр только по исполняемым
+                        , 2                // только на закупку
+                        ) <> cmCancel )
+          {
+            set KatSopr.cDover  := KatSopr.cDover;
+
+            if (GetFirst DogovorR = tsOk)
+              KatSopr.cOrg := DogovorR.cOrg;
+
+            ReScanPanel(#KatSopr);
+          }
+
+        FreeVipInterface(pRunDSel);
+      }
+
+    #MarPunktR.Name:
+      {
+        if ( RunInterface(Get_Item, 1, KatSopr.cZakaz) <> cmCancel )
+          set KatSopr.cZakaz := KatSopr.cZakaz;
+      }
+
+    #KatStroy.Name:
+      {
+        if ( RunInterface(KatStroy, 0, true, KatSopr.cUKS, false, false, true) <> cmCancel )
+          {
+            set KatSopr.cUKS := KatSopr.cUKS;
+
+            PushPos(#SpSopr);
+
+            update SpSopr where (( KatSopr.nRec == SpSopr.cSopr )) set SpSopr.cUKS := comp(0);
+                     
+            PopPos(#SpSopr);
+          }
+      }
+
+    #KatSopr.nVagon:
+      {
+        var cEdRec: comp;  cEdRec := if (IsValid(#MoveCell), MoveCell.NRec, 0);
+
+        if ( RunInterface('GetVagon', 3, KatSopr.cNMoveCell, comp(0), cEdRec, comp(0)) <> cmCancel )
+          {
+            set KatSopr.cNMoveCell := KatSopr.cNMoveCell;
+            set KatSopr.nVagon     := Vagon.Num;
+            set KatSopr.cCellVal   := Vagon.cMoveCell;
+            set KatSopr.cTransp    := Vagon.cTransp;
+
+            CopyVagonSpec;
+          }
+      }
+  end; // case
+
+  UpDateTable;
+  ReReadRecord(#KatSopr);
+  CheckSumma(true);
+  ReReadRecord(#KatSopr);
+}
+
+cmSetDefault:
+{
+  P_OtgOrder_SetDefault;
+
+  if (CurWindow < 0)
+    RunWindow(winOtgOrder_Edit);
+}
+
+cmPositionChanged:
+  CheckProtect;
+
+cmSetCurField:
+{
+}
+
+cmCheckRecord:
+{
+  if ( KatSopr.NSopr = '' )
+    {
+      Message(''#3'Номер документа не задан.', Information);
+      SelectField(#KatSopr.NSopr);
+      Abort;
+      Exit;
+    }
+
+  if ( KatSopr.dPrice < KatSopr.dSopr )
+    {
+      Message(''#3'Дата окончания действия документа меньше даты оформления.', Information);
+      SelectField(#KatSopr.dPrice);
+      Abort;
+      Exit;
+    }
+}
+
+cmInsertRecord:
+{
+  insert current KatSopr;
+
+  CheckSumma(true);
+}
+
+cmAbortInsert:
+{
+  RPriemOtp_Sh_NoDoc_Del(KatSopr.NSopr, KatSopr.Descr, KatSopr.dSopr);
+  RescanPanel(#KatSopr);
+}
+
+cmUpdateRecord:
+{
+  update current KatSopr;
+  CheckSumma(true);
+}
+
+cmDelOnProtect:
+{
+  if ( (CurTable <> #KatSopr) or IsProtected(#KatSopr) or (KatSopr.Status > 0) )
+    {
+      Abort;
+      Exit;
+    }
+
+  case CurField of
+
+    #KatPodrP.Name:
+      set KatSopr.cPodrFrom := comp(0);
+
+    #KatOrgP_Post.Name:
+      set KatSopr.cOrgBase := comp(0);
+
+    #fNameDogovorP:
+      {
+        set KatSopr.cDogovor    := comp(0);
+        set KatSopr.cAppDogovor := comp(0);
+      }
+
+    #fNameSoglP:
+      set KatSopr.cAppDogovor := comp(0);
+
+    #KatOrgP_Gotp.Name:
+      set KatSopr.cGruzFrom := comp(0);
+
+    #KatOrgP_Gpol.Name:
+      set KatSopr.cGruzTo := comp(0);
+
+    #MarPunktP.Name:
+      set KatSopr.cNZakaz := comp(0);
+
+    #MoveCell.Name:
+      {
+        set KatSopr.nVagon     := '';
+        set KatSopr.cNMoveCell := 0;
+        set KatSopr.cCellVal   := 0;
+        set KatSopr.cTransp    := 0;
+
+        CopyVagonSpec;
+      }
+
+    #KatSopr.NVagon:
+      {
+        set KatSopr.nVagon     := '';
+        set KatSopr.cNMoveCell := 0;
+        set KatSopr.cTransp    := 0;
+
+        CopyVagonSpec;
+      }
+
+    #GroupMC.Name:
+      set KatSopr.cGrSopr := comp(0);
+
+    #KatPodrR.Name:
+      set KatSopr.cPodrTo := comp(0);
+
+    #KatMolR.Name:
+      set KatSopr.cMolTo := comp(0);
+
+    #KatOrgR_Podr.Name:
+      set KatSopr.cOrg := comp(0);
+
+    #fNameDogovorR:
+      set KatSopr.cDover := comp(0);
+
+    #MarPunktR.Name:
+      set KatSopr.cZakaz := comp(0);
+
+    #KatStroy.Name:
+      set KatSopr.cUKS := comp(0);
+
+  else
+    {
+      Abort;
+      Exit;
+    }
+
+  end; // case
+
+  CheckSumma(true);
+}
+
+cmDeleteRecord :
+{
+/*
+  if ( KatSopr.Status = 1 )
+    {
+      Message( ''#3'Невозможно удалить распоряжение на прием-отпуск МТР'
+             + ''#13#3'со статусом <Исполняемый>', Information);
+
+      Abort;
+      Exit;
+    }
+*/
+  _LOOP KatSopr2 where ((KatSopr.NRec == KatSopr2.cKatSopr))
+    if (KatSopr2.VidSopr = 115)
+        {
+          Message( ''#3'Невозможно удалить распоряжение на прием-отпуск МТР,'
+                 + ''#13#3'так как по нему создан акт на прием материалов!', Information);
+          Abort;
+          Exit;
+        }
+
+  if ( Message(''#3'Удалить распоряжение на прием-отпуск МТР?', YesNo) <> cmYes )
+    {
+      Abort;
+      Exit;
+    }
+
+  Delete_OtgOrder(KatSopr.NRec);
+}
+
+cmProtectedInput:
+  RunProtectedInput;
+
+end; // HandleEvent
+end; // Panel panOtgOrder
+
+//******************************************************************************
+//******************************************************************************
+
+Panel panSpOtgOrd;
+  Table SpSopr;
+
+HandleEvent
+
+cmPick:
+{
+  if ( (KatSopr.Status > 0) or (CurTable <> #SpSopr) or IsProtected(#SpSopr) )
+    Exit;
+
+  case CurField of
+
+    #KatMC.BarKod
+  , #KatMC.Name:
+      {
+        if ( (KatSopr.cDogovor <> comp(0)) OR (KatSopr.cAppDogovor <> comp(0)) )
+          PickMCSogl;
+        else
+          PickMCKat;
+      }
+
+    #SpSopr.Kolfact,
+    #SpSopr.Kol,
+    #SpSopr.KolOpl:
+     //глюк Atl - входит в cmPick на непиковом поле (перестрахуемся и проверим UseDEI)
+     //мысли: событие cmPick посылается в очередь в cmSetDefault, когда фокус стоит на пиковом поле.
+     //Затем, меняем фокус на непиковое поле и приходит время сработать событию в очереди
+     //и оно срабатывает в слепую, не глядя что уже текущее поле в фокусе непиковое.
+      if (UseDEI)
+        {
+          var w_TipKol: word;
+          var sTitle: string;
+          var nKol: double;
+
+          case CurField of
+          //--------------
+           #SpSopr.Kolfact:
+            {
+              w_TipKol := 1;
+              sTitle  := 'Ввод фактического количества';
+              nKol := SpSopr.Kolfact;
+            }
+          //--------------
+           #SpSopr.KolOpl:
+            {
+              w_TipKol := 3;
+              sTitle  := 'Ввод количества к оплате по распоряжению';
+              nKol := SpSopr.KolOpl;
+            }
+          //--------------
+           #SpSopr.Kol    :
+            {
+              w_TipKol := 2;
+              sTitle  := 'Ввод количества по распоряжению'
+              nKol := SpSopr.Kol;
+            }
+          //--------------
+          end;
+
+          RunInterface('KolDopEd',
+                        word(coSpSopr), // coTable,  код таблицы спецификации
+                        SpSopr.NRec,    // cRec,     ссылка на спецификацию
+                        w_TipKol,       // wTipKol,  тип количества
+                        sTitle,         // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                        SpSopr.cMCUSL,  // cMCUsl,   NRec МЦ/услуги
+                        SpSopr.PrMC,    // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                        SpSopr.Price,   // Price,    цена за 1-у отпускную единицу
+                        Cena_Pr,        // ForPrice, кол-во знаков после запятой в цене
+                        Cena_Pr,        // ForSumma, кол-во знаков после запятой в стоимости
+                        KatSopr.cValut,  // comp(0),        // cVal,     валюта переданной цены
+                        SpSopr.cOtpEd,  // cOtpEd,   ссылка на отпускную единицу измерения
+                        nKol,           // fKol      количество в отпускных единицах (возвращаемый параметр)
+                        longint(0),
+                        SpSopr.VidSopr
+                      );
+
+          case CurField of
+          //--------------
+           #SpSopr.Kolfact:
+             {
+               set SpSopr.Kolfact := nKol;
+               wOldKolFactDEI := nKol;
+             }
+          //--------------
+           #SpSopr.KolOpl:
+             {
+               set SpSopr.KolOpl := nKol;
+               wOldKolOplDEI     := nKol;
+             }
+          //--------------
+           #SpSopr.Kol:
+             {
+               set SpSopr.Kol := nKol;
+               wOldKolDEI := nKol;
+             }
+          //--------------
+          end;
+
+          ProcessCommand(cmCheckField);
+        }
+
+    #OtpEd:
+      {
+        var Kf      : double;  
+        var cSavOtp : comp; 
+
+        kf      := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+        cSavOtp := SpSopr.cOtpEd;
+
+        if ( RunInterface(GetOtpEd, SpSopr.cMCUsl, SpSopr.cOtpEd, 1) = cmCancel )
+          Exit;
+
+        if (cSavOtp = SpSopr.cOtpEd)
+          Exit;
+
+        if (wGetTune('Doc.UchEd') = 1)
+          if (fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) = 1.0)
+            {
+               Message('В настройке ' + GetTuneName('Doc.UchEd') + ' установлен ' +
+                      'запрет на использование в документах учетных единиц измерения.',
+                      Warning+CancelButton);
+        
+               set SpSopr.cOtpEd := cSavOtp;
+               
+               Exit;
+             }
+
+        Kf := kf / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+        SpSopr.Price   := SpSopr.Price  / kf;
+        SpSopr.VPrice  := SpSopr.VPrice / kf;
+
+        if (wGetTune('Doc.ChangeOtpEd') <> 0)
+          CheckSumma(true)
+        else
+          SpSopr.KolFact := SpSopr.KolFact * kf;
+
+        RedrawPanel(#SpSopr);
+      }
+
+#ifndef __MTR_TO_SPEC__
+    #KatStroySp.Name:
+      {
+        if ( RunInterface(KatStroy, 0, true, SpSopr.cUKS, false, false, false) <> cmCancel )
+          set SpSopr.cUKS := SpSopr.cUKS;
+      }
+
+
+    #AddSumTune.Name:
+      {
+        #CheckEditStatZatrInDelOnPr
+
+        if (SpSopr.cSpSopr <> comp(0))
+          {
+            Stop;
+            Message('Материал связан с работой!'#10#13 +
+                    'Нельзя изменять статью затрат.');
+          }
+        else
+          {
+            if UpdateTable {};
+              if (Delete Current SpecZatr = tsOk)
+                {
+                  SynchUKSObj(SpSopr.NRec, comp(0), 2);
+                  RereadRecord(#SpSopr);
+                }
+          }
+      }
+#else
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+        RereadRecord;
+      }
+#end
+
+
+    #SpSopr.nVagon:
+      {
+        var cEdRec: comp;  cEdRec := if (isValid(#MoveCell), MoveCell.nRec, 0);
+
+        if (RunInterface('GetVagon', 3, SpSopr.cNMoveCell, comp(0), cEdRec, comp(0)) <> cmCancel)
+          {
+            set SpSopr.cNMoveCell := SpSopr.cNMoveCell;
+            set SpSopr.nVagon     := VagonSp.Num;
+            set SpSopr.cCellVal   := VagonSp.cMoveCell;
+            set SpSopr.cTransp    := VagonSp.cTransp;
+          }
+      }
+
+  end;
+}
+
+cmCheckField:
+{
+  if (SpSopr.cMcUsl = 0)
+    {
+      Message('Не указана матценность.');
+      ReReadRecord(#SpSopr);
+      Exit;
+    }
+
+  if ( (KatSopr.cKatSopr = 0) AND (KatSopr.cDogovor = 0) )
+    Exit;
+
+  if ( CurField = #SpSopr.KolFact )
+    {
+      var _NKol_ : double; 
+      
+      _NKol_ := CheckKolSpSopr(KatSopr.NRec, SpSopr.cMCUSL, SpSopr.cOtpEd, SpSopr.KolFact, SpSopr.NRec, FALSE);
+
+      if (_NKol_ < SpSopr.KolFact)
+        {
+          Message('Превышено количество по ' + if (KatSopr.cAppDogovor <> comp(0), 'соглашению!', 'договору!'));
+          SpSopr.KolFact := _NKol_ ;
+          Abort;
+        }
+      else
+        set SpSopr.KolFact := SpSopr.KolFact;
+    }
+
+  RedrawPanel(#SpSopr);
+}
+
+cmPositionChanged:
+  CheckProtect;
+
+cmSetDefault:
+{
+  ClearBuffer(#SpSopr);
+  SpSopr.VidSopr := KatSopr.VidSopr;
+
+  if ( GetLast SpSopr2 where (( KatSopr.nrec == SpSopr2.cSopr )) ordered by index SpSopr02 = tsOk )
+    SpSopr.Npp := SpSopr2.Npp + 1;
+  else
+    SpSopr.Npp := 1;
+}
+
+cmUpdateRecord:
+{
+  if ( IsValid(#SpSopr) )
+    update current SpSopr;
+  
+  CheckSumma(true)
+}
+
+cmInsertRecord:
+{
+  insert current SpSopr;
+  CheckSumma(true)
+}
+
+cmDelOnProtect:
+{
+  if (  ((KatSopr.Status > 0) and (KatSopr.Status < 5))
+     or (CurTable <> #SpSopr)
+     or (IsProtected(#SpSopr))
+     )
+    {
+      Abort;
+      Exit;
+    }
+
+  case CurField of
+
+    #KatMC.BarKod
+  , #KatMC.Name:
+      set SpSopr.cMCUsl := comp(0);
+
+    #KatStroySp.Name:
+      set SpSopr.cUKS := comp(0);
+#ifndef __MTR_TO_SPEC__
+      #KatStroySp.Name:
+        {
+          if (KatSopr.cUKS <> 0)
+            {
+              Message('Объект строительства установлен для всего документа!'#10#13 +
+                      'Нельзя изменять объект строительства.');
+              Stop;
+              Exit;
+            }
+
+          if SpSopr.cSpSopr <> comp(0)
+            {
+              Stop;
+              Message('Материал связан с работой!'#10#13 +
+                      'Нельзя изменять объект строительства.');
+            }
+          else
+            {
+              set SpSopr.cUKS:=0;
+              Update Current SpSopr;
+              SynchUKSObj(SpSopr.NRec, SpSopr.cUks, 1);
+            }
+        }
+
+    #AddSumTune.Name:
+      {
+        #CheckEditStatZatrInDelOnPr
+
+        if (SpSopr.cSpSopr <> comp(0))
+          {
+            Stop;
+            Message('Материал связан с работой!'#10#13 +
+                    'Нельзя изменять статью затрат.');
+          }
+        else
+          {
+            if UpdateTable {};
+              if (Delete Current SpecZatr = tsOk)
+              {
+                SynchUKSObj(SpSopr.NRec, comp(0), 2);
+                RereadRecord(#SpSopr);
+              }
+          }
+      }
+#else
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+        RereadRecord;
+      }
+#end
+
+
+    #SpSopr.nVagon:
+      {
+        set SpSopr.nVagon     := '';
+        set SpSopr.cNMoveCell := 0;
+        set SpSopr.cTransp    := 0;
+      }
+
+  end;
+}
+
+cmDeleteRecord:
+{
+  if ( Message(''#3'Удалить позицию спецификации распоряжения?', YesNo) = cmYes )
+    {
+      Delete_SpOtgOrd(SpSopr.nRec);
+      ReCountSpec(KatSopr.nRec);
+//      CheckSumma(true);
+    }
+}
+
+cmProtectedInput:
+{
+  if ( CurField = #KatNotes.Name )
+    {
+      var mask : word;
+      mask := if(KatSopr.Status = 5, 1 + 2 + 4 + 8 + 16, 32);
+
+      UpdateTable;
+
+      if ( RunInterface(StatLog, Word(1), KatSopr.nRec, word(442), KatSopr.Status, KatSopr.cNote, mask) <> cmCancel )
+        {
+          set KatSopr.Status := KatSopr.Status;
+          set KatSopr.cNote  := KatSopr.cNote;
+       
+          CheckProtect;
+        }
+
+      Stop;
+      Exit;
+    }
+
+  Message('Распоряжение на прием-отпуск можно редактировать только в статусе "оформляемый" !');
+  Stop;
+}
+
+end; // HandleEvent
+end; // Panel panSpOtgOrd

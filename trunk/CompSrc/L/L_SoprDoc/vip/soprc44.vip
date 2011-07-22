@@ -1,0 +1,78 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#doc
+Назначение:
+  Обрабатывает поле "Заводская(контрактная цена)" в каталоге партий
+
+Параметры:
+  c1 - ссылка на спецификацию сопроводительного документа
+#end
+
+//********************************************************************************
+
+Interface iKatPartyKATPARTYCENAZAV, cacheable;
+
+Create view
+var
+  c1: comp;
+
+from
+  KatParty, KatSopr, SpOrder, SpSopr
+
+where
+((
+  c1            == SpSopr.nRec     AND
+  SpSopr.cSopr  == KatSopr.nRec    AND
+  SpSopr.nRec   == SpOrder.cSpSopr AND
+  SpSopr.cParty == KatParty.nRec
+));
+
+parameters
+  c1;
+
+HandleEvent
+cmInit:
+  {
+    If not IsValid(#SpSopr)
+    or not IsValid(#KatParty)
+    or (KatSopr.VidSopr <> 101 and KatSopr.VidSopr <> 108) //только прих.накладные
+      {
+        Abort;
+        Exit;
+      }
+
+    case wGetTune('Party.MethodModifyKATPARTYCENAZAV') of
+     1: //цена ордера
+        If IsValid(#SpOrder)
+         {
+          KatParty.CENAZAV := if(KatSopr.cVal = 0, SpOrder.SrPrice, SpOrder.VPrice);
+          update current KatParty;
+         }
+
+     2: { //цена накладной
+          KatParty.CENAZAV := if(KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice);
+          update current KatParty;
+        }
+
+     3:  //цена накладной без налогов
+        {
+          if (KatSopr.VhodNal <> 1) //налоги не входят
+            KatParty.CENAZAV := if(KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice);
+          else
+            if SpSopr.KolOpl <> 0
+              KatParty.CENAZAV := if(KatSopr.cVal = 0,
+                                        SpSopr.Price-SpSopr.SumNDS/SpSopr.KolOpl,
+                                        SpSopr.VPrice-SpSopr.SumVNDS/SpSopr.KolOpl);
+          update current KatParty;
+        }
+    end;
+
+    Abort;
+  }
+end;
+
+End.

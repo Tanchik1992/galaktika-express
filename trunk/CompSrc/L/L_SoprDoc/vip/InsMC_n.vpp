@@ -1,0 +1,782 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Формирование специфкиации накладной по ДО
+//******************************************************************************
+
+#ifNdef _INSMCN_VPP
+#define _INSMCN_VPP
+
+//******************************************************************************
+
+#include do2bufer.vpp
+#include insmc.fun
+
+//******************************************************************************
+
+Create view loBD
+From
+  Dogovor,
+  CalPlan
+;
+
+//******************************************************************************
+
+Function MessageFun: boolean;
+{
+  MessageFun := TRUE;
+
+  if (KatSopr.dOpr <> Date(0, 0, 0))
+    {
+      Message('По накладной уже созданы ордера. Операция вставки отменена.'#13+
+              'Удалите ордера, повторите выбор ДО еще раз.');
+
+      MessageFun := FALSE;
+      Exit;
+    }
+
+  if (Message('Вставить спецификацию ДО в текущий документ?', YesNo) <> cmYes)
+    {
+      MessageFun := FALSE;
+      Exit;
+    }
+}
+
+//******************************************************************************
+// корректировка шапки накладной в соответствии с ДО (при выборе ДО из накладной)
+// используется в накладных накладных
+Function SGetBaseDoc(var Curse: double; DOSelectType: word): boolean;
+var
+  Doc       : word;
+  isNakl    : boolean;
+  OldOtvPodr: comp;
+  oExtAtr   : iExtAttr;
+  oExtCls   : iExtClass;
+  OldOrgBase: comp;
+
+{
+  SGetBaseDoc := FALSE;
+
+  Doc        := KatSoprToBaseDoc;
+  OldOrgBase := KatSopr.cOrgBase;
+
+  if (boGetTune('Ves.Use')) AND (TypeSopr = 201)
+    {
+      if (RunInterface('SHT_CE_OrgDo', KatSopr.cStepDoc, KatSopr.cOrg) = cmCancel)
+        Exit;
+    }
+  else
+    {
+      var wvResult: word;
+
+      if (DOSelectType = 0)
+        {
+          var tmpComp_1: comp;
+          var tmpComp_2, tmpComp_3: comp;
+
+          tmpComp_1 := comp(0);
+          tmpComp_2 := KatSopr.cStepDoc;
+          tmpComp_3 := KatSopr.cOrgBase;
+
+          wvResult := RunInterface(GetDBase, TRUE, word(0), Doc, tmpComp_1, tmpComp_2, tmpComp_3, double(0));
+
+          if (wvResult <> cmCancel)
+            if (GetFirst FastFirstRow SchFact where((KatSopr.cSchFact == SchFact.NRec)) <> tsOk)
+              {
+                set KatSopr.cStepDoc := tmpComp_2;
+                set KatSopr.cOrgBase := tmpComp_3;
+              }
+            else
+              {
+                case (wGetTune('Country')) of
+                  2:
+                    {
+                      Message('Нельзя редактировать текущее поле по причине: '+
+                              'накладная связана с документом для учета НДС -'#13+ SCHFACTNUM);
+                      Exit
+                    }
+                  else
+                    {
+                      Message('Нельзя редактировать текущее поле по причине: '+
+                              'накладная связана со счет-фактурой № '+SchFact.Num);
+                      Exit
+                    }
+                end;
+              }
+        }
+
+      if (DOSelectType = 1)
+        wvResult := RunInterface(iSelectBaseDoc, StepDoc.cBaseDoc, word(501), KatSopr.cStepDoc, word(0), word(0))
+
+      if (wvResult = cmCancel)
+        Exit;
+    }
+
+  if (GetFirst BaseDoc where ((StepDoc.cBaseDoc == BaseDoc.NRec)) <> tsOk)
+    {
+      Message('Ошибка в данных при выборе документа-основания...', CancelButton);
+      Exit;
+    }
+
+  if (not OnAfterMakeBaseDoc)
+    Exit;
+
+  // возвратные накладные в консигнации
+  if (KatSopr.VidSopr = 102) OR (KatSopr.VidSopr = 203)
+  {
+    KatSopr.cGruzFrom := BaseDoc.cGrPol;
+    KatSopr.cGruzTo   := BaseDoc.cGrOtpr;
+  }
+  else
+  {
+    KatSopr.cGruzFrom := BaseDoc.cGrOtpr;
+    KatSopr.cGruzTo   := BaseDoc.cGrPol;
+  }
+
+  KatSopr.TaraVoz   := BaseDoc.TaraVoz;
+  KatSopr.Name      := oSDfuns.SetKatSoprName( coBaseDoc, BaseDoc.nRec, FALSE );  //BaseDoc.Name;
+
+  KatSopr.cPayment    := BaseDoc.cPayment;
+  KatSopr.cDogovor    := BaseDoc.cDogovor;
+  KatSopr.cAppDogovor := BaseDoc.cAppDogovor;
+  KatSopr.cCalPlan    := BaseDoc.cCalPlan;
+  KatSopr.cNZakaz     := 0;
+  KatSopr.cOtgOrder   := 0;
+  KatSopr.cDover      := BaseDoc.cDover;
+  KatSopr.dDover      := BaseDoc.dDover;
+  KatSopr.nDover      := BaseDoc.nDover;
+  KatSopr.sDover      := BaseDoc.sDover;
+  KatSopr.cDovFio     := BaseDoc.cDovFio;
+
+
+  if (KatSopr.VidSopr = 201) //пир 104.1860
+    if (wGetTune('Reserv.PrSchSklad') = 1)//пир 102.52860 настройка резервирования по складу
+      if (BaseDoc.cParty <> 0)
+        KatSopr.cPodrFrom := BaseDoc.cParty;
+
+  OldOtvPodr       := KatSopr.cOtvPodr;
+  KatSopr.cOtvPodr := BaseDoc.cOtvPodr;
+
+  //--Формирование номера сопр. док. исходя из настроек------
+  if ( ((KatSopr.VidSopr = 101  or KatSopr.VidSopr = 108) AND boGetTune('Doc.Buy.dSopr=DO')) OR
+       ((KatSopr.VidSopr = 1411) AND boGetTune('Doc.Wood.Journ.dSopr=DO'))  OR
+       ((KatSopr.VidSopr = 111) AND boGetTune('Doc.Buy.dAkt=DO'))  OR
+       ((KatSopr.VidSopr = 211) AND boGetTune('Doc.Sell.dAkt=DO')) OR
+       ((KatSopr.VidSopr = 1421) AND boGetTune('Doc.Wood.Nakl.dSopr=DO')) OR
+       ((KatSopr.VidSopr = 201) AND boGetTune('Doc.Sell.dSopr=DO')) )
+    {
+      KatSopr.dSopr := BaseDoc.dDoc;
+    }
+
+  case KatSopr.VidSopr of
+  //------------------------------------------------------------------------------
+    101, 103, 108, 110, 114, 111:
+    {
+      if boGetTune('Doc.Buy.NumSopr=DO')
+        KatSopr.NSopr := BaseDoc.NoDoc;
+
+      if (KatSopr.VidSopr = 101) OR (KatSopr.VidSopr = 103) OR (KatSopr.VidSopr = 108)
+        if (boGetTune('Doc.Buy.dSopr=DO'))
+          KatSopr.dSopr := BaseDoc.dDoc;
+
+      if (KatSopr.VidSopr = 111)
+        if (boGetTune('Doc.Buy.dAkt=DO'))
+          KatSopr.dSopr := BaseDoc.dDoc;
+    }
+  //------------------------------------------------------------------------------
+    1411:
+      if boGetTune('Doc.Wood.Journ.NumSopr=DO')
+        KatSopr.NSopr := BaseDoc.NoDoc;
+  //------------------------------------------------------------------------------
+    201, 202, 203:
+    {
+      if (boGetTune('Doc.Sell.NumSopr=DO'))
+        KatSopr.NSopr := BaseDoc.NoDoc;
+
+      if (boGetTune('Doc.Sell.dSopr=DO'))
+        KatSopr.dSopr := BaseDoc.dDoc;
+    }
+    1421:
+      if boGetTune('Doc.Wood.Nakl.NumSopr=DO')
+        KatSopr.NSopr := BaseDoc.NoDoc;
+  //------------------------------------------------------------------------------
+    211:
+    {
+      if (boGetTune('Doc.Sell.NumAkt=DO'))
+        KatSopr.NSopr := BaseDoc.NoDoc;
+
+      if (boGetTune('Doc.Sell.dAkt=DO'))
+        KatSopr.dSopr := BaseDoc.dDoc;
+    }
+  //------------------------------------------------------------------------------
+    551, 552:
+      {
+        if (boGetTune('Doc.Remont.NumSopr=DO'))
+          KatSopr.NSopr := BaseDoc.NoDoc;
+      }
+  //------------------------------------------------------------------------------
+    else
+      if (boGetTune('FN.isNumOtvPodr'))
+        if (OldOtvPodr<>BaseDoc.cOtvPodr)
+          {
+            DelLastNumD_(KatSopr.VidSopr, string(OldOtvPodr), KatSopr.NSopr)
+            KatSopr.NSopr := GetLastNumD_(KatSopr.VidSopr, string(KatSopr.cOtvPodr));
+          }
+  //------------------------------------------------------------------------------
+  end;
+
+  if (BaseDoc.TipMoney = 3)
+  {
+    KatSopr.cValut := BaseDoc.cVal;
+    KatSopr.cVal   := BaseDoc.cVal;
+
+    if (wGetTune('Doc.SoprDataKurs') = 0) // по запросу
+      if (RunInterface('GetDCurse', Date(0, 0, 0), BaseDoc.cVal, KatSopr.dPrice) = cmCancel) {}
+
+    KatSopr.dPrice := if (BaseDoc.dValCurse <> Date(0, 0, 0), BaseDoc.dValCurse, KatSopr.dSopr);
+
+    SaveMyDsk(TRUE, 'MakeSoprByBuff_GetCurse');
+  }
+
+ #ifdef _SOPRDOC_VIP
+  ChangeNoDocBaseDoc;
+ #end
+
+  //---------------------------------------------------------
+  if (BaseDoc.cNazna <> 0)
+    KatSopr.cNazna := BaseDoc.cNazna;
+
+  KatSopr.nVagon   := BaseDoc.nVagon;
+  KatSopr.TypeDoc  := BaseDoc.TypeDoc;
+  KatSopr.cCellVal := BaseDoc.cCellVal;
+  KatSopr.cTransp  := BaseDoc.cTransp;
+  KatSopr.cOrg     := BaseDoc.cOrg; // 101.28343 - Ведение документооборота при участии филиалов
+
+  if ( (BaseDoc.VidDoc = 201) OR (BaseDoc.VidDoc = 211) ) // продажа
+      AND
+     ( wGetTune('Doc.Sell.OrgFromDO') = 0 ) // контрагент из договора/соглашения/ПКП
+    {
+      if (BaseDoc.cCalPlan <> 0)
+        {
+          var pCalPlan: comp; pCalPlan := BaseDoc.cCalPlan;
+
+          if (loBD.GetFirst FastFirstRow CalPlan where ((pCalPlan == CalPlan.NRec)) = tsOk)
+            KatSopr.cOrg := loBD.CalPlan.cOrg;
+        }
+      else
+        {
+          var pDogDO: comp;
+
+          pDogDO := if (BaseDoc.cAppDogovor <> 0, BaseDoc.cAppDogovor, BaseDoc.cDogovor);
+
+          if (pDogDO <> 0)
+            if (loBD.GetFirst FastFirstRow Dogovor where ((pDogDO == Dogovor.NRec)) = tsOk)
+              KatSopr.cOrg := loBD.Dogovor.cOrg;
+        }
+    }
+
+  set KatSopr.cOrgBase := KatSopr.cOrg;
+
+  if ((KatSopr.cOrgPlat = KatSopr.cOrgBase) OR (KatSopr.cOrgPlat = 0))
+    if (wGetTune('Doc.Sell.OrgPlat') = 0)
+      KatSopr.cOrgPlat := KatSopr.cOrgBase
+    else
+      KatSopr.cOrgPlat := KatSopr.cGruzFrom;
+
+  if (not UpdateTable)
+    Exit;
+
+  oSDfuns.TTNDoc_Copy(coBaseDoc, BaseDoc.NRec, coKatSopr, KatSopr.NRec);
+
+  // копирование внешних атрибутов и классификации из ДО в акт
+  //копирование из шапки
+  if boGetTune('Oper.ExClass_DO2Docs')
+    {
+      oExtAtr.CopyAllAttrEx    (word(coBaseDoc), BaseDoc.NRec, word(coKatSopr), KatSopr.NRec);
+      oExtCls.CopyAllClassValEx(word(coBaseDoc), BaseDoc.NRec, word(coKatSopr), KatSopr.NRec);
+    }
+
+  #ifdef _SOPRDOCB_VIP
+  if (KatSopr.wADoc <> adSoprDocKN)
+  #end
+    {  //нужно только для КН (корректирующая накладная)
+
+      ResetBounds(#SpSopr);
+      isNakl := TRUE;
+
+      if (NOT MessageFun)
+        isNakl := FALSE;
+      else
+        While (GetFirst Spsopr where ((KatSopr.NRec == SpSopr.cSopr)) = tsOk)
+          {
+            DoDeleteSoprDop;
+            onBeforeClearSpSopr;
+            #include uksdelsp.vpp
+            oSDfuns.SpSopr_Delete (SpSopr.NRec);
+          }
+
+      SetBounds(#SpSopr);
+    }
+
+  if (OldOrgBase <> KatSopr.cOrg)
+    ChangeSpDocNalOrg(OldOrgBase, KatSopr.cOrg);
+
+  if (not isNakl)
+    Exit;
+
+  KatSopr.VhodNal := if ((KatSopr.VidSopr <> 501) OR (wGetTune('Oper.FormUch') = 1), BaseDoc.VhodNal, 2);
+
+  IsNakl := FALSE;
+
+  KatSopr.Summa  := 0;
+  KatSopr.SumVal := 0;
+
+  // что нужно будет в makenakl - записываем в буфер шапки,
+  // (там шапка создаваться не будет, но какие-то поля будут использоваться)
+  SDocBuf.VidSopr  := KatSopr.VidSopr;
+  SDocBuf.TipMoney := BaseDoc.TipMoney;
+  SDocBuf.VidDoc   := BaseDoc.VidDoc;
+  SDocBuf.cOrg     := BaseDoc.cOrg;
+  SDocBuf.cVal     := BaseDoc.cVal;
+  SDocBuf.wTypeDoc := 3;
+  SDocBuf.cStepDoc := KatSopr.cStepDoc;
+  SDocBuf.cBaseDoc := BaseDoc.NRec;
+  SDocBuf.ValCurse := BaseDoc.ValCurse;
+  SDocBuf.DopProc  := BaseDoc.DopProc;
+  SDocBuf.KolKompl := KatSopr.KolKompl;
+  SDocBuf.cSklad   := BaseDoc.cSklad;
+  SDocBuf.cParty   := BaseDoc.cParty;
+  SDocBuf.Name     := oSDfuns.SetKatSoprName( coBaseDoc, BaseDoc.nRec, FALSE );
+  SDocBuf.cKatSopr := KatSopr.NRec;
+  Insert Current SDocBuf;
+
+  Update_Current_KatSopr;
+
+  OnInitInsMCInfo; // Абстракный
+
+  SGetBaseDoc := TRUE;
+} // Function SGetBaseDoc
+
+//******************************************************************************
+// замена спецификации
+Function InsertMC(DOSelectType: word): boolean;
+var
+  Curse: double;
+  pMakeSoprByBuff: MakeSoprByBuff;
+{
+  InsertMC := FALSE;
+
+  delete all SDocBuf;
+  delete all SpDocBuf;
+
+  SaveMyDsk(word(0), 'ShowRaspr');      // это чтобы не показывалось распределение по складам
+  SaveMyDsk (FALSE, 'MakeSoprByBuff_GetCurse'); // чтобы курс запрашивался
+
+  if (not SGetBaseDoc(Curse, DOSelectType))
+    Exit;
+
+#ifdef _SOPRDOCB_VIP
+  if ((KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108)) AND (KatSopr.wADoc = adSoprDocKN)
+    Exit;
+#end
+
+  var
+  viKatPost_IsLeaf
+  : integer;
+
+  _LOOP SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc ))
+               ordered by index SpStep02
+    {
+      if (  (wGetTune('Reserv.FormSopr') = 1)
+        AND (SpStep.PrMc = 1)
+        AND (TypeSopr = 201)
+        AND (SpStep.Reserv = 0) )
+        {
+          Continue; // ПИР 3.7546
+        }
+
+//------------------------------------------------------------------------------
+
+      if ((TypeSopr = 551)
+       OR (TypeSopr = 552)
+       OR (TypeSopr = 553)
+       OR (TypeSopr = 554)
+       OR (TypeSopr = 557))
+      {
+        viKatPost_IsLeaf := -1;
+
+        if (GetFirst SpStepRem where ((SpStep.Nrec == SpStepRem.cSpStep)) = tsOk)
+          if (GetFirst KatPost where ((SpStepRem.cPostMC == KatPost.NRec)) = tsOk)
+            viKatPost_IsLeaf := KatPost.IsLeaf;
+
+       if not (
+           ( (SpStep.PrMC = 1)
+         AND ( (viKatPost_IsLeaf = -1)
+           OR ((viKatPost_IsLeaf = 0) AND (KatSopr.VidSopr = 551))
+           OR (                           (KatSopr.VidSopr = 552))
+           OR ((viKatPost_IsLeaf = 1) AND (KatSopr.VidSopr = 553)) // п
+           OR ((viKatPost_IsLeaf = 0) AND (KatSopr.VidSopr = 554)) // соб силы
+           OR (                           (KatSopr.VidSopr = 557))
+             )
+           )
+        OR (SpStep.PrMC = 2)
+          )
+          Continue;
+      }
+
+//------------------------------------------------------------------------------
+
+      // добавим обработку настройки "В спецификации акта на ремонт использовать"
+      if ((TypeSopr = 553)
+       OR (TypeSopr = 554)
+       OR (TypeSopr = 557))
+      {
+        if(((SpStep.PrMc = 1)  AND (wGetTune('Doc.Remont.AktMCUsl') = 1))
+        OR ((SpStep.PrMc <> 1) AND (wGetTune('Doc.Remont.AktMCUsl') = 2)))
+          Continue;
+      }
+
+      FillSpNaklBuffer;
+    }
+
+  StartNewVisual(vtNumericVisual, vfTimer, 'Создание спецификации...', 1);
+
+  if pMakeSoprByBuff.MakeDocument (KatSopr.dSopr, longint(0), SDocBuf.Name, word(1+2)) = 0
+    {
+      //апдейт Katsopr-а был - можно перечитать
+      RereadRecord(#KatSopr); //ПИР 101.22564
+      InsertMC := TRUE;
+    }
+
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+// эта процедура перешла по наследству из старого insmc
+// наверное, где-то используется
+// Только для МЦ и услуг, не являющимися сопутствующими
+Procedure GetMCUslSopr;
+var
+  wLst   : word;
+  cOwn   : comp;
+  oExtAtr: iExtAttr;
+  oExtCls: iExtClass;
+
+{
+  if ( ( KatSopr.cStepDoc = 0 ) AND ( KatSopr.VidSopr = 102 ) )
+    {
+      wLst := 999;
+
+      if ( Delete Pick where (( wLst == Pick.wList )) <> tsOk )
+        {}
+
+      if ( RunInterface('iSpStepDO', comp(0), KatSopr.cOrg, KatSopr.cVal, KatSopr.dSopr) = cmCancel )
+        Exit;
+    }
+  else
+    {
+      wLst := 555;
+
+      if ( Delete Pick where (( wLst == Pick.wList )) <> tsOk )
+        {}
+
+      if ( RunInterface('GetMCSopr', KatSopr.cStepDoc, SpSopr.PrMC) = cmCancel )
+        Exit;
+    }
+
+  if ( RecordExists Pick where (( wLst == Pick.wList )) <> tsOk )
+    Exit;
+
+  if (not IsNew)
+    {
+      KatSopr.Sumval := KatSopr.SumVal - SpSopr.VPrice * SpSopr.KolOpl;
+      set KatSopr.Summa := KatSopr.Summa - SpSopr.Price * SpSopr.KolOpl;
+
+      DoDeleteSoprDop;
+      #include uksdelsp.vpp
+      oSDfuns.SpSopr_Delete(SpSopr.NRec);
+    }
+
+  OnInitInsMCInfo;
+
+  StartNewVisual(vtNumericVisual, vfTimer, 'Вставка выбранных позиций: '#13#3, 1);
+
+  _LOOP Pick where ((wLst == Pick.wList)) ordered by index Pick02
+    if (GetFirst SpStep where ((Pick.cRec == SpStep.NRec)) = tsOk)
+      {
+        if ( wLst = 999 )
+          if ( GetFirst FastFirstRow StepDoc where (( SpStep.cStepDoc == StepDoc.nRec )) <> tsOk )
+            {}
+
+        SpSopr.NRec := 0; //G58502 без этого перестала работать вставка в спецификации
+        SpSopr.LastDate   := Cur_Date;
+        SpSopr.LastTime   := Cur_Time;
+        SpSopr.cSopr      := KatSopr.NRec;
+        SpSopr.dSopr      := KatSopr.dSopr;
+        SpSopr.VidSopr    := KatSopr.VidSopr;
+        SpSopr.dOprTTN    := KatSopr.dOpr;
+        SpSopr.cVal       := KatSopr.cValut;
+        SpSopr.cOtpEd     := SpStep.cOtpEd;
+        SpSopr.cParty     := SpStep.cParty;
+        SpSopr.Kol        := SpStep.KolSkl;
+        SpSopr.cMCUSL     := SpStep.cMCUSL;
+        SpSopr.KolFact    := Pick.PickKol;
+        SpSopr.PrMC       := SpStep.PrMC;
+        SpSopr.ProcUb     := SpStep.ProcUb;
+        SpSopr.cSpStep    := SpStep.NRec;
+        SpSopr.KolOpl     := Pick.PickKol * (1 - SpStep.ProcUb / 100);
+        SpSopr.cPriceList := SpStep.cPriceList;
+        SpSopr.Netto      := SpStep.Netto;
+        SpSopr.mTara      := SpStep.mTara;
+        SpSopr.cCellVal   := SpStep.cCellVal;
+        SpSopr.nVagon     := SpStep.nVagon;
+        SpSopr.cTransp    := SpStep.cTransp;
+        SpSopr.wMcProp    := SpStep.wMcProp;
+        SpSopr.nKvit      := SpStep.nKvit;
+        SpSopr.SumAvt     := SpStep.SumAvt;
+        SpSopr.cValAvt    := SpStep.cValAvt;
+        SpSopr.cMasEd     := SpStep.cMasEd;
+        SpSopr.cMasVid    := SpStep.cMasVid;
+        SpSopr.cResOtgr   := SpStep.cResOtgr;
+        SpSopr.cUKS       := SpStep.cUKS;
+        // обработка позиций с тарой
+        SpSopr.PrVoz      := SpStep.PrVoz; //andr
+        SpSopr.cOwner     := 0;
+
+       #ifdef _INSSTDS_VPP
+        if (OnInsertSpSopr1(GetCursPrice))
+       #else
+        if (OnInsertSpSopr(GetCursPrice))
+       #end //_INSSTDS_VPP
+          {
+            SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+
+            if (Insert Current SpSopr = tsOk)
+            {
+#ifndef __MTR_TO_SPEC__
+              if (GetFirst SpecZatr where ((coSpStep == SpecZatr.coTable AND SpStep.nRec == SpecZatr.cSpec)) = tsOk)
+              {
+                var cz : comp;
+                cz := SpecZatr.cAddSumTune;
+                ClearBuffer(#SpecZatr);
+                SpecZatr.coTable := coSpSopr;
+                SpecZatr.cSpec := SpSopr.nRec;
+                SpecZatr.cAddSumTune := cz;
+                if (Insert Current SpecZatr = tsOk) {};
+              }
+#else
+              oMTRFun.CopySpecMTR(coSpStep, SpStep.nRec, coSpSopr, SpSopr.NRec);
+#end
+#ifdef __SMETA__
+              RunInterface('CopySpDocSmeta', word(coSpStep), SpStep.nRec, word(coSpSopr), SpSopr.nRec);
+#end
+            }
+
+            #ifdef _SOPRDOC_VIP
+            if ( ( wGetTune('Reserv.PrSchSklad') = 0 ) AND ( SpStep.Reserv >= SpSopr.KolFact ) )
+              {
+                fTekRun.ModifySklOstAlways(SpSopr.cMCUsl, KatSopr.cPodrFrom, 0, SpSopr.KolFact * KatOtpEd.Koef);
+
+                if ( KatSopr.VidSopr = 201 ) OR ( KatSopr.VidSopr = 1421)
+                  fTekRun.ModifyDoRes(SpSopr.cSpStep, KatSopr.cPodrFrom, 0/*МОЛ*/, 0/*партия*/, SpSopr.KolFact);
+              }
+            #end
+
+            // обработка позиций с тарой
+            if IsValid(#BaseDoc)
+              if ( (TypeSopr = 101 or TypeSopr = 108) AND
+                   (BaseDoc.viddoc = 201) AND
+                   (KatMC.kGroupMC = sGetTune('Tara.KodGrMcTara')) )
+                {
+                  RunInterface('GETPAR2', 1, SpSopr.NRec, KatMC.cUsl, SpSopr.ProcUb, double(0), word(coSpSopr));
+                  Update Current SpSopr;
+                }
+
+            if (wGetTune('Tara.GrTara') = 0) AND
+               (SpStep.NRec = SpStep.cOwner)
+              {
+                cOwn           := SpSopr.NRec;
+                SpSopr.cOwner  := SpSopr.NRec;
+                Update Current SpSopr;
+              }
+
+            NextVisual;
+
+            if boGetTune('Oper.ExClassDO2Docs') // Копирование атрибутов классификации из ДО
+              {
+                oExtAtr.CopyAllAttrEx    (word(coSpStep), SpSopr.cSpStep, word(coSpSopr), SpSopr.NRec);
+                oExtCls.CopyAllClassValEx(word(coSpStep), SpSopr.cSpStep, word(coSpSopr), SpSopr.NRec);
+              }
+
+            oSDfuns.TTNDoc_Copy(coSpStep, SpStep.NRec, coSpSopr, SpSopr.NRec);
+
+            if ( SpStep.PrMC = 1 )
+              {
+                if ( not ExistTune('Doc.DEI.SpStep2SpSopr') )
+                  {
+                    oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(1), SpSopr.KolFact);
+                    oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(2), SpSopr.Kol);
+                    oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(3), SpSopr.KolOpl);
+                  }
+                else
+                  if ( wGetTune('Doc.DEI.SpStep2SpSopr') = 0 )
+                    {
+                      oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(1), SpSopr.KolFact);
+                      oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(2), SpSopr.Kol);
+                      oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(3), SpSopr.KolOpl);
+                    }
+                  else
+                    {
+                      oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), double(0), word(1), SpSopr.KolFact);
+                      oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), double(0), word(2), SpSopr.Kol);
+                      oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), double(0), word(3), SpSopr.KolOpl);
+                    }
+              }
+
+            KatSopr.Summa  := KatSopr.Summa  + SpSopr.Price  * SpSopr.KolOpl;
+            KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+            OnAfterInsertSpSopr;
+          }
+      }
+
+  StopVisual('', 0);
+
+  Update_Current_KatSopr;
+
+  OnDoneInsmcInfo;
+
+  // привязка нагрузки
+  ReSetBounds(#SpStep);
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr
+    if (GetFirst SpStep where (( SpSopr.cSpStep == SpStep.NRec )) = tsOk)
+      if (SpStep.cOwner <> 0)
+      {
+        PushPos(#SpSopr);
+
+        var tOwner: comp;
+        tOwner := 0;
+
+        if (GetFirst SpSopr where (( SpStep.cOwner  ==  SpSopr.cSpStep AND
+                                     KatSopr.NRec   ==  SpSopr.cSopr )) = tsOk)
+          tOwner := SpSopr.NRec;
+
+        PopPos(#SpSopr);
+
+        SpSopr.cOwner := tOwner;
+        Update Current SpSopr;
+      }
+
+  oSoprTara.ChangeNppSopr(KatSopr.NRec);
+
+  PopPos(#SpSopr);
+
+  SetBounds(#SpStep)
+
+  SelectField(#SpSopr.KolFact);
+
+#ifdef _OPER_NAKL_VIH
+  SetModified(FALSE);
+  CheckSumma(TRUE);
+#else
+  RecalcSumm(TRUE);
+  Update_Current_KatSopr;
+#end
+}
+
+//******************************************************************************
+// эта и следущая процедуры перешли по наследству из старого insmc
+// наверное, где-то используется
+// Проверка корректности входимости налогов в сопроводительный документ
+Procedure ChVhNal;
+{
+  if (KatSopr.cStepDoc = 0)
+    set KatSopr.VhodNal := if (KatSopr.VhodNal = 1, 2, 1);
+  else
+    Message('Сопроводительный документ сформирован по документу-основанию.'#13+
+            'Входимость налогов изменять нельзя...', CancelButton);
+}
+
+//******************************************************************************
+
+Procedure GetMCUslRazrez;
+var
+  MarkerSelect, MarkerTempPart,
+  MarkerCount, i: longint;
+  ret: word;
+  pickrec, pickrec1: comp;
+{
+  MarKerSelect   := InitMarker('TekSaldo', 8, 100, 10, FALSE);
+  MarKerTEMPPART := InitMarker('TEMPPART', 8, 100, 10, FALSE);
+  MarkerCount    := GetMarkerCount(MarkerSelect);
+
+  if (GetMarker(MarkerSelect, 0, pickrec))
+    {
+      OnInitInsMCInfo;
+
+      StartNewVisual(vtNumericVisual, vfTimer, 'Добавление выбранных позиций: ', 1);
+
+      For (i := 0; i < MarkerCount; i := i + 1)
+        {
+          if GetMarker(MarkerSelect, i, pickrec)
+            if (GetFirst TekSaldo where ((PickRec == TekSaldo.NRec)) = tsOk)
+              {
+                if GetMarker(MarkerTemppart, i, pickrec1)
+                  ret := GetFirst SpDocs where ((pickrec1 == SpDocs.NRec));
+
+                SpSoprDefault;
+
+                SpSopr.cOtpEd  := SpDocs.cOtpEd;
+                SpSopr.cParty  := TekSaldo.cParty;
+                SpSopr.Kol     := TekSaldo.Kol;
+                SpSopr.cMCUSL  := TekSaldo.cMC;
+                SpSopr.KolFact := TekSaldo.kol;
+                SpSopr.PrMC    := SpDocs.PrMC;
+                SpSopr.ProcUb  := 0;
+                SpSopr.cSpStep := 0;
+                SpSopr.KolOpl  := SpSopr.kol;
+                SpSopr.cSpDocs := SpDocs.NRec;
+
+               #ifdef _INSSTDS_VPP
+                if (OnInsertSpSopr1(GetCursPrice))
+               #else
+                if (OnInsertSpSopr(GetCursPrice))
+               #end //_INSSTDS_VPP
+                  {
+                    SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+
+                    if (Insert Current SpSopr <> tsOk)
+                      { }
+
+                    if (SpSopr.PrMC = 1)
+                      {
+                        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 1, 0, SpSopr.Kolfact, 0);
+                        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 2, 0, SpSopr.Kol,     0);
+                        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 3, 0, SpSopr.KolOpl,  0);
+                      }
+
+                    NextVisual;
+                    KatSopr.Summa  := KatSopr.Summa  + SpSopr.Price  * SpSopr.KolOpl;
+                    KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+                    OnAfterInsertSpSopr;
+                  }
+              }
+        }// for
+
+      StopVisual('', 0);
+
+      Update_Current_KatSopr;
+
+      OnDoneInsmcInfo;
+      RereadRecord;
+      SetModified(TRUE);
+    }
+
+  DoneMarker(MarkerSelect  , 'TekSaldo');
+  DoneMarker(MarkerTemppart, 'TEMPPART');
+  RecalcSumm(TRUE);
+}
+
+#end //_INSMCN_VPP
+//******************************************************************************

@@ -1,0 +1,522 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//******************************************************************************
+
+
+//******************************************************************************
+
+Procedure PrintDocumentVDE;
+{
+};
+
+//******************************************************************************
+
+Procedure WritePositions(Skipflag : boolean);
+{
+  if ( (SkipFlag) or (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) <> tsOk) )
+    FrmZhdn.SkipFormat(4);
+  else
+    {
+      FrmZhDn.SkipFormat(1);         // кол-во мест
+      FrmZhDn.SkipFormat(1);         // упаковка
+      FrmZhDn.Write(KatMC.Name);     // наименование МЦ
+      FrmZhDn.SkipFormat(1);         // масса
+    }
+}
+
+//******************************************************************************
+//железнодорожная накладная (печатает только первых 8 позиций спецификации)
+Procedure PrintDocument_1;
+var
+  x                 : word;
+  pg_flag           : word;
+  Marker_flag       : boolean;
+  MarkerCount2, i2  : longint; // счетчики записей в маркере
+  pickrec2          : comp;
+{
+  if (not IsValid(#KatSopr))
+    {
+      Message('Не найдена накладная для печати...', CancelButton);
+      Exit;
+    }
+
+  Marker_flag  := FALSE;
+  pg_flag      := 0;
+  MarkerCount2 := GetMarkerCount(MarkerNZ);
+
+  if (MarkerCount2 <> 0)
+    if (RunDialog('PrintBaseDocParams', pg_flag) = cmCancel)
+      Exit;
+
+  if (MarkerCount2 = 0)
+    {
+      Marker_flag  := TRUE;
+      pickrec2     :=  KatSopr.NRec;
+      MarkerCount2 := 1;
+    }
+
+  PushPos(#KatSopr);
+
+  For (i2 := 0; i2 < MarkerCount2; i2 := i2 + 1)
+    {
+      if (NOT Marker_flag)
+        GetMarker(MarkerNZ, i2, pickrec2);
+
+      if (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) <> tsOk )
+        Continue;
+
+      FrmZhdn.Write(KatSopr.nRec);
+      FrmZhdn.Write(KatSopr.NSopr);
+
+      // Пункт отгрузки (наш)
+      if (   (GetFirst TTNDoc where ((  coKatSopr    == TTNDoc.wTable
+                                    and KatSopr.NRec == TTNDoc.cDoc
+                                    )) = tsOk)
+         and (GetFirst MarPunkt where ((TTNDoc.cPunktP  == MarPunkt.NRec)) = tsOk)
+         )
+        FrmZhdn.Write(MarPunkt.Name);
+      else
+        FrmZhdn.SkipFormat(1);
+
+      if (   (GetFirst TTNDoc where ((  coKatSopr    == TTNDoc.wTable
+                                    and KatSopr.NRec == TTNDoc.cDoc
+                                    )) = tsOk)
+         and (GetFirst MarPunkt where ((TTNDoc.cPunktR  == MarPunkt.NRec)) = tsOk)
+         )
+        FrmZhdn.Write(MarPunkt.Name);
+      else
+        FrmZhdn.SkipFormat(1);
+
+      if (GetFirst KatOrg where ((KatSopr.cGruzFrom == KatOrg.NRec)) <> tsOk)
+        FrmZhdn.SkipFormat(2);
+      else
+        {
+          FrmZhdn.Write(KatOrg.Name);
+          FrmZhdn.Write(KatOrg.Addr);
+        }
+
+      if (GetFirst KatOrg where ((KatSopr.cGruzTo == KatOrg.NRec)) <> tsOk)
+        FrmZhdn.SkipFormat(2);
+      else
+        {
+          FrmZhdn.Write(KatOrg.Name);
+          FrmZhdn.Write(KatOrg.Addr);
+        }
+
+      if (GetFirst KatOrg where ((KatSopr.cOrg == KatOrg.NRec)) <> tsOk)
+        FrmZhdn.SkipFormat(1);
+      else
+        {
+          FrmZhdn.SkipFormat(1);
+//          FrmZhdn.Write(KatOrg.Name); // Плательщик 1
+        }
+
+      FrmZhdn.SkipFormat(1);          // Плательщик 2
+
+      x := 1;
+
+      _LOOP SpSopr where ((  KatSopr.NRec == SpSopr.cSopr
+                         and word(1)      == SpSopr.PrMc
+                         ))
+                   ordered by index SpSopr11
+        {
+          WritePositions(FALSE);
+          x := x + 1;
+
+          if ( x > 8 )
+            Break;
+        }
+
+      if ( x < 9 )
+        do
+          {
+            WritePositions(TRUE);
+            x := x + 1;
+          }
+        while (x < 9);
+
+      FrmZhDn.SkipFormat(1);   // итого масса
+      FrmZhDn.SkipFormat(1);   // итого масса прописью
+      FrmZhDn.SkipFormat(1);   // итого мест
+      FrmZhDn.SkipFormat(1);   // итого мест прописью
+
+      FrmZhdn.Write(KatSopr.Summa);
+      FrmZhdn.Write('SS');     // символ 
+
+      if ( pg_flag <> 0 ) AND ( i2 < MarkerCount2 - 1 )
+        FrmZhdn.Write(' ');
+      else
+        FrmZhdn.SkipFormat(1);
+
+      Marker_flag := FALSE;
+    }
+
+  PopPos(#KatSopr);
+  FrmZhdn.PutEvent(feBreak);
+  FrmZhdn.ShowFile;
+}
+
+//******************************************************************************
+
+//******************************************************************************
+
+Procedure PrintDocument_2;
+var
+  koefp, aSumma,
+  ANDS, aGSM,
+  aMassa            : double;
+  pg_flag           : word;
+  Marker_flag       : boolean;
+  MarkerCount2,
+  i2                : longint; // счетчики записей в маркере
+  pickrec2          : comp;
+
+{
+  if (not IsValid(#KatSopr))
+    {
+      Message('Не найдена накладная для печати...', CancelButton);
+      Exit;
+    }
+
+  if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr AND
+                              word(1)      == SpSopr.PRMC       )) <> tsOk)
+    {
+      Message('В спецификации накладной нет матценностей...', CancelButton);
+      Exit;
+    }
+
+//----------
+  Marker_flag := FALSE;
+  pg_flag := 0;
+  MarkerCount2 := GetMarkerCount(MarkerNZ);
+  if (MarkerCount2<>0)
+    if ( RunDialog('PrintBaseDocParams', pg_flag) = cmCancel )
+      Exit;
+
+  if (MarkerCount2 = 0)
+    {
+      Marker_flag := TRUE;
+      pickrec2 := KatSopr.NRec;
+      MarkerCount2 := 1;
+    }
+
+  For ( i2 := 0; i2<MarkerCount2; i2 := i2+1 )
+    {
+      if (NOT Marker_flag)
+        GetMarker(MarkerNZ, i2, pickrec2);
+
+      if (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) = tsOk )
+        {
+          PushPos(#KatSopr);
+   //----------
+          if GetFirst BaseDoc where ((KatSopr.cStepDoc == StepDoc.NRec AND
+                                         StepDoc.NRec == BaseDoc.NRec)) = tsOk
+            frmSamVivoz.Write(BaseDoc.NoDoc+IF(BaseDoc.dDoc<>date(0, 0, 0), ' от '+DateToStr(BaseDoc.dDoc, '"DD" mon YYYY г.')+' ', '') );
+          else
+            frmSamVivoz.SkipFormat(1);
+
+          if (GetFirst Dogovor where((KatSopr.cDogovor == Dogovor.NRec)) = tsOk)
+            frmSamVivoz.Write(Dogovor.NoDoc+IF(Dogovor.dDoc<>date(0, 0, 0), ' от '+DateToStr(Dogovor.dDoc, '"DD" mon YYYY г.'), '') );
+          else
+            frmSamVivoz.SkipFormat(1);
+
+          if (GetFirst KatOrg where ((KatSopr.cGruzFrom == KatOrg.NRec)) = tsOk)
+            frmSamVivoz.Write(KatOrg.Name)
+          else
+            frmSamVivoz.SkipFormat(1);
+          if (GetFirst KatOrg where ((KatSopr.cGruzTo == KatOrg.NRec)) = tsOk)
+            {
+              frmSamVivoz.Write(KatOrg.Name);
+              frmSamVivoz.Write(KatOrg.Addr);
+            }
+          else
+            frmSamVivoz.SkipFormat(2);
+
+           frmSamVivoz.Write(KatSopr.sDover);
+           frmSamVivoz.Write(KatSopr.nDover+
+              if(KatSopr.dDover<>date(0, 0, 0), ' от '+DateToStr(KatSopr.dDover, '"DD" mon YYYY г.'), '') );
+
+
+          if ( (KatSopr.cNZakaz <> 0) AND
+               (GetFirst NZakaz where ((KatSopr.cNZakaz == NZakaz.NRec)) = tsOk) )
+            frmSamVivoz.Write(NZakaz.NoDoc);
+          else
+            frmSamVivoz.SkipFormat(1);
+
+          if (GetFirst KatOrg where ((KatSopr.cOrg == KatOrg.NRec)) = tsOk)
+            frmSamVivoz.Write(KatOrg.Name);
+          else
+            frmSamVivoz.Skipformat(1);
+
+          frmSamVivoz.Write(KatSopr.NSopr);
+
+          aSumma := 0;
+          ANDS := 0;
+          aGSM := 0;
+          aMassa := 0;
+
+          if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr AND
+                                       word(1)      == SpSopr.PRMC       )) <> tsOk)
+            frmSamVivoz.Skipformat(5);
+          else
+
+           _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+                                       ordered by index SpSopr02
+             if (SpSopr.PRMC = 1)
+               {
+                 if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) <> tsOk)
+                   ClearBuffer(#KatMC);
+
+                 frmSamVivoz.Write(KatMC.Name);
+
+                 if (SpSopr.cOtpEd <> 0)
+                   {
+                     koefp := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+                     frmSamVivoz.Write(fEdIzm.GetNameOtpEd(SpSopr.cOtpEd));
+                   }
+                 else
+                   {
+                     koefp := 1;
+                     frmSamVivoz.Write(fEdIzm.GetKatEdName(KatMC.cEd));
+                   }
+
+                 frmSamVivoz.Write(SpSopr.KolFact * koefp * (SpSopr.Netto+SpSopr.mTara)/1000, 3);
+                 aMassa := aMassa + (SpSopr.KolFact * koefp * (SpSopr.Netto+SpSopr.mTara)/1000);
+
+                 if (katSopr.VhodNal <> 1)
+                   {
+                     frmSamVivoz.Write(SpSopr.Price, 2);
+                     frmSamVivoz.Write(SpSopr.KolFact * SpSopr.Price, 2);
+                     aSumma := aSumma + (SpSopr.Price * SpSopr.KolFact);
+                   }
+                 else
+                   {
+                     frmSamVivoz.Write(SpSopr.Price - (SpSopr.SumNDS / SpSopr.KolFact), 2);
+                     frmSamVivoz.Write((SpSopr.KolFact * SpSopr.Price) - SpSopr.SumNDS, 2);
+                     aSumma := aSumma + (SpSopr.Price * SpSopr.KolFact) - SpSopr.SumNDS;
+                   }
+
+                 _LOOP SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc AND
+                                               SpSopr.NRec == SpDocNal.cSpDoc))
+                   {
+                     if (SpDocNal.cNalog = coGetTune('Nalog.cNalogNDS'))
+                       ANDS := ANDs + SpDocNal.Summa;
+
+                     if GetFirst KatNalog where ((SpDocNal.cNalog == KatNalog.NRec)) = tsOk
+                       if InStr('гсм', LoCase(KatNalog.Name)) > 0
+                         aGSM := aGSM + SpDocNal.Summa;
+                   }
+               }
+
+           frmSamVivoz.PutEvent(feBreak);
+           frmSamVivoz.Write(aGSM, 2);
+           frmSamVivoz.Write(aNDS, 2);
+           frmSamVivoz.Write(KatSopr.Summa, 2);
+           frmSamVivoz.Write(aMassa, 3);
+
+         //---------------
+           if (pg_flag <> 0 ) AND (i2 < MarkerCount2-1)
+             frmSamVivoz.write(' ');
+           else
+             frmSamVivoz.SkipFormat(1);
+
+            PopPos(#KatSopr);
+            Marker_flag := FALSE;
+         //---------------
+
+        }  //***IF (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) = tsOk )
+
+    } //***FOR ( i2 := 0; i2<MarkerCount2; i2 := i2+1 )
+
+  frmSamVivoz.PutEvent(feBreak);
+  frmSamVivoz.ShowFile;
+
+}
+
+//******************************************************************************
+
+Procedure PrintDocument_3;
+var x      : word;
+    sumdoc: double;
+    pg_flag           : word;
+    Marker_flag       : boolean;
+    MarkerCount2, i2  : longint; // счетчики записей в маркере
+    pickrec2          : comp;
+
+{
+  if (not IsValid(#KatSopr))
+    {
+      Message('Не найдена накладная для печати...', CancelButton);
+      Exit;
+    }
+
+  if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr AND
+                              word(1)      == SpSopr.PRMC       )) <> tsOk)
+    {
+      Message('В спецификации накладной нет матценностей...', CancelButton);
+      Exit;
+    }
+//----------
+  Marker_flag := FALSE;
+  pg_flag     := 0;
+  MarkerCount2 := GetMarkerCount(MarkerNZ);
+
+  if (MarkerCount2 = 0)
+    {
+      Marker_flag := TRUE;
+      pickrec2    := KatSopr.NRec;
+      MarkerCount2 := 1;
+    }
+  else
+    if (RunDialog('PrintBaseDocParams', pg_flag) = cmCancel)
+      Exit;
+
+
+  PushPos(#KatSopr);
+  ResetBounds(#KatSopr);
+
+  For ( i2 := 0; i2<MarkerCount2; i2 := i2+1 )
+    {
+      if (NOT Marker_flag)
+        GetMarker(MarkerNZ, i2, pickrec2);
+
+      if (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) = tsOk )
+        {
+    //----------
+          frmmonak.Write(KatOrg.Name);
+          frmmonak.Write(KatSopr.NSopr);
+          frmmonak.SkipFormat(1);
+
+          frmmonak.Write(KatSopr.DSopr, 'DD');
+          frmmonak.Write(KatSopr.DSopr, 'month');
+          frmmonak.Write(KatSopr.DSopr, 'YYYY');
+
+          frmmonak.Write(KatPodr.Kod);
+          frmmonak.Write(BaseDoc.NoDoc+IF(BaseDoc.dDoc<>date(0, 0, 0), ' от '+DateToStr(BaseDoc.dDoc, '"DD" mon YYYY г.')+' ', '') );
+
+          if (KatSopr.cGruzTo <> 0)
+            frmmonak.Write(KatOrgT.Name);
+          else
+            frmmonak.Write(KatOrg.Name);
+
+          frmmonak.Write(KatSopr.sDover);
+
+          SumDoc := 0; x := 0;
+
+          if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr AND
+                                     word(1)      == SpSopr.PRMC       )) <> tsOk)
+
+            frmmonak.SkipFormat(7)
+          else
+
+            _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr AND
+                               word(1)      == SpSopr.PRMC       ))
+              {
+                frmmonak.Write(KatMC.Name);
+                frmmonak.Write(KatMC.BarKod);
+
+                if (SpSopr.cOtpEd <> 0)
+                  frmmonak.Write(fEdIzm.GetNameOtpEd(SpSopr.cOtpEd));
+                else
+                  frmmonak.Write(fEdIzm.GetKatEdName(KatMC.cEd));
+
+
+                frmmonak.Write(Spsopr.KolFact, GetDlinaDrob_forKol);
+                frmmonak.Write(SpSopr.KolOpl, GetDlinaDrob_forKol);
+                frmmonak.Write(SpSopr.Price, GetPrecisionGroup('brForSopr_RVPrice'));
+                frmmonak.Write(SpSopr.PRice * SpSopr.KolFact, GetPrecisionGroup('brForSopr_RVPrice'));
+                x := x + 1;
+                SumDoc := SumDoc + SpSopr.Price * SpSopr.KolFact;
+              }//_LOOP SpSopr
+
+          frmmonak.PutEvent(feBreak);
+          frmmonak.Write(DoubleToStr(x, '4'));
+          frmmonak.Write(DoubleToString(0, SumDoc));
+
+          if (pg_flag = 0 )
+            frmmonak.SkipFormat(1);
+          else
+            if (i2 < MarkerCount2-1)
+              frmmonak.write('*')
+            else
+              frmmonak.SkipFormat(1)
+
+          Marker_flag := FALSE;
+
+        }  //***IF (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) = tsOk )
+
+     } //***FOR ( i2 := 0; i2<MarkerCount2; i2 := i2+1 )
+
+   SetBounds(#KatSopr);
+   PopPos(#KatSopr);
+   ReReadRecord(#KatSopr);
+   frmmonak.PutEvent(feBreak);
+   frmmonak.ShowFile;
+
+}
+
+//******************************************************************************
+
+Procedure PrintDoubleTTN;
+var pNaklBuilder: tNaklBuilderObjInterface;
+    res: double;
+    pg_flag           : word;
+    Marker_flag       : boolean;
+    MarkerCount2, i2  : longint; // счетчики записей в маркере
+    pickrec2          : comp;
+begin
+  if NOT GetVipRef(pNaklBuilder, 'NaklBuilder')
+    {
+      Message('Ошибка загрузки интерфейса NaklBuilder.', Error);
+      Exit;
+    }
+
+  Marker_flag := FALSE;
+  pg_flag := 0;
+  MarkerCount2 := GetMarkerCount(MarkerNZ);
+
+  if (MarkerCount2 = 0)
+    {
+      Marker_flag := TRUE;
+      pickrec2 := KatSopr.NRec;
+      MarkerCount2 := 1;
+    }
+
+  pNaklBuilder.Init;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Формирование парной накладной'#13, 0);
+
+  For ( i2 := 0; i2<MarkerCount2; i2 := i2+1 )
+    {
+      if NOT Marker_flag
+        GetMarker(MarkerNZ, i2, pickrec2);
+
+      if GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) <> tsOk
+        Continue;
+
+      PushPos(#KatSopr);
+
+      NextVisual;
+      res := pNaklBuilder.MakeSpisPlan(KatSopr.NRec);
+
+      if (res <= 0)
+        {
+          StopVisual('', 0);
+          PopPos(#KatSopr);
+          Exit;
+        }
+
+       NextVisual;
+       pNaklBuilder.MakeDoubleTTN(KatSopr.NRec);
+
+       PopPos(#KatSopr);
+       Marker_flag := FALSE;
+    }
+
+  StopVisual('', 0);
+  pNaklBuilder.Done;
+end;
+
+//******************************************************************************

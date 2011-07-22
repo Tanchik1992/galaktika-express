@@ -1,0 +1,212 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - Договоры
+// Выбор из спецификации договора, соглашения, кал.плана
+//******************************************************************************
+
+if EditDOPosEnabled(true, true)
+  {
+    if (BaseDoc.SpecYes = 0)
+      Exit;
+
+    var cDog: comp;   cDog  := 0;
+    var cSogl: comp;  cSogl := 0;
+    var cPlan: comp;  cPlan := 0;
+
+    var TiDk: word;   TiDk := 0;
+    var cDoc: comp;   cDoc := 0;
+
+    SaveMyDsk(BaseDoc.cOrg, 'GetDAK_Kontr');
+    SaveMyDsk(byte(0) , 'GetDAK_Kontr_e');
+
+    var DSKParams: longint;  DSKParams := vcGetDog_Kontr OR vcGetDog_NoFinKP;
+
+    if (RunInterface('GetDocs', cDog, cSogl, cPlan, DSKParams, cgiPick) = cmCancel)
+      Exit;
+
+    if (cDog <> comp(0))
+      {
+        cDoc := cDog;
+        TiDk := 400;
+      }
+
+    if (cSogl <> comp(0))
+      {
+        cDoc := cSogl;
+        TiDk := 401;
+
+        if (GetFirst Dogovor1 where ((cSogl == Dogovor1.nRec)) = tsOk)
+          cDog := Dogovor1.cDogovor;
+      }
+
+    if (cPlan <> comp(0))
+      {
+        cDoc := cPlan;
+        TiDk := 403;
+
+        if (GetFirst CalPlan1 where ((cPlan == CalPlan1.nRec)) = tsOk)
+          {
+            cSogl := CalPlan1.cDogovor;
+
+            if (GetFirst Dogovor1 where ((cSogl == Dogovor1.nRec)) = tsOk)
+              if (Dogovor1.cDogovor <> 0)
+                cDog := Dogovor1.cDogovor;
+              else
+                {
+                  cDog  := cSogl;
+                  cSogl := 0;
+                }
+          }
+      }
+
+    if (TiDk = 0)
+      Exit;
+
+    var PrRasUsl: boolean;  PrRasUsl := FALSE;// признак расчетной услуги
+    var PrNom: word;        PrNom := SpStep.PrMC;
+    var NRecSaved: comp;    NRecSaved := 0;
+
+    var NSpecif: string;
+
+    pmc_ := SpStep.cMcUsl;
+
+    if (not IsNew)
+      {
+        SubResTov(SpStep.Reserv); // Снятие резерва по товару
+        SubResRazrez;             // Снятие резерва по складу
+        DelPosDORES;
+        DelPosSpDocNal;
+        oCalcFuns.ClcUsl_DeleteFactPar(SpStep.NRec, coSpStep);
+        oDOfuns.SpStep_Delete(SpStep.nRec);
+      }
+
+    if (GetFirst SpDocs where (( TiDk    == SpDocs.TiDk AND
+                                 cDoc    == SpDocs.cDoc AND
+                                 word(3) >> SpDocs.PrMC     )) = tsOk)
+      {
+        do
+          {
+            SpStep.NRec   := 0;
+            SpStep.dDoc   := BaseDoc.dDoc;
+            SpStep.cMcUsl := SpDocs.cMCUsl;
+            SpStep.KolSkl := SpDocs.Kol;
+            SpStep.cOtpEd := SpDocs.cOtpEd;
+            SpStep.Kol    := SpStep.KolSkl;
+            SpStep.ProcUb := 0;
+            SpStep.PrMC   := SpDocs.PrMC;
+            SpStep.cUKS   := SpDocs.cUKS;
+
+            if ((BaseDoc.VidDoc = 201 OR BaseDoc.VidDoc = 1420)AND(SpStep.PrMC = 2))  // для ДО на продажу
+              SpStep.PrUsNkl  := wGetTune('Doc.UslDoSell');
+
+            if (SpStep.PrMC = 1)
+              {
+                if (GetFirst katmc where
+                   ((SpDOcs.cMCUsl == KatMC.Nrec)) = tsOk)
+                  { }
+
+                SpStep.ProcUb := oSDfuns.GetNormUbFromKatalog(oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc), 0, KatMC.NormUb);
+                SpStep.Kol    := SpStep.KolSkl * (1-SpStep.ProcUb/100);
+                SpStep.cMasEd := KatMC.cMasEd;
+                SpStep.Netto  := KatMC.Massa;
+                SpStep.mTara  := KatMC.mTara;
+              }
+
+            SpStep.cStepDoc := StepDoc.NRec;
+            SpStep.Price    := oValFunc.GetAnyCurrency(SpDocs.cVal,
+                                                     SPDocs.Price,
+                                                     BaseDoc.dDoc,
+                                                     BaseDoc.cVal);
+            SpStep.cVal    := BaseDoc.cVal;
+            SpStep.Summa   := 0;
+            SpStep.SumVal  := 0;
+            SpStep.Nds     := 0;
+            SpStep.Reserv  := 0;
+            SpStep.cSpDocs := SpDocs.nRec;
+            SpStep.cSpMC   := SpDocs.cSpMC;
+
+            SpStep.cDogovor    := cDog;
+            SpStep.cAppDogovor := cSogl;
+            SpStep.cCalPlan    := cPlan;
+
+            addallmc := 1;
+            SpStep.Npp  := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+            SpStep.cGrNal := SpDocs.cGrNal;
+            insert current SpStep;
+
+#ifndef __MTR_TO_SPEC__
+            var cz: comp;  cz := 0;
+
+            if (GetFirst SpecZatr
+                        where ((coSpDocs == SpecZatr.coTable AND
+                             SpDocs.nRec == SpecZatr.cSpec)) = tsOk)
+              cz := SpecZatr.cAddSumTune;
+
+            if (cz <> 0)
+              {
+                ClearBuffer(#SpecZatr);
+                SpecZatr.coTable := coSpStep;
+                SpecZatr.cAddSumTune := cz;
+                SpecZatr.cSpec := SpStep.nRec;
+                SpecZatr.cUKS := SpStep.cUKS;
+                insert current SpecZatr;
+              }
+#else
+            oMTRFun.CopySpecMTR(coSpDocs, SpDocs.nRec, coSpStep, SpStep.nRec);
+#end
+
+            RunInterface('CopySpDocSmeta', word(coSpDocs), SpDocs.nRec, word(coSpStep), SpStep.nRec);
+
+            if (NrecSaved = 0) // запомнить первую вставляемую позицию
+              NRecSaved := SpStep.Nrec;
+
+            if ((SpStep.PrMC <> 1) AND (KatUsl.TYPEUSL = 1))
+              {
+                RunInterface('GETPAR1', 0, SpStep.Nrec, KatUsl.Nrec, SpStep.Price, SpStep.KolSkl, word(coSpStep));
+                SpStep.Kol := SpStep.KolSkl;
+                UpDate current SpStep;
+
+                PrRasUsl := TRUE;
+              }
+          }
+        While (GetNext SpDocs where (( TiDk == SpDocs.TiDk AND
+                                       cDoc == SpDocs.cDoc )) = tsOk);
+
+        _LOOP SpStep
+          if ((SpStep.PrMC <> 1) AND (SpStep.cSpMC <> comp(0)))
+            if (GetFirst SpStepC where ((SpStep.cSpMC == SpStepC.cSpDocs)) = tsOk)
+              {
+                SpStep.cSpMC := SpStepC.nRec;
+                UpDate current SpStep;
+              }
+
+        if ( (wGetTune('Pick.ChkGrpIns') <> 0) AND
+             boGetTune('Reserv.SchReserv') AND
+             (SpStep.PrMC = 1) AND
+             (BaseDoc.Status = 2) AND
+             (BaseDoc.VidDoc <> 211) )
+          Proc20;                    // резервирование
+
+        if prRasUsl            // пересчет, если введена расчетная услуга
+          GetTotalSkid(false);
+
+        if (NrecSaved > 0)
+          {
+            if (GetFirst SpStep where ((NrecSaved == SpStep.Nrec)) <> tsOk)
+              { }
+          }
+        else
+          {
+            if (GetFirst SpStep <> tsOk)
+              { }
+          }
+      }
+
+    GetTotalSkid(false);
+
+    RereadRecord;
+
+    SelectField(#SpStep.Price);
+  }
+
+//******************************************************************************

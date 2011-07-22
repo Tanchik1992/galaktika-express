@@ -1,0 +1,1251 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Формирование спецификации накладной по ДО
+//******************************************************************************
+
+!************************************************************************!
+! Внимание ! В данном модуле вызываются абстрактные процедуры для        !
+! ▀▀▀▀▀▀▀▀▀▀ инициализации, расчета и закрытия системы расчета цен       !
+!            при вставке спецификации МЦ из ДО в накладную.         !
+!            Эти процедуры должны быть описаны перед включением данного  !
+!            модуля в интерфейс.                                         !
+!            onInitInsMCInfo - вызывается перед циклом по спецификации   !
+!            onInsertSpSopr  - вызывается перед вставкой спецификации    !
+!     Function onInsertSpSopr(Curse : double) : boolean;                 !
+!          TRUE - следует вставить позицию в спецификацию                !
+!          FALSE - пропустить позицию без вставки спецификацию           !
+!     procedure OnAfterInsertSpSopr - вызывается после вставки позиции   !
+!            в накладную                                                 !
+!            onDoneInsMCInfo - вызывается после проходжения спецификации !
+!                              документа-основания или Pick              !
+!               --- ПРИБЛИЗИМ МЕТОДЫ РАЗРАБОТКИ К ООП ---                !
+!            Данный модуль должен быть подключен после Soprval.vpp       !
+!     procedure OnBeforeClearSpSopr - вызывается перед удалением         !
+!            спецификации накладной при выборе ДО                        !
+!     Function CanSetBaseDoc : boolean - должна проверять можно ли       !
+!             перевыбирать ДО и переформировывать сопр. док. по ДО       !
+!             (для накладных описана в NaklGen.vpp)                      !
+!     Function OnAfterMakeBaseDoc : boolean - если нужна стандартная     !
+!              обработка заполнения спецификации накладной после выбора  !
+!              ДО то надо возвратить TRUE, иначе - FALSE                 !
+!************************************************************************!
+#ifndef _INSMC_VPP
+#define _INSMC_VPP
+
+#include insmc.fun
+
+Create view loBD
+from
+  Dogovor,
+  CalPlan,
+  BaseDoc
+;
+
+// Выбор ДО для накладной
+// Используется в актах на услуги
+Function SGetBaseDoc(var Curse: double; DOSelectType: word): boolean;
+var
+  Doc       : word;
+  isNakl    : boolean;
+  OldOtvPodr: comp;
+  OldOrgBase: comp;
+
+{
+  SGetBaseDoc := FALSE;
+
+  Doc        := KatSoprToBaseDoc;
+  OldOrgBase := KatSopr.cOrgBase;
+
+  if (boGetTune('Ves.Use')) AND (TypeSopr = 201)
+  {
+    if (RunInterface('SHT_CE_OrgDo', KatSopr.cStepDoc, KatSopr.cOrg) = cmCancel)
+      EXIT;
+  }
+  else
+  {
+    var wvResult: word;
+
+    if (DOSelectType=0)
+    {
+       var tmpComp_1 : comp;
+
+       tmpComp_1 := comp(0);
+
+       wvResult := RunInterface(GetDBase, TRUE, word(0), Doc, tmpComp_1, KatSopr.cStepDoc,
+                                          if (KatSopr.VidSopr <> 110, Katsopr.cOrgBase, 0),
+                                          double(0));
+    }
+
+    if (DOSelectType = 1)
+      wvResult := RunInterface(iSelectBaseDoc, StepDoc.cBaseDoc, word(501), KatSopr.cStepDoc, word(0), word(0))
+
+    if (wvResult = cmCancel)
+        Exit;
+  }
+
+  if (GetFirst BaseDoc where ((StepDoc.cBaseDoc == BaseDoc.NRec)) <> tsOk)
+  {
+    Message(''#3'Ошибка в данных при выборе документа-основания...', CancelButton);
+    Exit;
+  }
+
+  if (not OnAfterMakeBaseDoc)
+    Exit;
+
+  if (TypeSopr = 114)
+    if (Message(''#3'Заменить спецификацию на '+
+                'спецификацию выбранного документа ?', YesNo) <> cmYes)
+      Exit;
+
+  KatSopr.cGruzFrom := BaseDoc.cGrOtpr;
+  KatSopr.cGruzTo   := BaseDoc.cGrPol;
+  KatSopr.Name      := oSDfuns.SetKatSoprName( coBaseDoc, BaseDoc.nRec, FALSE );  //BaseDoc.Name;
+
+  KatSopr.cPayment    := BaseDoc.cPayment;
+  KatSopr.cDogovor    := BaseDoc.cDogovor;
+  KatSopr.cAppDogovor := BaseDoc.cAppDogovor;
+  KatSopr.cCalPlan    := BaseDoc.cCalPlan;
+  KatSopr.cNZakaz     := 0;
+  KatSopr.cOtgOrder   := 0;
+
+  OldOtvPodr := KatSopr.cOtvPodr;
+  KatSopr.cOtvPodr := BaseDoc.cOtvPodr;
+
+  // номер и дата сопр.документа
+  case KatSopr.VidSopr of
+    // ----------------
+    101, 103, 108, 110, 114, 111, 117:
+    {
+      if (boGetTune('Doc.Buy.NumSopr=DO'))
+        KatSopr.NSopr := BaseDoc.NoDoc;
+
+      if (KatSopr.VidSopr = 101) OR (KatSopr.VidSopr = 103) OR (KatSopr.VidSopr = 108)
+        if (boGetTune('Doc.Buy.dSopr=DO' ))
+          KatSopr.dSopr := BaseDoc.dDoc;
+
+      if (KatSopr.VidSopr = 111) OR (KatSopr.VidSopr = 117)
+        if (boGetTune('Doc.Buy.dAkt=DO'))
+        {
+          KatSopr.dSopr := BaseDoc.dDoc;
+          KatSopr.dOpr  := BaseDoc.dDoc; // дата исполнения у актов должна быть равна дате создания
+        }
+    }
+    1411:
+      if boGetTune('Doc.Wood.Journ.NumSopr=DO')
+      {
+        KatSopr.NSopr := BaseDoc.NoDoc;
+      }
+    // ----------------
+    201, 202, 203:
+    {
+      if (boGetTune('Doc.Sell.NumSopr=DO'))
+        KatSopr.NSopr := BaseDoc.NoDoc;
+
+      if (boGetTune('Doc.Sell.dSopr=DO'))
+        KatSopr.dSopr := BaseDoc.dDoc;
+    }
+    1421:
+      if boGetTune('Doc.Wood.Nakl.NumSopr=DO')
+      {
+        KatSopr.NSopr := BaseDoc.NoDoc;
+      }
+    // ----------------
+    211:
+    {
+      if (boGetTune('Doc.Sell.NumAkt=DO'))
+        KatSopr.NSopr := BaseDoc.NoDoc;
+
+      if (boGetTune('Doc.Sell.dAkt=DO' ))
+      {
+        KatSopr.dSopr := BaseDoc.dDoc;
+        KatSopr.dOpr  := BaseDoc.dDoc; // дата исполнения у актов должна быть равна дате создания
+      }
+    }
+    // ----------------
+    551, 552:
+    {
+      if (boGetTune('Doc.Remont.NumSopr=DO'))
+        KatSopr.NSopr := BaseDoc.NoDoc;
+    }
+    else
+    {
+      if (boGetTune('FN.isNumOtvPodr'))
+        if (OldOtvPodr <> BaseDoc.cOtvPodr)
+        {
+          DelLastNumD_(KatSopr.VidSopr, string(OldOtvPodr), KatSopr.NSopr)
+          KatSopr.NSopr := GetLastNumD_(KatSopr.VidSopr, string(KatSopr.cOtvPodr));
+        }
+    }
+  end;
+
+  if (BaseDoc.TipMoney = 3) //ДО-ВАЛ
+  {
+    KatSopr.cVal := BaseDoc.cVal;
+  }
+
+  KatSopr.cValut := if(BaseDoc.cVal > 0, BaseDoc.cVal, coGetTune('BaseCurrency'));
+
+  if (BaseDoc.cNazna <> 0)
+    KatSopr.cNazna := BaseDoc.cNazna;
+
+  KatSopr.nVagon   := BaseDoc.nVagon;
+  KatSopr.TypeDoc  := BaseDoc.TypeDoc;
+  KatSopr.cCellVal := BaseDoc.cCellVal;
+  KatSopr.cTransp  := BaseDoc.cTransp;
+
+  // 101.28343 - Ведение документооборота при участии филиалов
+  KatSopr.cOrg := BaseDoc.cOrg;
+
+  if ((BaseDoc.VidDoc = 201) OR (BaseDoc.VidDoc = 211)) // продажа
+      AND
+     (wGetTune('Doc.Sell.OrgFromDO') = 0)                // контрагент из договора/соглашения/ПКП
+  {
+    if (BaseDoc.cCalPlan <> 0)
+    {
+      var pPlanDO: comp;
+
+      pPlanDO := BaseDoc.cCalPlan;
+
+      if (loBD.GetFirst fastfirstrow CalPlan where ((pPlanDO == CalPlan.NRec)) = tsOk)
+        KatSopr.cOrg := loBD.CalPlan.cOrg;
+    }
+    else
+    {
+      var pDogDO : comp;
+
+      pDogDO := if (BaseDoc.cAppDogovor <> 0, BaseDoc.cAppDogovor, BaseDoc.cDogovor);
+
+      if (pDogDO <> 0)
+      {
+        if (loBD.GetFirst fastfirstrow Dogovor where ((pDogDO == Dogovor.NRec)) = tsOk)
+          KatSopr.cOrg := loBD.Dogovor.cOrg;
+      }
+    }
+  }
+
+  set KatSopr.cOrgBase := KatSopr.cOrg;
+  KatSopr.cOrgPlat := BaseDoc.cOrg;
+
+  if (not UpdateTable)
+    Exit;
+
+  oSDfuns.TTNDoc_Copy(coBaseDoc, BaseDoc.NRec, coKatSopr, KatSopr.NRec);
+
+  ResetBounds(#SpSopr);
+
+  isNakl := TRUE;
+
+  if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr)) = tsOk)
+  {
+    if TypeSopr = 114
+    {
+      while (GetFirst Spsopr where ((KatSopr.NRec == SpSopr.cSopr))= tsok)
+      {
+        DoDeleteSoprDop;
+        onBeforeClearSpSopr;
+        oSDfuns.SpSopr_Delete (SpSopr.nRec);
+      }
+    }
+    else
+      if (Message('Заменить спецификацию на спецификацию выбранного документа-основания ?', YesNo) = cmYes)
+      {
+        while (GetFirst Spsopr where ((KatSopr.NRec == SpSopr.cSopr))= tsok)
+        {
+          DoDeleteSoprDop;
+          onBeforeClearSpSopr;
+        #ifdef _SOPRDOC_VIP
+          #include uksdelsp.vpp
+        #end
+        #ifdef _SOPRDOCB_VIP
+          #include uksdelsp.vpp
+        #end
+        #ifdef SOPINMOV_VIP
+          #include uksdelsp.vpp
+        #end
+        #ifdef _AKT110_
+          #include uksdelsp.vpp
+        #end
+          oSDfuns.SpSopr_Delete (SpSopr.nRec);
+        }
+      }
+      else
+        isNakl := FALSE;
+  }
+
+  SetBounds(#SpSopr);
+
+  if (OldOrgBase <> KatSopr.cOrg)
+    ChangeSpDocNalOrg(OldOrgBase, KatSopr.cOrg);
+
+  if (not isNakl)
+    Exit;
+
+  if ((BaseDoc.TipMoney = 2) AND (BaseDoc.ValCurse <> 0) AND
+      (wGetTune('Doc.SoprDataKurs') <> 0) )
+  {
+    KatSopr.cValut := BaseDoc.cVal;
+    Curse          := BaseDoc.ValCurse;
+    KatSopr.dPrice := BaseDoc.dValCurse;
+  }
+  else
+    if (KatSopr.VidSopr <> 551 and KatSopr.VidSopr <> 552) // 102.63283
+      Curse := SetDefaultCross;
+
+  KatSopr.VhodNal := if ((KatSopr.VidSopr <> 501) OR wGetTune('Oper.FormUch') = 1, BaseDoc.VhodNal, 2);
+  IsNakl := FALSE;
+
+  KatSopr.Summa  := 0;
+  KatSopr.SumVal := 0;
+
+  Update_Current_KatSopr;
+
+  OnInitInsMCInfo; // Абстракный
+
+  SGetBaseDoc := TRUE;
+} // Function SGetBaseDoc
+
+
+! Обработчик формирования стандартного буфера записи позиции накладной для вставки
+Function InsMC_MakeSpSoprBuffer(DoKol: double; Curse: double; doUpdate: boolean): boolean;
+var
+  oExtAtr : iExtAttr;
+  oExtCls : iExtClass;
+  cOwn    : comp;
+
+{
+  if (not doUpdate)
+    SpSoprDefault;
+
+  SpSopr.cOtpEd     := SpStep.cOtpEd;
+  SpSopr.cParty     := SpStep.cParty;
+  SpSopr.Kol        := SpStep.KolSkl;
+  SpSopr.cMCUSL     := SpStep.cMCUSL;
+  SpSopr.PrMC       := SpStep.PrMC;
+  SpSopr.ProcUb     := SpStep.ProcUb;
+  SpSopr.KolFact    := DoKol;
+  SpSopr.cPriceList := SpStep.cPricelist;
+  SpSopr.cSpStep    := SpStep.NRec;
+  SpSopr.ManualTax  := SpStep.ManualTax;
+  SpSopr.KolOpl     := DoKol * (1 - (SpStep.ProcUb / 100));
+  SpSopr.Netto      := SpStep.Netto;
+  SpSopr.mTara      := SpStep.mTara;
+  SpSopr.cCellVal   := SpStep.cCellVal;
+  SpSopr.nVagon     := SpStep.nVagon;
+  SpSopr.nKvit      := SpStep.nKvit;
+  SpSopr.SumAvt     := SpStep.SumAvt;
+  SpSopr.cValAvt    := SpStep.cValAvt;
+  SpSopr.cMasEd     := SpStep.cMasEd;
+  SpSopr.cMasVid    := SpStep.cMasVid;
+  SpSopr.cResOtgr   := SpStep.cResOtgr;
+  SpSopr.cPersons   := SpStep.cPersons;   // работник, выполняющий услугу
+
+  if ((TypeSopr = 102) OR (TypeSopr = 103))
+    SpSopr.cSpDocs:= SpStep.Nrec;
+
+  SpSopr.KolGrM     := SpStep.KolGrM;
+  SpSopr.cOtpEdGrM  := SpStep.cOtpEdGrM;
+  SpSopr.nSertif    := SpStep.nSertif;
+  SpSopr.cTransp    := SpStep.cTransp;
+#ifdef _Agency_
+  SpSopr.wMcProp    := SpStep.wMcProp;
+#end
+  SpSopr.cUKS       := SpStep.cUKS;
+
+//------------------------------------------------------------------------------
+#ifdef _AKTREMONT2_
+// для акта вып. ремонтов добавить заполнение ссылки на услугу у МЦ
+  if (SpSopr.PrMC = 1)
+    SpSopr.cSpSopr    := vcSpSoprUsl;
+
+  // перенос ссылки на МОЛ из заявки, а в заявке заполнятеся из АПМО
+  if (boGetTune('DOC.REMONT.MOL_From_APMO'))
+    if (SpSopr.PrMC = 1)
+      SpSopr.cMOL := oExtAttr.coGetAttr(coSpStep, SpStep.nRec, 'МОЛ_ИЗ_АПМО');
+
+#end
+//------------------------------------------------------------------------------
+
+  InsMC_MakeSpSoprBuffer := FALSE;
+
+  if (OnInsertSpSopr(Curse))
+  {
+    if (doUpdate)
+    {
+      if (Update Current SpSopr = tsOk)
+        InsMC_MakeSpSoprBuffer := TRUE
+      else
+      {
+        Message(''#3'Ошибка обновления позиции документа.',Error);
+        Exit;
+      }
+    }
+    else
+    {
+      SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec,coSpSopr);
+      // обработка возвратной тары
+      SpSopr.PrVoz := SpStep.PrVoz;
+
+      if (SpStep.cOwner = comp(0))
+        SpSopr.cOwner := 0;
+      else
+      {
+        if (sGetTune('Tara.KodGrMcTara') = '')
+        {
+          if (SpStep.NRec <> SpStep.cOwner)
+            SpSopr.cOwner := cOwn;
+        }
+        else
+          SpSopr.cOwner := SpStep.cOwner;
+      }
+      //--------------------------------
+
+      if (Insert Current SpSopr = tsOk)
+      {
+        if (sGetTune('Tara.KodGrMcTara') = '') AND
+           (SpStep.NRec = SpStep.cOwner)
+        {
+          cOwn           := SpSopr.Nrec;
+          SpSopr.cOwner  := SpSopr.NRec;
+          Update Current SpSopr;
+        }
+
+        InsMC_MakeSpSoprBuffer := TRUE;
+
+#ifndef __MTR_TO_SPEC__
+        if (GetFirst SpecZatr where ((coSpStep == SpecZatr.coTable AND SpStep.nRec == SpecZatr.cSpec)) = tsOk)
+        {
+          var cz : comp;
+          cz := SpecZatr.cAddSumTune;
+
+          ClearBuffer(#SpecZatr);
+
+          SpecZatr.coTable := coSpSopr;
+          SpecZatr.cSpec := SpSopr.nRec;
+          SpecZatr.cAddSumTune := cz;
+
+          if (Insert Current SpecZatr = tsOk) {};
+        }
+#else
+        oMTRFun.CopySpecMTR(coSpStep, SpStep.nRec, coSpSopr, SpSopr.NRec);
+#end
+      #ifdef __SMETA__
+        RunInterface('CopySpDocSmeta', word(coSpStep), SpStep.nRec, word(coSpSopr), SpSopr.nRec);
+      #end
+      }
+      else
+      {
+        Message(''#3'Ошибка вставки позиции в документ.',Error);
+        Exit;
+      }
+    }
+
+    // копирование внешних атрибутов и классификации из ДО в акт
+    //копирование из шапки
+    if boGetTune('Oper.ExClass_DO2Docs')
+    {
+      oExtAtr.CopyAllAttrEx    (word(coBaseDoc), BaseDoc.NRec, word(coKatSopr), KatSopr.NRec);
+      oExtCls.CopyAllClassValEx(word(coBaseDoc), BaseDoc.NRec, word(coKatSopr), KatSopr.NRec);
+    }
+    // копирование из спецификации
+    if boGetTune('Oper.ExClassDO2Docs')
+    {
+      oExtAtr.CopyAllAttrEx    (word(coSpStep), SpSopr.cSpStep, word(coSpSopr), SpSopr.NRec);
+      oExtCls.CopyAllClassValEx(word(coSpStep), SpSopr.cSpStep, word(coSpSopr), SpSopr.NRec);
+    }
+
+    oSDfuns.TTNDoc_Copy(coSpStep, SpStep.NRec, coSpSopr, SpSopr.NRec);
+
+    if ( SpStep.PrMC = 1 )
+      {
+        if ( not ExistTune('Doc.DEI.SpStep2SpSopr') )
+          {
+            oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(1), SpSopr.KolFact);
+            oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(2), SpSopr.Kol);
+            oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(3), SpSopr.KolOpl);
+          }
+        else
+          if ( wGetTune('Doc.DEI.SpStep2SpSopr') = 0 )
+            {
+              oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(1), SpSopr.KolFact);
+              oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(2), SpSopr.Kol);
+              oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(3), SpSopr.KolOpl);
+            }
+          else
+            {
+              oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), double(0), word(1), SpSopr.KolFact);
+              oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), double(0), word(2), SpSopr.Kol);
+              oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), double(0), word(3), SpSopr.KolOpl);
+            }
+      }
+  }
+} // Function InsMC_MakeSpSoprBuffer
+
+
+! Стандартная втавка позиции в накладную
+Function InsMC_StdHandle(Curse: double): boolean;
+var
+  SKol: double;
+{
+  sKol := SpStep.kolskl;
+
+  if (TypeSopr <> 114)
+    Case TypeSopr of
+     102, 203, 502..504, 506, 512:
+       sKol := PreviursKolSopr;
+     else
+       sKol := sKol - PreviursKolSopr;
+    end;
+
+  InsMC_StdHandle := InsMC_MakeSpSoprBuffer(sKol, Curse, FALSE);
+}
+
+
+// Стандатрная вставка позиций матценностей при формировании накладной по ДО
+Function InsertMC(DOSelectType: word) : boolean;
+var
+  StRN, StVN, Curse : double;
+  sNDS, svNDS : double;
+  MustRCSumm  : boolean;
+{
+  InsertMC := FALSE;
+
+  if (not SGetBaseDoc(Curse, DOSelectType))
+    Exit;
+
+  MustRCSumm := FALSE;
+
+  StRN := 0;    StVN := 0;
+  SNDS := 0;    SVNDS := 0;
+
+  if (TypeSopr <> 114)
+  {
+
+    StartNewVisual(vtNumericVisual,vfTimer, ''#3'Создание спецификации: '#13#3,1);
+    ////////////////////// wGetTune('Reserv.FormSopr') "0-разр,1-запр.накладные без резерва в ДО",
+
+    var
+    viKatPost_IsLeaf
+    : integer;
+
+    _LOOP SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc ))
+                 Ordered by index SpStep02
+    {
+
+      if (wGetTune('Reserv.FormSopr') = 1)
+         AND (SpStep.PrMc   = 1)
+         AND (TypeSopr      = 201)
+         AND (SpStep.Reserv = 0)
+        Continue; // ПИР 3.7546
+
+//------------------------------------------------------------------------------
+
+      if ((TypeSopr = 551)
+       OR (TypeSopr = 552)
+       OR (TypeSopr = 553)
+       OR (TypeSopr = 554)
+       OR (TypeSopr = 557))
+      {
+        viKatPost_IsLeaf := -1;
+
+        if (GetFirst SpStepRem where ((SpStep.Nrec == SpStepRem.cSpStep)) = tsOk)
+          if (GetFirst KatPost where ((SpStepRem.cPostMC == KatPost.NRec)) = tsOk)
+            viKatPost_IsLeaf := KatPost.IsLeaf;
+
+       if not (
+           ( (SpStep.PrMC = 1)
+         AND ( (viKatPost_IsLeaf = -1)
+           OR ((viKatPost_IsLeaf = 0) AND (KatSopr.VidSopr = 551))
+           OR (                           (KatSopr.VidSopr = 552))
+           OR ((viKatPost_IsLeaf = 1) AND (KatSopr.VidSopr = 553)) // п
+           OR ((viKatPost_IsLeaf = 0) AND (KatSopr.VidSopr = 554)) // соб силы
+           OR (                           (KatSopr.VidSopr = 557))
+             )
+           )
+        OR (SpStep.PrMC = 2)
+          )
+          Continue;
+      }
+
+//------------------------------------------------------------------------------
+
+      // добавим обработку настройки "В спецификации акта на ремонт использовать"
+      if ((TypeSopr = 553)
+       OR (TypeSopr = 554)
+       OR (TypeSopr = 557))
+      {
+        if(((SpStep.PrMc = 1)  AND (wGetTune('Doc.Remont.AktMCUsl') = 1))
+        OR ((SpStep.PrMc <> 1) AND (wGetTune('Doc.Remont.AktMCUsl') = 2)))
+          Continue;
+      }
+
+      if (InsMC_StdHandle(Curse))
+      {
+        NextVisual;
+
+        if ((SpSopr.PrMC <> TMCUSL) AND (SpStep.PrUsNkl <> 1))
+          MustRcSumm := TRUE;
+
+        STRN := STRN + (SpSopr.Price  * SpSopr.KolOpl);
+        STVN := STVN + (SpSopr.VPrice * SpSopr.KolOpl);
+
+        if ((SpStep.PrMC = 1) AND (wGetTune('Reserv.VypRes') > 0))
+        {
+          SpStep.SrokRes := Add_Day(SpStep.SrokRes, wGetTune('Reserv.VypRes'));
+          if (Update Current SpStep <> tsOK) {};
+        }
+
+        OnAfterInsertSpSopr;
+        oCalcFuns.ClcUsl_CopyFactPar(SpStep.NRec,coSpStep,SpSopr.NRec,coSpSopr);
+        SNDS := SNDS + SpSopr.SumNDS;
+        SVNDS := SVNDS + SpSopr.SumvNDS;
+      }
+    }
+
+    StopVisual('',0);
+    OnDoneInsMcInfo;
+  }
+
+  if (MustRcSumm)
+    RecalcSumm(FALSE)
+  else
+  {
+    if (KatSopr.VhodNal = 1)
+    {
+      KatSopr.Summa := FSRoundRub(STRN);
+      set KatSopr.SumVal := FSRoundVal(STVN);
+    }
+    else
+    {
+      KatSopr.Summa := FSRoundRub(STRN + SNDS);
+      set KatSopr.SumVal := FSRoundRub(STVN + SVNDS);
+    }
+
+    KatSopr.sNalogs  := SNDS;
+    KatSopr.sVNalogs := SVNDS;
+  }
+
+  RereadRecord(#SpSopr);
+  InsertMC := TRUE;
+}
+
+
+// Только для МЦ и услуг, не являющимися сопутствующими
+Procedure GetMCUslSopr;
+var
+  wLst   : word;
+  cOwn   : comp;
+  oExtAtr: iExtAttr;
+  oExtCls: iExtClass;
+{
+!пир101.12992
+!  if (SpSopr.PrMC <> TMCUSL)
+!    {
+!    if not boGetTune('Ves.Use')
+!      Message(''#3'В данной версии не предусмотрен выбор услуг для '+
+!        'накладной по ДО.'#13#3'Для решения данной проблемы повторно выберите '+
+!        'ДО для накладной.',CancelButton);
+!    Exit;
+!    }
+  wLst := 555;
+
+  if (Delete Pick where ((wLst == Pick.wList)) <> tsoK) {};
+
+ #ifdef _AKTUSLB_VIP
+  if KatSopr.VidSopr = 114
+  {
+    if (RunInterface(GetMCSopr, KatSopr.cStepDoc, TMCUSL) = cmCancel)
+      Exit;
+  }
+  else
+  {
+    if KatSopr.cKatSopr <> 0
+    {
+      if (RunInterface(GetSpUSL, KatSopr.cStepDoc) = cmCancel)
+        Exit;
+    }
+    else
+    {
+      if (RunInterface(GetMCSopr, KatSopr.cStepDoc, TMCUSL) = cmCancel)
+        Exit;
+    }
+  }
+ #else
+   #ifdef _AKTREMONT_
+    if (RunInterface(GetMCSopr, vcZremOrDOFromAkt, TMCUSL) = cmCancel)
+      Exit;
+   #else
+    if (RunInterface(GetMCSopr, KatSopr.cStepDoc, TMCUSL) = cmCancel)
+      Exit;
+   #end
+ #end
+
+  if (GetFirst Pick where ((wLst == Pick.wList))
+                    Ordered by index Pick02 = tsOk)
+  {
+    if (not isNew)
+    {
+          KatSopr.Sumval := KatSopr.SumVal - SpSopr.VPrice * SpSopr.KolOpl;
+      set KatSopr.Summa  := KatSopr.Summa  - SpSopr.Price  * SpSopr.KolOpl;
+
+      DoDeleteSoprDop;
+    #ifdef _SOPRDOC_VIP
+      #include uksdelsp.vpp
+    #end
+    #ifdef _SOPRDOCB_VIP
+      #include uksdelsp.vpp
+    #end
+    #ifdef SOPINMOV_VIP
+      #include uksdelsp.vpp
+    #end
+    #ifdef _AKT110_
+      #include uksdelsp.vpp
+    #end
+
+      oSDfuns.SpSopr_Delete(SpSopr.nRec);
+    }
+#ifdef _LINKMTR2SPEC_
+#ifdef __MTR_TO_SPEC__
+    else
+      oLinkMTR2Spec.DelVal(word(coSpSopr), SpSopr.nRec);
+#end
+#end
+
+    OnInitInsMCInfo;
+
+    StartNewVisual(vtNumericVisual, vfTimer, 'Вставка выбранных позиций:'#13#3,1);
+
+    _LOOP Pick where ((wLst == Pick.wList)) Ordered by index Pick02
+      if (GetFirst SpStep where ((Pick.cRec == SpStep.Nrec)) = tsOk)
+      {
+        SpSoprDefault;
+        SpSopr.cOtpEd     := SpStep.cOtpEd;
+        SpSopr.cParty     := SpStep.cParty;
+        SpSopr.Kol        := SpStep.KolSkl;
+        SpSopr.cMCUSL     := SpStep.cMCUSL;
+        SpSopr.KolFact    := Pick.PickKol;
+        SpSopr.PrMC       := SpStep.PrMC;
+        SpSopr.ProcUb     := SpStep.ProcUb;
+        SpSopr.cSpStep    := SpStep.NRec;
+        SpSopr.KolOpl     := Pick.PickKol * (1 - SpStep.ProcUb / 100);
+        SpSopr.cPriceList := SpStep.cPriceList;
+        SpSopr.Netto      := SpStep.Netto;
+        SpSopr.mTara      := SpStep.mTara;
+        SpSopr.cCellVal   := SpStep.cCellVal;
+        SpSopr.nVagon     := SpStep.nVagon;
+        SpSopr.cTransp    := SpStep.cTransp;
+        SpSopr.nKvit      := SpStep.nKvit;
+        SpSopr.SumAvt     := SpStep.SumAvt;
+        SpSopr.cValAvt    := SpStep.cValAvt;
+        SpSopr.cMasEd     := SpStep.cMasEd;
+        SpSopr.cMasVid    := SpStep.cMasVid;
+        SpSopr.cResOtgr   := SpStep.cResOtgr;
+        SpSopr.cUKS       := SpStep.cUKS;
+        // обработка позиций с тарой
+        SpSopr.PrVoz      := SpStep.PrVoz;
+
+        if (SpStep.cOwner = comp(0))
+           SpSopr.cOwner := 0;
+        else
+        {
+          if (sGetTune('Tara.KodGrMcTara') = '')
+          {
+            if (SpStep.NRec <> SpStep.cOwner)
+              SpSopr.cOwner := cOwn;
+          }
+          else
+            SpSopr.cOwner := SpStep.cOwner;
+        }
+
+       #ifdef _INSSTDS_VPP
+        if (OnInsertSpSopr1(GetCursPrice))
+       #else
+        if (OnInsertSpSopr(GetCursPrice))
+       #end //_INSSTDS_VPP
+        {
+          SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec,coSpSopr);
+
+          if (Insert Current SpSopr = tsOK)
+          {
+#ifndef __MTR_TO_SPEC__
+            if (GetFirst SpecZatr where ((coSpStep == SpecZatr.coTable AND SpStep.nRec == SpecZatr.cSpec)) = tsOk)
+            {
+              var cz : comp;
+              cz := SpecZatr.cAddSumTune;
+              ClearBuffer(#SpecZatr);
+              SpecZatr.coTable := coSpSopr;
+              SpecZatr.cSpec := SpSopr.nRec;
+              SpecZatr.cAddSumTune := cz;
+              if (Insert Current SpecZatr = tsOk) {};
+            }
+#else
+#ifdef _LINKMTR2SPEC_
+            if ( oLinkMTR2Spec.CanCopySpec(coSpStep, SpStep.nRec, coSpSopr, SpSopr.nRec) )
+              oMTRFun.CopySpecMTR(coSpStep, SpStep.nRec, coSpSopr, SpSopr.NRec);
+            else
+              case TypeSopr of
+                201, 211, 114:
+                  oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.SELL'), false);
+                101, 108, 111:
+                  oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.BUY'), false);
+                110, 210, 229:
+                  oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, 0, true);
+              end;
+
+            oLinkMTR2Spec.SelFormat(true);
+#else
+            oMTRFun.CopySpecMTR(coSpStep, SpStep.nRec, coSpSopr, SpSopr.NRec);
+#end
+#end
+           #ifdef __SMETA__
+            RunInterface('CopySpDocSmeta', word(coSpStep), SpStep.nRec, word(coSpSopr), SpSopr.nRec);
+           #end
+          }
+
+          // обработка позиций с тарой
+          if isValid(#BaseDoc)
+            if (((TypeSopr = 101) or (TypeSopr = 108)) AND
+                (BaseDoc.viddoc = 201) AND
+                (KatMC.kGroupMC = sGetTune('Tara.KodGrMcTara')))
+            {
+              RunInterface('GETPAR2', 1, SpSopr.Nrec, KatMC.cUsl, SpSopr.ProcUb, double(0), word(coSpSopr));
+              Update Current SpSopr;
+            }
+
+          if (sGetTune('Tara.KodGrMcTara') = '') AND
+             (SpStep.NRec = SpStep.cOwner)
+          {
+            cOwn          := SpSopr.Nrec;
+            SpSopr.cOwner := SpSopr.NRec;
+            Update Current SpSopr;
+          }
+
+          NextVisual;
+
+          if boGetTune('Oper.ExClassDO2Docs') // Копирование атрибутов классификации из ДО
+          {
+            oExtAtr.CopyAllAttrEx    (word(coSpStep), SpSopr.cSpStep, word(coSpSopr), SpSopr.nRec);
+            oExtCls.CopyAllClassValEx(word(coSpStep), SpSopr.cSpStep, word(coSpSopr), SpSopr.nRec);
+          }
+
+          oSDfuns.TTNDoc_Copy(coSpStep,SpStep.NRec,coSpSopr,SpSopr.NRec);
+
+          if ( SpStep.PrMC = 1 )
+            {
+              if ( not ExistTune('Doc.DEI.SpStep2SpSopr') )
+                {
+                  oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(1), SpSopr.KolFact);
+                  oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(2), SpSopr.Kol);
+                  oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(3), SpSopr.KolOpl);
+                }
+              else
+                if ( wGetTune('Doc.DEI.SpStep2SpSopr') = 0 )
+                  {
+                    oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(1), SpSopr.KolFact);
+                    oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(2), SpSopr.Kol);
+                    oDEIfuns.CopyDEISpStepToSpSopr(SpStep.NRec, SpSopr.NRec, SpSopr.VidSopr, word(1), SpStep.KolSkl, word(3), SpSopr.KolOpl);
+                  }
+                else
+                  {
+                    Var
+                      KolD1
+                    , KolD2
+                           : double;
+
+                    KolD1 := 0;
+                    KolD2 := SpSopr.KolFact;
+
+                    piKatDopEd.SetDefaultDopEd( word(coSpSopr)  // _wTable: word;     // код таблицы спецификации
+                                              , SpSopr.nRec     // _cRec: comp;       // ссылка на запись спецификации
+                                              , word(1)         // _wTipKol: word;    // тип количества
+                                              , SpSopr.cMCUsl   // _cMCUsl: comp;     // ссылка на МЦ/Услугу
+                                              , SpSopr.PrMC     // _PrMC: word;       // признак МЦ/Услуга
+                                              , KolD1           // старое количество
+                                              , KolD2           // _Kol: double       // количество в отпускных единицах
+                                              , 1
+                                              , SpSopr.VidSopr // тип документа системный
+                                              );
+
+                    KolD1 := 0;
+                    KolD2 := SpSopr.Kol;
+
+                    piKatDopEd.SetDefaultDopEd( word(coSpSopr)  // _wTable: word;     // код таблицы спецификации
+                                              , SpSopr.nRec     // _cRec: comp;       // ссылка на запись спецификации
+                                              , word(2)         // _wTipKol: word;    // тип количества
+                                              , SpSopr.cMCUsl   // _cMCUsl: comp;     // ссылка на МЦ/Услугу
+                                              , SpSopr.PrMC     // _PrMC: word;       // признак МЦ/Услуга
+                                              , KolD1           // старое количество
+                                              , KolD2           // _Kol: double       // количество в отпускных единицах
+                                              , 1
+                                              , SpSopr.VidSopr // тип документа системный
+                                              );
+
+                    KolD1 := 0;
+                    KolD2 := SpSopr.KolOpl;
+
+                    piKatDopEd.SetDefaultDopEd( word(coSpSopr)  // _wTable: word;     // код таблицы спецификации
+                                              , SpSopr.nRec     // _cRec: comp;       // ссылка на запись спецификации
+                                              , word(3)         // _wTipKol: word;    // тип количества
+                                              , SpSopr.cMCUsl   // _cMCUsl: comp;     // ссылка на МЦ/Услугу
+                                              , SpSopr.PrMC     // _PrMC: word;       // признак МЦ/Услуга
+                                              , KolD1           // старое количество
+                                              , KolD2           // _Kol: double       // количество в отпускных единицах
+                                              , 1
+                                              , SpSopr.VidSopr // тип документа системный
+                                              );
+                  }
+            }
+
+          KatSopr.Summa  := KatSopr.Summa  + SpSopr.Price  * SpSopr.KolOpl;
+          KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+          OnAfterInsertSpSopr;
+        }
+      }
+
+    StopVisual('',0);
+
+    Update_Current_KatSopr;
+
+    OnDoneInsmcInfo;
+  }
+
+  SelectField(#SpSopr.KolFact);
+
+#ifdef _OPER_NAKL_VIH
+  SetModified(FALSE);
+  CheckSumma(TRUE);
+#else
+  RecalcSumm(TRUE);
+  Update_Current_KatSopr;
+#end
+}
+
+
+// Проверка корректности входимости налогов в сопроводительный документ
+Procedure ChVhNal;
+{
+  if (KatSopr.cStepDoc <> 0)
+    Message(''#3'Сопроводительный документ сформирован по '+
+                'документу-основанию.'#13#3+
+                'Входимость налогов изменять нельзя...',CancelButton);
+  else
+    set KatSopr.VhodNal := if (KatSopr.VhodNal = 1,2,1);
+}
+
+
+Procedure GetMCUslRazrez;
+var
+  MarkerSelect, MarkerTempPart,
+  MarkerCount, i : longint;
+  ret : word;
+  pickrec, pickrec1:comp;
+{
+  MarKerSelect   := InitMarker('TekSaldo', 8, 100, 10, FALSE);
+  MarKerTEMPPART := InitMarker('TEMPPART', 8, 100, 10, FALSE);
+  MarkerCount:=GetMarkerCount(MarkerSelect);
+
+  if (GetMarker(MarkerSelect, 0, pickrec))
+  {
+    OnInitInsMCInfo;
+    StartNewVisual(vtNumericVisual, vfTimer, 'Вставка выбранных позиций:'#13#3,1);
+
+    for (i := 0; i < MarkerCount; i := i + 1)
+    {
+      if GetMarker(MarkerSelect, i, pickrec)
+        if (GetFirst TekSaldo where ((PickRec == TekSaldo.Nrec)) = tsOk)
+        {
+          if GetMarker(MarkerTemppart, i, pickrec1)
+            ret := GetFirst SpDocs where ((pickrec1 == SpDocs.NRec));
+
+          SpSoprDefault;
+          SpSopr.cOtpEd  := SpDocs.cOtpEd;
+          SpSopr.cParty  := TekSaldo.cParty;
+          SpSopr.Kol     := TekSaldo.Kol;
+          SpSopr.cMCUSL  := TekSaldo.cMC;
+          SpSopr.KolFact := TekSaldo.kol;
+          SpSopr.PrMC    := SpDocs.PrMC;
+          SpSopr.ProcUb  := 0;
+          SpSopr.cSpStep := 0;
+          SpSopr.KolOpl  := SpSopr.kol;
+          SpSopr.cSpDocs := SpDocs.nrec;
+         #ifdef _INSSTDS_VPP
+          if (OnInsertSpSopr1(GetCursPrice))
+         #else
+            if (OnInsertSpSopr(GetCursPrice))
+         #end //_INSSTDS_VPP
+            {
+              SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec,coSpSopr);
+
+              if (Insert Current SpSopr <> tsOK) {};
+                if (SpSopr.PrMC = 1)
+                {
+                  oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 1, 0, SpSopr.Kolfact, 0);
+                  oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 2, 0, SpSopr.Kol,     0);
+                  oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SpSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 3, 0, SpSopr.KolOpl,  0);
+                }
+
+                NextVisual;
+                KatSopr.Summa := KatSopr.Summa + SpSopr.Price * SpSopr.KolOpl;
+                KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+                OnAfterInsertSpSopr;
+            }
+        }
+    }
+
+    StopVisual('',0);
+
+    Update_Current_KatSopr;
+
+    OnDoneInsmcInfo;
+    RereadRecord;
+    SetModified(TRUE);
+  }
+
+  DoneMarker(MarkerSelect,'TekSaldo');
+  DoneMarker(MarkerTemppart,'TEMPPART');
+  RecalcSumm(TRUE);
+}
+
+#ifdef _SOPRDOCB_VPP
+Function MakeNewKatsopr:boolean;
+var Doc: word;
+var isNakl: boolean;
+    ret : word;
+    pVal : comp;
+    pdPrice : date;
+{
+  MakeNewKatsopr := FALSE;
+
+  Doc     := KatSoprToBaseDoc;
+  pVal    := KatSopr.cValut;
+  pdPrice := KatSopr.dPrice;
+
+  if ( GetFirst StepDoc where ((KatSopr.cStepDoc == StepDoc.NRec)) = tsOk)
+    if (GetFirst BaseDoc
+                  where ((StepDoc.cBaseDoc == BaseDoc.NRec)) <> tsOk)
+      {
+         Message(''#3'Ошибка в данных при выборе документа-основания...',CancelButton);
+         Exit;
+      }
+
+  if (not OnAfterMakeBaseDoc)   Exit;
+
+  KatSopr.NRec        := 0;
+  KatSopr.cGruzFrom   := BaseDoc.cGrOtpr;
+  KatSopr.cGruzTo     := BaseDoc.cGrPol;
+  KatSopr.Name        := oSDfuns.SetKatSoprName(coBaseDoc, BaseDoc.nRec, FALSE);  //BaseDoc.Name;
+  KatSopr.cOrg        := BaseDoc.cOrg;
+  KatSopr.cPayment    := BaseDoc.cPayment;
+  KatSopr.cDogovor    := BaseDoc.cDogovor;
+  KatSopr.cAppDogovor := BaseDoc.cAppDogovor;
+  KatSopr.cCalPlan    := BaseDoc.cCalPlan;
+  KatSopr.cNZakaz     := 0;
+  KatSopr.cOtgOrder   := 0;
+
+  if (BaseDoc.cNazna<>0)
+    KatSopr.cNazna := BaseDoc.cNazna;
+
+  KatSopr.nVagon       := BaseDoc.nVagon;
+  KatSopr.TypeDoc      := BaseDoc.TypeDoc;
+  KatSopr.cCellVal     := BaseDoc.cCellVal;
+  KatSopr.cTransp      := BaseDoc.cTransp;
+  KatSopr.cOrgPlat     := KatSopr.cOrgBase;
+  set KatSopr.cOrgBase := BaseDoc.cOrg;
+
+  Insert Current KatSopr;
+
+  oSDfuns.TTNDoc_Copy(coBaseDoc, BaseDoc.NRec, coKatSopr, KatSopr.NRec);
+
+  iGrPl.InsSpGrPlD_Default( KatSopr.VidSopr   // тип документа системный
+                          , KatSopr.nRec      //ссылка на документ
+                          , KatSopr.cOrg      //ссылка на контрагента
+                          );
+  ResetBounds(#SpSopr);
+
+
+  KatSopr.cValut  := pVal;
+  KatSopr.dPrice  := pdPrice;
+  KatSopr.VhodNal := if ((KatSopr.VidSopr <> 501) OR wGetTune('Oper.FormUch') = 1, BaseDoc.VhodNal, 2);
+  IsNakl         := FALSE;
+  KatSopr.Summa  := 0;
+  KatSopr.SumVal := 0;
+
+  Update_Current_KatSopr;
+
+  MakeNewKatsopr := TRUE;
+} // Function SGetBaseDoc
+
+
+// !!! Функция в данный момент 11/2005 нигде не используется
+// Формирование повагонных накладных по ДО
+Function InsertMCVagon: boolean;
+var
+  StRN, StVN, sKol, Curse : double;
+  sNDS, svNDS  : double;
+  Part, Sk, ML : comp;
+  MustRCSumm   : boolean;
+  ret     : word;
+  isFirst : boolean;
+  oldVagon: string;
+{
+  InsertMCVagon := FALSE;
+
+  isFirst  := TRUE;
+  oldVagon :='';
+
+  if (not SGetBaseDoc(Curse, 0))
+    Exit;
+
+  MustRCSumm := FALSE;
+  StRN := 0;    StVN := 0;
+  SNDS := 0;    SVNDS := 0;
+
+  StartNewVisual(vtNumericVisual,vfTimer,
+        ''#3'Создание спецификации: '#13#3,1);
+ ////////////////////// wGetTune('Reserv.FormSopr') "0-разр,1-запр.накладные без резерва в ДО",
+
+  delete NoNalMC;
+
+  if (wGetTune('Reserv.FormSopr') = 1) AND (SpStep.PrMc = 1)
+  {
+    _LOOP SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc AND
+                         (SpStep.Reserv > 0) ))
+                 Ordered by index SpStep02
+    {
+      NoNalMc.nRec   := 0;
+      NoNalMC.Name   := SpStep.nVagon;
+      NoNalMC.cSpDoc := SpStep.NRec;
+      Insert Current NoNalMc;
+    }
+  }
+  else
+  {
+    _LOOP SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc))
+                         Ordered by index SpStep02
+    {
+      NoNalMc.nRec   := 0;
+      NoNalMC.Name   := SpStep.nVagon;
+      NoNalMC.cSpDoc := SpStep.NRec;
+      Insert Current NoNalMC;
+    }
+  }
+
+  _LOOP NoNalMc Ordered by index NoNalMc01
+  {
+    ret := GetFirst SpStep where ((NoNalMC.cSpDoc == SpStep.NRec));
+
+    if (ret <> tsOk) continue;
+      if (isFirst)
+      {
+        isFirst := FALSE;
+        KatSopr.nSopr   := SpStep.nKvit;
+        KatSopr.TypeDoc := 1;
+        KatSopr.nVagon  := SpStep.nVagon;
+        KatSopr.cTransp := SpStep.cTransp;
+
+        Update_Current_KatSopr;
+
+        oldVagon := SpStep.nVagon;
+      }
+
+    if (oldVagon <> SpStep.nVagon)
+    {
+      if (MustRcSumm)
+        RecalcSumm(FALSE)
+      else
+      {
+        if (KatSopr.VhodNal = 1)
+        {
+          KatSopr.Summa := FSRoundRub(STRN);
+          set KatSopr.SumVal := FSRoundVal(STVN);
+        }
+        else
+        {
+          KatSopr.Summa := FSRoundRub(STRN + SNDS);
+          set KatSopr.SumVal := FSRoundRub(STVN + SVNDS);
+        }
+
+        KatSopr.sNalogs  := SNDS;
+        KatSopr.sVNalogs := SVNDS;
+      }
+
+      Update_Current_KatSopr;
+
+      MakeNewKatSopr;
+
+      KatSopr.nSopr   := SpStep.nKvit;
+      KatSopr.TypeDoc := 1;
+      KatSopr.nVagon  := SpStep.nVagon;
+      KatSopr.cTransp := SpStep.cTransp;
+
+      Update_Current_KatSopr;
+
+      oldVagon := SpStep.nVagon;
+
+      MustRCSumm := FALSE;
+      StRN := 0;    StVN := 0;
+      SNDS := 0;    SVNDS := 0;
+    }
+
+    if (InsMC_StdHandle(Curse))
+    {
+      NextVisual;
+
+      if ((SpSopr.PrMC <> TMCUSL) AND (SpStep.PrUsNkl <> 1))
+         MustRcSumm := TRUE;
+
+      STRN := STRN + (SpSopr.Price  * SpSopr.KolOpl);
+      STVN := STVN + (SpSopr.VPrice * SpSopr.KolOpl);
+
+      if ((SpStep.PrMC = 1) AND (wGetTune('Reserv.VypRes') > 0))
+      {
+        SpStep.SrokRes := Add_Day(SpStep.SrokRes, wGetTune('Reserv.VypRes'));
+        if (Update Current SpStep <> tsOK) {};
+      }
+
+      OnAfterInsertSpSopr;
+
+      oCalcFuns.ClcUsl_CopyFactPar(SpStep.NRec,coSpStep,SpSopr.NRec,coSpSopr);
+
+      SNDS  := SNDS  + SpSopr.SumNDS;
+      SVNDS := SVNDS + SpSopr.SumvNDS;
+    }
+  }
+/////////////////////////////////////////////
+  StopVisual('',0);
+
+  OnDoneInsMcInfo;
+
+  if (MustRcSumm)
+    RecalcSumm(FALSE)
+  else
+  {
+    if (KatSopr.VhodNal = 1)
+    {
+      KatSopr.Summa := FSRoundRub(STRN);
+      set KatSopr.SumVal := FSRoundVal(STVN);
+    }
+    else
+    {
+      KatSopr.Summa := FSRoundRub(STRN + SNDS);
+      set KatSopr.SumVal := FSRoundRub(STVN + SVNDS);
+    }
+
+    KatSopr.sNalogs := SNDS;
+    KatSopr.sVNalogs := SVNDS;
+  }
+
+  Update_Current_KatSopr;
+
+  SelectField(#KatSopr.Name);
+  SelectPanel(#SpSopr);
+  RescanPanel(#SpSopr);
+  SelectPanel(#KatSopr);
+
+  if (GetFirst SpSopr = tsOk)
+    RereadRecord(#SpSopr);
+  InsertMCVagon := TRUE;
+}
+#end //_SOPRDOCB_VPP
+
+#end //_INSMC_VPP

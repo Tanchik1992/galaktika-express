@@ -1,0 +1,219 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Модификация цен по выбранному прайсу для ДО из Pick
+//******************************************************************************
+
+cmValue17: // пересчет цен по выбранному прайс-листу для группы выбранных ДО
+  {
+    var st        : word;
+    var KlTip     : word;
+    var KlVidForm : word;
+    var KlTipMoney: word;
+    var OnePick   : boolean;
+    var NewPrice  : double;
+    var lCount    : longint;
+
+    OnePick := FALSE;
+
+    PushPos(#BaseDoc);
+
+    if ( GetFirst Pick3 where (( word(15) == Pick3.wList )) = tsOk )
+      {
+        lCount := 0;
+
+        _LOOP Pick3 where (( word(15) == Pick3.wList ))
+          lCount := lCount + 1;
+      }
+    else
+      if ( IsValid(#SpStep) AND IsValidNew(#SpStep) )
+        {
+          ClearBuffer(#Pick3);
+
+          Pick3.wList   := 15;
+          Pick3.PickNum := 100;
+          Pick3.Pickkol := 0;
+          Pick3.cRec    := BaseDoc.nRec;
+
+          insert current Pick3;
+
+          OnePick := TRUE;
+
+          lCount := 1;
+        }
+      else
+        {
+          Message('В документе-основании нет спецификации!', Information);
+          Exit;
+        }
+
+    RVhod := BaseDoc.VhodNal;
+
+    if ( RunInterface(GetKlPr, PrNrec, RVhod, word(1), word(0)) <> cmCancel )
+      {
+        if ( GetFirst KlPrice where (( PrNRec == KlPrice.nRec )) <> tsOk )
+          {
+            Message('Прайс-лист не найден!', Information);
+            PopPos(#BaseDoc);
+            Exit;
+          }
+
+        KlVidForm  := KlPrice.VidForm;
+        KlTip      := KlPrice.Tip;
+        KlTipMoney := KlPrice.TipMoney;
+
+        ClusterDisabledField(#Par1, 0);
+
+        if ( RunWindowModal(ModPricePar) <> cmCancel )
+          {
+            StartNewVisual(vtIndicatorVisual
+                         , vfTimer + vfBreak + vfConfirm
+                         , 'Модификация цен в документах-основаниях по выбранному прайс-листу'
+                         , lCount);
+
+            _LOOP Pick3 where (( word(15) == Pick3.wList ))
+              {
+                if ( not NextVisual )
+                  Break;
+
+                BaseDocRec := Pick3.cRec;
+
+                if ( GetFirst FastFirstRow BaseDoc where (( BaseDocRec == BaseDoc.nRec )) = tsOk )
+                  {
+                    if not EditDOPosEnabled(true, true)
+                      Continue;
+
+                    if (
+                        ( ( tipDO = 101 ) AND boGetTune('Doc.Buy.NotEditDO') )
+                         OR
+                        ( ( tipDO = 201 ) AND boGetTune('Doc.Sell.NotEditDO') )
+                         OR
+                        ( ( tipDO = 1410) AND boGetTune('Doc.Wood.NarAkt.NotEditDO') )
+                         OR
+                        ( ( tipDO = 1420) AND boGetTune('Doc.Wood.Schet.NotEditDO') )
+                       )
+                      if ( IsValid(tnBaseFin) OR IsValid(tnKatSopr) )
+                        Continue;
+
+                    var dValNalog: date;
+
+                    dValNalog := if (BaseDoc.dValCurse = ZeroDate, BaseDoc.dDoc, BaseDoc.dValCurse);
+
+                    BaseDoc.dPrice := KlPrice.dprice;
+
+                    _LOOP SpStep
+                      if (
+                          ( // совпадение типа позиции и прайс-листа
+                           ( ( KlTip  = 1 ) AND ( SpStep.PrMC = 2 ) )
+                             OR
+                           ( ( KlTip <> 1 ) AND ( SpStep.PrMC = 1 ) )
+                          )
+                           AND // фильтр по прайс-листу в позициях
+                          ( ( SpStep.cPriceList = pFltKlPrice ) OR ( pFltKlPrice = -1 ) )
+                         )
+                        if ( if(KlVidForm <> 0
+                              , (GetFirst Prices where (( SpStep.cMCUsl == Prices.cThing   AND
+                                                          PrNrec        == Prices.cKlPrice AND
+                                                          SpStep.cParty == Prices.cParty )) )
+                              , (GetFirst Prices where (( SpStep.cMCUsl == Prices.cThing   AND
+                                                          PrNrec        == Prices.cKlPrice )) )
+                               ) <> tsOk )
+                          {
+                            if ( Par2 <> 0 )
+                              {
+                                SpStep.Price := 0;
+                                update current SpStep;
+                              }
+                          }
+                        else
+                          {
+                            SpStep.cPriceList := Prices.cKlPrice;
+
+                            PriceR := KatOtpEd.Koef;
+                            PriceV := fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+                            //---------Пересчет цен прайса при разной входимости налогов
+                            if ( BaseDoc.VhodNal <> RVhod )
+                              {
+                                if ( BaseDoc.VhodNal = 1 ) // налоги входят в цену
+                                  {
+                                    CountNalogPrice(BaseDoc.nRec
+                                                  , SpStep.nRec
+                                                  , tipDo + 1000
+                                                  , if(SpStep.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal)
+                                                  , BaseDoc.cOrg
+                                                  , SpStep.Kol
+                                                  , SpStep.cOtpEd
+                                                  , dValNalog
+                                                  , BaseDoc.cVal
+                                                  , 0
+                                                  , Prices.Price
+                                                  , Prices.SumVal
+                                                  , BaseDoc.cPayment);
+
+                                    Prices.Price  := GetNalogPrice;
+                                    Prices.SumVal := GetNalogValPrice;
+                                  }
+                                else
+                                  {
+                                    CountBasePrice(BaseDoc.nRec
+                                                 , SpStep.nRec
+                                                 , tipDo + 1000
+                                                 , if(SpStep.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal)
+                                                 , BaseDoc.cOrg
+                                                 , SpStep.Kol
+                                                 , SpStep.cOtpEd
+                                                 , dValNalog
+                                                 , BaseDoc.cVal
+                                                 , 0
+                                                 , Prices.Price
+                                                 , Prices.SumVal
+                                                 , BaseDoc.cPayment);
+
+                                    Prices.Price  := GetBasePrice;
+                                    Prices.SumVal := GetBaseValPrice;
+                                  }
+                              }
+                            //-----------------------------------------------------------------
+
+                            if ( BaseDoc.cVal <> 0 )
+                              {
+                                if ( Prices.cVal = 0 )
+                                  NewPrice := oValFunc.GetAnyCurrency(0, Prices.Price, dValNalog, BaseDoc.cVal);
+                                else
+                                  if ( BaseDoc.cVal <> Prices.cVal )
+                                    NewPrice := oValFunc.GetAnyCurrency(Prices.cVal, Prices.SumVal, dValNalog, BaseDoc.cVal)
+                                  else
+                                    NewPrice := Prices.SumVal;
+                              }
+                            else
+                              if ( ( Prices.cVal <> 0 ) AND ( KlTipMoney <> 1 ) or ( Par1 <> 0 ) AND ( KlTipMoney = 1 ) )
+                                NewPrice := oValFunc.GetNatCurrency(Prices.cVal, Prices.SumVal, dValNalog)
+                              else
+                                NewPrice := Prices.Price;
+
+                            NewPrice := NewPrice * (1 - BaseDoc.KolKompl / 100) * PriceR / PriceV;
+
+                            SpStep.Price := oDOfuns.DoRoundVltP(tipdo, NewPrice);
+
+                            update current SpStep;
+                          }
+
+                       GetTotalSkid(false);  //полный пересчет
+
+                       update current BaseDoc;
+                  }
+              }
+
+            StopVisual('', 0);
+          } // RunWindowModal(ModPricePar)
+      }
+
+    PopPos(#BaseDoc);
+    RescanPanel(#BaseDoc);
+
+    KillPick2;
+    RereadRecord(#BaseDoc);
+  }
+
+//******************************************************************************

@@ -1,0 +1,414 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Контур логистики                                          ║
+ ║ Версия        : 5.84                                                      ║
+ ║ Назначение    : Расчет итоговых сумм в отчете Просмотр дог-согл-кал плана ║
+ ║                 и привязанных документов                                  ║
+ ║ Ответственный : Шелепов А.Ф.                                              ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+// Sum[2] - наши отгрузки/исходящие платежи; напраление 1 -> 2
+// Sum[1] - отгрузки контрагента/входящие платежи; напраление 2 -> 1
+//
+
+Function DoLoopKatSopr: boolean;
+var _wTiDk, _wDirect : word;
+    _sSum  : double;
+    _cVal  : comp;
+{
+  Result := FALSE;
+
+  _loop KatSopr
+    {
+      _cVal  := KatSopr.cVal;
+      _sSum  := if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal);
+      _wTiDK := KatSopr.VidSopr;
+      _wDirect := 0;
+      if (GetFirst SoprHoz where ((KatSopr.VidSopr == SoprHoz.TipDoc and
+                                   KatSopr.nRec    == SoprHoz.cSoprDoc)) =tsOK)
+         _wDirect := SoprHoz.Direct
+      else
+         _wDirect := KatSopr.TipSopr;
+      if ((_wDirect = 1) or (_wDirect = 2))
+       {
+        if (GetFirst fastfirstrow tmpSumsTiDK
+                     where (( _wTiDk == tmpSumsTiDK.tiDkGal and
+                              _cVal  == tmpSumsTiDK.cVal )) <> tsOk)
+         {
+           ClearBuffer(tntmpSumsTiDK);
+           tmpSumsTiDK.tiDkGal := _wTiDk;
+           tmpSumsTiDK.cVal    := _cVal;
+           tmpSumsTiDK.Sum[_wDirect]  := _sSum;
+           if (insert current tmpSumsTiDK = tsOk) {}
+         }
+        else
+         {
+           tmpSumsTiDK.Sum[_wDirect]  := tmpSumsTiDK.Sum[_wDirect] + _sSum;
+           if (update current tmpSumsTiDK = tsOk) {}
+         }
+       }
+      if (GetFirst tmpSumsTiDK = tsOk)
+        Result := true;
+    }
+}
+
+Function GetSumsKS : boolean;
+var pDog : comp;
+{
+  Result := FALSE;
+
+  Delete All tmpSumsTiDK;
+  GetSumsKS := false;
+  ReRead_Filters_Only(3); //Накладные
+
+  pDog := if(SGetDocs.cAppDogovor = 0, SGetDocs.cDogovor, SGetDocs.cAppDogovor);
+
+  case SGetDocs.wDocType of
+  //**********
+    1, 2:
+      _LOOP IerDog where (( pDog == IerDog.cUpRec ))
+        Result := Result OR DoLoopKatSopr;
+  //**********
+    4:
+      _LOOP IerCalPl where (( pDog == IerCalPl.cDogovor AND SGetDocs.cCalPlan == IerCalPl.cUpRec ))
+        Result := Result OR DoLoopKatSopr;
+  //**********
+  end;
+
+  ReRead_Filters(True); //восстановим
+};
+
+//
+Function DoLoopBaseFin: boolean;
+var _wTiDk, _wDirect : word;
+    _sSum  : double;
+    _cVal  : comp;
+{
+  Result := FALSE;
+
+  _loop BaseFin
+    {
+      if ( SGetDocs.wDocType = 4 ) // ПКП
+          AND
+         not ((IerCalPl.cRec = BaseFin.cCalPlan) AND not SGetDocs.IsFinPKP or
+              (IerCalPl.cRec = BaseFin.cKatSopr) AND     SGetDocs.IsFinPKP)
+        Continue;
+
+      _cVal  := BaseFin.cVal;
+      _sSum  := if (BaseFin.cVal = 0, BaseFin.Summa, BaseFin.SumVal);
+      _wTiDK := BaseFin.TiDkGal;
+      _wDirect := BaseFin.Direct;
+      if ((_wDirect =1) or (_wDirect = 2))
+       {
+         if (GetFirst fastfirstrow tmpSumsTiDK
+                      where (( _wTiDk == tmpSumsTiDK.tiDkGal and
+                               _cVal  == tmpSumsTiDK.cVal )) <> tsOk)
+          {
+            ClearBuffer(tntmpSumsTiDK);
+            tmpSumsTiDK.tiDkGal := _wTiDk;
+            tmpSumsTiDK.cVal    := _cVal;
+            tmpSumsTiDK.Sum[_wDirect]  := _sSum;
+            if (insert current tmpSumsTiDK = tsOk) {}
+          }
+         else
+          {
+            tmpSumsTiDK.Sum[_wDirect]  := tmpSumsTiDK.Sum[_wDirect] + _sSum;
+            if (update current tmpSumsTiDK = tsOk) {}
+          }
+       }
+      if (GetFirst tmpSumsTiDK = tsOk)
+        Result := true;
+    }
+}
+
+Function GetSumsBF : boolean;
+var pDog : comp;
+{
+  Result := FALSE;
+
+  Delete All tmpSumsTiDK;
+  GetSumsBF := false;
+  ReRead_Filters_Only(1); //платежи
+
+  pDog := if(SGetDocs.cAppDogovor = 0, SGetDocs.cDogovor, SGetDocs.cAppDogovor);
+
+  case SGetDocs.wDocType of
+  //**********
+    1, 2:
+      _LOOP IerDog where (( pDog == IerDog.cUpRec ))
+        Result := Result OR DoLoopBaseFin;
+  //**********
+    4:
+      _LOOP IerCalPl where (( pDog == IerCalPl.cDogovor AND SGetDocs.cCalPlan == IerCalPl.cUpRec ))
+        Result := Result OR DoLoopBaseFin;
+  //**********
+  end;
+
+  ReRead_Filters(True); //восстановим
+};
+
+//
+Function DoLoopBaseDoc: boolean;
+var _wTiDk,_wDirect : word;
+    _sSum  : double;
+    _cVal  : comp;
+{
+  Result := FALSE;
+
+  _loop BaseDoc
+    {
+      _cVal    := BaseDoc.cVal;
+      _sSum    := BaseDoc.Total;
+      _wTiDk  := oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc);
+      _wDirect := 0;
+      if (GetFirst SoprHoz where ((_wTiDK      == SoprHoz.TipDoc and
+                                   BaseDoc.nRec== SoprHoz.cSoprDoc)) =tsOK)
+       _wDirect := SoprHoz.Direct;
+      if (_wDirect = 1)  _wDirect := 2
+      else
+        if (_wDirect = 2)  _wDirect := 1
+        else _wDirect := 0;
+
+      if ((_wDirect <> 0) and (_wTiDk <> 0))
+       {
+        if (GetFirst fastfirstrow tmpSumsTiDK
+                     where (( _wTiDk == tmpSumsTiDK.tiDkGal and
+                              _cVal  == tmpSumsTiDK.cVal )) <> tsOk)
+         {
+           ClearBuffer(tntmpSumsTiDK);
+           tmpSumsTiDK.tiDkGal := _wTiDk;
+           tmpSumsTiDK.cVal    := _cVal;
+           tmpSumsTiDK.Sum[_wDirect]  := _sSum;
+           if (insert current tmpSumsTiDK = tsOk) {}
+         }
+        else
+         {
+           tmpSumsTiDK.Sum[_wDirect]  := tmpSumsTiDK.Sum[_wDirect] + _sSum;
+           if (update current tmpSumsTiDK = tsOk) {}
+         }
+       }
+      if (GetFirst tmpSumsTiDK = tsOk)
+        Result := true;
+    }
+}
+
+Function GetSumsBD : boolean;
+var pDog : comp;
+{
+  Result := FALSE;
+
+  Delete All tmpSumsTiDK;
+  GetSumsBD := false;
+  ReRead_Filters_Only(2); //ДО
+
+  pDog := if(SGetDocs.cAppDogovor = 0, SGetDocs.cDogovor, SGetDocs.cAppDogovor);
+
+  case SGetDocs.wDocType of
+  //**********
+    1, 2:
+      _LOOP IerDog where (( pDog == IerDog.cUpRec ))
+        Result := Result OR DoLoopBaseDoc;
+  //**********
+    4:
+      _LOOP IerCalPl where (( pDog == IerCalPl.cDogovor AND SGetDocs.cCalPlan == IerCalPl.cUpRec ))
+        Result := Result OR DoLoopBaseDoc;
+  //**********
+  end;
+
+  ReRead_Filters(True); //восстановим
+};
+//
+Function GetSumsIski : boolean;
+var _wTiDk : word;
+    _sSum1, _sSum2  : double;
+    _cVal  : comp;
+{
+  PushPos(tnIski);
+  Delete All tmpSumsTiDK;
+  GetSumsIski := false;
+  _Loop Iski
+   {
+     _cVal  := Iski.cVal;
+     _sSum1 := Iski.SumIsk;
+     _sSum2 := Iski.SumIskOk;
+     _wTiDK := Iski.TiDk;
+     if (GetFirst fastfirstrow tmpSumsTiDK
+                  where (( _wTiDk == tmpSumsTiDK.tiDkGal and
+                           _cVal  == tmpSumsTiDK.cVal )) <> tsOk)
+      {
+        ClearBuffer(tntmpSumsTiDK);
+        tmpSumsTiDK.tiDkGal := _wTiDk;
+        tmpSumsTiDK.cVal    := _cVal;
+        tmpSumsTiDK.Sum[1]  := _sSum1;
+        tmpSumsTiDK.Sum[2]  := _sSum2;
+        if (insert current tmpSumsTiDK = tsOk) {}
+      }
+     else
+      {
+        tmpSumsTiDK.Sum[1]  := tmpSumsTiDK.Sum[1] + _sSum1;
+        tmpSumsTiDK.Sum[2]  := tmpSumsTiDK.Sum[2] + _sSum2;
+        if (update current tmpSumsTiDK = tsOk) {}
+      }
+     if (GetFirst tmpSumsTiDK = tsOk)
+       GetSumsIski := true;
+   }
+  PopPos(tnIski)
+};
+
+//
+Function GetSumsReStru : boolean;
+var _wTiDk : word;
+    _sSum  : double;
+    _cVal  : comp;
+{
+  PushPos(tnReStruDolg);
+  Delete All tmpSumsTiDK;
+  GetSumsReStru := false;
+  _Loop ReStruDolg
+   {
+     _cVal  := ReStruDolg.cVal;
+     _sSum  := if (ReStruDolg.cVal = 0, ReStruDolg.Sum, ReStruDolg.SumV);
+     _wTiDK := ReStruDolg.TiDk;
+     if (GetFirst fastfirstrow tmpSumsTiDK
+                  where (( _wTiDk == tmpSumsTiDK.tiDkGal and
+                           _cVal  == tmpSumsTiDK.cVal )) <> tsOk)
+      {
+        ClearBuffer(tntmpSumsTiDK);
+        tmpSumsTiDK.tiDkGal := _wTiDk;
+        tmpSumsTiDK.cVal    := _cVal;
+        tmpSumsTiDK.Sum[1]  := _sSum;
+        if (insert current tmpSumsTiDK = tsOk) {}
+      }
+     else
+      {
+        tmpSumsTiDK.Sum[1]  := tmpSumsTiDK.Sum[1] + _sSum;
+        if (update current tmpSumsTiDK = tsOk) {}
+      }
+     if (GetFirst tmpSumsTiDK = tsOk)
+       GetSumsReStru := true;
+   }
+  PopPos(tnReStruDolg)
+};
+
+var AllSum_NDE : double;
+
+Function GetAllSum_NDE : double;
+var _dSumma : double;
+{
+  _dSumma := 0.0;
+  PushPos(tnTmpSumsTiDk);
+  _Loop tmpSumsTiDk
+   {
+     if (tmpSumsTiDK.cVal = comp(0))
+       _dSumma := _dSumma + (tmpSumsTiDK.Sum[1] - tmpSumsTiDK.Sum[2])
+     else
+      {
+       _dSumma := _dSumma + (oValFunc.GetNatCurrency(tmpSumsTiDK.cVal,tmpSumsTiDK.Sum[1],Cur_Date)-
+                             oValFunc.GetNatCurrency(tmpSumsTiDK.cVal,tmpSumsTiDK.Sum[2],Cur_Date))
+      }
+   }
+  GetAllSum_NDE := Abs(_dSumma);
+  PopPos(tnTmpSumsTiDk);
+};
+
+#doc
+Окно просмотра сумм по типам документов
+#end
+Window winSumsTipDoc 'Суммы по типам документов'  EscClose, Cyan;
+ show at (,,65,11);
+ Browse brSumsTipDoc '' ('',hcDog_ItogSymmDok,sci1Esc);
+  show at (,,,8);
+  table tmpSumsTiDk;
+  fields
+    KatDoc_Sums.Name   #3'Наименование' ('Наименование по типа документа'): [30] ,protect;
+    tmpSumsTiDK.Sum[1] #3'Сумма',#3'2 -> 1' ('Итоговая сумма по типу документов (контрагент -нам)') : [16,'\2p[|-]366`666`666`666`666.88'], protect;
+    tmpSumsTiDK.Sum[2] #3'Сумма',#3'1 -> 2' ('Итоговая сумма по типу документов (мы - контрагенту)') : [16,'\2p[|-]366`666`666`666`666.88'], protect;
+    SimvValSums        #3'Вал' ('Символ валюты') : [3], Protect, Centered, NoAutoSize;
+ End;
+ Screen scrSumsTipDoc;
+  show at (,9,,);
+  table tmpSumsTiDk;
+  fields
+    AllSum_NDE : [18,'\2p[|-]366`666`666`666`666.88'], skip;
+<<
+   Итоговая сумма в НДЕ .@@@@@@@@@@@@@@@@@@@@
+>>
+ End;
+
+ HandleEvent
+  cmInit: AllSum_NDE := GetAllSum_NDE;
+ End
+End;
+
+#doc
+Окно просмотра итоговых сумм по исковым заявлениям
+#end
+Window winSumsIski 'Итоговые суммы по исковым заявлениям'  EscClose, Cyan;
+  show at (,14,35,);
+ Browse brSumsIski '' ('',,sci1Esc);
+  table tmpSumsTiDk;
+  fields
+    tmpSumsTiDK.Sum[1]  #3'Сумма долга по',#3'исковым заявлениям' ('Итоговая сумма долга по исковым заявлениям') : [16,'\2p[|-]366`666`666`666`666.88'], protect;
+    tmpSumsTiDK.Sum[2]  #3'Сумма долга по',#3'решениям суда' ('Итоговая сумма долга по решениям суда')           : [16,'\2p[|-]366`666`666`666`666.88'], protect;
+    SimvValSums         #3'Вал' ('Символ валюты') : [3], Protect, Centered, NoAutoSize;
+ End;
+End;
+//
+Function GetAllSumReStru_NDE : double;
+var _dSumma : double;
+{
+  _dSumma := 0.0;
+  PushPos(tnTmpSumsTiDk);
+  _Loop tmpSumsTiDk
+   {
+     if (tmpSumsTiDK.cVal = comp(0))
+       _dSumma := _dSumma + tmpSumsTiDK.Sum[1]
+     else
+      {
+       _dSumma := _dSumma + oValFunc.GetNatCurrency(tmpSumsTiDK.cVal,tmpSumsTiDK.Sum[1],Cur_Date)
+      }
+   }
+  GetAllSumReStru_NDE := _dSumma;
+  PopPos(tnTmpSumsTiDk);
+};
+
+#doc
+Окно просмотра итоговых сумм по реструктуризации долга
+#end
+Window winSumsReStru 'Итоговые суммы по реструктуризации долга'  EscClose, Cyan;
+  show at (,,20,11);
+ Browse brSumsReStru '' ('',,sci1Esc);
+  show at (,,,8);
+  table tmpSumsTiDk;
+  fields
+    tmpSumsTiDK.Sum[1]  #3'Сумма' ('Итоговая сумма долга по соглашениям реструктуризации долга') : [16,'\2p[|-]366`666`666`666`666.88'], protect;
+    SimvValSums         #3'Вал' ('Символ валюты') : [3], Protect, Centered, NoAutoSize;
+ End;
+ Screen scrSumsReStru;
+  show at (,9,,);
+  table tmpSumsTiDk;
+  fields
+    AllSum_NDE : [18,'\2p[|-]366`666`666`666`666.88'], skip;
+<<
+   Итоговая сумма в НДЕ .@@@@@@@@@@@@@@@@@@@@
+>>
+ End;
+
+ HandleEvent
+  cmInit: AllSum_NDE := GetAllSumReStru_NDE;
+ End
+End;
+
+Panel pnTmpSums
+ table tmpSumsTiDk
+ HandleEvent
+  cmDelOnProtect : abort;
+ end
+End;
+
+procedure ShowSums;
+{
+  RunWindowModal(winSumsTipDoc);
+}

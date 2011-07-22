@@ -1,0 +1,501 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 5.50 - логистика
+// Формирование ордеров по накладной на внутреннее перемещение
+//******************************************************************************
+
+#define _CALLMAKE_
+#define  _InRemont_  // отпуск в ремонты
+#define _USE_SERIAL_
+
+#include KatSopr.vih    // подключение объектных интерфейсов, общих для сопроводительных документов
+#include docs2obj.vih
+#include MCToOS.vih
+#include MBP_Tune.vih
+#include IznMetod.vih
+#include TransLib.vih
+#include Confirm.vih
+#include MBP_Doc.vih
+#include MBP_In.vih
+#include MBP_Out.vih
+#include boxfuncsFunctions.vih
+#include RoznFuns.vih
+#include MoveOS.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Формирование ордеров по накладной на внутреннее перемещение
+
+Параметры:
+  TypeSopr - вид сопроводительного документа
+  pNRec    - ссылка на сопроводительный документ
+  wDate    - 1 - формировать ордера по дате накладной
+  wTXO     - 1 - формировать проводки ТХО
+  wDel     - 1 - удалять существующие ордера
+  w_dOpr   - дата формирования ордера
+#end
+
+//******************************************************************************
+
+Interface CallMake 'Формирование по накладной' gray;//cyan;
+
+  Show at (, , 1, 1);
+
+#include KatSopr.var    // объектные переменные, общие для сопр.документов
+#include IznMetod.var
+#include MBP_Tune.var
+#include TransLib.var
+#include Confirm.var
+#include MBP_Doc.var
+#include MBP_In.var
+#include MBP_Out.var
+
+Create view
+
+//********************************************************************************
+
+Var
+  pNrec
+, NRecSaved    // для автоустановки на товар
+              : comp;
+
+#include soprvar.vpp    // общие переменные сопроводительных документов
+
+  Word4Seach  // для совместимости с МБП
+, stri
+, s_SimvRub   : string;
+
+  wTXO        // 1-формировать проводки ТХО
+, wDate       // 1-формировать ордера по дате накладной
+, wDel        // 1-удалять существующие ордера
+, wTipOrd
+, wOtkuda
+, wKuda       : word;
+
+  MarkerNZ    : longint;
+
+  NRsh
+, NPrh        : string[20];
+
+  w_dOpr      : Date;
+
+#include varos.vpp
+
+//********************************************************************************
+
+As select // Вычисляемые выражения
+
+  if (KatSopr.cVal = 0,
+    if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+                                                              ( FieldName = Valut )
+
+, if (KatSopr.cVal = 0, SpSopr.price * SpSopr.kolfact, SpSopr.VPrice * SpSopr.kolfact)
+                                                              ( FieldName = SumPrice )
+
+, if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal)
+                                                              ( FieldName = Sum )
+
+, if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice)
+                                                              ( FieldName = Prv )
+
+, PrintNumber(KatSopr.Descr, KatSopr.NSopr)
+                                                              ( FieldName = NomDes )
+
+, if (KatSopr.Reserved = 1, 'зарезервированы', 'не зарезервированы')
+                                                              ( FieldName = ifRes )
+
+, if (SpSopr.cOtpEd = 0, KatEd.Name, KatOtpEd.Name)
+                                                              ( FieldName = OtpEd )
+
+, if (KatSopr.Transp = 0, 'нет', 'да')
+                                                              ( FieldName = trp )
+
+, if (longint(KatSopr.dOpr) = 0, '-', '+')
+                                                              ( FieldName = PrOrd )
+
+, if (KatSopr.cValut = 0, ' ', if (SpSopr.VPrice = 0, 'Курс не определен',
+      'Курс : '+string(SpSopr.Price / SpSopr.VPrice, 14, 2)))
+                                                              ( FieldName = StrCurse )
+
+, // Основные таблицы
+  KatSopr.*
+, SpSopr.*
+, SoprHoz.*
+
+, // Ссылочные таблицы
+  KatMC.Name
+, KatMC.BarKod
+, KatOtpEd.*
+, KatParty.Name
+, KatPodr.Name
+, KatMol.Name
+, KatPayment.Name
+, ToPodr.Name
+, ToMol.Name
+, BaseDoc.NoDoc
+, KlVal.Simvolv
+, KatNazna.Name
+, Persons.FIO
+, KatOrgF.Name
+, KatOrgF.UNN
+, KatOrgF.OKPO
+, KatOrgF.Addr
+, KatBankF.Name
+, KatBankF.MFO1
+, KatBankF.Schet1
+, KatOrgT.Name
+, KatOrgT.UNN
+, KatOrgT.OKPO
+, KatOrgT.Addr
+, KatBankT.Name
+, KatBankT.MFO1
+, KatBankT.Schet1
+, KatOrgMy.Name
+, KatOrgMy.UNN
+, KatOrgMy.OKPO
+, KatOrgMy.Addr
+, KatBankMy.Name
+, KatBankMy.MFO1
+, KatBankMy.Schet1
+
+From
+
+  KatOrg
+, KatOrg KatOrgMy
+, KatOrg KatOrgF
+, KatOrg KatOrgT
+, KatBank KatBankMy
+, KatBank KatBankF
+, KatBank KatBankT
+, KatPodr ToPodr
+, KatMOL ToMOL
+, KatSopr KSopr
+, KatMBP
+, MBPIn
+, TTNdoc
+, KatPayment
+, KatOs
+, OsMc
+, SpSopr SSopr
+, CursVal
+, SpOrder SpOrder2
+, KATSOPR
+, KLVAL
+, SPSOPR
+, KATED
+, KATOTPED
+, KATMC
+, KATPARTY
+, KATPODR
+, KATPODR KATPODR1
+, KATMOL
+, BASEDOC
+, KATNAZNA
+, PERSONS
+, SPSTEP
+, SPDOCS
+, KATUSL
+, KATNOTES
+, SPOrder
+, SKLOrder
+, FILIAL
+, KATSTROY
+, KLPRICE
+, KATZAK
+, MARAVT
+, SYSTRAN
+, GRUZAK
+, SPZAKAZ
+, SpSopHoz
+, TekSaldo
+, TekMC
+, SklOst
+, SoprOrdB
+, SALDOMC
+, DORes
+, SpecZatr
+, NoNalMC
+, Kontras
+, Pick
+, Prices
+, PickPric
+, KauReff
+, AddSumTune
+, GroupMC
+, NalDrag
+, WayItem
+, MarRel
+, MarPunkt
+, Transp
+, PutLst
+, TipTex
+, attrnam
+, KlResHr
+, OBOROT
+, SaldoObj
+, SpOtpEd
+, KatKod
+, KatKod     KatKodIns
+
+Where
+((
+    pNRec               == KatSopr.NRec
+//and TypeSopr          == KatSopr.VidSopr
+
+and KatSopr.cGruzFrom   == KatOrgF.NRec
+and KatSopr.cGruzFrom   == KatBankF.cORG
+
+and KatSopr.cGruzTo     == KatOrgT.NRec
+and KatSopr.cGruzTo     == KatBankT.cORG
+
+and KatSopr.NRec        == SpSopr.cSopr
+and KatSopr.VidSopr     == SoprHoz.TipDoc
+and KatSopr.NRec        == SoprHoz.cSoprDoc
+and KatSopr.cValut      == KlVal.NRec
+and KatSopr.cPodrFrom   == KatPodr.NRec
+and KatSopr.cMolFrom    == KatMOL.NRec
+and KatSopr.cPodrTo     == ToPodr.NRec
+and KatSopr.cMolTo      == ToMOL.NRec
+and KatSopr.cNazna      == KatNazna.NRec
+and KatSopr.cPerson     == Persons.NRec
+and KatSopr.cStepDoc    == StepDoc.NRec
+and StepDoc.cBaseDoc    == BaseDoc.NRec
+and coGetTune('MyOrg')  == KatOrgMy.NRec
+and coGetTune('MyBank') == KatBankMy.NRec
+and SpSopr.cOtpEd       == KatOtpEd.NRec
+and SpSopr.cMCUSL       == KatMC.NRec
+and SpSopr.cParty       == KatParty.NRec
+and KatMC.cEd           == KatEd.NRec
+))
+
+#include soprdes1.vpp
+;
+
+//********************************************************************************
+
+Parameters
+  TypeSopr
+, pNRec
+, wDate
+, wTXO
+, wDel
+, w_dOpr
+;
+
+//********************************************************************************
+
+Form frm1wed('err2wed.OUT', 'ERRR') with novisual;
+Form sprForm('sprsoprm.OUT', 'sprsopr') with novisual;
+Form prmovnak('inmovnak.OUT', 'printinmovnak') with novisual;
+Form frmMBPProt('MC2MBPPt.OUT', 'MC2MBPProt') with novisual; // протокол передачи в МБП
+
+#include SoprAll.vpp  // общие функции сопроводительных документов
+#include sopconst.inc // Константы для сопроводительных документов
+#include soprgen.vpp  // Функции общей обработки сопроводительных документов
+#include saldomcs.vpp // Удаление сальдо при модификации позиции складского ордера
+#include soprval.vpp  // Функции валютной обработки накладных
+#include naklgen.vpp  // Функции общей обработки накладных
+#include rcsum.vpp    // Пересчет сумм по накладной
+#include nneword.vpp  // Автоинкремент номеров складского ордера
+#include delord.vpp   // Удаление складских ордеров по накладной
+
+//******************************************************************************
+
+Procedure DelDoRes;   // По внутренним перемещениям нет счетов
+{
+}
+
+//******************************************************************************
+
+Procedure DoDeleteCurrentSpSopr;
+{
+  if ( not IsValid(tnSpSopr) )
+    Exit;
+
+  Set KatSopr.Summa := KatSopr.Summa - SpSopr.Price * SpSopr.KolOpl;
+  Set KatSopr.SumVal := KatSopr.SumVal - SpSopr.VPrice * SpSopr.KolOpl;
+
+  Update current KatSopr;
+
+  oSDfuns.SpSopr_Delete(SpSopr.NRec);
+} // Procedure DoDeleteCurrentSpSopr
+
+#include srpsopr.vpp  // Пересчет средних цен по накладной
+#include makerash.vpp // Функции формирования расходных ордеров
+#define NAK501
+#include makemove.vpp // Осуществление операции внутреннего перемещения
+#undef NAK501
+#include gmckat.vpp     // Выбор товаров по F3
+#include NCopNal.vpp    // без налогов
+#include NCopOrdB.vpp   // без распределения
+
+//******************************************************************************
+
+Procedure OnAfterInsertSpSoprFromPrice;
+{
+}
+
+#include gmcprl.vpp   // Выбор товаров по Сtrl+F3
+#include makemvoc.vpp // Формирование карточки ОС
+#include copySopr.vpp // Копирование документа
+
+//---------- MBP ----------------
+#include Make_mbp.vpp  // Создание карточки МБП для МЦ
+
+//---------- Розничная торговля -------------
+#include rzskmove.vpp  // Перемещение в розницу
+
+//---------- Транспорт -------------
+#include WrInPut.vpp   // формирование заказа в Автотранспорте
+
+//******************************************************************************
+
+Function OtkatOrders(doDelMove: boolean) : boolean;
+{
+  OtkatOrders := false;
+
+  if ( KatSopr.NRec = 0 )
+    Exit;
+
+  case TypeSopr of
+
+    606, 600, 501, 551 :
+      if ( not doDelMove )
+        OtkatOrders := true;
+      else
+        OtkatOrders := DeleteOrders(true);
+
+    601 :
+      if ( OtkatKatOs(0) )
+        OtkatOrders := DeleteOrders(false);
+
+    602 :
+      if ( CheckDeleteMBPOperation )
+        {
+          if ( DeleteOrders(true) )
+            {
+              DeleteMBPOperation;
+              OtkatOrders := true;
+            }
+        }
+
+    603 :
+      OtkatOrders := RDeleteOrders(true);
+
+    605 :
+      if ( OtkatKatNMA(0) )
+        OtkatOrders := DeleteOrders(false);
+
+  end; // case
+}
+
+//******************************************************************************
+
+Function BeforeDeleteKatSopr : boolean;
+Var Res : boolean;
+{
+  if ( KatSopr.Reserved <> 1 )
+    {
+      Res := OtkatOrders(true);
+      BeforeDeleteKatSopr := Res;
+
+      if ( not Res )
+        Exit;
+    }
+  else
+    {
+      Message('Перед удалением накладной необходимо снять с резерва матценности...', CancelButton);
+      BeforeDeleteKatSopr := false;
+    }
+}
+
+#include getmolsk.vpp // ф-ия для МОЛ
+#include prninmov.vpp // печать накладной на вн. перемещение
+
+HandleEvent
+
+cmInit :
+{
+  abort;
+  #include ModifSalInit.vpp // для корректной работы объекта ModifSal.vih
+
+  if ( TypeSopr = 501 )
+    SetTitle('Формирование по накладной на отпуск в производство');
+
+  s_SimvRub := sGetTune('NDE.SimvRub');
+  MarkerNZ := InitMarker('KatSopr', 8, 100, 10);
+  ClearMarker(MarkerNZ);
+
+  if ( TypeSopr = 0 )
+    TypeSopr := 600;
+
+  TMCUSL := 1;
+
+#include soprdes3.vpp
+
+  SavedDoc := 0;
+
+  //Abort;
+  if ( CanEditDocument )
+    {
+      if ( IsNew )
+        {
+          Message('Накладная не оформлена', CancelButton);
+          CloseInterface(cmCancel);
+          Exit;
+        }
+
+      StartNewVisual(vtRotateVisual, vfTimer, 'Формирование по накладной ' +
+                     f_sNumDate(KatSopr.NSopr, KatSopr.dSopr), 1);
+
+      NextVisual;
+
+      if ( KatSopr.Reserved = 1 )
+        if ( Message('Перед формированием ордеров необходимо снять матценности с резерва.'#13#13+
+                    'Продолжить?', YesNo) <> cmYes )
+          {
+            StopVisual('', 0);
+            CloseInterface(cmCancel);
+            Exit;
+          }
+        else
+          MakeReserve(false);
+
+      if ( OtkatOrders(false) )
+        case TypeSopr of
+
+          600, 606, 501, 551 :
+            MakeMove;
+
+          603 :
+            {
+              if ( not rzMakeMovePaket( if(wDate = 0, w_dOpr, KatSopr.dSopr) ) )
+                {
+                  frm1wed.Write(sRzErrorMsg);
+                  frm1wed.ShowFile('Протокол ошибок');
+                  CloseInterface(cmCancel);
+                }
+            }
+
+        end; // case
+
+      Update_Current_KatSopr;
+
+      StopVisual('', 0);
+      CloseInterface(cmOk);
+    }
+}
+
+#include sopint.vpp
+
+cmDone :
+{
+  DoneMarker(MarkerNZ, 'KatSopr');
+  #include ModifSalDone.vpp // для корректной работы объекта ModifSal.vih
+}
+
+end; // HandleEvent Interface
+
+End. // Interface

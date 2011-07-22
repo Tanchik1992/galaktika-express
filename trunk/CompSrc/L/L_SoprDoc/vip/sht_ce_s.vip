@@ -1,0 +1,157 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - _
+// Выбор одной МЦ из спецификации ДО
+//******************************************************************************
+
+#include oEdIzm.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор одной МЦ из спецификации ДО
+
+Параметры:
+  pStepDoc - ссылка на этап ДО
+  pSpStep  - ссылка на позицию ДО
+#end
+
+//******************************************************************************
+
+Interface SHT_CE_DoSpec 'Выбор одной МЦ из спецификации ДО'
+                  ('Выбор одной МЦ из спецификации ДО', hcAllVPick, sci1EnEsc)
+                  EscClose,  DoAccept,   Cyan;
+  Show at (, , , );
+
+#include oEdIzm.var
+
+Create view loSHT_CE_DoSpec
+Var
+  pStepDoc: comp;
+  pSpStep  : comp;
+From
+   SpStep
+,  KatMC
+,  SpSopr
+,  KatOtpEd
+,  KatEd
+,  Pick
+,  StepDoc
+
+where
+((
+      pStepDoc       ==   SpStep.cStepDoc
+  AND 1              ==   SpStep.PrMC
+  AND SpStep.cMCUsl  ==   KatMC.NRec
+  AND SpStep.cOtpEd  ==   KatOtpEd.NRec
+  AND KatMC.cEd      ==   KatEd.NRec
+
+  AND SpStep.NRec    ==   SpSopr.cSpStep
+  AND 555            ==   Pick.wList
+  AND SpStep.NRec    ==   Pick.cRec
+))
+;
+
+//******************************************************************************
+
+Parameters
+  pStepDoc
+, pSpStep
+;
+
+//******************************************************************************
+
+Procedure SpStep_Init;
+{
+  delete safe Pick;
+}
+
+//******************************************************************************
+
+Function SpStep_Calc_Kol: boolean;
+{
+  SpStep_Calc_Kol := FALSE;
+  var dStat: word;
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Расчет, обработано записей: ', 1);
+
+  _LOOP SpStep
+    {
+      if (not NextVisual)
+        Break;
+
+      var dbl: double;  dbl := 0;
+
+      _LOOP SpSopr
+        if (not NextVisual)
+          Break
+        else
+          dbl := dbl + fEdIzm.ConvertToSecondEd(SpSopr.KolFact, SpSopr.cOtpEd, SpStep.cOtpEd);
+
+      if (dbl = 0)
+        Continue;
+
+      SpStep_Calc_Kol := TRUE;
+      ClearBuffer(#Pick);
+      Pick.wList   := 555;
+      Pick.cRec    := SpStep.NRec;
+      Pick.PickKol := dbl;
+      insert current Pick;
+    }
+
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+
+Procedure SpStep_Done;
+{
+  delete safe Pick;
+}
+
+//******************************************************************************
+
+Browse brSHT_CE_DoSpec  ('Выбор МЦ', , );
+  Table SpStep;
+
+Fields
+  KatMC.Name      'Наименование'        : [20], Protect;
+  KatMC.BarKod    'Номер'               : [10], Protect;
+  if (IsValid(#KatOtpEd), KatOtpEd.Name, KatEd.Name)
+                  'ЕдИзм'               : [ 5], Skip, NoAutoSize;
+  SpStep.KolSkl-Pick.PickKol 'Остаток'  : [12], [prSignsInKol], Skip, NoAutoSize;
+  SpStep.KolSkl   'В ДО'                : [12], [prSignsInKol], Skip, NoAutoSize;
+  Pick.PickKol    'В накладных'         : [12], [prSignsInKol], Skip, NoAutoSize;
+end; // Browse brSHT_CE_DoSpec_KatOrg
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    if ((GetFirst StepDoc <> tsOk) or
+        (GetFirst SpStep  <> tsOk))
+      {
+        Message('Не найдена спецификация ДО', CancelButton);
+        Abort;
+        Exit;
+      }
+
+    SpStep_Init;
+    SpStep_Calc_Kol;
+  }
+
+cmDone:
+  {
+    SpStep_Done;
+    pSpStep  := SpStep.NRec;
+    ClearBuffer(#Pick);
+    Pick.wList := 7;
+    Pick.cRec  := SpStep.NRec;
+    insert current Pick;
+  }
+end;
+End.
+
+//******************************************************************************

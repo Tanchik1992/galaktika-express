@@ -1,0 +1,890 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Пакетный пересчет сумм в НДЕ для накладных/актов по курсам на дату платежа
+//******************************************************************************
+
+#include EditDoc.vih
+#include marker.vih
+#include RecalcSumByPlat.vih
+
+Interface RecalcSumByPlat 'Параметры пересчета' doAccept, EscClose, Gray;
+  Show at (, ,70,17);
+
+Table STRUCT TmpNakl
+(
+  NRec     : tNRec
+, dSopr    : Date
+, nSopr    : string
+, VidSopr  : word
+)
+with index
+(
+  TmpNakl01 = VidSopr + dSopr + nSopr
+, TmpNakl02 = NRec
+);
+
+#include EditDoc.var
+#include RecalcSumByPlat.var
+
+Var
+  TypeSopr : word;          // вид сопроводительного документа
+  Filter   : word;          // фильтры
+  fTypeSopr: word;          // фильтр по сопроводительному документу
+  fBegDate, fEndDate: date; // фильтр по дате создания
+  fOrgBase : comp;          // фильтр по контрагенту
+  fDescr   : tDescr;        // фильтр по дескриптору
+  fDesgr   : tDesGr;        // фильтр по группе дескрипторов
+  fStatus  : word;          // фильтр по статусу
+  fOtvPodr : comp;          // фильтр по ответсвенному подразделению
+  s_SimvRub: string;
+
+  pMarker  : IMarker(Marker) new;
+  iMarker  : longint;
+  wProt    : word;
+ iCountProt: word
+  AProt    : array [1..2] of string;
+  isProtSum: boolean;
+
+Create View
+
+As Select
+//------------------------------------------------------------------------------
+  if (KatSopr.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+        ( FieldName = Valut )
+//------------------------------------------------------------------------------
+, if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal)
+        ( FieldName = SummDoc )
+//------------------------------------------------------------------------------
+, if (KatSopr.Status = 0, 'Оформляемый',
+    if (KatSopr.Status = 1, 'Исполняемый',
+      if (KatSopr.Status = 2, 'Приостановленный',
+        if (KatSopr.Status = 3, 'Отмененный',
+          if (KatSopr.Status = 4, 'Закрытый', '')))))
+        ( FieldName = StatusDoc )
+//------------------------------------------------------------------------------
+, *
+
+From
+  KatSopr
+, SpSopr
+, KatOrg
+, FPCO
+, TmpNakl (TmpNakl01)
+, KatDoc
+, KatOrg KatOrg2
+, FPCO FPCO2
+, KlVal
+, SpSopHoz
+, SoprHoz
+, BaseFin
+, StepDoc
+, KatMC
+, KatUsl
+
+where
+((
+       TmpNakl.NRec      ==  KatSopr.NRec
+  AND  KatSopr.NRec      ==  SpSopr.cSopr
+  AND  KatSopr.VidSopr   ==  KatDoc.TiDkGal
+  AND  KatSopr.cOrgBase  ==  KatOrg2.NRec
+  AND  KatSopr.cOtvPodr  ==  FPCO2.NRec
+  AND  KatSopr.cVal      ==  KlVal.NRec
+  AND  KatSopr.cStepDoc  ==  StepDoc.NRec
+
+  AND  word(0)           ==  BaseFin.TiDkBase
+  AND  StepDoc.NRec      ==  BaseFin.cStepDoc
+
+  AND  SpSopr.NRec       ==  SpSopHoz.cSpSopr
+  AND  SpSopHoz.cSoprHoz ==  SoprHoz.NRec
+  AND  SpSopr.cMcUsl     ==  KatMC.NRec
+  AND  SpSopr.cMcUsl     ==  KatUsl.NRec
+
+  AND  fOrgBase          ==  KatOrg.NRec
+  AND  fOtvPodr          ==  FPCO.NRec
+
+))
+
+//по таблице TmpNakl
+bounds FiltrByTmpNakl   =   TmpNakl.NRec  ==  KatSopr.NRec
+
+//по дате
+bounds FiltrByDSopr     =   TypeSopr  ==  KatSopr.VidSopr   AND
+                            fBegDate <<=  KatSopr.dSopr     AND
+                            fEndDate >>=  KatSopr.dSopr
+
+//по контрагенту
+bounds FiltrByOrgBase   =   TypeSopr  ==  KatSopr.VidSopr   AND
+                           (fOrgBase   =  KatSopr.cOrgBase) AND
+                            fBegDate <<=  KatSopr.dSopr     AND
+                            fEndDate >>=  KatSopr.dSopr
+
+//по пользователю
+bounds FiltrByDescr     =   TypeSopr  ==  KatSopr.VidSopr   AND
+                           (fDescr     =  KatSopr.Descr)    AND
+                            fBegDate <<=  KatSopr.dSopr     AND
+                            fEndDate >>=  KatSopr.dSopr
+
+//по группе пользователей
+bounds FiltrByDesgr     =   TypeSopr  ==  KatSopr.VidSopr   AND
+                           (fDesgr     =  KatSopr.Desgr)    AND
+                            fBegDate <<=  KatSopr.dSopr     AND
+                            fEndDate >>=  KatSopr.dSopr
+
+//по статусу
+bounds FiltrByStatus    =   TypeSopr  ==  KatSopr.VidSopr   AND
+                           (fStatus    =  KatSopr.Status)   AND
+                            fBegDate <<=  KatSopr.dSopr     AND
+                            fEndDate >>=  KatSopr.dSopr
+
+//по центру ответственности
+bounds FiltrByFPCO      =   TypeSopr  ==  KatSopr.VidSopr   AND
+                           (fOtvPodr   =  KatSopr.cOtvPodr) AND
+                            fBegDate <<=  KatSopr.dSopr     AND
+                            fEndDate >>=  KatSopr.dSopr
+;
+
+Form
+  frmProt ('ProtRecalc.OUT', 'ERRR') with novisual;
+
+//******************************************************************************
+// Кол-во записей в протоколе
+Function ProtSummStrCount: word;
+{
+  ProtSummStrCount := iCountProt;
+  isProtSum := FALSE;
+}
+
+//******************************************************************************
+// получить одну запись протокола
+Function ProtSummGetStr(NumStr: word): string;
+{
+  ProtSummGetStr := AProt[NumStr];
+}
+
+//******************************************************************************
+// удалить все записи из протокола
+Procedure ProtSummClearStr;
+var
+  i: word;
+{
+  for (i := 1; i <= Count(AProt); Inc(i))
+    AProt[i] := '';
+
+  iCountProt := 0;
+  isProtSum := TRUE;
+}
+
+//******************************************************************************
+//маска фильтра
+Procedure CheckMask;
+{
+  if (Filter AND 2) = 2
+    SetFieldOption   (#KatOrg.Name, ofSelectable)
+  else
+    ClearFieldOption (#KatOrg.Name, ofSelectable);
+
+  if (Filter AND 4) = 4
+    SetFieldOption   (#fDescr, ofSelectable)
+  else
+    ClearFieldOption (#fDescr, ofSelectable);
+
+  if (Filter AND 8) = 8
+    SetFieldOption   (#fDesgr, ofSelectable)
+  else
+    ClearFieldOption (#fDesgr, ofSelectable);
+
+  if (Filter AND 16) = 16
+    SetFieldOption   (#fStatus, ofSelectable)
+  else
+    ClearFieldOption (#fStatus, ofSelectable);
+
+  if (Filter AND 32) = 32
+    SetFieldOption   (#FPCO.Name, ofSelectable)
+  else
+    ClearFieldOption (#FPCO.Name, ofSelectable);
+
+
+  set Filter := Filter;
+}
+
+
+//******************************************************************************
+// чтение настроек из ДСК
+Procedure ReadDSK;
+{
+  if NOT ReadMyDsk(Filter, 'RecalcSumByPlat_Filter', TRUE)
+    Filter := 0;
+
+  if NOT ReadMyDsk(fTypeSopr, 'RecalcSumByPlat_fTypeSopr', TRUE)
+    fTypeSopr := 0;
+
+  if NOT ReadMyDsk(fOrgBase, 'RecalcSumByPlat_fOrgBase', TRUE)
+    fOrgBase := 0;
+
+  if NOT ReadMyDsk(fDescr, 'RecalcSumByPlat_fDescr', TRUE)
+    fDescr := sGetTune('User.Descr');
+
+  if NOT ReadMyDsk(fDesgr, 'RecalcSumByPlat_fDesgr', TRUE)
+    fDesgr := sGetTune('User.DesGr');
+
+  if NOT ReadMyDsk(fBegDate, 'RecalcSumByPlat_fBegDate', TRUE)
+    fBegDate := Date(01, Month(Cur_Date), Year(Cur_Date));
+
+  if NOT ReadMyDsk(fEndDate, 'RecalcSumByPlat_fEndDate', TRUE)
+    fEndDate := Date(Last_day(Cur_Date), Month(Cur_Date), Year(Cur_Date));
+
+  if NOT ReadMyDsk(fStatus, 'RecalcSumByPlat_fStatus', TRUE)
+    fStatus := word(0);
+
+  if NOT ReadMyDsk(fOtvPodr, 'RecalcSumByPlat_fOtvPodr', TRUE)
+    fOtvPodr := comp(0);
+
+  if NOT ReadMyDsk(wProt, 'RecalcSumByPlat_wProt', TRUE)
+    wProt := word(1);
+}
+
+
+//******************************************************************************
+// запись настроек в ДСК
+Procedure SaveDSK;
+{
+  SaveMyDsk(Filter  , 'RecalcSumByPlat_Filter'   );
+  SaveMyDsk(fTypeSopr,'RecalcSumByPlat_fTypeSopr');
+  SaveMyDsk(fOrgBase, 'RecalcSumByPlat_fOrgBase' );
+  SaveMyDsk(fDescr  , 'RecalcSumByPlat_fDescr'   );
+  SaveMyDsk(fDesgr  , 'RecalcSumByPlat_fDesgr'   );
+  SaveMyDsk(fBegDate, 'RecalcSumByPlat_fBegDate' );
+  SaveMyDsk(fEndDate, 'RecalcSumByPlat_fEndDate' );
+  SaveMyDsk(fStatus , 'RecalcSumByPlat_fStatus'  );
+  SaveMyDsk(fOtvPodr, 'RecalcSumByPlat_fOtvPodr' );
+  SaveMyDsk(wProt   , 'RecalcSumByPlat_wProt'    );
+}
+
+
+//******************************************************************************
+// перерисовка
+Procedure ReDrawNastr;
+{
+  set fTypeSopr := fTypeSopr;
+  set fOrgBase  := fOrgBase;
+  set fBegDate  := fBegDate;
+  set fEndDate  := fEndDate;
+  set fOtvPodr  := fOtvPodr;
+  set fDescr    := fDescr;
+  set fDesgr    := fDesgr;
+  set fStatus   := fStatus;
+}
+
+//******************************************************************************
+// Установка фильтра
+Procedure SetFilterDoc;
+{
+  PushBounds(tbFiltrByDSopr);
+
+  //фильтр по контрагенту
+  if (Filter AND 2) = 2
+    AddBounds(tbFiltrByOrgBase);
+
+  //фильтр по дескриптору
+  if (Filter AND 4) = 4
+    AddBounds(tbFiltrByDescr);
+
+  //фильтр по группе дескрипторов
+  if (Filter AND 8) = 8
+    AddBounds(tbFiltrByDesgr);
+
+  //фильтр по контрагенту
+  if (Filter AND 16) = 16
+    AddBounds(tbFiltrByStatus);
+
+  //фильтр по центру ответственности
+  if (Filter AND 32) = 32
+    AddBounds(tbFiltrByFPCO);
+}
+
+
+//******************************************************************************
+// загрузка определенного типа документов
+Function LoadDoc: boolean;
+{
+  LoadDoc := TRUE;
+
+  _LOOP KatSopr
+  {
+    if (KatSopr.cVal = 0)
+      Continue;
+
+    ClearBuffer(#TmpNakl);
+    TmpNakl.NRec    := KatSopr.NRec;
+    TmpNakl.dSopr   := KatSopr.dSopr;
+    TmpNakl.nSopr   := KatSopr.nSopr;
+    TmpNakl.VidSopr := KatSopr.VidSopr;
+    Insert Current TmpNakl;
+
+    if (NOT NextVisual)
+    {
+      LoadDoc := FALSE;
+      EXIT
+    }
+  }
+}
+
+//******************************************************************************
+// Загрузка документов
+Function LoadDocs: boolean;
+{
+  LoadDocs := FALSE;
+
+  Delete All TmpNakl;
+
+  if ((fTypeSopr AND 1) = 1)
+  {
+    TypeSopr := 101;
+
+    if (NOT LoadDoc)
+      EXIT;
+  }
+
+  if ((fTypeSopr AND 2) = 2)
+  {
+    TypeSopr := 111;
+
+    if (NOT LoadDoc)
+      EXIT;
+  }
+
+  if ((fTypeSopr AND 4) = 4)
+  {
+    TypeSopr := 117;
+
+    if (NOT LoadDoc)
+      EXIT;
+  }
+
+  if ((fTypeSopr AND 8) = 8)
+  {
+    TypeSopr := 201;
+
+    if (NOT LoadDoc)
+      EXIT;
+  }
+
+  if ((fTypeSopr AND 16) = 16)
+  {
+    TypeSopr := 211;
+
+    if (NOT LoadDoc)
+      EXIT;
+  }
+
+  PushBounds(tbFiltrByTmpNakl);
+
+  if (GetFirst TmpNakl = tsOk)
+    LoadDocs := TRUE;
+}
+
+
+//******************************************************************************
+// округление
+Function GetRoundSumm (dSumm: double): double;
+{
+  case SpSopr.VidSopr of
+    101, 108, 111, 117: {
+      GetRoundSumm := FRoundRub1(dSumm);
+    }
+
+    201, 211: {
+      GetRoundSumm := FRoundRub2(dSumm);
+    }
+  end;
+}
+
+//******************************************************************************
+// запись в протокол
+Procedure WriteProtSum(Str: string);
+{
+  if (NOT isProtSum)
+    Exit;
+
+  Inc(iCountProt);
+
+  AProt[iCountProt] := Str;
+}
+
+//******************************************************************************
+// расчет цены в НДЕ для позиции
+Procedure RecalcSpDocByPlat (dCurse: date; var doPrice, doRPrice: double);
+var
+  tKolPlat   : double;
+  tSumPlatNDE: double;
+  tSumPlatVal: double;
+  tKol       : double;
+  tSumm      : double;
+  tSummNDE   : double;
+  tSumNalNDE : double;
+{
+  tKolPlat    := 0;
+  tSumPlatNDE := 0;
+
+  if (iCountProt = 0)
+    WriteProtSum(  Center('Платежный документ, №', 40)
+                 + Center('Дата оплаты'          , 14)
+                 + Center('Сумма в валюте'       , 15)
+                 + Center('Символ'               , 7)
+                 + Center('Сумма в НДЕ'          , 15)
+                 + Center('Курс валюты'          , 11));
+
+  WriteProtSum('    ' + SpSopr.Npp + '. ' + if (SpSopr.PrMC = 1, KatMC.Name, KatUsl.Name));
+
+  if (GetFirst SpSopHoz <> tsOk) OR (dCurse = Date(0,0,0))
+  {
+    tSumm    := SpSopr.VPrice * SpSopr.KolOpl + if (KatSopr.VhodNal = 1, 0, SpSopr.SumVNDS);
+    tSummNDE := SpSopr.Price  * SpSopr.KolOpl + if (KatSopr.VhodNal = 1, 0, SpSopr.SumNDS);
+
+    WriteProtSum(PadCh('      неоплаченная сумма на', ' ', 40)
+                 + Center(KatSopr.dPrice, 14)
+                 + LPad(DoubleToStr(tSumm   , '\2P[|-]3666`666`666`666`666.88'), 15)
+                 + LPad('', 7)
+                 + LPad(DoubleToStr(tSummNDE, '\2P[|-]3666`666`666`666`666.88'), 15)
+                 + LPad(DoubleToStr(tSummNDE / tSumm, '\4P[|-]3666`666`666`666`666.8888'), 11));
+
+    WriteProtSum(PadCh('      итоговая сумма по позиции', ' ', 54)
+                 + LPad(DoubleToStr(tSumm   , '\2P[|-]3666`666`666`666`666.88'), 15)
+                 + LPad('', 7)
+                 + LPad(DoubleToStr(tSummNDE, '\2P[|-]3666`666`666`666`666.88'), 15)
+                 + LPad('', 11));
+
+    Exit
+  }
+
+  // оплаченные позиции
+  _LOOP SpSopHoz
+  {
+    if (GetFirst SoprHoz <> tsOk)
+      Continue;
+
+    if (SoprHoz.DatOb >= dCurse)
+      Continue;
+
+    tKolPlat    := tKolPlat    + SpSopHoz.KolVo;
+    tSumPlatNDE := tSumPlatNDE + SpSopHoz.Summa;
+    tSumPlatVal := tSumPlatVal + SpSopHoz.SumVal;
+
+    // выводить в протокол позиции без распределенного платежа
+    WriteProtSum(PadCh('     ' + SoprHoz.NoDoc, ' ', 40)
+                 + Center(SoprHoz.DatOb, 14) +
+                 + LPad(DoubleToStr(SpSopHoz.SumVal, '\2P[|-]3666`666`666`666`666.88'), 15)
+                 + PadCh('$', ' ', 7)
+                 + LPad(DoubleToStr(SpSopHoz.Summa , '\2P[|-]3666`666`666`666`666.88'), 15)
+                 + LPad(DoubleToStr(SpSopHoz.Summa / SpSopHoz.SumVal, '\4P[|-]3666`666`666`666`666.8888'), 11));
+  }
+
+  tKol := SpSopr.KolOpl - tKolPlat;
+
+  if (tKol = 0)
+    tSumm := 0
+  else
+    tSumm := tKol * (SpSopr.VPrice + if (KatSopr.VhodNal = 1, 0, SpSopr.SumVNDS /SpSopr.KolOpl));
+
+  tSummNDE := oValFunc.GetAnyCurrency (KatSopr.cVal, tSumm, KatSopr.dPrice, comp(0));
+
+  WriteProtSum(PadCh('      неоплаченная сумма на', ' ', 40)
+               + Center(KatSopr.dPrice, 14)
+               + LPad(DoubleToStr(tSumm   , '\2P[|-]3666`666`666`666`666.88'), 15)
+               + LPad('', 7)
+               + LPad(DoubleToStr(tSummNDE, '\2P[|-]3666`666`666`666`666.88'), 15)
+               + LPad(DoubleToStr(tSummNDE / tSumm, '\4P[|-]3666`666`666`666`666.8888'), 11));
+
+  tSummNDE := tSummNDE + tSumPlatNDE;
+  tSumm    := tSumm    + tSumPlatVal;
+
+  tSummNDE := GetRoundSumm(tSummNDE);
+
+  WriteProtSum(PadCh('      итоговая сумма по позиции', ' ', 54)
+               + LPad(DoubleToStr(tSumm   , '\2P[|-]3666`666`666`666`666.88'), 15)
+               + LPad('', 7)
+               + LPad(DoubleToStr(tSummNDE, '\2P[|-]3666`666`666`666`666.88'), 15)
+               + LPad('', 11));
+
+  // стоимость позиции в НДЕ рассчитанная из валютой на дату цен
+  // нужна для пропорционального расчета новой цены
+  tSumm      := SpSopr.VPrice * SpSopr.KolOpl + if (KatSopr.VhodNal = 1, 0, SpSopr.SumVNDS);
+  tSumm      := GetRoundSumm(oValFunc.GetAnyCurrency (KatSopr.cVal, tSumm, KatSopr.dPrice, comp(0)));
+  tSumNalNDE := GetRoundSumm(oValFunc.GetAnyCurrency (KatSopr.cVal, SpSopr.SumVNDS, KatSopr.dPrice, comp(0)));
+
+  if (KatSopr.VhodNal = 1)
+    doRPrice := tSummNDE / SpSopr.KolOpl
+  else
+  {
+    tSumNalNDE := tSummNDE / tSumm * tSumNalNDE;
+
+    doRPrice := (tSummNDE - tSumNalNDE) / SpSopr.KolOpl;
+  }
+
+  doPrice := doRPrice;
+}
+
+//******************************************************************************
+// пересчет документа (public)
+Procedure RecalcSpSoprByPlat(pSpSopr: comp; var doPrice, doRPrice: double);
+{
+  if (NOT boGetTune('Oper.Buy.Nakl.RecalcSumByPlat'))
+    Exit;
+
+  ReSetBounds(#SpSopr);
+
+  ReSetBounds(#KatSopr);
+
+  if (GetFirst SpSopr where (( pSpSopr == SpSopr.NRec )) <> tsOk)
+    Exit;
+
+  if (SpSopr.VidSopr <> Word(101) AND SpSopr.VidSopr <> Word(108) AND SpSopr.VidSopr <> Word(111) AND
+      SpSopr.VidSopr <> Word(117) AND SpSopr.VidSopr <> Word(201) AND SpSopr.VidSopr <> Word(211))
+    Exit;
+
+  if (SpSopr.cVal = 0)
+    Exit;
+
+  if (GetFirst KatSopr where (( SpSopr.cSopr == KatSopr.NRec )) <> tsOk)
+    Exit;
+
+  if (GetFirst StepDoc <> tsOk)
+    Exit;
+
+  if (GetFirst BaseFin <> tsOk)
+    Exit;
+
+  if (KatSopr.dOpr <> Date(0,0,0))
+    if (KatSopr.VidSopr = Word(101) or KatSopr.VidSopr = Word(108))
+      Exit;
+
+  if (KatSopr.cSchfact <> 0)
+    Exit;
+
+  RecalcSpDocByPlat(KatSopr.dPrice, doPrice, doRPrice);
+}
+
+
+//******************************************************************************
+// Пересчет документов
+Procedure RecalcDocs;
+  var iCount, i: longInt;
+  var tRec: comp;
+{
+  iCount := GetMarkerCount(iMarker);
+
+  if (iCount = 0)
+  {
+    Message('Нет выбранных документов');
+    Exit;
+  }
+
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm, 'Пересчет документов', iCount);
+
+  frmProt.write ('        ПРОТОКОЛ ПЕРЕСЧЕТА СУММ В НДЕ ДЛЯ НАКЛАДНЫХ/АКТОВ ПО КУРСАМ НА ДАТУ ПЛАТЕЖА');
+  frmProt.write ('');
+
+  FOR (i := 0; i < iCount; Inc(i))
+  {
+    if (NOT NextVisual)
+      Break;
+
+    GetMarker(iMarker, i, tRec);
+
+    if (GetFirst TmpNakl where (( tRec == TmpNakl.NRec )) = tsOk)
+      if (GetFirst KatSopr = tsOk)
+      {
+        if (GetFirst StepDoc <> tsOk)
+          Continue;
+
+        if (GetFirst BaseFin <> tsOk)
+        {
+          frmProt.write ('Документ ПРОПУЩЕН: ' + KatDoc.Name + ' ' + KatSopr.NSopr
+                                              + ' от ' + DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmProt.write ('   -  по документу нет распределения платежей');
+          Continue;
+        }
+
+        if (KatSopr.dOpr <> Date(0,0,0))
+          if (KatSopr.VidSopr = Word(101) or KatSopr.VidSopr = Word(108))
+          {
+            frmProt.write ('Документ ПРОПУЩЕН: ' + KatDoc.Name + ' ' + KatSopr.NSopr
+                                              + ' от ' + DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+            frmProt.write ('   -  по документу сформированы складские ордера');
+            Continue;
+          }
+
+        if (KatSopr.cSchfact <> 0)
+        {
+          frmProt.write ('Документ ПРОПУЩЕН: ' + KatDoc.Name + ' ' + KatSopr.NSopr
+                                              + ' от ' + DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmProt.write ('   -  по документу создан счет-фактура');
+          Continue;
+        }
+
+        var OldSumma: double;
+        OldSumma := KatSopr.Summa;
+
+        oRecalcSumByPlat.ProtSummClearStr;
+
+        if (KatSopr.VidSopr = 101 or KatSopr.VidSopr = 108)
+        {
+          RunInterface('iChkSumB', KatSopr.NRec, 0, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+        }
+        else
+          RunInterface('iChkSum', KatSopr.NRec, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+
+        ReReadRecord(#KatSopr);
+
+        if (OldSumma <> KatSopr.Summa)
+        {
+          frmProt.write ( 'Документ пересчитан: ' + KatDoc.Name + ' ' + KatSopr.NSopr
+                        + ' от ' + DateToStr(KatSopr.dSopr, 'DD/MM/YYYY')
+                        + ' курс ' + DoubleToStr(oValFunc.Rate(KatSopr.cVal, KatSopr.dPrice), '\4P[|-]3666`666`666`666.8888'));
+          var i: word;
+
+          for (i := 1; i <= oRecalcSumByPlat.ProtSummStrCount; inc(i))
+            frmProt.write (oRecalcSumByPlat.ProtSummGetStr(i));
+
+          var StrOldSum, StrNewSum : string;
+
+          StrOldSum := DoubleToStr(OldSumma, '\2P[|-]36`666`666`666`666.88');
+          StrNewSum := DoubleToStr(KatSopr.Summa, '\2P[|-]36`666`666`666`666.88');
+
+          i := if(Length(StrOldSum) > Length(StrNewSum), Length(StrOldSum), Length(StrNewSum));
+
+          frmProt.write ('   +  Сумма по документу   до  пересчета: ' + LPad(StrOldSum, i));
+
+          frmProt.write ('   +  Сумма по документу после пересчета: ' + LPad(StrNewSum, i));
+
+          frmProt.write ('   +  Разница сумм до и после  пересчета: '
+                         + LPad(DoubleToStr(OldSumma - KatSopr.Summa, '\2P[|-]36`666`666`666`666.88'), i));
+        }
+        else
+        {
+          frmProt.write ('Документ пересчитан: ' + KatDoc.Name + ' ' + KatSopr.NSopr
+                                              + ' от ' + DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmProt.write ('   =  Сумма не изменилась: ' + DoubleToStr(OldSumma, '\2P[|-]36`666`666`666`666.88'));
+
+        }
+
+        frmProt.write ('');
+      }
+  }
+
+  StopVisual('', 0);
+
+  frmProt.PutEvent(feBreak);
+
+  if (NOT frmProt.Error)
+    frmProt.ShowFile('Протокол пересчета сумм');
+
+  frmProt.AbortForm;
+}
+
+
+//******************************************************************************
+Window winTmpNakl 'Выберите документы для пересчета' EscClose, DoAccept, Cyan;
+  Show at (,,110,20);
+
+Browse brTmpNakl ('',,sci14EscIns);
+  Table TmpNakl;
+  RecMarker = pMarker;
+Fields
+  KatDoc.Name   'Наименование'   ('Наименование документа'  ): [15], Protect;
+  TmpNakl.dSopr 'Дата','создания'('Дата создания документа' ): [10], Protect;
+  TmpNakl.nSopr 'Номер'          ('Номер документа'         ): [10], Protect;
+  KatSopr.Descr 'Дескриптор'     ('Наименование дескриптора'):  [8], Protect;
+  KatSopr.DesGr 'Группа','дескрипторов' ('Наименование группы дескрипторов'): [8], Protect;
+  StatusDoc     'Статус'         ('Статус документа'        ): [10], Protect;
+  KatOrg2.Name  'Контрагент'     ('Наименование контрагента'): [17], Protect;
+  FPCO2.Name    'Центр','ответственности'('Наименование центра ответственности'): [13], Protect;
+  SummDoc       'Сумма'          ('Сумма по документу'      ): [12, '\2p[|-]36`666`666`666`666.88'], Protect;
+  Valut         'Вал.'           ('Валюта документа'        ): [3], Protect;
+end;
+
+//******************************************************************************
+Handleevent
+
+cmInit:
+{
+  pMarker.DeleteRecWoMessage;
+}
+
+cmDefault:
+{
+  ClearMarker(iMarker);
+  pMarker.ExportTo(iMarker);
+}
+
+cmEdit:
+{
+  iEditDoc.RunEditHozDoc(coKatSopr, KatSopr.VidSopr, KatSopr.VidSopr, KatSopr.NRec);
+}
+
+end;
+
+end;
+
+//******************************************************************************
+Screen scrFiltr('', hcm_zakup_Oper_ParamPeresch, sci13Esc);
+  Bevel b01 {1, 0, 36,  7, bsLowered, bsFrame};
+  Bevel b02 {1, 7, 68, 15, bsLowered, bsFrame};
+Fields
+  fTypeSopr    ('Установленные фильтры по типу документа'           ,,) : NoProtect;
+  wProt        ('Выводить протокол'                                 ,,) : NoProtect;
+  Filter       ('Установленные фильтры'                             ,,) : NoProtect;
+  fBegDate     ('Введите начальную дату интервала'                  ,,) : NoProtect;
+  fEndDate     ('Введите конечную дату интервала'                   ,,) : NoProtect;
+  KatOrg.Name  ('Установленные фильтры по контрагенту'              ,,) : Protect;
+  fDescr       ('Установленные фильтры по дескриптору'              ,,) : Protect;
+  fDesgr       ('Установленные фильтры по группе дескрипторов'      ,,) : Protect;
+  fStatus      ('Установленные фильтры по статусу'                  ,,) :
+    [LIST  0 'Оформляемый', 1 'Исполняемый', 2 'Приостановленный',
+           3 'Отмененный' , 4 'Закрытый'], Protect;
+  FPCO.Name    ('Установленные фильтры по центру ответственности'   ,,) : Protect;
+
+Buttons
+  cmOK,,,'Ввод - принять выбор',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+     Документы
+   [.] Приходная накладная        `       [.] Выводить протокол`
+   [.] Акт на прием услуг         `
+   [.] Акт на прием услуг (лизинг)`
+   [.] Накладная на отпуск        `
+   [.] Акт на оказание услуг      `
+
+     Фильтры
+   [.] Дата создания        ` `с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+   [.] Контрагент           ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Дескриптор           ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Группа дескрипторов  ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Статус               ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.] Центр ответственности` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+       <.    Продолжить    .>        <.     Отмена      .>
+>>
+End; // Screen
+
+//******************************************************************************
+Handleevent
+cmInit:
+{
+  ReadDSK;
+  CheckMask;
+  ClusterDisabledField(#Filter, 1);
+  Filter := Filter OR 1;
+
+  s_SimvRub := sGetTune('NDE.SimvRub');
+
+  iMarker := InitMarker('RecalcSumByPlat', 8, 100, 10, FALSE);
+  ClearMarker(iMarker);
+}
+
+cmPick:
+{
+   case CurField of
+    #KatOrg.Name:
+    {
+      if (RunInterface('GetKatOr', fOrgBase,comp(0),FALSE,comp(0),comp(0)) <> cmCancel)
+        ReDrawNastr;
+    }
+
+    #fDescr:
+    {
+      var wIsVisible: word;
+      wIsVisible := word(12345);
+
+      if (RunInterface('GetDescr', fDescr, fDesgr, wIsVisible) <> cmCancel)
+        ReDrawNastr;
+    }
+
+    #fDesgr:
+    {
+      if (RunInterface('GetGrDescr', fDesgr, FALSE, FALSE, comp(0)) <> cmCancel)
+        ReDrawNastr;
+    }
+
+    #FPCO.Name:
+    {
+      if RunInterface('GetCO', word(cgiPick), comp(0), comp(0), fOtvPodr) <> cmCancel
+        ReDrawNastr;
+    }
+
+  end;
+}
+
+cmCheckField:
+  case CurField of
+    #Filter: {
+      CheckMask;
+    }
+
+    #fBegDate: {
+      if (fBegDate > fEndDate)
+        if (CurField = #fBegDate)
+          set fEndDate := fBegDate;
+    }
+  end;
+
+cmDelOnProtect:
+{
+  case CurField of
+    #KatOrg.Name : fOrgBase := 0;
+    #FPCO.Name   : fOtvPodr := 0;
+    #fDescr      : fDescr   := '';
+    #fDesgr      : fDesgr   := '';
+    #fStatus     : fStatus  := 0;
+  end;
+
+  ReDrawNastr;
+}
+
+cmOk:
+{
+  if (fBegDate > fEndDate)
+  {
+    Message('Начальная дата фильтра больше конечной!' ,Information);
+    Exit;
+  }
+
+  if (NOT boGetTune('Oper.Buy.Nakl.RecalcSumByPlat'))
+  {
+    ShowTune('Настройкой запрещен пересчет!', 'Oper.Buy.Nakl.RecalcSumByPlat');
+    Exit;
+  }
+
+  SaveDSK;
+  SetFilterDoc;
+
+  StartNewVisual (vtRotateVisual, vfTimer+vfThread+vfBreak, ''#3'Идет подготовка данных...', 1);
+
+  if (NOT LoadDocs)
+  {
+    Message('Не найдено документов для пересчета')
+    StopVisual('', 0);
+  }
+  else
+  {
+    StopVisual('', 0);
+
+    if (RunWindowModal(winTmpNakl) <> cmCancel)
+      RecalcDocs;
+  }
+}
+
+cmOnVipLoad:
+{
+  isProtSum := FALSE;
+}
+
+cmDone:
+{
+  DoneMarker(iMarker, 'RecalcSumByPlat');
+}
+
+end;
+
+End.

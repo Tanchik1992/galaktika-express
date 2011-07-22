@@ -1,0 +1,355 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Формирование распоряжения на отгрузку                     ║
+ ║ Ответственный : Славко Александр Анатольевич (SLAVKO)                     ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+Panel panOtgOrder;
+ Table OtgOrder;
+HandleEvent
+ cmPick :
+ {
+   if (CurWindow = winOtgOrder_Edit)
+     {
+      case ( CurField ) of
+        #KatNotes.Name :
+         {
+          var mask : word;
+          mask := if( OtgOrder.Status = 5, 1+2+4+8+16,32); 
+          if (RunInterface(StatLog, Word(1), OtgOrder.NRec, word(441), OtgOrder.Status,OtgOrder.cNote, mask ) <> cmCancel)
+            {
+             if ((OtgOrder.Status = word(1)) and (wGetTune('Doc.NZ.RotgrFormNum') > 0))
+               if (Message(''#3'Формировать номер документа по специальному алгоритму?',YesNo)=Yes)
+                 {
+                  ROtg_Sh_NoDoc(OtgOrder.DesGr, MarPunktSyn_P.Code,OtgOrder.dFrom,OtgOrder.Status,OtgOrder.NoDoc);
+                  set OtgOrder.NoDoc := OtgOrder.NoDoc;
+                  set OtgOrder.dDoc := Cur_Date;
+                 };
+             set OtgOrder.Status := OtgOrder.Status;
+             set OtgOrder.cNote  := OtgOrder.cNote;
+             FieldsOption_Edit;
+            }
+          }
+      end;
+      if ((OtgOrder.Status > 0) and (OtgOrder.Status < 5)) 
+        Exit;
+      case ( CurField ) of
+        #OtgOrder.DesGr:
+           if (RunInterface(GetGrDescr, OtgOrder.DesGr,false,false,comp(0)) <> cmCancel)
+             set OtgOrder.DesGr := OtgOrder.DesGr;
+        #OtgOrder.Descr:
+           if (RunInterface(GetDescr, OtgOrder.Descr, OtgOrder.DesGr, word(0)) <> cmCancel)
+             {
+              set OtgOrder.Descr := OtgOrder.Descr;
+              set OtgOrder.DesGr := OtgOrder.DesGr;
+             };
+        #OrgForm.Name :
+          if (RunInterface(GetKatOr,OtgOrder.cOrgForm,comp(0),false,comp(0),comp(0)) <> cmCancel)
+            set OtgOrder.cOrgForm := OtgOrder.cOrgForm;
+        #PodrForm.Name :
+          if (RunInterface(GetAnyPodr, OtgOrder.cPodrForm, 0) <> cmCancel)
+            set OtgOrder.cPodrForm := OtgOrder.cPodrForm;
+        #GrOtp.Name :
+          if (RunInterface(GetKatOr,OtgOrder.cGrOtp,comp(0),false,comp(0),comp(0)) <> cmCancel)
+            set OtgOrder.cGrOtp := OtgOrder.cGrOtp;
+        #MarPunktSyn_P.Name :
+          if (not IsValid(#SpOtgOrd))
+            {
+             if (RunInterface(Get_Item, word(1), OtgOrder.cPunktP) <> cmCancel)
+               set OtgOrder.cPunktP := OtgOrder.cPunktP;
+            }
+          else
+            {
+             Message(''#3'При наличии позиций изменение невозможно.',Information);
+             Abort; Exit;
+            };
+      end;
+     };
+ };
+ cmSetDefault  : P_OtgOrder_SetDefault;
+ cmPositionChanged :
+   {
+     if (CurWindow = winOtgOrder_Edit)
+     {
+      if ((OtgOrder.IsLeaf = 0) or
+          (((DscVisible=dcGrpRead)or(DscVisible=dcOwnModifAllRead))and(OtgOrder.Descr!=DscName))or
+          ((DscVisible=dcGrpModifAllRead)and(OtgOrder.DesGr!=DesGroup))
+         )
+        ProtectRecord(#OtgOrder,True)
+      else
+        ProtectRecord(#OtgOrder,False);
+      FieldsOption_Edit;
+     }
+   }
+ cmSetCurField :
+ {
+  Case Target of
+    #MarPunktSyn_P.Name :
+      if (not IsValid(#MarPunktSyn_P))
+        PutCommand(cmPick);
+    #OrgForm.Name :
+      if (not IsValid(#OrgForm))
+        PutCommand(cmPick);
+  end; // case
+ }
+ cmCheckField  : {};
+ cmCheckRecord :
+ {
+   if (OtgOrder.NoDoc = '')
+     {
+      Message(''#3'Номер документа не задан.',Information);
+      SelectField(#OtgOrder.NoDoc);
+      Abort; Exit;
+     };
+   if (OtgOrder.dTo < OtgOrder.dFrom)
+     {
+      Message(''#3'Дата окончания действия документа меньше даты начала.',Information);
+      SelectField(#OtgOrder.dTo);
+      Abort; Exit;
+     };
+   if (not IsValid(#MarPunktSyn_P))
+     {
+      Message(''#3'Пункт погрузки не задан.',Information);
+      SelectField(#MarPunktSyn_P.Name);
+      Abort; Exit;
+     };
+   if (not IsValid(#OrgForm))
+     {
+      Message(''#3'Контрагент не задан.',Information);
+      SelectField(#OrgForm.Name);
+      Abort; Exit;
+     };
+ };
+ cmInsertRecord :
+ {
+// Message(''#3'cmInsertRecord ',Information);
+   if (varAltIns <> 0)
+     {
+      if (GetFirst OtgOrderSyn where ((varAltIns == OtgOrderSyn.NRec)) = tsOk)
+        {
+         OtgOrderSyn.IsLeaf := 0;
+         update current OtgOrderSyn;
+        };
+      OtgOrder.cOwner := varAltIns;
+      varAltIns := 0;
+     };
+   insert current OtgOrder;
+   InsDocInSoprHoz(OtgOrder.NRec,comp(0),comp(0),
+                  441,OtgOrder.dInput,OtgOrder.NoDoc,
+                  OtgOrder.Descr,OtgOrder.DesGr);
+   case Format_Main of
+     0 : TreeJumpToRecord(trOtgOrderMain,OtgOrder.NRec);
+     1 : {};
+   end;
+ };
+ cmAbortInsert  :
+ {
+// Message(''#3'cmAbortInsert',Information);
+  ROtg_Sh_NoDoc_Del(OtgOrder.NoDoc,OtgOrder.dDoc);
+  varAltIns := 0;
+!  RereadRecord(#OtgOrder);
+  RescanPanel(#OtgOrder);
+  case Format_Main of
+    0 : PutCommand(cmValue1); // (т.к. вроде NRec не меняет после удаления,но узел стал листом)
+    1 : {};
+  end;
+ };
+ cmUpdateRecord :
+ {
+   // Message(''#3'cmUpdateRecord',Information);
+   update current OtgOrder;
+ };
+ cmDelOnProtect :
+ {
+  // Message(''#3'cmDelOnProtect',Information);
+  if ((OtgOrder.Status > 0) and (OtgOrder.Status < 5)) 
+    {
+     Abort; Exit;
+    };
+  case (CurField) of
+    #OrgForm.Name       : set OtgOrder.cOrgForm  := Comp(0);
+    #PodrForm.Name      : set OtgOrder.cPodrForm := Comp(0);
+    #GrOtp.Name         : set OtgOrder.cGrOtp    := Comp(0);
+    #MarPunktSyn_P.Name : if (not IsValid(#SpOtgOrd))
+                            set OtgOrder.cPunktP := Comp(0);
+                          else
+                            {
+                             Message(''#3'При наличии позиций изменение не возможно.',Information);
+                             Abort; Exit;
+                            };
+
+    else
+      {
+       Abort; Exit; // если поле протект, но его нельзя изменять
+      };
+  end; // case
+ };
+ cmDeleteRecord :
+ {
+   if ( OtgOrder.Status = 1 )
+   {
+     Message(''#3'Невозможно удалить распоряжение на отгрузку'+
+     ''#13#3'со статусом <Исполняемый>',Information);
+     Abort; Exit;
+   }
+   if (Message(''#3'Удалить распоряжение на отгрузку?',YesNo) <> cmYes)
+     {
+      Abort; Exit;
+     };
+   if (not Delete_OtgOrder(OtgOrder.NRec))
+     {
+      Abort; Exit;
+     };
+   RescanPanel(#OtgOrder);
+   case Format_Main of
+     0 : PutCommand(cmValue1); // (т.к. вроде NRec не меняет после удаления,но узел стал листом)
+     1 : {};
+   end;
+ };
+end; // HandleEvent
+end; // Panel panOtgOrder
+
+Panel panSpOtgOrd;
+ Table SpOtgOrd;
+HandleEvent
+ cmPick :
+   if not IsProtected(#OtgOrder)
+     Insert_SpOtgOrd(true);
+ cmPositionChanged :
+   if (((OtgOrder.Status > 0) and (OtgOrder.Status < 5)) or IsProtected(#OtgOrder))   
+     ProtectRecord(#SpOtgOrd,True)
+   else
+     ProtectRecord(#SpOtgOrd,False);
+ cmUpdateRecord :
+   if IsValid(#SpOtgOrd)
+     update current SpOtgOrd;
+ cmDelOnProtect :
+   {
+    Abort;
+    Exit;
+   };
+ cmDeleteRecord :
+   if ( Message(''#3'Удалить наряд-заказ из спецификации распоряжения?',YesNo) = cmYes )
+      Delete_SpOtgOrd(SpOtgOrd.NRec);
+end; // HandleEvent
+end; // Panel panSpOtgOrd
+
+Panel panSpNZRasp;
+ Table SpNZRasp;
+HandleEvent
+
+ cmSetCurfield : OldKolfactDEI :=SpNZRasp.KolFact;
+
+ cmPick :  
+   case CurField of
+     #SpNZRasp.KolFact :
+      {
+       if (OtgOrder.Status = 0)
+        {
+         if (OldKolfactDEI <> SpNZRasp.KolFact)
+          {
+           piKatDopEd.SetDefaultDopEd(coSpNZRasp,      // код таблицы спецификации
+                                      SpNZRasp.NRec,   // ссылка на запись спецификации
+                                      word(1),         // тип количества
+                                      SpDocs.cMCUsl, // ссылка на МЦ/Услугу
+                                      SpDocs.PrMC,   // признак МЦ/Услуга
+                                      OldKolfactDEI,       // старое количество
+                                      SpNZRasp.Kolfact,       // количество в отпускных единицах
+                                      longint(0),
+                                      word(441)
+                                      );
+          }
+         RunInterface('KolDopEd',
+                       word(coSpNZRasp),     // coTable,  код таблицы спецификации
+                       SpNZRasp.NRec,        // cRec,     ссылка на спецификацию
+                       1,                  // wTipKol,  тип количества
+                       'Ввод количества к отгрузке',  // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                       SpDocs.cMCUSL,      // cMCUsl,   NRec МЦ/услуги
+                       SpDocs.PrMC,        // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                       SpDocs.Price,       // Price,    цена за 1-у отпускную единицу
+                       2,                  // forPrice, кол-во знаков после запятой в цене
+                       2,                  // forSumma, кол-во знаков после запятой в стоимости
+                       Get_cValNZakaz(SpOtgOrd.cNZakaz),       // cVal,     валюта переданной цены
+                       SpDocs.cOtpEd,      // cOtpEd,   ссылка на отпускную единицу измерения
+                       SpNZRasp.Kolfact,   // fKol      количество в отпускных единицах (возвращаемый параметр)
+                       longint(1),
+                       word(441)
+                     );
+         OldKolfactDEI := SpNZRasp.Kolfact;
+         ProcessCommand(cmCheckField);
+        }
+      }
+   end;
+
+ cmPositionChanged :
+   if (((OtgOrder.Status > 0) and (OtgOrder.Status < 5)) or IsProtected(#OtgOrder))
+     ProtectRecord(#SpNZRasp,True)
+   else
+     ProtectRecord(#SpNZRasp,False);
+ cmCheckField   :
+   {
+    var varKolFact : Double;
+//    var OldKolfact : double;
+
+    case (CurField) of
+     #SpNZRasp.KolFact :
+       {
+//        OldKolfact:=SpNZRasp.Kolfact;
+        if (SpNZRasp.KolFact < 0)
+          {
+           Message(''#3'Количество должно быть более 0',Information);
+           set SpNZRasp.KolFact := Double(OldFieldValue);
+          };
+        else
+         {
+           varKolFact := KolFact_OtgOrder(SpDocs.NRec,1 + 2,SpNZRasp.NRec); // 1 - оформляемые 2 - исполняемые
+           if ((varKolFact + SpNZRasp.KolFact) > SpDocs.Kol)
+            {
+              set SpNZRasp.KolFact := Double(OldFieldValue);
+              Message(''#3'По <Оформляемым> и <Исполняемым> распоряжениям' +
+                      ''#13#3'этой позиции уже отгружено '  + string(varKolFact) +
+                      ''#13#3'Разрешается отгрузить не более ' +
+                      if ((SpDocs.Kol - varKolFact) < 0,
+                          string(0),
+                          string(SpDocs.Kol - varKolFact)
+                         ),Information);
+            }
+         }
+        if (OldKolfactDEI <> SpNZRasp.KolFact)
+         {
+           piKatDopEd.SetDefaultDopEd(coSpNZRasp,      // код таблицы спецификации
+                                      SpNZRasp.NRec,   // ссылка на запись спецификации
+                                      word(1),         // тип количества
+                                      SpDocs.cMCUsl, // ссылка на МЦ/Услугу
+                                      SpDocs.PrMC,   // признак МЦ/Услуга
+                                      OldKolfactDEI,       // старое количество
+                                      SpNZRasp.Kolfact,       // количество в отпускных единицах
+                                      longint(0),
+                                      word(441)
+                                      );
+           OldKolfactDEI := SpNZRasp.KolFact
+         }
+       };
+    end;
+   };
+ cmUpdateRecord : update current SpNZRasp;
+ cmDelOnProtect :
+   {
+    Abort;
+    Exit;
+   };
+end; // HandleEvent
+end; // Panel panSpNZRasp
+
+Panel panNZakaz;
+ Table NZakaz;
+HandleEvent
+
+end; // HandleEvent
+end; // Panel panNZakaz

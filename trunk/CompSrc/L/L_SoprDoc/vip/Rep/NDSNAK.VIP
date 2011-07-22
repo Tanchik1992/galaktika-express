@@ -1,0 +1,279 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Печать накладной с разными ставками налогов
+//********************************************************************************
+
+#include DOfuns.vih
+
+//******************************************************************************
+#doc
+Назначение:
+  Печать накладной с разными ставками налогов
+Параметры:
+  p1 - ссылка на сопроводительный документ
+#end
+//******************************************************************************
+
+Interface NdsNak;
+
+#include DOfuns.var
+
+Create view vNdsNak
+
+Var
+  NumPP
+              : integer;
+
+  isfirst
+, doview
+              : boolean;
+
+  vrem
+, tnsum
+, tnsumnds
+, obSum
+, obSumNDS
+, cbezrez
+, cbezrezs
+, bezreztn
+, bezrezit
+, cenabez
+, reztnds
+, reztnnds
+, reznds
+, RezSumT
+, RezSumTn
+, RezSum
+, cena
+              : double;
+
+  kodtn
+              : string[20];
+
+  simvolb
+              : string[4];
+
+  p1
+              : comp;
+
+As select
+  SpSopr.*            // поля обязательны (внешняя выгрузка!)
+, KatMC.Name
+, KatMC.TNVed
+, KatMC.BarKod
+, KatOtpEd.Name
+
+From
+  KatSopr
+, SpSopr
+, KatPodr
+, KatMC
+, KatOtpEd
+, KatBank
+, KatOrg
+, KlVal
+, Synonym KatOrg MyOrg
+, Synonym KatOrg GrOrg
+
+Where
+((
+    p1                  == KatSopr.nRec
+and KatSopr.nRec        == SpSopr.cSopr
+and KatSopr.cOrg        == KatOrg.nRec
+and KatSopr.cGruzTo     == GrOrg.nRec
+and KatSopr.cVal        == KlVal.nRec
+and KatSopr.cPodrFrom   == KatPodr.nRec
+and KatSopr.cNazna      == KatNazna.nRec
+and KatSopr.cStepDoc    == StepDoc.nRec
+and StepDoc.cBaseDoc    == BaseDoc.nRec
+and SpSopr.cMCUSL       == KatMC.nRec
+and SpSopr.cOtpEd       == KatOtpEd.nRec
+and coGetTune('MyOrg')  == MyOrg.nRec
+and coGetTune('MyBank') == KatBank.nRec
+))
+
+Order BYMY external By KatMC.TnVed
+;
+
+Parameters
+  p1;
+
+Form frmNdsNak('BNakNDS.OUT', 'BNakNDS');
+
+HandleEvent
+
+cmInit :
+{
+//-------------ШАПКА ДОКУМЕНТА-------------------------------
+  InitNalserv;
+  doview := false;
+
+  if ( KatSopr.cVal = 0 )
+    SimVolB := sGetTune('NDE.SimvRub')
+  else
+    SimVolB := KlVal.SimVolV;
+
+  case BaseDoc.VhodNal of
+
+     1 :  frmNdsNak.SetGroup('С налогами');
+     else frmNdsNak.SetGroup('Без налогов');
+
+  end;
+
+  frmNdsNak.Write(MyOrg.Name);
+  frmNdsNak.Write(KatBank.Schet1);
+  frmNdsNak.Write(KatBank.Name);
+
+  frmNdsNak.Write(KatSopr.Descr);
+  frmNdsNak.Write(KatSopr.NSopr);
+  frmNdsNak.Write(KatSopr.dSopr);  //'DD/MM/YY'
+  frmNdsNak.Write(KatPodr.Name);
+  frmNdsNak.Write(BaseDoc.NoDoc);
+  frmNdsNak.Write(BaseDoc.dDoc);
+  frmNdsNak.Write(KatOrg.Name);
+  frmNdsNak.Write(GrOrg.Name);
+  frmNdsNak.Write(KatSopr.Name);
+  frmNdsNak.Write(KatNazna.Name);
+
+//-------Формирование спецификации документа-------------------
+
+  KodTn := '';
+  SetOrder(tiByMy);
+
+  if ( GetFirst = tsOk )
+    {
+      isfirst := true;
+      NumPP   := 0;
+
+      _LOOP
+        {
+          if ( (KodTn <> KatMC.TnVed) and (isFirst = false) )
+            {
+//---------Итого по группе ТНВЭД--------------------------------
+              frmNdsNak.PutEvent(feBreak);
+              frmNdsNak.Write(BezRezTn, 2);
+
+              BezRezIt := BezRezIt + BezRezTn;
+              BezRezTn := 0;
+
+              frmNdsNak.Write(RezSumTn, 2);
+
+              RezSum   := RezSum + RezSumTn;
+              RezSumTn := 0;
+
+              frmNdsNak.Write(RezTnNDS, 2);
+              frmNdsNak.Write(SimvolB);
+
+              RezNDS   := RezNDS + RezTnNDS;
+              RezTnNDS := 0;
+
+              frmNdsNak.Write(KatMC.TnVed);
+
+              obSum    := obSum + tnSum;
+              obSumNDS := obSumNDS + tnSumNds;
+            }
+
+          if ( isFirst = true )
+            {
+              doview  := true;
+              isFirst := false;
+
+              RezTnNds := 0;
+              RezNds   := 0;
+              RezSumTn := 0;
+              BezRezTn := 0;
+              BezRezIt := 0;
+              RezSum   := 0;
+              obSum    := 0;
+              obSumNDS := 0;
+
+              frmNdsNak.Write(KatMC.TnVed);
+            }
+
+          NumPP := NumPP + 1 ;
+
+          frmNdsNak.Write(NumPP);
+          frmNdsNak.Write(KatMC.BarKod);
+          frmNdsNak.Write(KatMC.Name);
+          frmNdsNak.Write(KatOtpEd.Name);
+          frmNdsNak.Write(SpSopr.KolFact, 3);
+
+          cena    := SpSopr.Price;
+          RezTNDS := oDOfuns.doRoundNDE( BaseDoc.VidDoc
+                               , SpSopr.Price * SpSopr.KolFact - cena * SpSopr.KolFact);
+
+          frmNdsNak.Write(cena, 2);
+          frmNdsNak.Write(cena * SpSopr.KolFact, 2);
+
+          BezRezTn := BezRezTn + cena * SpSopr.KolFact;
+
+          frmNdsNak.Write(SpSopr.Price, 2); // цена как есть из документа
+          frmNdsNak.Write(oDOfuns.DoRoundNDE(BaseDoc.VidDoc, SpSopr.Price * SpSopr.KolFact), 2);
+
+          KodTn := KatMC.TnVed;
+          frmNdsNak.Write(RezTNDS,2);
+
+          RezTnNDS := RezTnNDS + RezTNDS;
+          RezTNDS  := 0;
+//---------------------------------------
+          RezSumTn := RezSumTn + oDOfuns.doRoundNDE(BaseDoc.VidDoc, SpSopr.Price * SpSopr.KolFact);
+        }
+    }
+
+// итого по группе ТНВЭД
+
+  frmNdsNak.PutEvent(feBreak);
+  frmNdsNak.Write(BezRezTn, 2);
+
+  BezRezIt := BezRezIt + BezRezTn;
+  BezRezTn := 0;
+
+  frmNdsNak.Write(RezSumTn, 2);
+
+  RezSum   := RezSum + RezSumTn;
+  RezSumTn := 0;
+
+  frmNdsNak.Write(RezTnNDS, 2);
+  frmNdsNak.Write(SimvolB);
+
+  RezNDS   := RezNDS + RezTnNDS;
+  RezTnNDS := 0;
+  obSum    := obSum + tnSum;
+  obSumNDS := obSumNDS + tnSumNds;
+  RezSum   := RezSum + RezSumTn;
+  RezNDS   := RezNDS + RezTnNds;
+  tnSum    := 0;
+  tnSumNds := 0;
+
+//--------Итоги по счету-------------------------------
+
+  frmNdsNak.PutEvent(feBreak);
+  frmNdsNak.Write(BezRezIt, 2);
+  frmNdsNak.Write(RezSum, 2);
+  frmNdsNak.Write(RezNDS, 2);
+  frmNdsNak.Write(SimvolB);
+
+  frmNdsNak.Write(RezSum, 2);
+  frmNdsNak.Write(SimvolB);
+  frmNdsNak.Write(RezNDS, 2);
+  frmNdsNak.Write(SimvolB);
+  frmNdsNak.Write(doubletostring(KatSopr.cVal, RezSum));
+
+  if ( not frmNdsNak.error )
+    {
+      if ( doview )
+        frmNdsNak.ShowFile('Накладная на отпуск');
+      else
+        frmNdsNak.abortForm;
+    }
+  else
+    frmNdsNak.abortForm;
+
+  Abort;
+  doneNalserv;
+}
+
+end; // HandleEvent
+
+end.

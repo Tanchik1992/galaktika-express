@@ -1,0 +1,416 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,99 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Модуль Договора                                           ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Ввод, редактирование и выбор возможных языков документов  ║
+ ║ Ответственный : Скороход Дмитрий Владимирович                             ║
+ ║ Параметры     : да                                                        ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Интерфейс ввода, редактирования и выбора возможных языков документов
+#end
+Interface Language''(, hcLanguage_All,) EscClose, cyan;
+show at (15,3,65,15);
+Create View vLanguage
+var
+  pLanguage, Node, Owner,
+  tmp_InsertNRec         : comp;
+  Markers, IndexNo       : LongInt;
+  TreeFormat, ListFormat : LongInt;
+  Loop, Rendering        : word;
+  NameMarker             : string;
+  isTree                 : boolean;
+  ( picked )
+as select
+  if( SearchMarker(Markers, Language.NRec, IndexNo), '√', ' ' )
+from
+  Language
+
+bounds DrawTree  as
+  Node            == Language.cBack
+;
+
+Parameters Rendering, pLanguage, NameMarker;
+// Rendering
+// 0 - групповой выбор
+// 1 - единичный выбор
+// 2 - интерфейс просмотра
+
+form frmLanguage('Language.out','Language') with novisual;
+
+procedure WriteTitleCountMark;
+{
+  var TitleString : string;
+  case Rendering of
+    0: TitleString := 'Выберите языки';
+    1: TitleString := 'Выберите язык';
+    2: TitleString := 'Просмотр списка языков';
+  end; // case
+
+  if( Rendering = 0)
+    if( GetMarkerCount(Markers) != 0 )
+      TitleString := TitleString +
+        ' (выбрано ' + string(GetMarkerCount(Markers)) + ')';
+  SetTitle(TitleString);
+}
+
+
+browse aaaa (,,sci1478EnIns);
+  table Language;
+fields
+  Picked  '': [1],skip;
+  Language.Name 'Наименование'('Название языка'):[43],protect;
+end;
+
+browse bbbb (,,sci1478EnEscA);
+  table Language;
+fields
+//  Picked  '': [1],skip;
+  Language.Name 'Наименование'('Название языка'):[45],protect;
+end;
+
+tree 1 cccc (,,sci1478EnEscTreeI);
+  table Language;
+fields
+  Picked  '': [1],skip;
+  Language.Name'Наименование'('Название языка'):[43], protect;
+end;
+
+tree dddd (,,sci1478EnEscTree);
+  table Language;
+fields
+  Language.Name'Наименование'('Название языка'):[45], protect;
+end;
+
+
+Window Win1 'Редактирование списка языков' escclose;
+  show at(15,3,65,15);
+Screen Scr00(,hcLanguage_All, sci178Esc);
+  table Language;
+Fields
+  Language.Name('Язык'):NoProtect;
+<<
+
+ Язык  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+>>
+End; // screen
+HandleEvent
+
+
+cmDone:
+  if (UpdateTable)
+   {
+    if ((tmp_InsertNRec<>0)and(isTree))
+     {
+      TreeJumpToRecord(TreeFormat, tmp_InsertNRec);
+      tmp_InsertNRec := 0;
+     }
+    ReReadRecord(#Language);
+    ReScanPanel(#Language);
+   }
+end;
+end; // window
+
+
+
+panel paLanguage
+  table Language;
+HandleEvent
+cmTreeTop:
+  Node := 0;
+cmTreeUp:
+  Node := Language.cBack;
+cmTreeDown:
+  Node := Language.NRec;
+cmTreeNodeType:
+  if( not isValid(#Language) )
+    TreeSetNodeType(TreeFormat, 2);
+cmTreeNeedOwner:
+  TreeJumpToRecord(TreeFormat, Language.cBack);
+
+cmSetDefault:
+{
+  ClearBuffer(#Language);
+  Language.NRec  := GetNextNRec(#Language, 0);
+  Language.cBack := Owner;
+}
+
+cmInsertRecord :
+  _try
+   {
+    insert current Language;
+    tmp_InsertNRec := Language.NRec;
+   }
+  _except on ExDbDuplicateKey:
+    Message(''#3'Такой язык в списке уже есть', Error + OkButton);
+
+cmUpdateRecord :
+  _try
+  {
+   update current Language;
+  }
+  _except on ExDbDuplicateKey:
+    Message(''#3'Такой язык в списке уже есть', Error + OkButton);
+
+
+cmDeleteRecord :
+  if( Message(''#3'Удалим?', Warning + YesNo) = cmYes )
+   {
+    var Language5NRec, Language5cBack : comp;
+    Language5NRec := Language.NRec;
+    Language5cBack := Language.cBack;
+
+    PushPos(#Language);
+    update Language where((Language5NRec == Language.cBack))
+      set Language.cBack := Language5cBack;
+    PopPos(#Language);
+
+    delete current Language;
+   }
+
+end; // HandleEvent
+end; // panel
+
+HandleEvent
+cmInit:
+{
+  if( NameMarker = '' )
+    NameMarker := 'Language';
+  if( Rendering = 0 )
+    Markers := InitMarker(NameMarker, 8, 100, 10);
+
+  var DateChanged : boolean;
+  if( not ReadMydsk(isTree, 'LanguageIsTree', DateChanged) )
+    isTree := true;
+
+  TreeFormat := if(Rendering = 0, cccc, dddd);
+  ListFormat := if(Rendering = 0, aaaa, bbbb);
+
+  tmp_InsertNRec := 0;
+  if( isTree )
+  {
+    PushBounds(tbDrawTree);
+    SetFormat(TreeFormat);
+  }
+  else
+    SetFormat(ListFormat);
+
+  PutCommand(cmValue1);
+
+  WriteTitleCountMark;
+}
+
+cmDone:
+{
+  SaveMyDsk(isTree, 'LanguageIsTree');
+  if( Rendering = 0 )
+    DoneMarker(Markers, NameMarker);
+}
+
+cmMarkUnMark:
+{
+  InvertMarker(Markers, Language.NRec);
+  var ccc : boolean;
+  if( isTree )
+    ccc := TreeGetNext(TreeFormat);
+  else
+    ccc := (GetNext Language = tsOK)
+
+  if( ccc )
+    CallToNeighBours(cmPosDown, #Language);
+
+  ReScanPanel(#Language);
+  WriteTitleCountMark;
+}
+
+cmSelectAll:
+{
+  StartNewVisual( vtRotateVisual, vfTimer, 'Помечаю все', 1);
+  PushPos(#Language);
+  if( isTree )
+    PopBounds(tbDrawTree);
+  for( Loop := getfirst Language; Loop = tsOk; Loop := getnext Language )
+  {
+    InsertMarker(Markers, Language.NRec);
+    if( not NextVisual )
+      getlast Language;
+  }
+  if( isTree )
+    PushBounds(tbDrawTree);
+  PopPos(#Language);
+  StopVisual('', 0);
+  RescanPanel(#Language);
+  WriteTitleCountMark;
+}
+
+cmUnSelectAll:
+{
+  ClearMarker(Markers);
+  RescanPanel(#Language);
+  WriteTitleCountMark;
+}
+
+cmInvertAll:
+{
+  StartNewVisual( vtRotateVisual, vfTimer, 'Инвертирую список', 1);
+  PushPos(#Language);
+  if( isTree )
+    PopBounds(tbDrawTree);
+  for( Loop := getfirst Language; Loop = tsOk; Loop := getnext Language )
+  {
+    InvertMarker(Markers, Language.NRec);
+    if( not NextVisual )
+      getlast Language;
+  }
+  if( isTree )
+    PushBounds(tbDrawTree);
+  PopPos(#Language);
+  StopVisual( '', 0);
+  RescanPanel(#Language);
+  WriteTitleCountMark;
+}
+
+cmEdit :
+{
+  RunWindow(Win1);
+  ReDrawPanel(#Language);
+}
+
+cmAddNewRec :
+{
+  if( isTree )
+    if( TreeNodeIsOpen(TreeFormat) )
+      Owner := Language.NRec;
+    else
+      Owner := Language.cBack;
+  else
+    Owner := 0;
+
+  PutCommand(cmInsert);
+  RunWindow(Win1);
+  ReDrawPanel(#Language);
+}
+
+
+cmDefault  :
+{
+  if( CurWindow = Win1 )
+    Exit;
+
+  if( Rendering = 2 )
+  {
+    RunWindow(Win1);
+    Exit;
+  }
+
+  // if( not isValid(#Language) )
+  //   UpdateTable;
+  // В случае с деревьями это не помогает :-(
+
+  if( Rendering = 0 )
+  {
+    if( GetMarkerCount(Markers) = 0  )
+      InsertMarker(Markers, Language.NRec);
+  }
+  else
+    pLanguage := Language.NRec;
+  CloseInterface(cmOk);
+}
+
+cmAccording:
+{
+  if( isTree )
+  {
+    PopBounds(tbDrawTree);
+    SetFormat(ListFormat);
+  }
+  else
+  {
+    if( Language.cBack != Node )
+    {
+      pLanguage := Language.NRec;
+      PutCommand(cmValue1);
+    }
+    PushBounds(tbDrawTree);
+    SetFormat(TreeFormat);
+  }
+  isTree := not isTree;
+}
+
+cmValue1:
+{
+  if( pLanguage = 0 )
+    exit;
+
+  if( getfirst Language where((pLanguage == Language.NRec)) != tsOk )
+    Exit;
+
+  if( isTree )
+  {
+    Node := Language.cBack;
+    TreeJumpToRecord(TreeFormat, Language.NRec);
+  }
+
+  ReScanPanel(#Language);
+}
+
+cmPrintDoc:
+{
+  var
+    goAway, rS : boolean;
+  goAway := false;
+  if( not isTree )
+  {
+    PushPos(#Language);
+    PushBounds(tbDrawTree);
+  }
+  else
+    TreePushPos(TreeFormat);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak + vfConfirm,
+    ''#3'Печатаю...'#13#3, RecordsInTable(#Language));
+  // for( Loop := getfirst Language; Loop = tsOk; Loop := getnext Language )
+  for( rS := TreeGetFirstEx(TreeFormat); rS; rS := TreeGetNextEx(TreeFormat) )
+  {
+    if( not nextVisual )
+    {
+      goAway := true;
+      break;
+    }
+
+    frmLanguage.PutEventById(feDoLoop, FCLanguage_Loop1);
+    frmLanguage.write(TreeLevel(TreeFormat));
+    frmLanguage.write(LPadCh('', '.', TreeLevel(TreeFormat)) + Language.Name);
+    frmLanguage.write(Language.Name);
+  }
+  StopVisual('', 0);
+  if( not isTree )
+  {
+    PopBounds(tbDrawTree);
+    PopPos(#Language);
+  }
+  else
+    TreePopPos(TreeFormat);
+  RereadRecord(#Language);
+  if( (not frmLanguage.Error) and (not goAway) )
+    frmLanguage.showFile('');
+  else
+    frmLanguage.abortForm;
+}
+
+cmHotKeys :
+  PutHotCommand(RunMenu('mnuLanguage'));
+
+end; //HandleEvent
+end. // Interface
+
+mnuLanguage Menu
+{
+- '~П~ереключить режим просмотра',cmAccording,'Переключение режима просмотра между таблицей и деревом',,'Alt-S',kbAltS,sci1Esc;
+- '~П~ечать',cmPrintDoc,'Печать списка языков',hcPrintKatalog,'Ctrl-P',kbCtrlP,sci1Esc;
+}

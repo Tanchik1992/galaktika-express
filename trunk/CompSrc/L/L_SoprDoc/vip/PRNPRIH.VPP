@@ -1,0 +1,289 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Печать приходной накладной                                ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+!!! этот файл устарел и больше поддерживаться не будет - оставлен только для поддержки
+!!! клиентских отчетов, разработанных на базе этой формы
+!!! в дальнейшем печать отчетов в приходных накладных будет поддерживаться интерфейсом PRINTSOPR
+
+! = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+#INCLUDE prn_org.vpp 
+#include prn_onkl.vpp
+
+! = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+
+procedure PrintDocument;
+var 
+  erfl,
+  CanNalog      : boolean;
+
+  kolattr, 
+  attrtyp       : byte;
+
+  pg_flag,
+  iNalog,iNpp   : word; // Порядковый номер налога
+
+  SumR, SumV, kusl, 
+  susl, svusl, 
+  suslBN, svuslBN,
+  PriceNl, VPRiceNl, 
+  sumnl, vsumnl,
+  stavkaNDS,summaNDS,
+  rPriceNl, rVPRiceNl,
+  iNalR, iNalV  : double; // Сумма порядка налогов по позиции
+
+  MarkerCount, 
+  i             : longint; // счетчики записей в маркере
+
+  pickrec,
+  coMyOrg       : comp;
+
+{
+  if wGetTune('Doc.ReportInPrihNak') = word(0)
+  {
+    RunInterface('PrintSopr',KatSopr.NRec,MarkerNZ,word(0))
+    Exit;
+  }
+
+  if (not isValid(#SpSopr))
+    {
+      Message(''#3'Накладная не оформлена...',CancelButton);
+      exit;
+    }
+
+  pg_flag := 0;
+  MarkerCount:=GetMarkerCount(MarkerNZ);
+  if (MarkerCount<>0)
+    if ( RunDialog('PrintBaseDocParams',pg_flag) = cmCancel )
+      Exit;
+  StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,
+                 'Формирование документа: ',1);
+              
+  if (FPrihNkl.Error)
+    {
+      StopVisual('',0);
+      FPrihNkl.putevent(feBreak);
+      FPrihNkl.AbortForm;
+      Exit;
+    }
+  coMyOrg := coGetTune('MyOrg');
+  if (MarkerCount=0)
+    {
+      pickrec := KatSopr.NRec;
+      MarkerCount:=1;
+    }
+  PushPos(#SpSopr);
+  PushPos(#KatSopr);
+  FOR ( i:=0; i<MarkerCount; i:=i+1 )
+    {
+      if (GetMarkerCount(MarkerNZ)<>0)
+        GetMarker(MarkerNZ,i,pickrec);
+      if (GetFirst KatSopr where ((pickrec == KatSopr.NRec)) = tsOk)
+        {
+          FPrihNkl.Write(KatSopr.NRec);
+
+          var tmpnr  : comp;           tmpnr := KatSopr.Nrec;
+          var Kol_MC : integer;        kol_Mc:=0;
+          var Kol_Usl: integer;        Kol_Usl:=0; 
+
+          _loop SpSopUsl where ((tmpnr == SpSopUsl.cSopr))
+            if (SpSopUsl.PrMC = 1)
+              inc(Kol_Mc)
+            else
+              inc(Kol_Usl);
+
+          FPrihNkl.Write(Kol_Mc);  // количество МЦ
+          FPrihNkl.Write(Kol_Usl); // количество Услуг
+
+          PrintBankMyOrg(FPrihNkl.Handle, coMyOrg); //своя организация (получатель)
+
+          IF coMyOrg = KatSopr.cOrgBase
+            PrintBankMyOrg(FPrihNkl.Handle,KatSopr.cOrgBase); //своя организация (получатель)
+          else
+            PrintBankOrg(FPrihNkl.Handle,KatSopr.cOrgBase); //Контрагент
+
+          IF coMyOrg = KatSopr.cGruzFrom
+            PrintBankMyOrg(FPrihNkl.Handle,KatSopr.cGruzFrom); //своя организация (получатель)
+          else
+            PrintBankOrg(FPrihNkl.Handle,KatSopr.cGruzFrom);//Грузоотправитель
+
+          IF coMyOrg = KatSopr.cGruzTo
+            PrintBankMyOrg(FPrihNkl.Handle,KatSopr.cGruzTo); //своя организация (получатель)
+          else
+            PrintBankOrg(FPrihNkl.Handle,KatSopr.cGruzTo);  //Грузополучатель
+
+          IF coMyOrg = KatSopr.cOrg
+            PrintBankMyOrg(FPrihNkl.Handle,KatSopr.cOrg); //своя организация (получатель)
+          else
+            PrintBankOrg(FPrihNkl.Handle,KatSopr.cOrg); //к-т взаиморасчетов
+
+          FPrihNkl.Write(KatSopr.nSopr);
+          FPrihNkl.Write(KatSopr.Descr);
+          FPrihNkl.Write(PrintNumber(KatSopr.Descr,KatSopr.NSopr));
+          if (FPrihNkl.Error) 
+            {
+              StopVisual('',vfSilent); 
+              FPrihNkl.AbortForm; 
+              PopPos(#SpSopr);
+              PopPos(#KatSopr);
+              Exit;
+            }
+          FPrihNkl.Write(KatSopr.dSopr);
+          FPrihNkl.Write(KatSopr.Name);
+          FPrihNkl.Write(KatNazna.Name);
+          if (GetFirst KatState where ((KatOrg.cState == KatState.NRec)) = tsOk)
+            FPrihNkl.Write(KatState.KOD);
+          else
+            FPrihNkl.SkipFormat(1);
+          FPrihNkl.Write(BaseDoc.NoDoc);
+          FPrihNkl.Write(BaseDoc.dDoc);
+          FPrihNkl.Write(katSopr.VhodNal);
+          //-- счет-фактура
+          FPrihNkl.Write(SchFact.NRec);
+          FPrihNkl.Write(SchFact.Num);
+          //---------------
+          FPrihNkl.Write(KatPodrTo.Name);
+          FPrihNkl.Write(KatMolTo.Name);
+          FPrihNkl.Write(Catalogs.Name);//мол_должность
+
+          FPrihNkl.Write(KatSopr.nDover);   //номер доверенности
+          FPrihNkl.Write(KatSopr.dDover);   //дата доверенности
+          FPrihNkl.Write(KatSopr.sDover);   //доверенное лицо
+
+          FPrihNkl.Write(GetCursPrice);//курс
+          FPrihNkl.Write(KlVal.SimvolV); //валюта
+
+          SumR := 0;
+          SumV := 0;
+          erfl := false;
+          //------ Вывод позиций МЦ ---------
+          CanNalog := true;
+          if (GetFirst KatState where ((KatOrg.cState == KatState.NRec)) = tsOk)
+            CanNalog := KatState.isNal = 1;
+          sumnl  := 0;
+          vsumnl := 0;
+          ResetBounds(#SpSopr);
+          _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr)) 
+            {
+              #include prnprimc.vpp
+
+              if (Not NextVisual)
+                {
+                  FPrihNkl.AbortForm;
+                  PopPos(#KatSopr);
+                  SetBounds(#SpSopr);
+                  PopPos(#SpSopr);
+                  StopVisual('',0);
+                  Exit;
+                }
+            }
+          SetBounds(#SpSopr);
+          //------- Вывод сопутствующих услуг -----------
+          if not (erfl)
+            {
+              FPrihNkl.AbortForm;
+              Message(''#3'В накладной нет МЦ...',CancelButton);
+            }
+          else
+            {
+              FPrihNkl.PutEvent(feBreak);
+              erfl := false;
+              ResetBounds(#SpSopr);
+              ResetBounds(#KatUsl);
+              
+              kusl := 0;
+              susl := 0;
+              svusl := 0;
+              sUslBN := 0;
+              svUslBN := 0;
+              _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr and
+                                   word(2)     <<= SpSopr.PrMC)) 
+                {
+                  #include prnprius.vpp
+
+                  if (Not NextVisual)
+                    {
+                      FPrihNkl.AbortForm;
+                      PopPos(#KatSopr);
+                      SetBounds(#SpSopr);
+                      SetBounds(#KatUsl);
+                      PopPos(#SpSopr);
+                      StopVisual('',0);
+                      Exit;
+                    }
+                }
+              SetBounds(#SpSopr);
+              SetBounds(#KatUsl);
+              FPrihNkl.Write((SumR), Cena_PrR);
+              FPrihNkl.Write((SumV), Cena_PrV);
+              FPrihNkl.Write(klVal.SimvolV);
+              if (KatSopr.VhodNal = 1)
+                {
+                  FPrihNkl.Write((sumnl), Cena_PrR);
+                  FPrihNkl.Write((sumr), Cena_PrR);
+                  FPrihNkl.Write((vsumnl), Cena_PrV);
+                  FPrihNkl.Write((sumv), Cena_PrV);
+                }
+              else
+                {
+                  FPrihNkl.Write((sumr), Cena_PrR);
+                  FPrihNkl.Write((sumnl), Cena_PrR);
+                  FPrihNkl.Write((sumv), Cena_PrV);
+                  FPrihNkl.Write((vsumnl), Cena_PrV);
+                }
+              if not erfl
+                FPrihNkl.SkipFormat(8);
+              else
+                {
+                  FPrihNkl.Write('Итого по накладной вместе с услугами :');
+                  if (KatSopr.VhodNal = 1) 
+                    {    //входят
+                      FPrihNkl.Write((SumR + sUsl), Cena_PrR);
+                      FPrihNkl.Write((SumV + svUsl), Cena_PrV);
+                      FPrihNkl.Write(KlVal.SimvolV);
+
+                      FPrihNkl.Write((sumnl + sUslBN),  Cena_PrR);
+                      FPrihNkl.Write((sumR  + sUsl),  Cena_PrR);
+                      FPrihNkl.Write((vsumnl+ svUslBN),  Cena_PrV);
+                      FPrihNkl.Write((sumV  + svUsl),  Cena_PrV);
+                    }
+                  else
+                    {
+                      FPrihNkl.Write((SumR + sUslBN), Cena_PrR);
+                      FPrihNkl.Write((SumV + svUslBN), Cena_PrV);
+                      FPrihNkl.Write(KlVal.SimvolV);
+
+                      FPrihNkl.Write((sumR  + sUslBN),  Cena_PrR);
+                      FPrihNkl.Write((sumnl + sUsl), Cena_PrR);
+                      FPrihNkl.Write((sumV  + svUslBN),  Cena_PrV);
+                      FPrihNkl.Write((vsumnl+ svUsl),  Cena_PrV);
+                    }
+                }
+
+              if (pg_flag <> 0) and (i < MarkerCount-1)
+                FPrihNkl.write(' ');
+              else
+                FPrihNkl.SkipFormat(1);
+
+            }
+        }  //***IF (GetFirst KatSopr where ((pickrec == KatSopr.NRec)) = tsOk )
+
+    } //***FOR ( i:=0; i<MarkerCount; i:=i+1 )
+  PopPos(#KatSopr);
+  PopPos(#SpSopr);
+
+  StopVisual('',0);
+
+  if (FPrihNkl.Error)
+    FPrihNkl.AbortForm;
+  else
+    Case TypeSopr of
+      101 : FPrihNkl.ShowFile('Накладная на получение МЦ');
+      102 : FPrihNkl.ShowFile('Накладная на получение МЦ с консигнации');
+      103 : FPrihNkl.ShowFile('Накладная на получение МЦ на консигнацию');
+    else
+      FPrihNkl.ShowFile('Накладная');
+    End;
+}  // procedure PrintDocument

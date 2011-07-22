@@ -1,0 +1,151 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО на продажу
+// Процедура вывода на печать Инвойса из Счета на продажу
+//******************************************************************************
+
+Create view CV_Invoice
+
+Var
+  CV_BaseNRec: comp;
+
+As select
+//------------------------------------------------------------------------------
+  if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice)
+    (FieldName = PrV)
+//------------------------------------------------------------------------------
+, if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice) * SpSopr.KolFact
+    (FieldName = SumPrice)
+//------------------------------------------------------------------------------
+From
+  BaseDoc
+, StepDoc
+, SpStep
+, KatSopr
+, SpSopr
+, Dogovor
+, KatOrg
+, KatOrg OrgPlat
+, KatParty
+, KatMC
+, KatUsl
+, KatPodr
+
+Where
+((
+     coGetTune('MyOrg') == KatOrg.NRec
+
+AND  CV_BaseNRec        == BaseDoc.Nrec
+AND  BaseDoc.Nrec       == StepDoc.cBaseDoc
+AND  BaseDoc.cDogovor   == Dogovor.nRec
+AND  BaseDoc.cOrg       == OrgPlat.Nrec
+AND  StepDoc.Nrec       == SpStep.cStepDoc
+
+AND  StepDoc.NRec       == KatSopr.cStepDoc
+AND  KatSopr.cPodrFrom  == KatPodr.NRec
+
+AND  KatSopr.NRec       == SpSopr.cSopr
+AND  SpStep.NRec        == SpSopr.cSpStep
+
+AND  SpSopr.cParty      == KatParty.NRec
+AND  SpSopr.cMCUSL      == KatMC.NRec
+AND  SpSopr.cMCUSL      == KatUsl.NRec
+))
+;
+
+//******************************************************************************
+
+Procedure printInvoice;
+var
+  SumKolGruzMest,
+  SumKol,
+  SumStoim,
+  tmpKolGruzMest        : double;
+
+{
+  CV_Invoice.CV_BaseNRec := BaseDoc.Nrec;
+  if (CV_Invoice.GetFirst BaseDoc <> tsOk)
+    {
+      Message('Не найден счет!', Information);
+      Exit;
+    }
+
+  if (CV_Invoice.GetFirst Dogovor <> tsOk)
+    {
+      Message('Не найден связанный договор!', Information);
+      Exit;
+    }
+
+  if (CV_Invoice.GetFirst KatSopr <> tsOk)
+    {
+      Message('Нет накладных, сформированных по данному счету!', Information);
+      Exit;
+    }
+
+  if (CV_Invoice.GetFirst KatOrg <> tsOk)
+    {
+      ShowTune('Необходимо установить собственную организацию в настройке!', 'MyOrg');
+      Exit;
+    }
+
+  SumKolGruzMest := 0;
+  SumKol         := 0;
+  SumStoim       := 0;
+
+  frmInvoice.write(Cur_Date);     //Шапка_ДатаВыписки
+  frmInvoice.write(CV_Invoice.KatOrg.TEL);     //Шапка_ТелФакс
+  frmInvoice.write(' № ' + string(CV_Invoice.BaseDoc.NoDoc));     //Шапка_НомерСчета
+  frmInvoice.write(' № ' + string(CV_Invoice.Dogovor.NoDoc_Ext) + ' dd.' + string(CV_Invoice.Dogovor.dDoc));//Шапка_НомерДатаДоговора
+  frmInvoice.write(CV_Invoice.OrgPlat.Name);     //Шапка_Плательщик
+
+  CV_Invoice._LOOP SpStep
+    CV_Invoice._LOOP KatSopr
+      CV_Invoice._LOOP SpSopr
+        {
+          frmInvoice.PutEventById(feDoLoop, fcStroka);
+
+          if (CV_Invoice.SpSopr.cParty <> comp(0))
+            frmInvoice.write(SubStr(CV_Invoice.KatParty.Name, 1, 7)) //Строка_7СимвПартии
+          else
+            frmInvoice.write(' ');                      //Строка_7СимвПартии
+
+          tmpKolGruzMest := CV_Invoice.SpSopr.KolGrM;
+
+          frmInvoice.write(tmpKolGruzMest);             //Строка_КолГрузМест
+          frmInvoice.write(CV_Invoice.SpSopr.KolFact);  //Строка_Кол
+
+            if (CV_Invoice.SpSopr.PrMC = 1)
+              {
+              frmInvoice.write(CV_Invoice.KatMC.Name);     //Строка_НаименМЦ
+              frmInvoice.write(if (not (CV_Invoice.KatMC.TNVED = ''),
+                                  (CV_Invoice.KatMC.TNVED),''));   //Строка_Код_ТНВЭД
+              }
+            else
+              {
+              frmInvoice.write(CV_Invoice.KatUsl.Name);   //Строка_НаименМЦ
+              frmInvoice.write(if (not (CV_Invoice.KatUsl.KodGRNal = ''),
+                                  (CV_Invoice.KatUsl.KodGRNal),'')); //Строка_Код_ТНВЭД
+              }
+
+          frmInvoice.write(CV_Invoice.PrV);             //Строка_Цена
+          frmInvoice.write(CV_Invoice.SumPrice);        //Строка_Стоимость
+          frmInvoice.write(CV_Invoice.KatSopr.dSopr);   //Строка_ДатаНакл
+          frmInvoice.write(CV_Invoice.KatPodr.Name);    //Строка_СкладОткуда
+          frmInvoice.write(' № ' + string(CV_Invoice.Katsopr.NSopr));     //Строка_НомерНакл
+
+          SumKolGruzMest := SumKolGruzMest + tmpKolGruzMest;
+          SumKol         := SumKol + CV_Invoice.SpSopr.KolFact;
+          SumStoim       := SumStoim + CV_Invoice.SumPrice;
+        }
+
+  frmInvoice.write(SumKolGruzMest);             //Строка_ВсегоКолГрузМест
+  frmInvoice.write(SumKol);                     //Строка_ВсегоКол
+  frmInvoice.write(SumStoim);                   //Строка_ВсегоСтоимость
+
+  if (frmInvoice.error)
+    frmInvoice.abortForm
+  else
+    frmInvoice.showFile('');
+}
+
+//******************************************************************************

@@ -1,0 +1,908 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Просмотр и редактирование заменяемых товаров в спецификации договоров
+//********************************************************************************
+
+#include oFlAn.vih //функции именованных фильтров по Аналитикам
+
+#ifdef __IsEnableCrossTable__
+  #include MDA_DG_RunCrossTableForEditListAltMC.vih
+#end
+
+#doc
+Просмотр и редактирование заменяемых товаров в спецификации договоров
+#end
+Interface ZamenMcSpec 'Заменяющие МЦ/Услуги'
+                     ('Заменяющие МЦ/Услуги из товарной спецификации', hcdogM_zamen, sci1378Esc) EscClose;
+  Show at (,, 95, 25);
+
+#include oFlAn.var //Функции именованных фильтров по Аналитикам (var foFilterAn: ofilterAn;)
+
+Create view
+Var
+//**********************
+  CanEdit
+   : boolean;
+//**********************
+  pTiDkSpDocs
+, curFormat
+   : word;
+//**********************
+  pNRecSpDocs
+, CurGroup
+   : comp;
+//**********************
+  OwnerGroupName
+, OwnerName
+, sHeader
+   : string;
+//**********************
+
+As select
+//******************************************************************************
+  if(( SpDocs.PrMC = 1 ) OR ( SpDocs.PrMC = 4 ) OR ( SpDocs.PrMC = 5 ), 'MЦ'
+, if(( SpDocs.PrMC = 2 ) OR ( SpDocs.PrMC = 3 )                       , 'Усл'
+                                                                      , 'Шбл'))
+    ( FieldName = SpDogVid )
+//******************************************************************************
+, if(SpDocs.cMCUsl = 0, '',
+//------------------------------------------------------------------------------
+    if(( SpDocs.PrMC = 1 ) OR ( SpDocs.PrMC = 4 ) OR ( SpDocs.PrMC = 5 )
+    , if(IsValid(tnKatMC)  , KatMC.Name  , '? MЦ '           + string(SpDocs.cMCUsl)),
+//------------------------------------------------------------------------------
+    if(( SpDocs.PrMC = 2 ) OR ( SpDocs.PrMC = 3 )
+    , if(IsValid(tnKatUsl) , KatUsl.Name , '? Услуга '       + string(SpDocs.cMCUsl)),
+//------------------------------------------------------------------------------
+    if(SpDocs.PrMC = 10
+    , if(IsValid(tnMaskMC) , MaskMC.Name , '? Шаблон MЦ '    + string(SpDocs.cMCUsl)),
+//------------------------------------------------------------------------------
+    if(SpDocs.PrMC = 20
+    , if(IsValid(tnMaskUsl), MaskUsl.Name, '? Шаблон услуг ' + string(SpDocs.cMCUsl)),
+//------------------------------------------------------------------------------
+       '')))))
+    ( FieldName = SpDogName )
+//******************************************************************************
+, if(SpDocs.cMCUsl = 0, '',
+    if(SpDocs.PrMC = 1, if(IsValid(tnGroupMC) OR ( SpDocs.cGrMCUsl = 0 )
+                         , GroupMC.Name
+                         , '? Группа МЦ ' + string(SpDocs.cGrMCUsl)),
+    if(SpDocs.PrMC = 2, if(IsValid(tnGroupUsl) OR ( SpDocs.cGrMCUsl = 0 )
+                         , GroupUsl.Name, '? Группа услуг ' + string(SpDocs.cGrMCUsl)), '')))
+    ( FieldName = SpDogGrName )
+//******************************************************************************
+, if(SpDocs.cSpMC = 0, string(SpDocs.MaxValue / 100 * SpDocs.MinValue * SpDocs2.Kol), '')
+    ( FieldName = KolOnOwnerPos2 )
+//******************************************************************************
+, if(SpDocs.cSpMC = 0, string(double(KolOnOwnerPos2) * KatOtpEdMain.Koef / KatOtpEd.Koef), '')
+    ( FieldName = KolOnOwnerPos )
+//******************************************************************************
+, if(SpDocs.cSpMC = 0, string(SpDocs.MinValue), '')
+    ( FieldName = doMinValue )
+//******************************************************************************
+, if(SpDocs.cSpMC = 0, string(SpDocs.MaxValue), '')
+    ( FieldName = doMaxValue )
+//******************************************************************************
+, *
+
+From
+  SpDocs(SpDocs02)
+, SpDocs   SpDocs1
+, SpDocs   SpDocs2
+, SpDocs   SpDocs3
+, KatMC
+, KatUsl
+, GroupMC
+, GroupUsl
+, Pick
+, KatMC    KatMC2
+, KatUsl   KatUsl2
+, KatOtpEd
+, KatEd
+, KatOtpEd KatOtpEdMain
+, MaskMC
+, MaskMC   MaskMC2
+, MaskUsl
+, MaskUsl  MaskUsl2
+, FiltAn
+, PickPric
+
+Where
+((
+//***********************************
+    CurGroup        == SpDocs.cSpMC
+AND pTiDkSpDocs     == SpDocs.TiDk
+AND pNRecSpDocs     == SpDocs.cDoc
+AND pNRecSpDocs     == SpDocs2.nRec
+//***********************************
+AND SpDocs.cMCUsl   == KatMC.nRec
+AND SpDocs.cMCUsl   == KatUsl.nRec
+AND SpDocs.cMCUsl   == MaskMC.nRec
+AND SpDocs.cMCUsl   == MaskUsl.nRec
+AND SpDocs.cGrMCUsl == GroupMC.nRec
+AND SpDocs.cGrMCUsl == GroupUsl.nRec
+AND SpDocs.cOtpEd   == KatOtpEd.nRec
+AND SpDocs.cMakeSp  == FiltAn.nRec
+//***********************************
+AND SpDocs2.cDoc    == Dogovor.nRec
+AND SpDocs2.cDoc    == CalPlan.nRec
+AND SpDocs2.cOtpEd  == KatOtpEdMain.nRec
+//***********************************
+ ));
+
+Parameters
+  pTiDkSpDocs // входной - SpDocs.TiDk
+, pNRecSpDocs // входной - SpDocs.nRec
+;
+
+Form errr('Zamen.out', 'errr') With NoVisual;
+
+Screen scrSpDocs;
+  Show at (,,, 3)
+  Table SpDocs2;
+Fields
+//******************************************************************************
+  sHeader: Skip, Centered,
+    { Font = { Bold = TRUE; Color = ColorSysYellow; BackColor = ColorSysBlue }};
+//******************************************************************************
+  if(SpDocs2.PrMC = 1, 'Товар', if(SpDocs2.PrMC = 2, 'Услуга', '')): Skip, Centered,
+    { Font = { Bold = TRUE }};
+//******************************************************************************
+  OwnerGroupName: Skip,
+    { Font = { Bold = TRUE }};
+//******************************************************************************
+  OwnerName     : Skip,
+    { Font = { Bold = TRUE }};
+//******************************************************************************
+  SpDocs2.Kol : ['\3p[|-]366`666`666`666.888'], Skip, Centered,
+    { Font = { Bold = TRUE }};
+//******************************************************************************
+  KatOtpEdMain.ABBR: Skip, Centered,
+    { Font = { Bold = TRUE }};
+//******************************************************************************
+<<
+.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+&Тип   &Группа                      &Наименование                          &Количество  &ЕдИзм
+.@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@ .@@@@@@
+>>
+end;
+
+Tree trSpDocs (,, sci178EscTree)
+  Show at (, 4,, 23)
+#ifdef ATL51
+  WideOffset, DottedLines, LinesAtRoot
+#end
+  Table SpDocs
+;
+Fields
+//**************************************************************************
+  SpDocs.CODE    #3'№'#13#3'п/п'    : [12], Protect, NoAutoSize;
+//**************************************************************************
+  SpDogVid       #3'Тип'            : [ 4], Protect, NoAutoSize, Centered;
+//**************************************************************************
+  SpDogGrName    #3'Группа'         : [15], Protect;
+//**************************************************************************
+  SpDogName      #3'Наименование'   : [20], Protect;
+//**************************************************************************
+  doMinValue     #3'Коэффициент'    : [11], Protect;
+//**************************************************************************
+  doMaxValue     #3'Процент'        : [ 7], Protect;
+//**************************************************************************
+  KolOnOwnerPos  #3'Количество'     : [10];
+//**************************************************************************
+  KatOtpEd.ABBR  #3'ЕдИзм'          : [ 5], Protect, NoAutoSize, Centered;
+//**************************************************************************
+  KolOnOwnerPos2 #3'Количество',
+                 #3'по спецификации': [15];
+//**************************************************************************
+end;  //Browse
+
+Screen scrFlAn (,,sci13Esc);
+  Show at (, 24,,)
+  Table SpDocs;
+Fields
+//******************************************************************************
+  FiltAn.Name ('Фильтр по аналитикам'): Protect, { Font = { Bold = TRUE; }};
+//******************************************************************************
+<<
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+!-------------------Определяет следующий номер в заменяющих записях-------------
+
+Function NextSpDocsZamen: string;
+var tmpN, maxN: string;
+{
+  maxN := '';
+  tmpN := '000';
+
+  if ( GetLast FastFirstRow SpDocs1 where (( pNRecSpDocs == SpDocs1.cDoc AND
+                                             pTiDkSpDocs == SpDocs1.TiDk
+                                          )) ordered by index SpDocs02 = tsOk )
+    {
+      maxN := SpDocs1.Code;
+
+      if ( maxN <> '' )
+        tmpN := maxN
+      else
+        tmpN := '000';
+    }
+
+  NextNumStr(tmpN);
+
+  NextSpDocsZamen := tmpN;
+}
+
+Procedure InsertZamen(pGroup, pMcUsl, pOtpEd: comp; PrNom: word);
+{
+  ClearBuffer(#SpDocs);
+
+  SpDocs.cSpMC  := pGroup;
+  SpDocs.cVal   := SpDocs1.cVal;
+  SpDocs.CODE   := NextSpDocsZamen;
+  SpDocs.cMCUsl := pMcUsl;
+  SpDocs.PrMC   := PrNom;
+  SpDocs.TiDk   := pTiDkSpDocs;
+  SpDocs.cDoc   := pNRecSpDocs;
+  SpDocs.Direct := SpDocs1.Direct;
+
+  case PrNom of
+  //***********
+    1:
+      if ( GetFirst KatMC where (( pMcUsl == KatMC.nRec )) = tsOk )
+        SpDocs.cGrMCUsl := KatMC.cGroupMC;
+  //***********
+    2:
+      if ( GetFirst KatUsl where (( pMcUsl == KatUsl.nRec )) = tsOk )
+        SpDocs.cGrMCUsl := KatUsl.cGroupUsl;
+  //***********
+  end; // case
+
+  SpDocs.MaxValue := 100;
+  SpDocs.MinValue := 1;
+
+  if ( pOtpEd <> 0 )
+    SpDocs.cOtpEd := pOtpEd
+  else
+    if ( GetFirst FastFirstRow KatOtpEd where (( word(1) == KatOtpEd.Akt    AND
+                                                 pMcUsl  == KatOtpEd.cMCUSL AND
+                                                 PrNom   == KatOtpEd.PrMC
+                                              )) = tsOk )
+      SpDocs.cOtpEd := KatOtpEd.nRec;
+
+  insert current SpDocs;
+}
+
+Procedure InsertMaskSpec(pOwner: comp; PrNom: word; OnFilter: boolean; pFltAn: comp);
+var pMask: comp;
+{
+  pMask := if(PrNom = 1, MaskMC.nRec, MaskUsl.nRec);
+
+  case PrNom of
+  //***********
+    1:
+      _LOOP KatMC2 where (( pMask == KatMC2.cMaskMC ))
+        {
+          if ( OnFilter AND ( pFltAn <> 0 ) )
+            if Not foFilterAn.isFilterAnCorrect(pFltAn, KatMC2.cHashAn)
+              Continue;
+
+          InsertZamen(pOwner, KatMC2.nRec, 0, 1);
+        }
+  //***********
+    2:
+      _LOOP KatUsl2 where (( pMask == KatUsl2.cMaskUsl ))
+        {
+          if ( OnFilter AND ( pFltAn <> 0 ) )
+            if Not foFilterAn.isFilterAnCorrect(pFltAn, KatUsl2.cHashAn)
+              Continue;
+
+          InsertZamen(pOwner, KatUsl2.nRec, 0, 2);
+        }
+  //***********
+  end; // case
+}
+
+//******************************************************************************
+Procedure ProcessOneThing(PrNom: word; pMcUsl, pOtpEd: comp);
+var
+  c: comp;
+  s: string;
+{
+  if ( SpDocs2.cMcUsl = pMcUsl )
+    Exit;
+
+  case PrNom of
+  //****************
+    1:
+      if ( GetFirst KatMC2 where (( SpDocs2.cMcUsl == KatMC2.nRec AND
+                                    KatMC2.cEd     == KatEd.nRec
+                                 )) = tsOk )
+        {
+          c := KatMC2.cEd;
+          s := KatEd.Name;
+
+          if ( GetFirst KatMC2 where (( pMcUsl     == KatMC2.nRec AND
+                                        KatMC2.cEd == KatEd.nRec
+                                     )) = tsOk )
+            {
+              if ( c <> KatMC2.cEd )
+                {
+                  if NOT errr.Contain
+                    {
+                      errr.Write('Данные МЦ не могут быть заменяющими,');
+                      errr.Write('т.к. у них не совпадает учетная единица измерения');
+                      errr.Write('с учетной единицей измерения заменяемой МЦ: ' + s);
+                      errr.Write('');
+                    }
+
+                  errr.Write('    ' + KatMC2.Name + '(' + KatEd.Name + ')');
+
+                  Exit;
+                }
+            }
+        }
+  //****************
+    2:
+      if ( GetFirst KatUsl2 where (( SpDocs2.cMcUsl == KatUsl2.nRec AND
+                                     KatUsl2.cEd    == KatEd.nRec
+                                  )) = tsOk )
+        {
+           c := KatUsl2.cEd;
+           s := KatEd.Name;
+
+           if ( GetFirst KatUsl2 where (( pMcUsl      == KatUsl2.nRec AND
+                                          KatUsl2.cEd == KatEd.nRec
+                                       )) = tsOk )
+             {
+               if ( c <> KatUsl2.cEd )
+                 {
+                   if NOT errr.Contain
+                     {
+                       errr.Write('Данные услуги не могут быть заменяющими');
+                       errr.Write('т.к. у них не совпадает учетная единица измерения');
+                       errr.Write('с учетной единицей измерения заменяемой услуги: ' + s);
+                       errr.Write('');
+                     }
+
+                   errr.Write('    ' + KatUsl2.Name + '(' + KatEd.Name + ')');
+
+                   Exit;
+                 }
+             }
+        }
+  //****************
+  end;
+
+  InsertZamen(0, pMcUsl, pOtpEd, PrNom);
+}
+//******************************************************************************
+
+!--------  Заполнение спецификации замен договора из каталога МС/услуг ---------------
+
+Procedure GetKatMCUsl;
+var
+//********************
+  pmc_
+   : comp;
+//********************
+  PrNom
+, wordPV
+, w1
+   : word;
+//********************
+{
+  if ( GetFirst FastFirstRow SpDocs1 where (( pNRecSpDocs == SpDocs1.nRec )) = tsOk )
+    PrNom := SpDocs1.PrMC;
+
+  pmc_ := SpDocs.cMcUsl;
+
+  case SpDocs1.PrMC of
+  //******************
+    1, 4, 5:
+      PrNom := 1;
+  //******************
+    2, 3:
+      PrNom := 2;
+  //******************
+  else
+    Exit;
+  end;
+
+  wordPV := if(PrNom = 1, word(7), word(12));
+
+  if ( delete Pick where (( WordPV == Pick.wList )) = tsOk )
+    {}
+
+  var oldUsTu: word;
+
+  oldUsTu := wGetTune('Pick.ChkGrpIns');
+
+  if ( oldUsTu <> 0 )
+    SetTune('Pick.ChkGrpIns', word(0));
+
+  case PrNom of
+    1: w1 := RunInterface('GetSomeMC',  pmc_);
+    2: w1 := RunInterface('GetSomeUsl', pmc_);
+  end;
+
+  if ( oldUsTu <> 0 )
+    SetTune('Pick.ChkGrpIns', OldUsTu);
+
+  if ( w1 = cmCancel )
+    Exit;
+
+  _LOOP Pick where (( WordPV == Pick.wList )) ordered by index pick02
+    ProcessOneThing(PrNom, Pick.cRec, 0);
+
+  RereadRecord(#SpDocs);
+
+  if errr.Contain
+    {
+      errr.PutEvent(feBreak);
+      errr.ShowFile('Ошибки добавления позиций');
+    }
+}
+
+!--------  Заполнение спецификации замен договора из прайс-листа ---------------
+
+Procedure GetPricesMCUsl;
+var PrNom: word;
+{
+  if ( RunInterface('GetPrice', SpDocs2.cPriceLs + 0, comp(0), PrNom, FALSE) = cmCancel )
+    Exit;
+
+    case SpDocs1.PrMC of
+    //******************
+      1, 4, 5:
+        if ( PrNom <> 1 )
+          Exit;
+    //******************
+      2, 3:
+        if ( PrNom <> 2 )
+          Exit;
+    //******************
+    else
+      Exit;
+    end;
+
+  _LOOP PickPric ordered by PickPric.nRec
+    ProcessOneThing(PrNom, PickPric.PickThing, PickPric.PickEd);
+
+  RereadRecord(#SpDocs);
+
+  if errr.Contain
+    {
+      errr.PutEvent(feBreak);
+      errr.ShowFile('Ошибки добавления позиций');
+    }
+}
+
+!--------  Заполнение спецификации замен договора из каталога МС/услуг ---------------
+
+Procedure GetMaskMCUsl;
+var
+//********************
+  pMask
+   : comp;
+//********************
+  PrNom
+, w1
+   : word;
+//********************
+{
+  if ( GetFirst FastFirstRow SpDocs1 where (( pNRecSpDocs == SpDocs1.nRec )) = tsOk )
+    case SpDocs1.PrMC of
+    //******************
+      1, 4, 5:
+        PrNom := 1;
+    //******************
+      2, 3:
+        PrNom := 2;
+    //******************
+    else
+      Exit;
+    end;
+
+  case PrNom of
+    1: w1 := RunInterface('GetMaskMC' , pMask);
+    2: w1 := RunInterface('GetMaskUsl', pMask);
+  end;
+
+  if ( w1 = cmCancel )
+    Exit;
+
+  var c: comp;
+  var s: string;
+
+  case PrNom of
+  //****************
+    1:
+      if ( GetFirst KatMC2 where (( SpDocs1.cMcUsl == KatMC2.nRec AND
+                                    KatMC2.cEd     == KatEd.nRec
+                                 )) = tsOk )
+        {
+          c := KatMC2.cEd;
+          s := KatEd.Name;
+
+          if ( GetFirst MaskMC2 where (( pMask       == MaskMC2.nRec AND
+                                         MaskMC2.cEd == KatEd.nRec
+                                      )) = tsOk )
+            if ( c <> MaskMC2.cEd )
+              {
+                Message('Данный шаблон не может быть заменяющим,'#13
+                      + 'т.к. у него не совпадает учетная единица измерения'#13
+                      + 'с учетной единицей измерения заменяемой позиции: ' + s, Warning);
+
+                Exit;
+              }
+        }
+  //****************
+    2:
+      if ( GetFirst KatUsl2 where (( SpDocs1.cMcUsl == KatUsl2.nRec AND
+                                     KatUsl2.cEd    == KatEd.nRec
+                                  )) = tsOk )
+        {
+           c := KatUsl2.cEd;
+           s := KatEd.Name;
+
+           if ( GetFirst MaskUsl2 where (( pMask        == MaskUsl2.nRec AND
+                                           MaskUsl2.cEd == KatEd.nRec
+                                        )) = tsOk )
+             if ( c <> MaskUsl2.cEd )
+               {
+                 Message('Данный шаблон не может быть заменяющим,'#13
+                       + 'т.к. у него не совпадает учетная единица измерения'#13
+                       + 'с учетной единицей измерения заменяемой позиции: ' + s, Warning);
+
+                 Exit;
+               }
+        }
+  //****************
+  end;
+
+  ClearBuffer(#SpDocs);
+
+  SpDocs.cSpMC  := 0;
+  SpDocs.cVal   := SpDocs1.cVal;
+  SpDocs.CODE   := NextSpDocsZamen;
+  SpDocs.cMCUsl := pMask;
+  SpDocs.PrMC   := PrNom * 10;
+  SpDocs.TiDk   := pTiDkSpDocs;
+  SpDocs.cDoc   := pNRecSpDocs;
+  SpDocs.Direct := SpDocs1.Direct;
+
+  case PrNom of
+  //***********
+    1: SpDocs.cGrMCUsl := MaskMC.cGroupMC;
+  //***********
+    2: SpDocs.cGrMCUsl := MaskUsl.cGroupUsl;
+  //***********
+  end; // case
+
+  SpDocs.MaxValue := 100;
+  SpDocs.MinValue := 1;
+
+  if ( GetFirst FastFirstRow KatOtpEd where (( word(1)         == KatOtpEd.Akt    AND
+                                               pMask           == KatOtpEd.cMCUSL AND
+                                               word(PrNom + 4) == KatOtpEd.PrMC
+                                            )) = tsOk )
+    SpDocs.cOtpEd := KatOtpEd.nRec;
+
+  RunInterface('GetFilterKAU', word(if(PrNom = 1, coKatMC, coKatUsl)), SpDocs.cMakeSp);
+
+  insert current SpDocs;
+
+  InsertMaskSpec(SpDocs.nRec, PrNom, SpDocs.cMakeSp <> 0, SpDocs.cMakeSp);
+
+  RereadRecord(#SpDocs);
+
+  if ( SpDocs.PrMC >= 10 )
+    SetFieldVisible(#FiltAn.Name, TRUE);
+}
+
+!-------------------Устанавливает формат бровзика-------------------------------
+
+Procedure SetMyFormat(_format: word); // 0 - Protect; 1 - edit
+{
+  curFormat := _format;
+
+  SetFieldProtected(#SpDocs.CODE   , _Format = 0);
+  SetFieldProtected(#doMinValue    , (_Format = 0) OR (SpDocs.cSpMC <> 0));
+  SetFieldProtected(#doMaxValue    , (_Format = 0) OR (SpDocs.cSpMC <> 0));
+  SetFieldProtected(#KolOnOwnerPos , (_Format = 0) OR (SpDocs.cSpMC <> 0));
+  SetFieldProtected(#KolOnOwnerPos2, (_Format = 0) OR (SpDocs.cSpMC <> 0));
+
+  if ( _Format = 0 )
+    {
+      var NewStat: word;
+
+      case SpDocs2.TiDk of
+      //******************
+        400, 401:
+          NewStat := if(Dogovor.Status = 0, sci14Esc, sci1Esc);
+      //******************
+        403:
+          NewStat := if(CalPlan.Status = 0, sci14Esc, sci1Esc);
+      //******************
+      end;
+
+      SetHelpAndStatusContext(trSpDocs,             -1, NewStat, 0);
+      SetHelpAndStatusContext(trSpDocs, #KatOtpEd.ABBR, NewStat, 0);
+
+      SetHelpAndStatusContext(scrFlAn, #FiltAn.Name, sci1Esc, 0);
+
+      SetTitle('Заменяющие МЦ/Услуги');
+    }
+  else
+    {
+      SetHelpAndStatusContext(trSpDocs,             -1,  sci178Esc, 0);
+      SetHelpAndStatusContext(trSpDocs, #KatOtpEd.ABBR, sci1378Esc, 0);
+
+      SetHelpAndStatusContext(scrFlAn, #FiltAn.Name, sci1378Esc, 0);
+
+      SetTitle('Заменяющие МЦ/Услуги (редактирование)');
+    }
+
+  SetInterfaceOptions(opEscClose OR if(CurFormat = 0, opCyanInterface, 0));
+}
+
+!-------------------------------------------------------------------------------
+
+HandleEvent  //Tree trSpDocs
+
+cmInit:
+  {
+    CurGroup := 0;
+
+    if ( RecordExists SpDocs where (( pTiDkSpDocs == SpDocs.TiDk
+                                  AND pNRecSpDocs == SpDocs.cDoc
+                                  AND ( (SpDocs.MinValue + SpDocs.MaxValue) > 0 )
+                                   )) <> tsOk )
+      update SpDocs set SpDocs.MinValue := 1, SpDocs.MaxValue := 100;
+
+    if ( GetFirst SpDocs where (( pNRecSpDocs == SpDocs.nRec )) = tsOk )
+      {
+        OwnerName      := SpDogName;
+        OwnerGroupName := SpDogGrName;
+        sHeader        := 'ЗАМЕНЯЕМАЯ ПОЗИЦИЯ';
+
+        if ( SpDocs.PrMC = 1 )
+          {
+            if ( GetFirst KatMC2 where (( SpDocs.cMcUsl == KatMC2.nRec AND
+                                          KatMC2.cEd    == KatEd.nRec
+                                       )) = tsOk )
+              sHeader := sHeader + ' (учетная единица ' + KatEd.Name + ')';
+          }
+        else
+          if ( GetFirst KatUsl2 where (( SpDocs.cMcUsl == KatUsl2.nRec AND
+                                         KatUsl2.cEd   == KatEd.nRec
+                                      )) = tsOk )
+            sHeader := sHeader + ' (учетная единица ' + KatEd.Name + ')';
+      }
+
+    if ( GetFirst SpDocs = tsOk )
+      SetMyFormat(0)
+    else
+      {
+        CanEdit := TRUE;
+
+        case SpDocs2.TiDk of
+        //******************
+          400, 401:
+            CanEdit := (Dogovor.Status = 0);
+        //******************
+          403:
+            CanEdit := (CalPlan.Status = 0);
+        //******************
+        end;
+
+        if CanEdit
+          SetMyFormat(1)
+        else
+          {
+            Message('Заменяющие МЦ/Услуги отсутствуют', InFormation);
+            Abort;
+          }
+      }
+    RereadRecord(#SpDocs);
+  }
+
+cmOpenSearch:
+  if ( curFormat = 1 )
+    Abort;
+
+cmCancel:
+  if ( ( curFormat = 1 ) AND UpdateTable )
+    {
+      SetMyFormat (0);
+      RereadRecord(#SpDocs);
+      Abort;
+    }
+
+cmDefault:
+  if ( curFormat = 0 )
+    CloseInterface(cmDone);
+
+cmEdit:
+  SetMyFormat(1);
+
+end; // HandleEvent Browse brSpDocs
+
+!-----------Обработка событий таблицы SpDocs------------------------------------
+Panel paSpDog
+  Table SpDocs;
+
+HandleEvent // Panel paSpDog
+
+cmExprFieldChanged: // меняем вычисляемое поле
+  case CurField of
+  //****************
+    #doMinValue:
+      set SpDocs.MinValue := double(ExprFieldValue);
+  //****************
+    #doMaxValue:
+      set SpDocs.MaxValue := double(ExprFieldValue);
+  //****************
+    #KolOnOwnerPos:
+      set SpDocs.MaxValue := double(ExprFieldValue) * KatOtpEd.Koef * 100 / ( SpDocs.MinValue * SpDocs2.Kol * KatOtpEdMain.Koef );
+  //****************
+    #KolOnOwnerPos2:
+      set SpDocs.MaxValue := double(ExprFieldValue) * 100 / ( SpDocs.MinValue * SpDocs2.Kol );
+  //****************
+  end;
+
+cmPick:
+  case CurField OF
+  //*************************
+    #KatOtpEd.ABBR:
+      {
+        if ( SpDocs.cMCUSL = 0 )
+          Exit;
+
+        if ( RunInterface('GetOtpEd', SpDocs.cMCUSL
+                                    , SpDocs.cOtpEd
+                                    , SpDocs.PrMC ) <> cmCancel )
+          set SpDocs.cOtpEd := SpDocs.cOtpEd;
+
+        update current SpDocs;
+      }
+  //*************************
+    #FiltAn.Name:
+      if ( SpDocs.PrMc >= 10 )
+        if ( RunInterface('GetFilterKAU', word(if(SpDocs.PrMC = 10, coKatMC, coKatUsl)), SpDocs.cMakeSp) <> cmCancel )
+          {
+            update current SpDocs;
+
+            delete SpDocs3 where (( SpDocs.nRec == SpDocs3.cSpMC ));
+
+            InsertMaskSpec(SpDocs.nRec, SpDocs.PrMC div 10, TRUE, SpDocs.cMakeSp);
+
+            RereadRecord(#SpDocs);
+          }
+  //*************************
+ end;
+
+cmDelOnProtect:
+  if ( CurFormat = 0 )
+    Abort
+  else
+      case CurField OF
+      //*************************
+        #FiltAn.Name:
+          if ( Message('Будут обновлены замены по шаблону. Продолжить?', YesNo + Confirmation) = cmYes )
+            {
+              update current SpDocs set SpDocs.cMakeSp := 0;
+
+              delete SpDocs3 where (( SpDocs.nRec == SpDocs3.cSpMC ));
+
+              InsertMaskSpec(SpDocs.nRec, SpDocs.PrMC div 10, FALSE, 0);
+
+              RereadRecord(#SpDocs);
+            }
+      //*************************
+      else
+        Abort;
+      end;
+
+cmUpdateRecord:
+  update current SpDocs;
+
+cmDeleteRecord:
+  {
+    if ( SpDocs.cSpMC <> 0 )
+      {
+        Message('Нельзя удалять позиции шаблона!', Warning);
+        Abort;
+        Exit;
+      }
+
+    if ( Message('Удалить запись?', YesNo + mfSwapButtons) = Yes )
+      {
+        delete SpDocs3 where (( SpDocs.nRec == SpDocs3.cSpMC ));
+        delete current SpDocs;
+      }
+
+    RescanPanel(#SpDocs);
+  }
+
+cmPositionChanged:
+  {
+    if ( CurFormat = 1 )
+      {
+        SetFieldProtected(#doMinValue    , SpDocs.cSpMC <> 0);
+        SetFieldProtected(#doMaxValue    , SpDocs.cSpMC <> 0);
+        SetFieldProtected(#KolOnOwnerPos , SpDocs.cSpMC <> 0);
+        SetFieldProtected(#KolOnOwnerPos2, SpDocs.cSpMC <> 0);
+      }
+
+    SetFieldVisible(#FiltAn.Name, SpDocs.PrMC >= 10);
+  }
+
+cmTreeTop:
+  CurGroup := 0;
+
+cmTreeUp:
+  CurGroup := SpDocs.cSpMC;
+
+cmTreeDown:
+  CurGroup := SpDocs.nRec;
+
+cmTreeNodeType:
+  if ( RecordExists SpDocs3 where (( SpDocs.nRec == SpDocs3.cSpMC )) <> tsOk )
+    TreeSetNodeType(trSpDocs, 2);
+
+end; // HandeEvent Panel paSpDog;
+
+end; // Panel paSpDog;
+
+HandleEvent
+
+cmHotKeys:
+  if ( CurFormat = 1 )
+    PutHotCommand(RunMenu('mnuZamenMcSpec'));
+
+cmInsert:
+  {
+    Abort;
+    PutHotCommand(RunMenu('mnuZamenMcSpec'));
+  }
+
+cmValue1:
+  if ( CurFormat = 1 )
+    GetPricesMCUsl;
+
+#ifdef __IsEnableCrossTable__
+cmValue2:
+  {
+    if ( CurFormat = 1 )
+     RunInterface('iMDA_DG_RunCrossTableForEditListAltMC', pNRecSpDocs);
+      RereadRecord(#SpDocs);
+  }
+#end
+
+cmAltInsert:
+  if ( CurFormat = 1 )
+    GetKatMCUsl;
+
+cmInsLowLevel:
+  if ( CurFormat = 1 )
+    GetMaskMCUsl;
+
+end;
+
+End. // Interface
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::ZamenMcSpec>L_Dogovor::ZamenMcSpec - Заменяющие МЦ/Услуги</link>
+#end
+mnuZamenMcSpec Menu
+{
+- 'Добавить позиции из каталога'     , cmAltInsert  , 'Добавить в замены позиции из каталога'     , hcdogM_zamen,  'Alt+F7',  kbAltF7, sci1Esc;
+- 'Добавить позиции из прайс-листа'  , cmValue1     , 'Добавить в замены позиции из прайс-листа'  , hcdogM_zamen,        '',         , sci1Esc;
+#ifdef __IsEnableCrossTable__
+- 'Добавить позиции из кросс-таблицы', cmValue2     , 'Добавить в замены позиции из кросс-таблицы', hcdogM_zamen,        '',         , sci1Esc;
+#end
+- 'Добавить шаблон'                  , cmInsLowLevel, 'Добавить в замены шаблон'                  , hcdogM_zamen, 'Ctrl+F7', kbCtrlF7, sci1Esc;
+}

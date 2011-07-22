@@ -1,0 +1,700 @@
+// ------------------------------------------------------------------------------
+//                                                       (c) корпорация Галактика
+// Галактика 8.1 - УKC
+// Сметные разделы
+// ------------------------------------------------------------------------------
+
+#include KatStroy.vih  
+#include Marker.vih  
+
+#doc
+Каталог сметных разделов
+#end
+Interface VidRabot 'Каталог сметных разделов' EscClose, DoAccept;
+  Show at(,, 80, 20);
+
+Const
+  cgSmetRazd = 6;
+End;
+
+// ------------------------------------------------------------------------------
+Procedure SetPropInterface(mode: integer); forward;
+
+// ------------------------------------------------------------------------------
+var Marker: IMarker(Marker) new;
+
+// ------------------------------------------------------------------------------
+Create view
+var
+  opt           : word;
+  cType,
+  vcNode,
+  cur_CatalPSD,
+  cUKS          : comp;
+  Search_Field,
+  sTitleBase,
+  sTitleFilter  : string;
+  ES,
+  vbFilterActive: boolean;
+
+As select
+ if (cUKS = 0, 'Не установлен', KatStroyF.Name) (FieldName = sKatStroyF_Name),
+  *
+
+// ------------------------------------------------------------------------------
+From
+  CatalPSD,
+  CatalPSD CatalPSD2,
+  CatalPSD SubCatalPSD,
+  KatStroy,
+  KatStroy KatStroyF
+
+where ((
+      CatalPSD.cTypeUr  == KatStroy.NRec
+  and cUKS              == KatStroyF.NRec
+  and cgSmetRazd        == CatalPSD2.VidCatal
+  and CatalPSD.NRec     == SubCatalPSD.cRec
+))
+
+Bounds tr_br =   cgSmetRazd == CatalPSD.VidCatal
+                               Ordered by TableOrder
+
+Bounds tr_tr =   cgSmetRazd == CatalPSD.VidCatal and
+                     vcNode == CatalPSD.cRec
+                               Ordered by TableOrder
+Bounds bycUKS =
+  cUKS == CatalPSD.cTypeUr (NoIndex) ordered by TableOrder
+
+Order byNum  by CatalPSD.Num
+Order byName by CatalPSD.Name
+;
+
+Parameters
+  cur_CatalPSD,
+  ES;
+
+var
+  curInterfaceMode: word;
+  curTypeUrov,
+  vcCatalPSD: comp;
+  CurCom, 
+  CurOrd, 
+  CurFormat: longint;
+
+//------------------------------------------------------------------------------
+Tree 2 trCatPSD (,, sci1478EnInsEscExTreeA);
+  Table CatalPSD;
+  RecMarker = Marker {CatalPSD.nRec};
+Fields
+  CatalPSD.Prim #3'Код', ('Номер'): [10], Protect;
+  CatalPSD.Name #3'Название', ('Название'): [40], Protect;
+  Katstroy.Name #3'Объект строительства', ('Наименование объекта строительства'): [30], Protect;
+End;
+
+//------------------------------------------------------------------------------
+
+Browse brCatPSD;
+  Table CatalPSD;
+  RecMarker = Marker {CatalPSD.nRec};
+Fields
+  CatalPSD.Prim #3'Код', ('Номер'): [10], Protect;
+  CatalPSD.Name #3'Название', ('Название'): [40], Protect;
+  Katstroy.Name #3'Объект строительства', ('Наименование объекта строительства'): [30], Protect;
+End;
+
+//------------------------------------------------------------------------------
+Procedure SetFilterMenu(_vwParam: word);
+{
+  case _vwParam of
+    1: EnableCommand(cmFilterSave);
+    2: DisableCommand(cmFilterSave);
+  end;
+}
+
+// ------------------------------------------------------------------------------
+Procedure SetFilter(_vbParam: boolean);
+{
+  if (_vbParam)
+  {
+    if (BoundActive(tbbycUKS))
+      SubBounds(tbbycUKS);
+    AddBounds(tbbycUKS);
+  }
+  else
+  {
+    if (BoundActive(tbbycUKS))
+      SubBounds(tbbycUKS);
+  }
+  RereadRecord(#CatalPSD);
+}
+
+
+// ------------------------------------------------------------------------------
+Procedure ReadFilter;
+{
+  var Datechanged: boolean;
+
+  if (not ReadMyDsk(cUKS, 'FiltVidRabot_cUKS', Datechanged))
+    cUKS := 0;
+}
+
+//------------------------------------------------------------------------------
+
+Procedure WriteFilter;
+{
+  SaveMyDsk(cUKS, 'FiltVidRabot_cUKS');
+}
+
+//------------------------------------------------------------------------------
+
+Procedure OpenAll(tr, tab: longint);
+{
+  StartNewVisual(vtRotateVisual, vfTimer, 'Открытие', 1);
+
+  TreePushPos(tr);
+  TreeGetFirst(tr);
+
+  do
+    TreeOpenNode(tr);
+  while (TreeGetNext(tr));
+
+  TreePopPos(tr);
+
+  RereadRecord(tab);
+  StopVisual('', 0);
+}
+
+//------------------------------------------------------------------------------
+
+Window wnFilter 'Установка фильтра' ('Установка фильтра',, sci13EnEsc) EscClose, DoAccept, Gray;
+  Show at (,, 80, 6);
+
+Screen SetFilt
+  Table CatalPSD;
+
+Fields
+ sKatStroyF_Name ('Объект строительства',, sci13Esc): Protect;
+
+Buttons
+  cmValue1, Default,, 'Установить фильтр';
+  cmValue2,,, 'Снять фильтр';
+  cmCancel,,, 'Отмена';
+<<
+
+  `Объект строительства`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  <. ~У~становить фильтр .> <.   ~С~нять фильтр    .> <.      ~О~тмена       .>
+>>
+end;
+
+HandleEvent // wnFilter
+
+cmValue1:
+{
+  CloseWindow(wnFilter);
+  vbFilterActive := true;
+  SetFilter(vbFilterActive);
+  sTitleFilter := '[фильтр]';
+  SetTitle(sTitleBase + ' ' + sTitleFilter);
+}
+
+cmValue2:
+{
+  CloseWindow(wnFilter);
+  vbFilterActive := false;
+  SetFilter(vbFilterActive);
+  sTitleFilter := '';
+  SetTitle(sTitleBase + ' ' + sTitleFilter);
+}
+
+End;
+
+End; // wnFilter
+
+// ------------------------------------------------------------------------------
+Function ExistCodePart(asCode: string): boolean;
+{
+  Result := false;
+  
+  _loop CatalPSD2
+  {
+    NextVisual;
+    if (SubStr(CatalPSD2.Num, 6, 5) = asCode)
+    {
+      Result := true;
+      break;
+    }
+  }
+}
+
+// ------------------------------------------------------------------------------
+Function ExistNum(asNum: string): boolean;
+{
+  if (CurFormat = brCatPSD)
+    Result := (GetFirst CatalPSD2 where (( cgSmetRazd == CatalPSD2.VidCatal and
+                                           asNum      == CatalPSD2.Prim (NoIndex) )) = tsOk);
+  else
+    Result := (GetFirst CatalPSD2 where (( cgSmetRazd == CatalPSD2.VidCatal and
+                                           vcNode     == CatalPSD2.cRec     and
+                                           asNum      == CatalPSD2.Prim (NoIndex) )) = tsOk);
+}
+
+// ------------------------------------------------------------------------------
+TableEvent
+  Table CatalPSD;
+
+cmInsertRecord:
+{
+  var sUniq: string;
+  sUniq := SubStr(CatalPSD.Num, 6, 5);
+  CatalPSD.Num := PadCh(SubStr(CatalPSD.Prim, 1, 5), ' ', 5) + sUniq;
+  insert current CatalPSD;
+}
+
+cmUpdateRecord:
+{
+  var sUniq: string;
+  sUniq := SubStr(CatalPSD.Num, 6, 5);
+  CatalPSD.Num := PadCh(SubStr(CatalPSD.Prim, 1, 5), ' ', 5) + sUniq;
+  update current CatalPSD;
+}
+
+cmDeleteRecord:
+  delete current CatalPSD;
+
+cmSetDefault:
+{
+  var sUniq, sNum: string;
+  sUniq := '00000';
+  sNum  := '001';
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Генерация уникального кода', 1);
+  while (ExistCodePart(sUniq))
+  {
+    sUniq := NextNumStr(sUniq);
+    if (sUniq = '99999')
+    {
+      message('Превышено максимально допустимое количество элементов каталога.'#13 +
+              'Создание новой записи невозможно.', Information);
+      abort;
+      break;
+    }
+  }
+  CatalPSD.Num := '     ' + sUniq;
+
+  while(ExistNum(sNum))
+    sNum := NextNumStr(sNum);
+  CatalPSD.Prim := sNum;
+
+  StopVisual('', 0);
+}
+
+cmPick:
+{
+  case CurField of
+    
+    #Katstroy.Name:
+    {
+      var vcCatalPSD_cTypeUr: comp;
+
+      vcCatalPSD_cTypeUr := CatalPSD.cTypeUr;
+
+      if (RunInterface('KatStroy', 0, true, vcCatalPSD_cTypeUr, false, false, true) <> cmCancel)
+      {
+        if (CatalPSD.cTypeUr <> vcCatalPSD_cTypeUr)
+        {
+          set CatalPSD.cTypeUr := vcCatalPSD_cTypeUr;
+          UpdateTable;
+        }
+      }
+    }
+    
+    #sKatstroyF_Name:
+    {
+      var cUksOld: comp;
+      cUksOld := cUKS;
+
+      if (RunInterface('KatStroy', 0, true, cUksOld, false, false, true) <> cmCancel)
+        if (cUKS <> cUksOld)
+        {
+          set cUKS := cUksOld;
+          WriteFilter;
+        }
+    }
+  end;
+  RereadRecord(#CatalPSD);
+}
+
+cmTreeTop:
+{
+  vcNode := 0;
+}
+
+cmTreeUp:
+{
+  vcNode := CatalPSD.cRec;
+}
+
+cmTreeDown:
+{
+  vcNode := CatalPSD.NRec;
+}
+
+cmTreeNodeType:
+{
+  if (TreeIsTerminal(trCatPSD) or IsNew)
+    TreeSetNodeType(trCatPSD, ntfText)
+}
+
+cmTreeNeedOwner:
+{
+  TreeJumpToRecord(trCatPSD, CatalPSD.cRec);
+}
+
+end;
+
+// ------------------------------------------------------------------------------
+
+HandleEvent
+
+cmInit:
+{
+  ReadFilter;
+  Marker.Caption := (' Выбрано: %d');
+  sTitleFilter := '';
+
+  CurFormat := trCatPSD;
+  SetFilterMenu(2);
+
+  PushBounds(tbtr_tr);
+  TreeJumpToRecordEx(trCatPSD, #CatalPSD, cur_CatalPSD);
+  
+  SetColumnSorting(CurFormat, #CatalPSD.Name, 1);
+  SetOrder(tiByName);
+  SetTableBackOrderIn(#CatalPSD, false);
+  CurOrd := tiByName;
+
+  SetFormat(CurFormat);
+  RereadRecord(#CatalPSD);
+
+  SetPropInterface(0);
+
+  if (not IsValid(#CatalPSD))
+    SetPropInterface(1);
+
+  if (ES)
+    SelectField(#CatalPSD.Name);
+
+}
+
+cmAddNewRec:
+{
+  if (curInterfaceMode = 0)
+    SetPropInterface(1);
+}
+
+cmInsLowLevel:
+{
+  SetPropInterface(1);
+}
+
+cmEdit:
+{
+  SetPropInterface(1);
+}
+
+cmCancel:
+{
+  if (curInterfaceMode = 1)
+  {
+    SetPropInterface(0);
+    abort;
+  }
+}
+
+cmClose:
+{
+  if (curInterfaceMode = 1)
+  {
+    SetPropInterface(0);
+    abort;
+  }
+}
+
+cmPositionChanged:
+{
+  if (IsValid(#CatalPSD))
+    vcCatalPSD := CatalPSD.NRec;
+  else
+    vcCatalPSD := 0;
+}
+
+cmColumnClicked:
+{
+  case Target of
+    #CatalPSD.Prim: CurOrd := tiByNum;
+    #CatalPSD.Name: CurOrd := tiByName;
+  else
+  {
+    abort;
+    exit;
+  }
+  end;
+
+  SetOrder(CurOrd);
+
+  case GetColumnSorting(CurFormat, Target) of
+    -1:
+    {
+      SetColumnSorting(CurFormat, Target, 1);
+      SetTableBackOrderIn(#CatalPSD, false);
+    }
+    0:
+    {
+      SetColumnSorting(CurFormat, Target, 1);
+      SetOrder(CurOrd);
+      SetTableBackOrderIn(#CatalPSD, false);
+    }
+    1:
+    {
+      SetColumnSorting(CurFormat, Target, -1);
+      SetTableBackOrderIn(#CatalPSD, true);
+    }
+  end;
+
+  RescanPanel(#CatalPSD);
+}
+
+cmShowAll: // Раскрыть все ветки
+{
+  if (CurFormat = trCatPSD)
+    OpenAll(trCatPSD, #CatalPSD);
+}
+
+cmHideAll: // Свернуть все ветки
+{
+  if (CurFormat = brCatPSD)
+  {
+    abort;
+    exit;
+  }
+
+  TreeGetFirst(trCatPSD);
+  TreeCloseAllOpenedNode(trCatPSD);
+
+  RescanPanel(#CatalPSD);
+}
+
+cmAccording:
+{
+  var s: integer;
+  s := GetColumnSorting(CurFormat, if(CurOrd = tiByName, #CatalPSD.Name, #CatalPSD.Prim));
+
+  var vbMojno: boolean;
+
+  vbMojno := true;
+
+  if (CurFormat = trCatPSD)
+  {
+    PopBounds(tbtr_tr);
+    PushBounds(tbtr_br);
+    CurFormat := brCatPSD;
+    SetFilterMenu(1);
+  }
+  else
+  {
+    if (vbMojno)
+    {
+      vcNode := CatalPSD.cRec;
+      PopBounds(tbtr_br);
+      PushBounds(tbtr_tr);
+      CurFormat := trCatPSD;
+      TreeJumpToRecordEx(trCatPSD, #CatalPSD, CatalPSD.NRec);
+      SetFilterMenu(2);
+    }
+  }
+
+  if (vbMojno)
+  {
+    SetFormat(CurFormat);
+
+    SetColumnSorting(CurFormat, if(CurOrd = tiByName, #CatalPSD.Name, #CatalPSD.Prim), s);
+
+    SetPropInterface(curInterfaceMode);
+  }
+
+  RescanPanel(#CatalPSD);
+}
+
+cmFilterSave:
+{
+  RunWindowModal(wnFilter);
+}
+
+cmHotKeys:
+{
+  if (CurFormat = brCatPSD)
+  {
+    DisableCommand(cmShowAll);
+    DisableCommand(cmHideAll);
+  }
+
+  PutHotCommand(RunMenu('mnuVidRabot'));
+
+  EnableCommand(cmShowAll);
+  EnableCommand(cmHideAll);
+}
+
+cmDelOnProtect:
+{
+  if (curInterfaceMode <> 1)
+  {
+    abort;
+    exit;
+  }
+
+  if (CurField = #KatStroy.Name)
+    set CatalPSD.cTypeUr := 0;
+}
+
+cmDefault:
+{
+  if (not ES)
+    abort;
+  else
+  {
+    SelectField(#CatalPSD.Name);
+    if (UpdateTable)
+      cur_CatalPSD := CatalPSD.NRec;
+  }
+}
+
+cmDelete:
+{
+  if (CurFormat = brCatPSD) and (isValid(#SubCatalPSD))
+  {
+    message('В режиме линейного списка нельзя удалить запись,'#13 +
+            'так как есть подчиненные записи.', Information);
+    abort;
+    exit;
+  }
+
+  if (not IsNew)
+    if (message('Удалить текущую запись?', YesNo) <> cmYes)
+      abort;
+    else
+      if (CurFormat = trCatPSD)
+      {
+        TreeDelTree(trCatPSD);
+        RescanPanel(#CatalPSD);
+        stop;
+      }
+}
+
+cmInsert:
+{
+  if (curInterfaceMode = 0)
+    SetPropInterface(1);
+}
+
+cmTreeInsLevel:
+{
+  SetPropInterface(1);
+}
+
+cmOpenSearch:
+{
+  if (CurFormat <> brCatPSD)
+  {
+    CurCom := cmOpenSearch;
+    ProcessCommand(cmAccording);
+  }
+}
+
+cmCloseSearch:
+{
+  if (CurCom = cmOpenSearch)
+  {
+    CurCom := 0;
+    PutCommand(cmAccording);
+  }
+}
+
+cmDone:
+{
+  Marker.ExportToName('VidRabot');
+}
+
+end;
+
+
+// ------------------------------------------------------------------------------
+
+Procedure SetPropInterface(mode: integer); // 0-просмотр; 1-редактирование
+{
+  var Name_Interface, acont, obj_typr: string;
+  var self_: longint;
+
+  curInterfaceMode := mode;
+
+  sTitleBase := 'Сметные разделы';
+
+  if (mode = 0)
+  {
+    SetFieldOption(#CatalPSD.Prim, ofProtected);
+    SetFieldOption(#CatalPSD.Name, ofProtected);
+
+    if (CurFormat = trCatPSD)
+    {
+      SetHelpAndStatusContext(trCatPSD, #CatalPSD.Prim, sci1478EnInsEscExTreeA, - 1);
+      SetHelpAndStatusContext(trCatPSD, #CatalPSD.Name, sci1478EnInsEscExTreeA, - 1);
+      SetHelpAndStatusContext(trCatPSD, #Katstroy.Name, sci1478EnInsEscExTreeA, - 1);
+    }
+    else
+    {
+      SetHelpAndStatusContext(brCatPSD, #CatalPSD.Prim, sci1478EscIns, - 1);
+      SetHelpAndStatusContext(brCatPSD, #CatalPSD.Name, sci1478EscIns, - 1);
+      SetHelpAndStatusContext(brCatPSD, #Katstroy.Name, sci1478EscIns, - 1);
+    }
+
+    if (ES)
+      sTitleBase := 'Выбор сметного раздела';
+  }
+  else
+  {
+    ClearFieldOption(#CatalPSD.Prim, ofProtected);
+    ClearFieldOption(#CatalPSD.Name, ofProtected);
+
+    if (CurFormat = trCatPSD)
+    {
+      SetHelpAndStatusContext(trCatPSD, #CatalPSD.Prim,
+                              if(ES, sci178EscExEnTree_InsLevel, sci178EscExTree_InsLevel), - 1);
+      SetHelpAndStatusContext(trCatPSD, #CatalPSD.Name,
+                              if(ES, sci178EscExEnTree_InsLevel, sci178EscExTree_InsLevel), - 1);
+      SetHelpAndStatusContext(trCatPSD, #Katstroy.Name,
+                              if(ES, sci1378EscExEnTree_InsLevel, sci1378EscExTree_InsLevel), - 1);
+    }
+    else
+    {
+      SetHelpAndStatusContext(brCatPSD, #CatalPSD.Prim, if(ES, sci178EnEsc, sci178Esc), - 1);
+      SetHelpAndStatusContext(brCatPSD, #CatalPSD.Name, if(ES, sci178EnEsc, sci178Esc), - 1);
+      SetHelpAndStatusContext(brCatPSD, #Katstroy.Name, if(ES, sci1378EnEsc, sci1378Esc), - 1);
+    }
+  }
+
+  SetInterfaceOptions(if(curInterfaceMode = 0, opEscClose or opCyanInterface, 0));
+  SetTitle(sTitleBase + ' ' + sTitleFilter);
+}
+
+End.  // Interface
+
+// ------------------------------------------------------------------------------
+
+mnuVidRabot Menu
+{
+  - 'Переключить режим отображения', cmAccording, 'Переключает режим отображения с дерева на линейный список и наоборот', , 'Alt+S', kbAltS, sci1Esc;
+  - '~Р~аскрыть все ветки',          cmShowAll,   'Разворачивает все дерево документов', , 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+  - 'С~в~ернуть все ветки',          cmHideAll,   'Сворачивает все дерево документов', , 'Ctrl+''-''', kbCtrlGrayMinus, sci1Esc;
+  -------;
+  - 'Установка фильтра',             cmFilterSave, 'Установка/снятие ограничений на просмотр объектов строительства', hcUKSLMObjStr, 'Alt+B', kbAltB, sci1Esc;
+}

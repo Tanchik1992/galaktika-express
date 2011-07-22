@@ -1,0 +1,286 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Выборы позиций ДО при резервировании по разрезу           ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор разреза резервирования по ДО
+
+Параметры:
+  tmpSklMol.cPodr - ссылка на склад
+  tmpSklMol.cMol  - ссылка на МОЛ
+#end
+
+//******************************************************************************
+
+Interface GetReservRasres 'Выбор разреза резервирования по ДО' EscClose, cyan, doAccept;
+  Show at (7,3,73,17);
+create view
+(
+  OtpEd
+)
+as select
+  if (SpStep.cOtpEd=0,KatEd.Name,KatOtpEd.Name)
+from
+  tmpSklMol,
+  tmpNaklOst,
+  KatParty,
+  KatMC,
+  KatPodr,
+  KatMol,
+  SpStep,
+  KatOtpEd,
+  KatEd
+where
+((
+  tmpSklMol.cPodr    == tmpNaklOst.cPodr and
+  tmpSklMol.cMol     == tmpNaklOst.cMol  and
+  tmpSklMol.cPodr    == KatPodr.NRec     and
+  tmpSklMol.cMol     == KatMol.NRec      and
+  tmpNaklOst.cMC     == KatMC.NRec      and
+  tmpNaklOst.cParty  == KatParty.NRec   and
+  tmpNaklOst.cSpStep == SpStep.NRec     and
+  SpStep.cOtpEd      == KatOtpEd.NRec   and
+  KatMC.cEd          == KatEd.NRec
+));
+Parameters
+  tmpSklMol.cPodr,
+  tmpSklMol.cMol;
+
+Window wnadvview 'Состав резерва' EscClose, cyan;
+  Show at (3,4,107,16);
+Panel pnrazadvview
+  show at (,,,2)
+  table tmpsklmol;
+Screen scrAdvViewRaz
+Fields
+  KatPodr.Name : skip,{font={bold=true}};
+  KatMol.Name :skip,{font={bold=true}};
+<<
+  Склад.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     МОЛ.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen scrAdvViewRaz
+end; // panel pnrazadvview
+
+Panel pnadvview
+  show at (,3,,)
+  table tmpNaklOst;
+Browse brAdvView (,,sci1Esc)
+fields
+  KatMC.Name    'Наименование МЦ' : [25], protect;
+  KatMC.BarKod  'Код МЦ'          : [12], protect,NoAutoSize;
+  KatParty.Name 'Партия'          : [15],skip;
+  OtpEd         'Ед.изм.'         : [7], skip,NoAutoSize;
+  tmpNaklOst.Kol'Остаток'         : [12],[prSignsInKol], skip,NoAutoSize;
+end; // browse brAdvView
+end; // panel pnadvview
+end; // window wnadvview
+
+!
+! = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+!
+
+Panel MainSelect
+  table tmpSklMol;
+Browse brMainSelect ('Склад, на котором зарезервированы МЦ (<Ctrl><Enter> - просмотр состава)',,sci1EnEsc);
+fields
+  KatPodr.Name 'Склад' : [31], protect;
+  KatMol.Name  'Материально-отвественное лицо' : [30], skip;
+end; // browse brMainSelect
+end; // panel MainSelect
+
+HandleEvent
+cmAttrib:
+  RunWindowModal(wnAdvView);
+cmInit:
+  if (GetFirst tmpSklMol <> tsOk)
+    Abort;
+end; // interface
+End.
+
+!
+!==============================================================================
+!==============================================================================
+!==============================================================================
+!
+
+#doc
+Выбор позиций ДО при резервировании по разрезу
+#end
+Interface GetReservesPos 'Выбор позиций ДО' EscClose, Cyan;
+  Show at (,3,108,19);
+create view
+var
+  tPodr, tMol: comp;
+  defstate : boolean;
+(
+  Picked,
+  OtpEd
+)
+as select
+  if (IsValid(tnPick), '√', ''),
+  if (SpStep.cOtpEd = 0,KatEd.Abbr,KatOtpEd.Abbr)
+from
+  Pick,
+  KatMC,
+  tmpNaklOst,
+  KatParty,
+  KatEd,
+  KatOtpEd,
+  SpStep
+where
+((
+  tPodr                 == tmpNaklOst.cPodr and
+  tMol                  == tmpNaklOst.cMol and
+  word(555)             == Pick.wlist and
+  tmpNaklOst.NRec       == Pick.cRec and
+  tmpNaklOst.cMC        == KatMC.NRec and
+  tmpNaklOst.cParty     == KatParty.NRec and
+  tmpNaklOst.cSpStep    == SpStep.NRec and
+  KatMC.cEd             == KatEd.NRec and
+  SpStep.cOtpEd         == KatOtpEd.NRec
+))
+;
+Parameters
+  tPodr,
+  tMol;
+
+Procedure KillPickList;
+{
+  ResetBounds(#Pick);
+  Delete Pick where ((word(555) == Pick.wList));
+  SetBounds(#Pick);
+} // procedure KillPickList
+
+Procedure InsPickList;
+{
+  ClearBuffer(#Pick);
+  Pick.wList := 555;
+  Pick.cRec := tmpNaklOst.NRec;
+  Pick.PickKol := tmpNaklOst.Kol;
+  insert current Pick;
+} // procedure InsPickList
+
+Panel pntmpNaklOst
+  table tmpNaklOst;
+
+Browse brtmpNaklOst ('Выберете нужные матценности',hcAllVPick,sci1EnIns);
+fields { font = { color = if(Picked='√',ColorMark,0) }};
+  Picked        '√'           :[1],   skip,NoAutoSize;
+  KatMC.Name    'Название МЦ' :[20],  protect;
+  KatMC.BarKod  'Код МЦ'      :[12],  protect,NoautoSize;
+  OtpEd         'Ед.изм.'     :[4],   skip,NoAutoSize;
+  KatParty.Name 'Партия'      :[15],  skip;
+  Pick.Pickkol  'Выбрано'     :[9],[prSignsInKol], noprotect,NoAutoSize;
+  tmpNaklOst.kol 'Всего'      :[9],[prSignsInKol], skip,NoAutoSize;
+end;
+
+HandleEvent
+
+cmPositionChanged :
+  if (isValid(#Pick))
+    SetFieldOption(#Pick.PickKol,ofSelectable)
+  else
+    {
+      ClearFieldOption(#Pick.PickKol,ofSelectable);
+      SelectField(#KatMC.Name);
+    }
+
+cmCheckField :
+  if (CurField = #Pick.PickKol)
+    {
+      if (IsValid(#Pick))
+        {
+          if (Pick.PickKol > tmpNaklOst.Kol)
+            Pick.PickKol := Double(OldFieldValue)
+          else
+            {
+              Update Current Pick;
+              RereadRecord(#Pick);
+              RescanPanel(#tmpNaklOst);
+            }
+        }
+      if (DefState)
+        {
+        #ifdef ATL51
+          RedrawCurrentAndGo (GetCurrentFormat,true);
+        #else
+          if (GetNext tmpNaklOst = tsOk)
+            CallToNeighBours(cmPosDown,#tmpNaklOst);
+          RedrawPanel(#tmpNaklOst);
+        #end
+          DefState := false;
+        }
+    }
+end; // handleevent panel pntmpNaklOst
+end; // panel pntmpNaklOst
+
+
+HandleEvent
+
+cmInit :
+  if (GetFirst tmpNaklOst <> tsOk)
+    Abort
+  else
+    KillPickList;
+
+cmMarkUnMark :
+  {
+    if (isValid(#Pick))
+      {
+        Delete Current Pick;
+        SelectField(#KatMC.Name);
+        ClearFieldOption(#Pick.PickKol,ofSelectable);
+  #ifdef ATL51
+       RedrawCurrentAndGo (GetCurrentFormat,true);
+  #else
+       if (GetNext tmpNaklOst = tsOk)
+         CallToNeighBours(cmPosDown,#tmpNaklOst);
+  #end
+      }
+    else
+      {
+        InsPickList;
+        SetFieldOption(#Pick.PickKol,ofSelectable);
+        SelectField(#Pick.PickKol);
+      }
+    RescanPanel(#tmpNaklOst);
+  }
+
+cmSelectAll :
+  {
+    PushPos(#tmpNaklOst);
+    KillPickList;
+    StartNewVisual(vtNumericVisual,vfTimer,''#3'Пометка позиций: ',1);
+    _LOOP tmpNaklOst
+      InsPickList;
+    StopVisual('',0);
+    PopPos(#tmpNaklOst);
+    SetFieldOption(#Pick.PickKol,ofSelectable);
+    RereadRecord;
+  }
+
+cmUnSelectAll :
+  {
+    KillPickList;
+    RereadRecord;
+    ClearFieldOption(#Pick.PickKol,ofSelectable);
+  }
+
+cmDefault :
+  if (CurField = #Pick.PickKol)
+    {
+       DefState := true;
+       SelectField(#KatMC.Name);
+    }
+  else
+    {
+      ResetBounds(#Pick);
+      if (GetFirst Pick where ((word(555) == Pick.wList)) <> tsOk)
+        InsPickList;
+      CloseInterface(cmDefault);
+    }
+end;
+End.

@@ -1,0 +1,110 @@
+
+#include oEdIzm.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Подсчет неотгруженного кол-ва
+
+Параметры:
+  fltSkl     - ссылка на склад
+  fltMol     - ссылка на МОЛ
+  SpStepNRec - ссылка на позицию ДО
+#end
+
+//******************************************************************************
+
+Interface iMakeNeogrPos;
+
+#include oEdIzm.var
+
+create view
+var
+  fltSkl    : comp;
+  fltMol    : comp;
+  SpStepNRec: comp;
+from
+  DoRes,
+  tmpSklMol,
+  tmpNaklOst,
+  SpStep,
+  KatSopr,
+  SpSopr,
+  KatOtpEd;
+
+
+Parameters
+  fltSkl,
+  fltMol,
+  SpStepNRec;
+
+function GetByOrders:double;
+{
+  GetByOrders := 0;
+  _LOOP SpOrder where ((SpSopr.NRec == SpOrder.cSpSopr))
+    if( SpOrder.SP = 0 )  // наличие нужно складское
+      GetByOrders := GetByOrders + SpOrder.Kol;
+}
+
+Procedure MakeNeogrPos(fltSkl: comp; fltMol: comp; SpStepNRec: comp);
+var NeotgOst: double;
+{
+
+  If getfirst SpStep where ((SpStepNRec == SpStep.nRec)) <> tsOK
+    exit;
+
+  _LOOP DoRes where ((SpStepNRec == DoRes.cSpStep))
+    {
+      if ((fltSkl<>0) or (fltMol<>0))
+        if ((DoRes.cPodr <> fltSkl) or (DoRes.cMol <> fltMol))
+          continue;
+
+      NeotgOst := DoRes.Kol;
+
+     _LOOP SpSopr where ((SpStepNRec == SpSopr.cSpStep))
+       if (GetFirst KatSopr where ((SpSopr.cSopr == KatSopr.nRec)) = tsOk)
+         if      (DoRes.cPodr   = KatSopr.cPodrFrom)
+             and (DoRes.cMol    = KatSopr.cMolFrom)
+             and (SpSopr.cParty = DoRes.cParty)
+
+           {
+             if (SpStep.cOtpEd <> SpSopr.cOtpEd)
+               SpSopr.KolOpl := SpSopr.KolOpl * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+
+             NeotgOst := NeotgOst - SpSopr.KolOpl + GetByOrders;
+           }
+
+
+     if (NeotgOst > 0)
+       {
+         tmpNaklOst.NRec := 0;
+         tmpNaklOst.cPodr := DoRes.cPodr;
+         tmpNaklOst.cMol := DoRes.cMol;
+         tmpNaklOst.cMC := SpStep.cMCUsl;
+         tmpNaklOst.cParty := DoRes.cParty;
+         tmpNaklOst.cSpStep := SpStep.NRec;
+         tmpNaklOst.Kol := NeotgOst;
+         insert current tmpNaklOst;
+
+         if (GetFirst tmpSklMol
+            where ((DoRes.cPodr == tmpSklMol.cPodr and DoRes.cMol == tmpSklMol.cMol)) <> tsOk)
+           {
+             tmpSklMol.cPodr := DoRes.cPodr;
+             tmpSklMol.cMol := DoRes.cMol;
+             if Insert Current tmpSklMol <> tsOK
+               {};
+           }
+       }//if (NeotgOst > 0)
+    } // LOOP DORES
+} // procedure MakeNeogrPos
+
+
+Handleevent
+cmInit:
+  {
+    MakeNeogrPos(fltSkl,fltMol,SpStepNRec);
+    abort;
+  }
+end;
+End.

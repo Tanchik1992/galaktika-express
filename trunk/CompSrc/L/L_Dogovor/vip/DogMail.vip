@@ -1,0 +1,664 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12
+// Переписка по договорам
+//********************************************************************************
+
+#ifdef __NIOKR__
+
+#include RunDSel.vih      // Функции стандартного выбора договоров/соглашений/планов
+#include GetKau.vih    // Обьектный интерфес выбора КАУ
+
+#doc
+Переписка по договорам
+#end
+Interface DogMail 'Переписка по договорам' (, hcNIORP_Perepiska,) EscClose, DoAccept;
+  Show at (, , 100, 20);
+
+#include RunDSel.var
+#include GetKau.var    // Переменная типа "Интерфеса выбора КАУ"
+
+//******************************************************************************
+Create view cv_dogmail
+Var
+  cDog
+, cAppDog
+, cCalPlan
+, cDogF
+, cAppDogF
+, cCPF
+, cOP          : comp;
+
+  wTip
+, optView      : word;
+
+  dStart
+, dFinish      : date;
+
+  bFilt        : boolean;
+
+As Select
+  if (DogMail.Direct = word(0), 'исходящее', 'входящее')
+    (FieldName = sDirect)
+//******************************************************************************
+, if (IsValid(tnDogovorF)  <> 0, 'N '+ DogovorF.NoDoc + ' от ' + DateToStr(DogovorF.dDoc,'DD/MM/YYYY'), '')
+    (FieldName = Dogovor_Filter)
+//******************************************************************************
+, if (IsValid(tnAppDogovorF) <> 0, 'N ' + AppDogovorF.NoDoc + ' от ' + DateToStr(AppDogovorF.dDoc,'DD/MM/YYYY'),'')
+    (FieldName = AppDogovor_Filter)
+//******************************************************************************
+, if (IsValid(tnCalPlanF), '№ ' + CalPlanF.NoDoc + ' от ' + DateToStr(CalPlanF.dInput, 'DD/MM/YYYY'), '')
+    (FieldName = CalPlan_Filter)
+
+From
+  DogMail
+, DogMail DogMail2
+, Dogovor
+, Dogovor DogovorF
+, Dogovor AppDogovorF
+, CalPlan
+, CalPlan CalPlanF
+, KatOrg
+, Persons
+, AttrDog
+
+Where
+((
+    DogMail.cOrg     == KatOrg.NRec
+AND DogMail.cPerson  == Persons.NRec
+//--для Доп.фильтров
+AND cDogF              ==  DogovorF.NRec
+AND cAppDogF           ==  AppDogovorF.NRec
+AND cCPF               ==  CalPlanF.NRec
+
+))
+
+
+Bounds fDate   =
+          dStart <<= DogMail.dMail (NoIndex)
+     AND dFinish >>= DogMail.dMail (NoIndex)
+
+Bounds bDog     =
+        cDogF   ==  DogMail.cDogovor
+
+Bounds bAppDog  =
+        cDogF    ==  DogMail.cDogovor
+    AND cAppDogF ==  DogMail.cAppDogovor
+
+Bounds bCalPlan =
+        cDogF    ==  DogMail.cDogovor
+    AND cAppDogF ==  DogMail.cAppDogovor
+    AND cCPF     ==  DogMail.cCalPlan
+
+Bounds bDirect =
+        wTip    ==  DogMail.Direct (NoIndex)
+;
+
+Parameters
+  cDog
+, cAppDog
+, cCalPlan
+;
+
+//******************************************************************************
+Procedure MyDSK;
+{
+  if NOT ReadMyDsk(dStart  , 'UrgentF_dStart' , TRUE)
+    dStart := Date(0,0,0);
+
+  if NOT ReadMyDsk(dFinish , 'UrgentF_dFinish', TRUE)
+    dFinish := Date(0,0,0);
+
+  if NOT ReadMyDsk(wTip    , 'UrgentF_Tip'   , TRUE)
+    wTip := 1;
+
+  if NOT ReadMyDsk(cDogF   , 'UrgentF_Dogovor', TRUE)
+    cDogF := comp(0);
+
+  if NOT ReadMyDsk(cAppDogF, 'UrgentF_AppDogovor', TRUE)
+    cAppDogF := comp(0);
+
+  if NOT ReadMyDsk(cCPF    , 'UrgentF_Save_Stat', TRUE)
+    cCPF := comp(0);
+
+  if NOT ReadMyDsk(optView , 'UrgentF_optView'  , TRUE)
+    optView := word(0);
+
+  if NOT ReadMyDsk(bFilt   , 'UrgentF_bFilt'     , TRUE)
+    bFilt := FALSE;
+}
+//******************************************************************************
+
+Procedure ClearAllFilter;
+{
+  if (BoundActive(tbfDate))
+    SubBounds(tbfDate);
+
+  if (BoundActive(tbbDirect))
+    SubBounds(tbbDirect);
+
+  if (BoundActive(tbbDog))
+    SubBounds(tbbDog);
+
+  if (BoundActive(tbbAppDog))
+    SubBounds(tbbAppDog);
+
+  if (BoundActive(tbbCalPlan))
+    SubBounds(tbbCalPlan);
+}
+
+//******************************************************************************
+
+Procedure SetFilterBounds;
+{
+  ClearAllFilter;
+
+  if ( (optView and 1) > 0 )  // Дата исполнения
+    {
+      if ( NOT BoundActive(tbfDate))
+        AddBounds(tbfDate);
+    }
+
+  if ( (optView and 2) > 0 )  // Дата исполнения
+    {
+      if ( NOT BoundActive(tbbDirect))
+        AddBounds(tbbDirect);
+    }
+
+  if ((optView and 16) > 0)
+    {
+      if (NOT BoundActive(tbbCalPlan))
+        AddBounds(tbbCalPlan);
+    }
+  else
+    if ((optView and 8) > 0)
+      {
+        if (NOT BoundActive(tbbAppDog))
+          AddBounds(tbbAppDog);
+      }
+    else
+      if ((optView and 4) > 0)
+        {
+          if (NOT BoundActive(tbbDog))
+            AddBounds(tbbDog);
+        }
+}
+
+//******************************************************************************
+//-- Для выбора значений дол.фильтра
+Procedure FilterDogMail(myType : word);
+var oldDog,
+    oldAppDog,
+    oldCalPlan : comp;
+! myType = 1 - F3 на Dogovor
+! myType = 2 - F3 на AppDogovor
+! myType = 4 - F3 на CalPlan
+! myType = 5 - Ctrl-F3 на Dogovor
+! myType = 6 - Ctrl-F3 на AppDogovor
+! myType = 8 - Ctrl-F3 на CalPlan
+{
+  oldDog     := cDogF;
+  oldAppDog  := cAppDogF;
+  oldCalPlan := cCPF;
+
+  if NullVipRef(pRunDSel)
+    if not(LoadVipRef(pRunDSel, 'RunDocSelections'))
+    {
+      Message(''#3'Не удалось загрузить библиотеку RunDocSelObj', Error);
+      Exit;
+    }
+
+  if (myType < 5)
+    {
+    if (pRunDSel.F3(cDogF,    // var cDogovor    : comp;
+                    cAppDogF, // var cAppDogovor : comp;
+                    cCPF,     // var cCalPlan    : comp;
+                    myType,             //     isSelect    : word; // откуда вызвали: 1 - договора 2 - соглашение 4 - календарный план
+                    word(2),            //     _wMaska     : word  // 0FFFFh - все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+                    word(0)             // только на продажу
+                   ) = cmCancel)
+      myType := 0;
+    }
+  else
+    {
+    myType := myType - 4;
+    if (pRunDSel.Ctrl_F3(cDogF,    // var cDogovor    : comp;
+                         cAppDogF, // var cAppDogovor : comp;
+                         cCPF,     // var cCalPlan    : comp;
+                         longint(0),         //     DskParams   : longint; // по умолчанию (=0) фильтр только по исполняемым
+                         myType              //     isSelect    : word; // откуда вызвали: 1 - договора 2 - соглашение 4 - календарный план
+                        ) = cmCancel)
+      myType := 0;
+    }
+
+ set cDogF    := cDogF;
+ set cAppDogF := cAppDogF;
+ set cCPF     := cCPF;
+
+ if (cDogF=0)
+  {if ((optView and 4) <> 0) set optView := (optView xor 4);}
+ else {if ((optView and 4) = 0) set optView := (optView xor 4);}
+
+ if (cAppDogF=0)
+   {if ((optView and 8) <> 0) set optView := (optView xor 8);}
+ else {if ((optView and 8) = 0) set optView := (optView xor 8);}
+
+ if (cCPF=0)
+   {if ((optView and 16) <> 0) set optView := (optView xor 16);}
+ else {if ((optView and 16) = 0) set optView := (optView xor 16);}
+}
+
+
+//******************************************************************************
+Panel panDogMail;
+  Table DogMail;
+
+Tree trDM  ('', , sci178Esc);
+  Table DogMail;
+
+Fields
+
+  sDirect        #3'Направление'   ('Направление'  , , sci1378Esc) : [13], Protect;
+  DogMail.dMail  #3'Дата'          ('Дата'                       ) : [10], NoProtect;
+  DogMail.Kod    #3'№ письма'      ('№ письма'                   ) : [ 7], NoProtect;
+  DogMail.Title  #3'Тема письма'   ('Тема письма'                ) : [30], NoProtect;
+  KatOrg.Name    #3'Корреспондент' ('Корреспондент', , sci1378Esc) : [20], Protect;
+  Persons.FIO    #3'Куратор'       ('Куратор'      , , sci1378Esc) : [20], Protect;
+end;
+
+
+
+HandleEvent
+cmTreeNodeType  :
+  TreeSetNodeType(trDM, 2,
+     if(DogMail.Direct = 0,
+#ifdef ComponentVersion
+         'L_DOGOVOR::' +
+#end
+         'BmpArrowOut',
+#ifdef ComponentVersion
+         'L_DOGOVOR::' +
+#end
+         'BmpArrowIn' ) );
+
+
+cmPick:
+  case CurField of
+    #KatOrg.Name:
+      {
+        var _cOrg : comp; _cOrg := DogMail.cOrg;
+
+        if (RunInterface('GetKatOr', _cOrg, 0, FALSE, 0, 0) <> cmCancel)
+          {
+            set DogMail.cOrg := _cOrg;
+            cOP := _cOrg;
+          }
+      }
+    //------------------------------------------------------------------------------
+    #Persons.FIO:
+      {
+        iGetKau.GetCodeKau(cgiPick, cgKau_Persons, DogMail.cPerson);
+        set DogMail.cPerson := DogMail.cPerson;
+      }
+    //------------------------------------------------------------------------------
+    #sDirect:
+      {
+        if (DogMail.Direct = word(0))
+          set DogMail.Direct := word(1)
+        else
+          set DogMail.Direct := word(0)
+
+        ReScanPanel(trDM);
+      }
+  end;
+
+end;
+end;
+//******************************************************************************
+
+Window winGetSomeDogMail_Filter 'Установка фильтров' EscClose DoAccept;
+  Show at (,, 62, 10);
+
+Panel p1;
+Screen scrFilt;
+Fields
+  optView ('Установить фильтр',,sci1Esc) : NoProtect ;
+  dStart ('Введите начальную дату фильтра по письмам') : NoProtect,
+    { Font = { BackColor = if(( (optView and 1) <> 0 ) AND ( dStart > dFinish), ColorNeed, 0) } };
+  dFinish ('Введите конечную дату фильтра по письмам' ) : NoProtect,
+    { Font = { BackColor = if(( (optView and 1) <> 0 ) AND ( dFinish = ZeroDate ), ColorNeed,
+                              if(( (optView and 1) <> 0 )
+                                  AND
+                                 ( dFinish <> ZeroDate )
+                                  AND
+                                 ( dStart > dFinish ), ColorError, 0)) } };
+  wTip     ('Тип письма исходяшее\входящее') :
+               [LIST 0 'исходящее','входящее'], protect;
+  Dogovor_Filter    ('F3 - выбор из списка, CTRL-F3 - выбор из дерева',,sci13Esc):Protect, PickButton;
+  AppDogovor_Filter ('F3 - выбор из списка, CTRL-F3 - выбор из дерева',,sci13Esc):Protect, PickButton;
+  CalPlan_Filter    ('F3 - выбор из списка, CTRL-F3 - выбор из дерева',,sci13Esc):Protect, PickButton;
+Buttons
+  cmOK    , Default,, 'Ввод - принять выбор',, sci1Esc;
+  cmCancel,        ,, 'Отмена'              ,, sci1Esc;
+<<
+
+ Использовать фильтры:
+  [.] Дата письма`        `с`.@@@@@@@@@@@@ `по`.@@@@@@@@@@@@
+  [.] Тип письма            `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] Договор               `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] Соглашение            `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] Календарный план      `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+             <. Продолжить .>    <.   Отмена   .>
+
+>>
+end; // Screen
+
+HandleEvent // Panel
+
+cmDelOnProtect:
+  {
+    case CurField of
+       #Dogovor_Filter:
+         {
+           set cDogF    := 0;
+           set cAppDogF := 0;
+           set cCPF     := 0;
+         }
+     //--------------
+       #AppDogovor_Filter:
+         {
+           if (CalPlanF.cDogovor = cAppDogF)
+             set cCPF := 0;
+
+           set cAppDogF := 0;
+         }
+     //--------------
+       #CalPlan_Filter:
+         set cCPF := 0;
+    end;
+
+    ReScanPanel(CurTable);
+  }
+
+
+cmCheckField:
+  {
+    case CurField of
+      #dStart, #dFinish:
+        if ( dStart > dFinish )
+          {
+            message('Перепутаны даты...', OkButton + Warning);
+
+            if ( CurField = #dStart )
+              set dStart := dFinish;
+
+            Abort;
+          }
+
+      #optView:
+        {
+          var wtmp : word; wtmp := optView xor word(OldFieldValue);
+
+          if ( wtmp > 0 )
+            case wtmp of
+              1:
+                if ( (optView and 1) > 0 )
+                  SelectField(#dStart);
+
+              2:
+                if ( (optView and 2) > 0 )
+                  {
+                    SelectField(#wTip);
+                    if ( wTip = 0 )
+                      PutCommand(cmPick);
+                  }
+              4:
+                if ( (optView and 4) > 0 )
+                  {
+                    SelectField(#Dogovor_Filter);
+                    if ( cDogF = 0 )
+                      PutCommand(cmPick);
+                  }
+              8:
+                if ( (optView and 8) > 0 )
+                  {
+                    SelectField(#AppDogovor_Filter);
+                    if ( cAppDogF = 0 )
+                      PutCommand(cmPick);
+                  }
+              16:
+                if ( (optView and 16) > 0 )
+                  {
+                    SelectField(#CalPlan_Filter);
+                    if ( cCPF = 0 )
+                      PutCommand(cmPick);
+                  }
+            end;
+        }
+    end;
+
+    if ( (optView and 16) > 0 )
+      if ((optView and 8) = 0)
+        set optView := (optView xor 8);
+
+    if ( (optView and 8) > 0 )
+      if ((optView and 4) = 0)
+        set optView := (optView xor 4);
+  }
+
+
+end; // HandleEvent
+end; // Panel
+
+
+
+//******************************************************************************
+
+HandleEvent
+
+cmOK:
+  {
+    SetFilterBounds;
+    PutCommand(cmDefault);
+    SaveMyDsk(dStart  , 'UrgentF_dStart'   );
+    SaveMyDsk(dFinish , 'UrgentF_dFinish'  );
+    SaveMyDsk(wTip    , 'UrgentF_Tip'      );
+    SaveMyDsk(cDogF   , 'UrgentF_Dogovor'  );
+    SaveMyDsk(cAppDogF, 'UrgentF_AppDogovor');
+    SaveMyDsk(cCPF    , 'UrgentF_Save_Stat');
+    SaveMyDsk(optView , 'UrgentF_optView'  );
+    ReReadRecord;
+  }
+
+cmRestoreDoc:
+ {
+  if (CurField = #Dogovor_Filter   ) FilterDogMail(5);
+  if (CurField = #AppDogovor_Filter) FilterDogMail(6);
+  if (CurField = #CalPlan_Filter   ) FilterDogMail(8);
+ }
+
+cmPick:
+ {
+  if (CurField = #Dogovor_Filter   ) FilterDogMail(1);
+  if (CurField = #AppDogovor_Filter) FilterDogMail(2);
+  if (CurField = #CalPlan_Filter   ) FilterDogMail(4);
+ }
+
+
+end; // HandleEvent Window
+end; // Window
+
+//******************************************************************************
+
+
+HandleEvent
+
+cmInit:
+  {
+    MyDSK;
+    set cDogF    := cDog;
+    set cAppDogF := cAppDog;
+    set cCPF     := cCalPlan;
+    cOP := 0;
+
+    if (cCPF <> 0)
+      {
+        if (GetFirst Dogovor where ((CalPlan.cDogovor == Dogovor.NRec)) = tsOk)
+          {
+            if (Dogovor.cDogovor = 0)
+              {
+                set cDogF    := Dogovor.NRec;
+                set cAppDogF := comp(0);
+              }
+            else
+              {
+                set cDogF    := Dogovor.cDogovor;
+                set cAppDogF := Dogovor.NRec;
+              }
+          }
+        else
+          {
+            set cDogF    := comp(0);
+            set cAppDogF := comp(0);
+          }
+      }
+
+    if (cAppDogF <> 0)
+      if (GetFirst Dogovor where ((cAppDogF == Dogovor.NRec)) = tsOk)
+        set cDogF := Dogovor.cDogovor;
+      else
+        set cDogF := comp(0);
+
+    if (cDogF = 0)
+      {
+        if ((optView and 4) <> 0)
+          set optView := (optView xor 4);
+      }
+    else
+      {
+        if ((optView and 4) = 0)
+          set optView := (optView xor 4);
+      }
+
+    if (cAppDogF = 0)
+      {
+        if ((optView and 8) <> 0)
+          set optView := (optView xor 8);
+      }
+    else
+      {
+        if ((optView and 8) = 0)
+          set optView := (optView xor 8);
+      }
+
+    if (cCPF = 0)
+      {
+        if ((optView and 16) <> 0)
+          set optView := (optView xor 16);
+      }
+    else
+      {
+        if ((optView and 16) = 0)
+          set optView := (optView xor 16);
+      }
+
+    if (optView <> 0)
+      SetFilterBounds;
+
+    //восстановление позиции:
+    var nRc: comp;
+
+    ReadMyDsk(nRc, 'DogMail_NRec1', TRUE);
+
+    if (GetFirst DogMail where ((nRc == DogMail.NRec)) <>tsOk)
+      if ( GetFirst DogMail <> tsOk )
+        { }
+  }//cmInit
+
+cmSetDefault:
+  {
+    if (DogMail.cOrg = 0)
+      {
+        var cRec_Dog : comp;
+        cRec_Dog := if (cAppDog <> 0, DogMail.cAppDogovor, DogMail.cDogovor);
+
+        if (GetFirst Dogovor where ((cRec_Dog == Dogovor.NRec)) = tsOk)
+          {
+            DogMail.cOrg := Dogovor.cOrg;
+
+            if (DogMail.cPerson = 0)
+              if (GetFirst AttrDog where ((Dogovor.NRec == AttrDog.cDogovor)) = tsOk)
+                DogMail.cPerson := AttrDog.cOtv_My;
+          }
+      }
+
+    SelectField(#sDirect);
+  }
+
+cmCheckRecord:
+  {
+    if (DogMail.dMail = Date(0,0,0))
+      {
+        Message('Не задана дата письма!'#13#13#3
+              + 'Задайте или удалите запись!'#13
+              , CancelButton+Warning);
+        SelectField(#DogMail.dMail);
+        Abort;
+        Exit;
+      }
+
+    if (Trim(DogMail.Kod) = '')
+      {
+        Message('Не задан номер письма!'#13#13#3
+              + 'Задайте или удалите запись!'#13
+              , CancelButton+Warning);
+        SelectField(#DogMail.Kod);
+        Abort;
+        Exit;
+      }
+
+    if (Trim(DogMail.Title) = '')
+      {
+        Message('Не задана тема письма!'#13#13#3
+              + 'Задайте или удалите запись!'#13
+              , CancelButton+Warning);
+        SelectField(#DogMail.Title);
+        Abort;
+        Exit;
+      }
+  }
+
+cmInsertRecord:
+  Insert current DogMail;
+
+cmUpdateRecord:
+  Update current DogMail;
+
+cmDeleteRecord:
+  if (Message('Удалить это письмо?', Confirmation+YesNo) <> cmYes)
+    Abort;
+  else
+    Delete current DogMail;
+
+cmDefault:
+  Abort;
+
+cmDone:
+  SaveMyDsk(DogMail.NRec, 'Measures_NRec1');
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuGetDogMail'));
+
+cmFilterSave:
+  RunWindowModal(winGetSomeDogMail_Filter);
+
+end; // HandleEvent
+End. // Interface
+
+mnuGetDogMail Menu
+{
+- 'Установка фильтров', cmFilterSave, 'Установить/снять фильтр по письмам',, 'Alt-B', kbAltB, sci1Esc;
+}
+
+#end

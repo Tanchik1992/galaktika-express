@@ -1,0 +1,118 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+//
+//******************************************************************************
+
+#include AktRecFun.vih
+#include oEdIzm.vih    // Функции для работы с единицами измерения
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Сервисные функции накладных на возврат по рекламации
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+Interface iAktRecFun;
+
+#include oEdIzm.var
+
+Create view
+var
+  pSpOrder : comp;  // ссылка на спецификацию ордера
+
+As select
+*
+
+From
+  SpOrder
+, SpSopr
+, SpSopr SpSoprR
+, SpSopr SpSopr2
+
+Where
+((
+       pSpOrder         ==  SpSoprR.cSpOrder
+
+  AND  pSpOrder         ==  SpOrder.NRec
+  AND  SpOrder.cSpSopr  ==  SpSopr.NRec
+))
+;
+
+//******************************************************************************
+// расчет доступного количества с учетом ранее сформированных рекламаций
+Function MaxKolInAkt (TypeSopr: word; cSpOrder, cSpSopr, cOtpEd: comp): double;
+var
+  KoefP, Koef: double;
+  tKol : double;
+{
+  MaxKolInAkt := 0;
+
+  pSpOrder := cSpOrder; // позиционирование
+
+  if (GetFirst FastFirstRow SpOrder <> tsOk)
+    Exit;
+
+  KoefP := fEdIzm.GetKoefOtpEd(cOtpEd);        // коэффициент в проверяемой позиции
+  Koef  := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd); // коэффициент в исходной накладной
+  tKol  := SpOrder.Kol / KoefP;
+
+  // для рекламационных накладных в сбыте расчет идет по KolOpl
+  // (только в случае, если оплаченное кол-во меньше кол-ва в ордере).
+  // Такой расчет связан с процентом убыли.
+  // предполагается, что нельзя вернуть больше оплаченного (оприходованого у контрагента) кол-ва.
+  // для всех остальных видов накладных в расчет принимается кол-во из ордеров
+
+  if (TypeSopr = 106)
+    if (SpOrder.Kol > SpSopr.KolOpl * Koef)
+      tKol := SpSopr.KolOpl * Koef / KoefP;
+
+  // вычет кол-ва по раннее сформированным рекламациям
+  _LOOP SpSoprR
+    if (cSpSopr <> SpSoprR.NRec)  // Если не проверяемая позиция
+      {
+        // позиция реестра смонтированного оборудования, сформированная по ведомости оборудования,
+        // монтаж которого начат, при расчете доступного количество не учитывается
+        if ( (SpSoprR.VidSopr = 610) AND (SpSoprR.cSpSopr <> SpSopr.NRec) )
+          Continue;
+
+        tKol := tKol - SpSoprR.KolFact * fEdIzm.GetKoefOtpEd(SpSoprR.cOtpEd) / KoefP;
+      }
+
+  MaxKolInAkt := if(tKol < 0, 0, tKol);
+}
+
+//******************************************************************************
+// расчет доступного количества для реестра смонтированного оборудования
+// с учетом ранее сформированных документов
+Function MaxKolInReestr (TypeSopr: word; cSpSoprUp, cSpSopr, cOtpEd: comp): double;
+var
+  KoefP, Koef: double;
+  tKol : double;
+{
+  MaxKolInReestr := 0;
+
+  if (GetFirst SpSopr2 where ((cSpSoprUp == SpSopr2.NRec)) <> tsOk)
+    Exit;
+
+  KoefP := fEdIzm.GetKoefOtpEd(cOtpEd);         // коэффициент в проверяемой позиции
+  Koef  := fEdIzm.GetKoefOtpEd(SpSopr2.cOtpEd); // коэффициент в исходной накладной
+
+  // количество из ведомости оборудования, монтаж которого начат
+  tKol  := SpSopr2.KolFact * Koef / KoefP;
+
+  // вычет кол-ва по ранее сформированым реестрам смонтированного оборудования
+  _LOOP SpSopr2 where (( cSpSoprUp == SpSopr2.cSpSopr ))
+    if (SpSopr2.NRec <> cSpSopr)
+      tKol := tKol - SpSopr2.KolFact * fEdIzm.GetKoefOtpEd(SpSopr2.cOtpEd) / KoefP;
+
+  MaxKolInReestr := if(tKol < 0, 0, tKol);
+}
+
+end.

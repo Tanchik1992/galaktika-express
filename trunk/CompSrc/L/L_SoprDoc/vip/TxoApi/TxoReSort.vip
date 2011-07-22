@@ -1,0 +1,250 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,2000 корпорация ГАЛАКТИКА                    ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Бухгалтерский контур                                      ║
+ ║ Версия        : 5.8x                                                      ║
+ ║ Назначение    : ТХО для актов на пересортицу МЦ                           ║
+ ║ Ответственный : Ларин Михаил Николаевич (larin@galaktika.by)              ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+#include TxoApi.vih
+
+VipInterface Txo_ReSort
+  Implements ObjTxoIdentPlugin
+  #ifdef Atl51
+  Licensed(Free)
+  #end
+;
+
+//******************************************************************************
+#doc
+Назначение:
+  ТХО для актов на пересортицу МЦ (используется как объектный)
+#end
+//******************************************************************************
+
+Interface Txo_ReSort (,hcTXOWVIPParam);
+
+create view
+var
+  CurSoprDoc        : comp;
+  Param_Direct      : word;    // направление 0=[МЦ:Спис] 1=[МЦ:Прих]
+  Param_FilterFlag  : word;    // Фильтры
+  Param_MaskGrNal   : string;  // [ГрНал:"маска"] - маска описывает допустимое множество групп налогов
+as select
+  *
+from
+  KatSopr    (readonly), // накладная
+  SpSopr     (readonly), // спецификация накладной
+  KauReff    KauReffMC  (readonly),
+  KatMC      (readonly),
+  KatParty   (readonly),
+  SpDocNal   (readonly),
+  GrNal      (readonly),
+  GrNal      GrNalMC    (readonly),
+  GrNal      Pick_GrNal (readonly)
+where
+((
+  CurSoprDoc       == KatSopr.Nrec      and
+  CurSoprDoc       == SpSopr.cSopr      and
+  Param_Direct     == SpSopr.prMC       and // 0=[МЦ:Спис] 1=[МЦ:Прих]
+  SpSopr.cMcUsl    == KatMC.Nrec        and
+  coKatMC          == KauReffMC.coTable and
+  SpSopr.cMCUsl    == KauReffMC.cRec    and
+  SpSopr.cParty    == KatParty.Nrec     and
+  SpSopr.VidSopr   == SpDocNal.cSpDoc   and
+  SpSopr.NRec      == SpDocNal.TipDoc   and
+  0                == SpDocNal.cNalog   and
+  SpDocNal.cGrNal  == GrNal.Nrec        and
+  KatMc.cGrNal     == GrNalMC.Nrec
+));
+
+const
+  idVipInfo   = '&VIP[Obj:"ReSort"]';
+  idVipTag    = 'ReSort';
+
+  flGrNal     =  1;
+end;
+
+
+function GetInfo : string;
+{
+   GetInfo := 'Обработка спецификации актов на пересортицу МЦ';
+}
+
+function IsMode(flConst : word) : boolean;
+{ IsMode := ((Param_FilterFlag and flConst) <> 0);
+}
+
+procedure SetFilter(flConst : word);
+{ Param_FilterFlag := (Param_FilterFlag or flConst);
+}
+
+function ParamGen : string;
+{  var s : String;
+   s := '';
+
+   PackFields;
+   if (Param_Direct = 0)
+     s := s + '[МЦ:Спис]';
+   else
+     s := s + '[МЦ:Прих]';
+   if (isMode(flGrNal))
+     s := s + '[ГрНал:"' + trim(Param_MaskGrNal) + '"]';
+   ParamGen := s;
+}
+
+window winParam 'Параметры идентификатора' EscClose, DoAccept;
+show at (,,65,9);
+screen scParam;
+table KatSopr;
+fields
+  idVipInfo+ParamGen : Skip, {Font={Bold=true;Color=ColorMark}}, Centered;
+  Param_Direct : [LIST 0 'МЦ для списания', 1 'МЦ для оприходования'], protect;
+  Param_FilterFlag  ('Фильтры',,sci1EnEsc) : NoProtect;
+  Param_MaskGrNal   ('Задайте маску фильтра (#, ?, [abc], [!xyz])',,sci13EnEsc) : NoProtect, NoStatic, PickButton;
+<<
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Направление` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] Фильтр по группам налогов` .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  Данный алгоритм позволяет получить сумму по спецификации
+  акта на пересортицу МЦ.
+  Циклическая обработка возможна по аналитике: МЦ, Группы МЦ,
+  Внешние КАУ из каталога МЦ, Партии МЦ и Группы партий МЦ.
+>>
+end;
+
+procedure MyCheckField;
+{
+  if (isMode(flGrNal))
+    SetFieldOption(#Param_MaskGrNal, ofSelectable)
+  else
+    ClearFieldOption(#Param_MaskGrNal, ofSelectable);
+}
+
+HandleEvent
+  cmInit :
+    {
+       Param_Direct      := 0; //значание параметра по умолчанию
+       Param_FilterFlag  := 0;
+       Param_MaskGrNal   := '';
+       SetWindowTitle(winParam, 'Параметры '+idVipInfo);
+       MyCheckField;
+    }
+  cmPick :
+    {
+       case CurField of
+         #Param_MaskGrNal :
+         {
+            var cGrNal : comp;
+            cGrNal := 0;
+            if (RunInterface('GetGrNal', cGrNal, 0) = cmDefault)
+              if (GetFirst fastfirstrow Pick_GrNal where ((cGrNal == Pick_GrNal.Nrec)) = tsOk)
+                set Param_MaskGrNal := Pick_GrNal.Kod;
+         }
+       end;
+       MyCheckField;
+    }
+end;
+end;
+
+TableEvent table KatSopr
+  cmCheckField : MyCheckField;
+end;
+
+function ParamMaster : string;
+{  ParamMaster := '';
+   if( RunWindowModal(winParam)=cmDefault )
+   {  PackFields;
+      ParamMaster := ParamGen;
+   }
+}
+// разбор параметров
+procedure ParamParser(hTxo : longint);
+{
+   Param_Direct      := 0; //значание параметра по умолчанию
+   Param_FilterFlag  := 0;
+   Param_MaskGrNal   := '';
+
+   var i : Longint;
+
+   for(i:=1; i<=TxoParamCount(hTxo); i:=i+1)
+   {  case TxoParamName(hTxo,i) of
+        'ГРНАЛ'  : { SetFilter(flGrNal);   Param_MaskGrNal   := TxoParamValue(hTxo,i); }
+        'МЦ'     : {
+                     case TxoParamValue(hTxo,i) of
+                       'СПИС' : Param_Direct := 0;
+                       'ПРИХ' : Param_Direct := 1;
+                       else   TxoDebugMsg(hTxo, idVipTag, 'Ошибка разбора параметра ['+TxoParamName(hTxo,i)+':'+TxoParamValue(hTxo,i)+']');
+                    end;
+        }
+      end;
+      TxoDebugMsg(hTxo, idVipTag, 'Param '+string(i)+' of '+string(TxoParamCount(hTxo))+' ['+TxoParamName(hTxo,i)+':'+TxoParamValue(hTxo,i)+']');
+   }
+}
+
+function TestMasks : boolean;
+{
+  TestMasks := false;
+  var s : string;
+
+  s := '';
+  if (isMode(flGrNal))
+  {
+    // группа налогов к спецификации накладной
+    if(getfirst fastfirstrow SpDocNal = tsOk)
+    {
+      if(getfirst fastfirstrow GrNal = tsOk)
+        s := GrNal.Kod;
+    }
+    else // группа налогов из МЦ
+    {
+      if(getfirst fastfirstrow KatMc = tsOk)
+        if(getfirst fastfirstrow GrNalMC = tsOk)
+           s := GrNalMC.Kod;
+    }
+    if (not MatchesMask(s,Param_MaskGrNal) ) exit;
+  }
+  TestMasks := true;
+}
+
+procedure StoreCycles(hTxo : longint; buf : TTxoApiInfoDoc);
+{
+   /////////////////////////////////////////////////////////////////////////
+   CurSoprDoc := buf.cSoprDoc;
+
+   TxoAllowRecallStoreCycles(hTxo);
+
+   /////////////////////////////////////////////////////////////////////////
+   // разбор параметров
+   ParamParser(hTXO);
+
+   /////////////////////////////////////////////////////////////////////////
+   if( buf.TiDkGal = cgDoc_0630 )
+   if( getfirst KatSopr = tsOk )
+      _loop SpSopr
+      {
+          if (not TestMasks) continue;
+
+          TxoBodyClear(hTxo);
+          TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_KatMc, SpSopr.cMcUsl);
+          //Для извлечения SpSopr.Nrec при помощи SoprDoc
+          TxoBodyAddKau(hTxo, wFlKau_Auto, wFlCycle_SpSopr, SpSopr.NRec);
+
+          if(getfirst fastfirstrow KatMc = tsOk)
+            TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_GroupMC, KatMc.cGroupMC);
+         _loop KauReffMC
+            TxoBodyAddKau(hTxo, wFlKau_KauReffMC, KauReffMC.wKau, KauReffMC.cKau);
+          TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_KatParty, SpSopr.cParty);
+          if(getfirst fastfirstrow KatParty = tsOk)
+            TxoBodyAddKau(hTxo, wFlKau_Auto, cgKau_GroupParty, KatParty.cGroupParty);
+
+          TxoBodySetSum(hTxo, SpSopr.Price*SpSopr.KolFact, 0, SpSopr.KolFact);
+          TxoBodySetSumVal(hTxo, SpSopr.VPrice*SpSopr.KolFact, SpSopr.cVal);
+          TxoBodyInsert(hTxo);
+      }
+}
+end.

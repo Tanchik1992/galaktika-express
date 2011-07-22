@@ -1,0 +1,814 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика - приходные накладные
+// HandleEvent из soprdocb.vip
+//********************************************************************************
+
+#include SOPRC13.VPP
+
+//********************************************************************************
+
+cmSetDefault:
+{
+  If (CurTable = #SpSopr  )
+  or (CurTable = #SpSopUsl)
+  or (CurTable = #SoprOrdB)
+    if (NOT OtkatToOldState(TRUE, word(0)))
+      {
+        Stop;
+        exit;
+      }
+
+  If not DocBuyAddMcUsl
+    If KatSopr.wADoc = adSoprDocKN
+      {
+        Stop;
+        Exit;
+      }
+
+  SpSoprDefault;
+  SpSopr.PrMC := 1;
+
+  SelectField(#KatMC.Name);
+
+  oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.BUY'), false);
+}
+
+//********************************************************************************
+
+#ifdef _RETTARA_
+cmExprFieldChanged:
+  {
+    if CurField = #KolFull
+      {
+        var KK: double;  kk := double(ExprFieldValue);
+
+        if (KatOtpEd.Diskret = 1) AND (Round(kk) <> kk)
+          {
+            Message('Отпускная единица ('+KatOtpEd.Name+') для "' + KatMC.Name +
+            '" неделимая.'#13'Значение округлено.');
+            kk := Trunc(kk);
+          }
+
+        SpSopr.KolPov := SpSopr.KolFact - kk;
+      }
+
+    if IsValid(tnSpSopr)
+      update current SpSopr;
+  }
+#end
+
+//********************************************************************************
+
+cmExprFieldChanged:
+{
+  Case CurField of
+  //--------------
+    #prv:
+    {
+       if KatSopr.cVal = 0
+         set SpSopr.rPrice := double(ExprFieldValue)
+       else
+         set SpSopr.rVPrice := double(ExprFieldValue);
+
+       if KatSopr.cVal = 0
+         set SpSopr.Price := double(ExprFieldValue)
+       else
+         set SpSopr.VPrice := double(ExprFieldValue);
+
+       CheckSumma(false);
+
+       if (wGetTune('Oper.Buy.Nakl.ReCalcPriceByFactory') = 1)
+         oFPrice.SetFactoryProcNac(SpSopr.NRec, SpSopr.rPrice);
+    }
+  //--------------
+    #SumPrice:
+      MakeSumPrice;
+  //--------------
+    #FactoryProcNac:
+      {
+        if not CheckCanModifyFactory(KatSopr.Vidsopr)
+          Exit;
+
+      // установка цены для приходной накладной по заводской цене и вх.проценту
+      if (wGetTune('Oper.Buy.Nakl.ReCalcPriceByFactory') = 1)
+        if (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108)
+          if (NOT oFPrice.IsTaraMCOneParty)
+            {
+              SpSopr.Price  := 0;
+              SpSopr.rPrice := 0;
+            }
+
+        if (SpSopr.cParty <> 0) AND (NOT oFPrice.IsTaraMCOneParty)
+          {
+            set  KatParty.VHODON := double(ExprFieldValue);
+
+            ModifyKatParty;
+
+            if (InStr('ЗЦ', Katparty.Name) <> 0)
+              {
+                update current KatParty;
+                KatParty.Name := NameParty;
+              }
+
+            update current KatParty;
+          }
+        else
+          {
+            set  KatMC.VHODON := double(ExprFieldValue);
+            update current KatMC;
+          }
+      }
+  //--------------
+  #FactoryPrice:
+    {
+      if not CheckCanModifyFactory(KatSopr.Vidsopr)
+        Exit;
+
+      // установка цены для приходной накладной по заводской цене и вх.проценту
+      if (wGetTune('Oper.Buy.Nakl.ReCalcPriceByFactory') = 1)
+        if (KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108)
+          {
+            SpSopr.Price  := 0;
+            SpSopr.rPrice := 0;
+          }
+
+      if (SpSopr.cParty <> 0) AND (NOT oFPrice.IsTaraMCOneParty)
+        {
+          if (KatSopr.cVal = KatParty.cValPar)
+            set KatParty.CenaZav := double(ExprFieldValue) / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd); // учетная
+          else
+            set KatParty.CenaZav := oValFunc.GetAnyCurrency (KatSopr.cVal, double(ExprFieldValue), KatSopr.dSopr, KatParty.cValPar)
+                                    / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd); // учетная
+
+          ModifyKatParty;
+
+          if (InStr('ЗЦ', Katparty.Name) <> 0)
+            {
+              update current KatParty;
+              KatParty.Name := NameParty;
+            }
+
+          update current KatParty;
+        }
+      else
+        {
+          if (KatSopr.cVal = 0)
+            set KatMC.CenaMC := double(ExprFieldValue) / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd); // учетная
+          else
+            set KatMC.CenaMC := oValFunc.GetAnyCurrency (KatSopr.cVal, double(ExprFieldValue), KatSopr.dSopr, 0)
+                                / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd); // учетная
+
+          update current KatMC;
+        }
+    }
+  //--------------
+    #capacity:
+      WorkWithCapcity(1);
+  //--------------
+    #CapacityPrice:
+      {
+        var d: double; d := double(ExprFieldValue)*(SpSopr.KolFact/SpSopr.OilPlot*KatOtpEd.Koef)/SpSopr.KolFact;
+
+        if (KatSopr.cVal = 0)
+          {
+            set SpSopr.rPrice := d;
+            set SpSopr.Price  := d;
+          }
+        else
+          {
+            set SpSopr.rVPrice := d;
+            set SpSopr.VPrice  := d;
+          }
+      }
+  //--------------
+  end;
+}
+
+//********************************************************************************
+
+#include soprttn.vpp //-- обработка полей весовых характеристик
+
+//********************************************************************************
+
+cmCheckField  :
+{
+  if (SpSopr.cMcUsl = 0)
+  {
+    Message('Не указана матценность.');
+    ReReadRecord(#SpSopr);
+    Exit;
+  }
+
+  Case CurField of
+  //--------------
+    #SpSopr.Price,
+    #SpSopr.VPrice:
+      {
+        oSDFuns.SetSoprCurFieldName(GetCurrentFieldName);
+
+        set SpSopr.rPrice := SpSopr.Price;
+        set SpSopr.rvPrice := SpSopr.vPrice;
+      }
+  //--------------
+    #SpSopr.rPrice,
+    #SpSopr.rVPrice:
+      {
+        oSDFuns.SetSoprCurFieldName(GetCurrentFieldName);
+
+        set SpSopr.Price  := SpSopr.rPrice;
+        set SpSopr.vPrice := SpSopr.rvPrice;
+
+        if (wGetTune('Oper.Buy.Nakl.ReCalcPriceByFactory') = 1)
+          oFPrice.SetFactoryProcNac(SpSopr.NRec, SpSopr.rPrice);
+      }
+  //--------------
+    #SpSopr.Kol,
+    #SpSopr.ProcUb,
+    #SpSopr.KolFact,
+    #SpSopr.KolOpl:
+      {
+        if (CurField = #SpSopr.KolFact)
+          old_kol := double(OldFieldValue);
+
+        if (CurField = #SpSopr.KolFact) or (CurField = #SpSopr.Kol)
+          {
+            if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+              if PAutoPlan.IsPlanExist(SpSopr.nRec, 0)
+                {
+                  Message('Выполнение невозможно.'#13'Сначала удалите план размещения МЦ.', CancelButton);
+
+                  if (CurField = #SpSopr.Kol)
+                    set SpSopr.Kol := double(OldFieldValue)
+                  else
+                    if (CurField = #SpSopr.KolFact)
+                      set SpSopr.KolFact := double(OldFieldValue);
+
+                  Exit;
+                }
+
+            if ( ((KatSopr.wADoc = adSoprDocKN) or (KatSopr.wADoc = adSoprDocSN)) and (KatMC.wSerialReg = word(1)) )
+              {
+                Message( 'В корректирующей накладной нельзя изменить количество МЦ'#13
+                       + 'по которой ведется учет серийных номеров.');
+
+                if ( CurField = #SpSopr.Kol )
+                  set SpSopr.Kol := double(OldFieldValue)
+                else
+                  if ( CurField = #SpSopr.KolFact )
+                    set SpSopr.KolFact := double(OldFieldValue);
+
+                exit;
+              }
+          }
+
+        Var
+          tKol, SumKol: double;
+        Var
+          bRes : boolean;
+
+        if ( KatSopr.VidSopr <> 101 and KatSopr.VidSopr <> 108 )
+          bRes := false
+        else
+          bRes := if ( SpSopr.PrMC = 1, wGetTune('Doc.RasNeotgMC') = 1,
+                    if ( SpSopr.PrMC = 2, wGetTune('Doc.RasNeotgUsl') = 1,
+                      false ) );
+
+        if ( bRes )
+          if ( GetFirst SpStep = tsok )
+            {
+              tKol   := oRasNeotg.RecalcNeotgr(SpSopr.cSpStep, SpSopr.nRec);
+              SumKol := SpStep.KolSkl - tKol;
+              SumKol := SumKol * fEdIzm.GetKoefOtpEd(SpStep.cOtpEd) / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+              if ( SumKol < SpSopr.KolFact )
+                set SpSopr.KolFact := SumKol;
+
+              if ( SumKol < SpSopr.KolOpl )
+                set SpSopr.KolOpl := SumKol;
+            }
+
+        CheckAndMakeKol;
+
+        Update Current SpSopr;
+
+        // пересчет кол-ва в распределении позиции
+        if (CurField = #SpSopr.KolFact)
+          oSDfuns.CheckKolSoprOrdB(SpSopr.NRec, Double(OldFieldValue));
+
+      }
+  //--------------
+  // для обработки конфигуратором
+    #SpDocNal.Summa, #SpDocNal.SumVal, #SpDocNal.SumNal:
+      {
+        if (Not isValid(#SpDocNal))
+          Exit;
+
+        Set SpSopr.ManualTax := 1;
+        UpDate current SpSopr;
+
+        case CurField of
+          #SpDocNal.Summa:
+            {
+              set SpDocNal.SumVal := SpDocNal.Summa / GetCursPrice;
+              set SpDocNal.SumNal := SpDocNal.Summa / CurseNalog;
+            }
+
+          #SpDocNal.SumVal:
+            {
+              set SpDocNal.Summa  := SpDocNal.SumVal * GetCursPrice;
+              set SpDocNal.SumNal := SpDocNal.Summa  / CurseNalog;
+            }
+
+          #SpDocNal.SumNal:
+            {
+              set SpDocNal.Summa  := SpDocNal.SumNal * CurseNalog;
+              set SpDocNal.SumVal := SpDocNal.Summa  / GetCursPrice;
+            }
+        end;
+
+        Update Current SpDocNal;
+
+        CalcSumNalogs;
+        UpDate Current SpSopr;
+      }
+  end;
+
+  CheckSumma(false);
+
+  procDocAutoCalcUsl;
+}
+
+//********************************************************************************
+
+cmCheckSumma:
+  {
+    if not OtkatToOldState(true, word(0))
+      Exit;
+
+    CheckSumma(false);
+    Stop;
+  }
+
+//********************************************************************************
+
+#include SpSopr_e.vpp
+
+cmUpdateRecord:
+{
+  if (CurField = #SpSopr.KolFact)
+    if (GetFirst SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+    {
+      oSoprTara.UpdateSpSoprKolTara (SpSopr.cSopr, SpSopr.cOtpEd, SpSopr.NRec, SpSopr.KolFact, old_kol);
+      SetModified(FALSE);
+      CheckSumma(TRUE);
+    }
+}
+
+//********************************************************************************
+
+cmPick:
+  case CurField of
+  //--------------
+    #PrSopUsl,
+    #PrSopUslFullName,
+    #KatMC.Name,
+    #KatMC.BarKod,
+    #KatUsl.Name,
+    #KatUsl.Kod:
+      {};
+  //--------------
+  else
+      case CurTable of
+      //--------------
+        #SpSopr:
+          If SpSopr.cMCUSL = 0
+            SelectField(#KatMC.Name);
+      //--------------
+        #SpSopUsl:
+          If SpSopUsl.cMCUSL = 0
+            SelectField(#KatUsl.Name);
+      //--------------
+      end;
+  //--------------
+  end;
+
+//********************************************************************************
+
+cmPick:
+  Case CurField of
+    #SmetaMy,
+    #SmetaSpMy:
+      {
+        RunInterface(iVSmeta, SpSopr.nRec, word(coSpSopr));
+                ReScanPanel(#SpSopr);
+              }
+  //--------------
+    #capacity:
+      WorkWithCapcity(2);
+  //--------------
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+      }
+  //--------------
+    #KatMC.Name,
+    #KatMC.BarKod:
+      {
+        if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+          if PAutoPlan.IsPlanExist(SpSopr.nRec, 0)
+            {
+              Message('Выполнение невозможно.'#13'Сначала удалите план размещения МЦ.', CancelButton);
+              Abort; Exit;
+            }
+
+        PickNameMCUsl;
+      }
+  //--------------
+    #KatUsl.Name,
+    #KatUsl.Kod:
+      GetMCUslKat;
+  //--------------
+    #OtpEd,
+    #OtpEdFullName:
+    {
+      if (SpSopr.PrVoz = 0)
+      {
+        var old_cotped: comp; old_cotped := SpSopr.cOtpEd;
+        var old_kol: double;  old_kol := SpSopr.KolFact;
+        var bUpdate: boolean; bUpdate := false;
+
+        ChangeOtpEd;
+
+        if (old_cotped <> SpSopr.cOtpEd)
+        {
+          if (GetFirst SpOtpEd where ((old_cotped == SpOtpEd.cOtpEd)) = tsOk)
+          {
+            // удаление позиций со старой тарой
+            oSoprTara.DeleteSpSoprTara (SpSopr.cSopr, old_cotped, SpSopr.NRec, old_kol);
+            bUpdate := true;
+          }
+
+          if (GetFirst SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+          {
+            // вставка новой тары
+            oSoprTara.InsertTara (SpSopr.cOtpEd, SpSopr.NRec, SpSopr.cSopr, SpSopr.KolFact, comp(0));
+            bUpdate := true;
+          }
+
+          if ( bUpdate )
+          {
+            // пересчет номеров
+            Update Current SpSopr;
+            oSoprTara.ChangeNppSopr (SpSopr.cSopr);
+
+            if (NOT boGetTune('Tara.RecalcKolPos'))
+              oSoprTara.UpdateSpSoprKolTara (SpSopr.cSopr, SpSopr.cOtpEd, SpSopr.NRec, SpSopr.KolFact, SpSopr.KolFact);
+
+            ReReadRecord(#SpSopr);
+            // пересчет массы нетто и брутто
+            pGetDocSpecInfo.GetDocSpecInfo(coKatSopr, KatSopr.NRec, KatSopr.Netto, KatSopr.mTara);
+            CheckSumma(TRUE);
+          }
+        }
+
+        if (NOT bUpDate)
+          CheckSumma(FALSE);
+      }
+    }
+
+  //--------------
+    #SpSopr.Kolfact,
+    #SpSopr.Kol,
+    #SpSopr.KolOpl:
+     //глюк Atl - входит в cmPick на непиковом поле (перестрахуемся и проверим UseDEI)
+     //мысли: событие cmPick посылается в очередь в cmSetDefault, когда фокус стоит на пиковом поле.
+     //Затем, меняем фокус на непиковое поле и приходит время сработать событию в очереди
+     //и оно срабатывает в слепую, не глядя что уже текущее поле в фокусе непиковое.
+      if (UseDEI)
+        {
+          var w_TipKol: word;
+          var sTitle: string;
+          var nKol: double;
+
+          case CurField of
+          //--------------
+           #SpSopr.Kolfact:
+            {
+              w_TipKol := 1;
+              sTitle  := 'Ввод фактического количества';
+              nKol := SpSopr.Kolfact;
+            }
+          //--------------
+           #SpSopr.KolOpl:
+            {
+              w_TipKol := 3;
+              sTitle  := 'Ввод количества к оплате по накладной';
+              nKol := SpSopr.KolOpl;
+            }
+          //--------------
+           #SpSopr.Kol    :
+            {
+              w_TipKol := 2;
+              sTitle  := 'Ввод количества по документу-основанию'
+              nKol := SpSopr.Kol;
+            }
+          //--------------
+          end;
+
+          RunInterface('KolDopEd',
+                        word(coSpSopr), // coTable,  код таблицы спецификации
+                        SpSopr.NRec,    // cRec,     ссылка на спецификацию
+                        w_TipKol,       // wTipKol,  тип количества
+                        sTitle,         // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                        SpSopr.cMCUSL,  // cMCUsl,   NRec МЦ/услуги
+                        SpSopr.PrMC,    // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                        SpSopr.Price,   // Price,    цена за 1-у отпускную единицу
+                        Cena_Pr,        // ForPrice, кол-во знаков после запятой в цене
+                        Cena_Pr,        // ForSumma, кол-во знаков после запятой в стоимости
+                        KatSopr.cValut,  // comp(0),        // cVal,     валюта переданной цены
+                        SpSopr.cOtpEd,  // cOtpEd,   ссылка на отпускную единицу измерения
+                        nKol,           // fKol      количество в отпускных единицах (возвращаемый параметр)
+                        longint(0),
+                        SpSopr.VidSopr
+                      );
+
+          case CurField of
+          //--------------
+           #SpSopr.Kolfact:
+             {
+               set SpSopr.Kolfact := nKol;
+               wOldKolFactDEI := nKol;
+             }
+          //--------------
+           #SpSopr.KolOpl:
+             {
+               set SpSopr.KolOpl := nKol;
+               wOldKolOplDEI     := nKol;
+             }
+          //--------------
+           #SpSopr.Kol:
+             {
+               set SpSopr.Kol := nKol;
+               wOldKolDEI := nKol;
+             }
+          //--------------
+          end;
+
+          ProcessCommand(cmCheckField);
+        }
+  //--------------
+    #KatOtpEdGRM.Name:
+      {
+        var cRecOtpEdGrM: comp;  cRecOtpEdGrM := if(SpSopr.cOtpEdGRM<>comp(0), SpSopr.cOtpEdGrM, -123456);
+
+        if (RunInterface(GetOtpEd, SpSopr.cMCUSL, cRecOtpEdGRM, SpSopr.prMC) <> cmCancel)
+          set SpSopr.cOtpEdGrM := cRecOtpEdGrM;
+      }
+  //--------------
+    #SummaNadbavki,
+    #FactoryPrice,
+    #SpSopr.ProcNac,
+    #FactoryProcNac:
+      {
+        PickKatPartyName;
+        CheckcValParty;
+        RescanPanel(#SpSopr);
+      }
+  //--------------
+    #KatParty.Name:
+      {
+        if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+          if PAutoPlan.IsPlanExist(SpSopr.nRec, 0)
+            {
+              Message('Выполнение невозможно.'#13'Сначала удалите план размещения МЦ.', CancelButton);
+              Abort;
+              Exit;
+            }
+
+        PickKatPartyName;
+      }
+
+  //--------------
+    #KlVal.SimvolV:
+      if CurTable = #SpSopr
+        PickKlVal;
+  //--------------
+    #TTNMoveCell.Name:
+      {
+        var flag_end: boolean;  flag_end := TRUE;
+
+        if (KatSopr.cCellVal = 0)
+          RunInterface( GetCellVal, SpSopr.cMCUSL, SpSopr.cCellVal, word(0), word(0));
+        else
+          do
+            {
+              RunInterface( GetCellVal, SpSopr.cMCUSL, SpSopr.cCellVal, word(0), word(0));
+
+              if GetFirst CellVal where ((  SpSopr.cCellVal == CellVal.cMoveCell )) <> tsOk
+                {
+                  MessageUzbek;
+                  continue;
+                }
+
+              if CellVal.cMoveCell = KatSopr.cCellVal
+                flag_end := FALSE
+              else
+                MessageUzbek;
+            }
+          While flag_end
+      }
+  //--------------
+    #SpSopr.nVagon:
+      {
+        var cEdRec: comp; cEdRec := if (isValid(#TTNMoveCell), TTNMoveCell.nRec, 0);
+
+        if (RunInterface('GetVagon', 4, comp(0), comp(0), cEdRec, comp(0)) <> cmCancel)
+          {
+            GetSpSoprVagon('VagonMarker');
+            RescanPanel(#SpSopr);
+          }
+      }
+  //--------------
+  end; // cmPick
+
+//********************************************************************************
+cmDelOnProtect:
+  case CurField of
+    #SmetaMy,
+    #SmetaSpMy:
+      {
+        delete SpDocSmeta where (( coSpSopr    == SpDocSmeta.coTable and
+                                   SpSopr.nRec == SpDocSmeta.cSpec  ))
+
+        ReScanPanel(#SpSopr);
+      }
+  //--------------
+    #KatParty.Name:
+    {
+      If (SpSopr.cParty <> comp(OldFieldValue) AND KatSopr.cSchFact <> 0)
+        SchFactFlag := TRUE; //надо редактировать счет-фактуру
+
+      // установка цены для приходной накладной по заводской цене и вх.проценту
+      if (wGetTune('Oper.Buy.Nakl.ReCalcPriceByFactory') = 1) AND (boGetTune('DOC.FACTORYPRICE'))
+        if (KatSopr.VidSopr = 101 or KatSopr.VidSopr = 108) AND (SpSopr.cParty <> comp(OldFieldValue))
+          {
+            SpSopr.Price  := 0;
+            SpSopr.rPrice := 0;
+            SpSopr.cParty := 0;
+            CheckSumma(FALSE);
+          }
+    }
+  //--------------
+    #TTNMoveCell.Name,
+    #SpSopr.nVagon:
+      {
+        set SpSopr.nVagon := '';
+        set SpSopr.cNMoveCell := 0;
+        set SpSopr.cTransp  := 0;
+      }
+  //--------------
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        PutCommand(cmIerarchy);
+        RereadRecord;
+      }
+  //--------------
+    #KatMC.Name,
+    #KatMC.BarKod,
+    #KatParty.Name:
+      {
+        if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+          if PAutoPlan.IsPlanExist(SpSopr.nRec, 0)
+            {
+              Message('Выполнение невозможно.'#13'Сначала удалите план размещения МЦ.', CancelButton);
+              Abort; Exit;
+            }
+      }
+  //--------------
+  end;
+
+cmPositionChanged:
+  {
+    Old_Kol := SpSopr.KolFact;
+
+    if ( CurTable = #SpSopr )
+      oLinkMTR2Spec.SetObjParam(word(coSpSopr), SpSopr.nRec, if(not OtkatToOldState(false, word(0)), 1, if(IsValid(#SmetaStroy), 2, 0)));
+  }
+
+cmDeleteRecord:
+  {
+    if SpSopr.wADocSp = adSoprDocKN
+      {
+        Message('Данная накладная является корректирующей накладной.'#13+
+                'Поэтому нельзя удалять спецификации, присутствующие в исходной приходной накладной.'#13+
+                'Вы можете просто указать для них нулевые значения цены и количества.');
+        Abort;
+      }
+    else
+      if Message('Удалить текущую позицию накладной?', YesNo+Confirmation) <> cmYes
+        Abort;
+      else
+        {
+          var bRecaclSumm: boolean; // при удалении нескольних позиций запустить полный пересчет суммм
+          bRecaclSumm := FALSE;
+
+          if (GetFirst SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+          {
+            oSoprTara.DeleteSpSoprTara (SpSopr.cSopr, SpSopr.cOtpEd, SpSopr.NRec, SpSopr.KolFact);
+            bRecaclSumm := TRUE;
+          }
+
+          var PrDel: boolean;  PrDel := TRUE;
+
+     //проверка наличия привязанных складских ордеров
+          if GetFirst SklOrder where ((KatSopr.nRec == SklOrder.cSopr)) = tsOk
+            PrDel := Message('Накладной №' + KatSopr.nSopr + ' соответствуют ордера ' +
+                       if(SklOrder.Sp = 0, 'на складе', 'в производстве.')+
+                       ''#13#3 + 'Отменить удаление текущей позиции?', YesNo) = cmNo;
+          else
+            if CheckRZKUT
+              PrDel := Message('Накладной №' + KatSopr.nSopr + ' соответствуют приходы в розничной торговле.'#13+
+                              'Отменить удаление текущей позиции?', YesNo) = cmNo;
+     //------------------------------------------------------------------------
+
+          if (NOT PrDel)
+            Abort;
+          else
+            {
+              if (NOT oSerialMove.RemoveSpSoprLink(SpSopr.nRec))
+                {
+                  Message('К позиции привязаны серийные номера. Удаление невозможно.');
+                  Abort;
+                  Exit;
+                }
+
+              DoDeleteCurrentSpSopr;
+
+              if SpSopr.cMcUsl = 0
+                oSDfuns.SpSopr_Delete(SpSopr.nRec);
+
+              ProcDocAutoCalcUsl;
+
+              if (bRecaclSumm)
+              {
+                SetModified(FALSE);
+                CheckSumma(TRUE);
+              }
+            }
+        }
+  }
+
+//********************************************************************************
+
+cmSetCurField:
+  {
+    if not OtkatToOldState(false, word(0))
+      Exit;
+
+    if not boGetTune('Pick.AutoPickinInterface')
+      Exit;
+
+    Case Target of
+    //------------
+      #KatMC.Name,
+      #KatMC.BarKod:
+        if (SpSopr.cMCUsl = 0)
+          PutCommand(cmPick);//102.31248
+    //------------
+      #KatParty.Name:
+        if SpSopr.cParty = 0
+          {
+            if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+              if PAutoPlan.IsPlanExist(SpSopr.nRec, 0)
+                Exit;
+
+            PutCommand(cmPick);
+          }
+    //------------
+      #SpSopr.KolFact:
+        Old_Kol := SpSopr.KolFact;
+    end;
+  }
+
+//********************************************************************************

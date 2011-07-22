@@ -1,0 +1,132 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : функции, возвращающие значения внешних классификаторов    ║
+ ║ Ответственный : Крахотко Александр Валерьевич                             ║
+ ║ Параметры     :                                                           ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+Create view ForClassSeg_0
+ Var
+  pClassCode,
+  pwTable
+    : word;
+  pcRec
+    : comp;
+  pClassName,
+  pClassSegName
+    : string;
+
+as select
+   ExClassName.*,
+   ExClassSeg.*,
+   ExClassVal.*
+from
+  ExClassName ,
+  ExClassSeg  ,
+  ExClassVal  
+ where
+  ((
+        pwTable               == ExClassName.wTable
+    and pClassName            == ExClassName.Name  (NoIndex)
+
+    and pClassCode            == ExClassVal.ClassCode
+    and pwTable               == ExClassVal.wTable
+    and pcRec                 == ExClassVal.cRec
+
+    and ExClassVal.cClassSeg  == ExClassSeg.NRec
+  ))
+;
+
+!------------------------------------------------------------------------------
+! возвращает Код Класса по названию класса для указанной таблицы
+function ExClass_GetClassCode (_wTable    : word ;   // номер таблицы
+                               _ClassName : string   // Название класса
+                              ) : word;              //возвращает Код Класса
+{
+  ExClass_GetClassCode     := 0;
+  ForClassSeg_0.pwTable    := _wTable;
+  ForClassSeg_0.pClassName := _ClassName;
+  if (ForClassSeg_0.GetFirst ExClassName = tsOk)
+    {
+     ExClass_GetClassCode     := ForClassSeg_0.ExClassName.ClassCode;
+     ForClassSeg_0.pClassCode := ForClassSeg_0.ExClassName.ClassCode;
+    }
+} // function ExClass_GetClassCode
+!-------------------------------------------------------------------------------
+
+! возвращает Название сегмента класса по коду класса для указанной таблицы с
+! номером записи
+function ExClass_GetClassSegName ( _wTable    : word ;  // номер таблицы
+                                   _ClassCode : word ;  // Код Класса
+                                   _cRec      : comp    // номер записи таблицы
+                                  ) : string;           //возвращает Название сегмента класса
+{
+  ExClass_GetClassSegName  := '' ;
+  ForClassSeg_0.pwTable    := _wTable ;
+  ForClassSeg_0.pClassCode := _ClassCode ;
+  ForClassSeg_0.pcRec      := _cRec ;
+  if ( ForClassSeg_0.GetFirst ExClassVal = tsOk )
+    if (ForClassSeg_0.GetFirst ExClassSeg = tsOk )
+      {
+      ForClassSeg_0.pClassSegName := ForClassSeg_0.ExClassSeg.Name;
+      ExClass_GetClassSegName     := ForClassSeg_0.ExClassSeg.Name;
+      }
+} // function ExClass_GetClassSegName
+!-------------------------------------------------------------------------------
+
+!------------------------------------------------------------------------------
+! возвращает NoDoc - Номер для Наряд-Заказа сформированный по спец.алгоритму(ЮКОС)
+Procedure ExClass_GetNZakazSpecNoDoc(_wTable     : word;         // номер таблицы
+                                     _cRec       : comp;         // номер записи таблицы
+                                     KatOrg_Code : string[20];   // вн. номер контрагента
+                                     dDoc        : date;         // дата документа
+                                 var NoDoc       : string[20]    // нужно пересылать текущий номер(меняет только первые 11 символов)
+                              );
+Var
+  SavNoDoc
+    : string;
+  varClassCode
+    : word;
+  varClassSegName
+    : string;
+{
+  SavNoDoc := NoDoc;
+  if wGetTune('Doc.NZ.FormNum') = 2
+    {
+     DelLastNumD_(_wTable, SubStr(NoDoc,4,3) + String(Year(dDoc)), SubStr(NoDoc,8,4));
+     NoDoc := '';
+     case Length(KatOrg_Code) of
+       0: KatOrg_Code := '___';
+       1: KatOrg_Code := KatOrg_Code + '  ';
+       2: KatOrg_Code := KatOrg_Code + ' ';
+     end;
+     // возвращает Код Класса по названию класса для указанной таблицы
+     varClassCode  := ExClass_GetClassCode(_wTable, 'Схема');
+     // возвращает Код Класса по названию класса для указанной таблицы
+     varClassSegName := ExClass_GetClassSegName(_wTable, varClassCode, _cRec);
+     case Length(varClassSegName) of
+       0: varClassSegName := '___';
+       1: varClassSegName := varClassSegName + '  ';
+       2: varClassSegName := varClassSegName + ' ';
+     end;
+     NoDoc := SubStr(varClassSegName,1,3) + SubStr(KatOrg_Code,1,3);
+     // возвращает Код Класса по названию класса для указанной таблицы
+     varClassCode  := ExClass_GetClassCode(_wTable, 'Год ресурса');
+     // возвращает Код Класса по названию класса для указанной таблицы
+     varClassSegName := ExClass_GetClassSegName(_wTable, varClassCode, _cRec);
+     case Length(varClassSegName) of
+       0: varClassSegName := '____';
+       1: varClassSegName := varClassSegName + '   ';
+       2: varClassSegName := varClassSegName + '  ';
+       3: varClassSegName := varClassSegName + ' ';
+     end;
+     NoDoc := NoDoc + SubStr(varClassSegName,4,1)
+              + GetLastNumD__(_wTable, SubStr(KatOrg_Code,1,3) + String(Year(dDoc)), 4)
+              + SubStr(SavNoDoc,12,Length(SavNoDoc)-12+1);
+    };
+}; // Procedure ExClass_GetNZakazSpecNoDoc

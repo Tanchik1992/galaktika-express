@@ -1,0 +1,892 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Протокол формирования цены
+//******************************************************************************
+
+Table STRUCT pTmpOrgUslNal "Контрагент и его услуга"
+(
+  NRec       : Comp         "nRec",
+  NameOrg    : tNameOrg     "наименование организации",
+  NameUsl    : tName        "наименование услуги",
+  SumUSL     : Double       "Сумма услуги",
+  NameNalog  : tName        "наименование налога",
+  SumNalog   : Double       "Сумма налога",
+  cVal       : Comp         "ссылка на валюту услуги"
+)
+With Index
+(
+  pTmpOrgUslNal00  =  NRec(Unique, Surrogate, Journal),
+  pTmpOrgUslNal01  =  NameOrg + NameUsl + NameNalog,
+  pTmpOrgUslNal02  =  NameOrg + NameNalog
+);
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Протокол формирования цены
+
+Параметры:
+  NRecKatSopr    - ссылка на сопр.документ
+  NRecSpSopr     - ссылка на позицию сопр.документа
+                   если не задан NRecSpSopr - печать отчета,
+                   иначе - возвращаются следующие параметры:
+  SopUslBasicOrg - Сопутствующии услуги основного контрагента
+  SopUslOtherOrg - Сопутствующие услуги, отнесенные на другого контрагента
+  Customs_Price  - -Таможенные пошлины, отнесенные на таможню
+  NDS_Price      - налог НДС
+  Akciz_Price    - налог Акциз
+  Prod_Price     - налог с продажи
+  Other_Price    - остальные налоги
+  cFormPl        - ссылка на расчетный алгоритм планирования
+#end
+
+//******************************************************************************
+
+Interface ShapingPrice 'Протокол формирования цены' AlwaysReturn;
+  Show at (, , , );
+
+Create view
+var
+//------------------------------------------------------------------------------
+  NRecKatSopr
+, NRecSpSopr
+                : comp;
+//------------------------------------------------------------------------------
+  TypeSopr
+                : word;
+//------------------------------------------------------------------------------
+  SopUslBasicOrg
+, SopUslOtherOrg
+, SopUslOtherOrgRu
+,  Customs_Price
+, NDS_Price
+, Akciz_Price
+, Prod_Price
+, Other_Price
+, UslNalogBasicOrg
+, UslNalogOtherOrg
+, UslNalogOtherOrgRu
+                : double;
+//------------------------------------------------------------------------------
+
+
+As select
+  if (SpSopr.cOtpEd = 0, KatEd.Name, KatOtpEd.Name)
+    ( FieldName =NameEdSpSopr )
+, KatSopr.*
+, SpSopr.*
+, SpDocNal.*
+, KatMC.*
+, KatOrg.*
+, Usl_KatSopr.*
+, Usl_SpDocNal.*
+, SpSopUsl.*
+
+From
+  KatSopr
+, SpSopr
+, SpDocNal
+, KatMC
+, KatOrg
+, pTmpOrgUslNal (pTmpOrgUslNal01)
+, KatOrg   KatOrg0
+, KatOrg   KatOrg1
+, KatOrg   KatOrg2
+, KatOrg   KatOrg3
+, KatUsl   KatUsl1
+, KatUsl   KatUsl2
+, KatNalog KatNalog0
+, KatNalog KatNalog1
+, KatNalog KatNalog2
+, KlVal    KlVal2
+, KatSopr  Usl_KatSopr
+, SpSopr   Usl_SpSopr
+, SpDocNal UslSpDocNal
+, SpDocNal Usl_SpDocNal
+, SpSopr   SpSopUsl
+, KatEd
+, KatOtpEd
+, DovFIO
+, KatCity
+, KatBank
+, KatMOL
+, Persons
+, Appointments
+, Catalogs
+, BaseDoc
+, StepDoc
+, Dover
+
+Where
+((
+  TypeSopr             == KatSopr.VidSopr      AND
+  //спецификация
+  KatSopr.NRec         == SpSopr.cSopr         AND
+  word(1)              == SpSopr.prMC          AND
+  //МЦ
+  SpSopr.cMCUsl        == KatMC.NRec           AND
+  KatMC.cED            == KatEd.NRec           AND
+  SpSopr.cOtpEd        == KatOtpEd.NRec        AND
+  //Организация-контрагент
+  KatSopr.cOrgBase     == KatOrg.NRec          AND
+  KatSopr.cVal         == KlVal.NRec           AND
+  //все налоги
+  TypeSopr             == SpDocNal.TipDoc      AND
+  SpSopr.NRec          == SpDocNal.cSpDoc      AND
+  SpDocNal.cOrg        == KatOrg0.NRec         AND
+  SpDocNal.cNalog      == KatNalog0.NRec       AND
+
+  //Сопутствующей услуги основного контрагента
+  KatSopr.NRec         == SpSopUsl.cSopr       AND
+  word(3)             <<= SpSopUsl.PrMC        AND
+  SpSopUsl.cMCUsl      == KatUsl1.NRec         AND
+  //все налоги услуг основного контрагента
+  TypeSopr             == UslSpDocNal.TipDoc   AND
+  SpSopUsl.NRec        == UslSpDocNal.cSpDoc   AND
+  UslSpDocNal.cOrg     == KatOrg1.NRec         AND
+  UslSpDocNal.cNalog   == KatNalog1.NRec       AND
+
+  //Сопутствующие услуги, отнесенные на другого контрагента
+  word(111)            == Usl_KatSopr.VidSopr  AND
+  KatSopr.NRec         == Usl_KatSopr.cKatSopr AND
+  Usl_KatSopr.NRec     == Usl_SpSopr.cSopr     AND
+  Usl_SpSopr.cMCUsl    == KatUsl2.NRec         AND
+  Usl_KatSopr.cOrgBase == KatOrg2.NRec         AND
+  Usl_KatSopr.cVal     == KlVal2.NRec          AND
+  //все налоги услуг, отнесенных на другого контрагента
+  word(111)            == Usl_SpDocNal.TipDoc  AND
+  Usl_SpSopr.NRec      == Usl_SpDocNal.cSpDoc  AND
+  Usl_SpDocNal.cOrg    == KatOrg3.NRec         AND
+  Usl_SpDocNal.cNalog  == KatNalog2.NRec
+));
+
+Parameters
+  NRecKatSopr
+, NRecSpSopr
+  //если не задан NRecSpSopr - печать отчета,
+  //иначе - возвращаются следующие параметры:
+, SopUslBasicOrg   //Сопутствующии услуги основного контрагента
+, SopUslOtherOrg   //Сопутствующие услуги, отнесенные на другого контрагента
+, Customs_Price    //Таможенные пошлины, отнесенные на таможню
+, NDS_Price        //налог НДС
+, Akciz_Price      //налог Акциз
+, Prod_Price       //налог с продажи
+, Other_Price      //остальные налоги
+;
+
+//******************************************************************************
+
+Form FrmShapingPrice('ShapingP.out', 'ShapingPrice') with noVisual;
+
+//*****************************************************************************
+//**************** Проверка рублевой или валютной накладной *******************
+Function fPrVal(nRecVal: Comp): boolean;
+{
+   //пока поставим заглушку - всегда рубли
+   fPrVal := TRUE;
+   //fPrVal := NRecVal = 0;
+}
+
+//*****************************************************************************
+//******* Накачка временной таблицы (Услуги и Налоги для Контрагента) *********
+
+Procedure SetUslNalogInTmp;
+Var tmpSumUsl, tmpNalogUsl: double;
+{
+   //удаление временной таблицы
+   if Delete All pTmpOrgUslNal <> tsOk
+     {
+       Message('Ошибка удаления временной таблицы pTmpOrgUslNal', Error);
+       Exit;
+     }
+
+
+   StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+                  'Получение данных для печати...'#13#3, 1);
+
+   //--------------------------------------------------------------------------
+   //---------- получение всех налогов услуг основного контрагента ------------
+   //--------------------------------------------------------------------------
+   tmpSumUsl        := 0.0;
+   tmpNalogUsl      := 0.0;
+   SopUslBasicOrg   := 0.0;
+
+   _LOOP SpSopUsl
+     {
+       if NOT NextVisual
+         {
+           StopVisual('', 0);
+           Exit;
+         }
+
+
+       //Сумма услуги
+       SopUslBasicOrg   := if(fPrVal(KatSopr.cVal), SpSopUsl.Price, SpSopUsl.vPrice);
+
+       if GetFirst pTmpOrgUslNal
+            where ((KatOrg.Name == pTmpOrgUslNal.NameOrg AND
+                    KatUsl1.Name == pTmpOrgUslNal.NameUsl AND
+                    String('')   == pTmpOrgUslNal.NameNalog)) = tsOk
+         {
+           //Сумма услуги
+           pTmpOrgUslNal.SumUSL   := pTmpOrgUslNal.SumUSL + SopUslBasicOrg;
+           //Сумма налога
+           pTmpOrgUslNal.SumNalog := 0.0;
+
+           if UpDate current pTmpOrgUslNal <> tsOk
+            Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+         }
+       else
+         {
+           ClearBuffer(#pTmpOrgUslNal);
+
+           //наименование организации
+           pTmpOrgUslNal.NameOrg   := KatOrg.Name;  //для сортировки, чтобы была первой
+           //наименование услуги
+           pTmpOrgUslNal.NameUsl   := KatUsl1.Name;
+           //Сумма услуги
+           pTmpOrgUslNal.SumUSL    := SopUslBasicOrg;
+           //наименование налога
+           pTmpOrgUslNal.NameNalog := '';
+           //Сумма налога
+           pTmpOrgUslNal.SumNalog  := 0.0;
+
+           if Insert current pTmpOrgUslNal <> tsOk
+            Message('Ошибка при вставке в таблицу pTmpOrgUslNal.', Error);
+         }
+
+
+       UslNalogBasicOrg := 0.0;
+
+       _LOOP UslSpDocNal
+          {
+            if NOT NextVisual
+              {
+                StopVisual('', 0);
+                Exit;
+              }
+
+
+            //Сумма налога
+            UslNalogBasicOrg := UslNalogBasicOrg +
+                                if(fPrVal(KatSopr.cVal),
+                                   UslSpDocNal.Summa,
+                                   UslSpDocNal.SumVal);
+
+            if GetFirst pTmpOrgUslNal
+                 where ((KatOrg1.Name   == pTmpOrgUslNal.NameOrg AND
+                         KatUsl1.Name   == pTmpOrgUslNal.NameUsl AND
+                         KatNalog1.Name == pTmpOrgUslNal.NameNalog)) = tsOk
+              {
+                //Сумма услуги
+                pTmpOrgUslNal.SumUSL   := pTmpOrgUslNal.SumUSL + SopUslBasicOrg;
+                //Сумма налога
+                pTmpOrgUslNal.SumNalog := pTmpOrgUslNal.SumNalog +
+                                          if(fPrVal(KatSopr.cVal),
+                                             UslSpDocNal.Summa,
+                                             UslSpDocNal.SumVal);
+
+                if UpDate current pTmpOrgUslNal <> tsOk
+                 Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+              }
+            else
+              {
+                ClearBuffer(#pTmpOrgUslNal);
+
+                //наименование организации
+                pTmpOrgUslNal.NameOrg   := KatOrg1.Name;
+                //наименование услуги
+                pTmpOrgUslNal.NameUsl   := KatUsl1.Name;
+                //Сумма услуги
+                pTmpOrgUslNal.SumUSL    := SopUslBasicOrg;
+                //наименование налога
+                pTmpOrgUslNal.NameNalog := KatNalog1.Name;
+                //Сумма налога
+                pTmpOrgUslNal.SumNalog  := if(fPrVal(KatSopr.cVal),
+                                              UslSpDocNal.Summa,
+                                              UslSpDocNal.SumVal);
+
+                if Insert current pTmpOrgUslNal <> tsOk
+                 Message('Ошибка при вставке в таблицу pTmpOrgUslNal.', Error);
+              }
+          }
+
+       //Сумма услуги (очищаем от налогов)
+       if KatSopr.VhodNal = 1  //если налоги входят
+         {
+           SopUslBasicOrg  := SopUslBasicOrg - UslNalogBasicOrg;
+
+           //ищем 1-ю запись и ставим "Сумму услуги" без налогов
+           if GetFirst pTmpOrgUslNal
+                where ((String('')   == pTmpOrgUslNal.NameOrg AND
+                        KatUsl1.Name == pTmpOrgUslNal.NameUsl)) = tsOk
+             {
+               //Сумма услуги
+               pTmpOrgUslNal.SumUSL := SopUslBasicOrg;
+
+               if UpDate current pTmpOrgUslNal <> tsOk
+                Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+             }
+         }
+
+       tmpSumUsl   := tmpSumUsl   + SopUslBasicOrg;
+       tmpNalogUsl := tmpNalogUsl + UslNalogBasicOrg;
+     }
+
+   SopUslBasicOrg   := tmpSumUsl;
+   UslNalogBasicOrg := tmpNalogUsl;
+
+   //--------------------------------------------------------------------------
+   //----------- получение всех налогов услуг другого контрагента -------------
+   //--------------------------------------------------------------------------
+   tmpSumUsl        := 0.0;
+   tmpNalogUsl      := 0.0;
+   SopUslOtherOrg   := 0.0;
+   SopUslOtherOrgRu := 0.0;
+
+   _LOOP Usl_KatSopr
+      {
+        if NOT NextVisual
+          {
+            StopVisual('', 0);
+            Exit;
+          }
+
+
+        _LOOP Usl_SpSopr
+          {
+            if NOT NextVisual
+              {
+                StopVisual('', 0);
+                Exit;
+              }
+
+            if ( Usl_SpSopr.PrVoz <> 0 )
+              continue;
+
+            //Сумма услуги
+            SopUslOtherOrg   := if(fPrVal(Usl_KatSopr.cVal),
+                                   Usl_SpSopr.Price,
+                                   Usl_SpSopr.vPrice) * Usl_SpSopr.KolFact;
+            SopUslOtherOrgRu := Usl_SpSopr.Price * Usl_SpSopr.KolFact;
+
+
+            if GetFirst pTmpOrgUslNal
+                 where ((KatOrg2.Name == pTmpOrgUslNal.NameOrg AND
+                         KatUsl2.Name == pTmpOrgUslNal.NameUsl AND
+                         String('')   == pTmpOrgUslNal.NameNalog)) = tsOk
+              {
+                //Сумма услуги
+                pTmpOrgUslNal.SumUSL   := pTmpOrgUslNal.SumUSL + SopUslOtherOrg;
+                //Сумма налога
+                pTmpOrgUslNal.SumNalog := 0.0;
+
+                if UpDate current pTmpOrgUslNal <> tsOk
+                 Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+              }
+            else
+              {
+                ClearBuffer(#pTmpOrgUslNal);
+
+                //наименование организации
+                pTmpOrgUslNal.NameOrg   := KatOrg2.Name;
+                //наименование услуги
+                pTmpOrgUslNal.NameUsl   := KatUsl2.Name;
+                //Сумма услуги
+                pTmpOrgUslNal.SumUSL    := SopUslOtherOrg;
+                //наименование налога
+                pTmpOrgUslNal.NameNalog := '';
+                //Сумма налога
+                pTmpOrgUslNal.SumNalog  := 0.0;
+
+                if Insert current pTmpOrgUslNal <> tsOk
+                 Message('Ошибка при вставке в таблицу pTmpOrgUslNal.', Error);
+              }
+
+
+            UslNalogOtherOrg   := 0.0;
+            UslNalogOtherOrgRu := 0.0;
+
+            _LOOP Usl_SpDocNal
+              {
+                if NOT NextVisual
+                  {
+                    StopVisual('', 0);
+                    Exit;
+                  }
+
+
+                //Сумма налога
+                UslNalogOtherOrg   := UslNalogOtherOrg +
+                                      if(fPrVal(Usl_KatSopr.cVal),
+                                         Usl_SpDocNal.Summa,
+                                         Usl_SpDocNal.SumVal);
+                UslNalogOtherOrgRu := UslNalogOtherOrgRu + Usl_SpDocNal.Summa;
+
+                if GetFirst pTmpOrgUslNal
+                     where ((KatOrg2.Name   == pTmpOrgUslNal.NameOrg AND
+                             KatUsl2.Name   == pTmpOrgUslNal.NameUsl AND
+                             KatNalog2.Name == pTmpOrgUslNal.NameNalog)) = tsOk
+                  {
+                    //Сумма услуги
+                    pTmpOrgUslNal.SumUSL   := pTmpOrgUslNal.SumUSL + SopUslOtherOrg;
+                    //Сумма налога
+                    pTmpOrgUslNal.SumNalog := pTmpOrgUslNal.SumNalog +
+                                              if(fPrVal(Usl_KatSopr.cVal),
+                                                 Usl_SpDocNal.Summa,
+                                                 Usl_SpDocNal.SumVal);
+
+                    if UpDate current pTmpOrgUslNal <> tsOk
+                     Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+                  }
+                else
+                  {
+                    ClearBuffer(#pTmpOrgUslNal);
+
+                    //наименование организации
+                    pTmpOrgUslNal.NameOrg   := KatOrg2.Name;
+                    //наименование услуги
+                    pTmpOrgUslNal.NameUsl   := KatUsl2.Name;
+                    //Сумма услуги
+                    pTmpOrgUslNal.SumUSL    := SopUslOtherOrg;
+                    //наименование налога
+                    pTmpOrgUslNal.NameNalog := KatNalog2.Name;
+                    //Сумма налога
+                    pTmpOrgUslNal.SumNalog  := if(fPrVal(Usl_KatSopr.cVal),
+                                                  Usl_SpDocNal.Summa,
+                                                  Usl_SpDocNal.SumVal);
+
+                    if Insert current pTmpOrgUslNal <> tsOk
+                     Message('Ошибка при вставке в таблицу pTmpOrgUslNal.', Error);
+                  }
+              }
+
+            //Сумма услуги (очищаем от налогов)
+            if Usl_KatSopr.VhodNal = 1  //если налоги входят
+              {
+                SopUslOtherOrg   := SopUslOtherOrg   - UslNalogOtherOrg;
+                SopUslOtherOrgRu := SopUslOtherOrgRu - UslNalogOtherOrgRu;
+
+                //ищем 1-ю запись и ставим "Сумму услуги" без налогов
+                if GetFirst pTmpOrgUslNal
+                     where ((KatOrg2.Name   == pTmpOrgUslNal.NameOrg AND
+                             KatUsl2.Name   == pTmpOrgUslNal.NameUsl)) = tsOk
+                  {
+                    //Сумма услуги
+                    pTmpOrgUslNal.SumUSL := SopUslOtherOrg;
+
+                    if UpDate current pTmpOrgUslNal <> tsOk
+                     Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+                  }
+              }
+
+            tmpSumUsl   := tmpSumUsl   + SopUslOtherOrgRu;
+            tmpNalogUsl := tmpNalogUsl + UslNalogOtherOrgRu;
+          }
+      }
+
+   SopUslOtherOrgRu   := tmpSumUsl;
+   UslNalogOtherOrgRu := tmpNalogUsl;
+   //--------------------------------------------------------------------------
+   //--------------------------------------------------------------------------
+
+
+   StopVisual('', 0);
+}
+
+
+//*****************************************************************************
+//************************* получение всех налогов ****************************
+//*****************************************************************************
+Procedure SetNalogOtherUsl(SumNalTmp: Double);
+{
+  if GetFirst pTmpOrgUslNal
+       where ((KatOrg0.Name   == pTmpOrgUslNal.NameOrg AND
+               string('')     == pTmpOrgUslNal.NameUsl AND
+               KatNalog0.Name == pTmpOrgUslNal.NameNalog)) = tsOk
+    {
+      //Сумма налога
+      pTmpOrgUslNal.SumNalog := pTmpOrgUslNal.SumNalog + SumNalTmp;
+
+      if UpDate current pTmpOrgUslNal <> tsOk
+       Message('Ошибка обновления записи в таблице pTmpOrgUslNal.', Error);
+    }
+  else
+    {
+      ClearBuffer(#pTmpOrgUslNal);
+
+      //наименование организации
+      pTmpOrgUslNal.NameOrg   := KatOrg0.Name;
+      //наименование услуги
+      pTmpOrgUslNal.NameUsl   := '';
+      //Сумма услуги
+      pTmpOrgUslNal.SumUSL    := 0.0;
+      //наименование налога
+      pTmpOrgUslNal.NameNalog := KatNalog0.Name;
+      //Сумма налога
+      pTmpOrgUslNal.SumNalog  := SumNalTmp;
+
+      if Insert current pTmpOrgUslNal <> tsOk
+       Message('Ошибка при вставке в таблицу pTmpOrgUslNal.', Error);
+    }
+}
+
+//******************************************************************************
+
+Procedure GetNalogAll;
+Var SumNalTmp: double;
+{
+NDS_Price     := 0.0;   //НДС
+Akciz_Price   := 0.0;   //Акциз
+Prod_Price    := 0.0;   //Нолог с продажи
+Customs_Price := 0.0;   //Таможенные пошлины
+Other_Price   := 0.0;   //Остальные налоги
+
+
+_LOOP SpDocNal
+  {
+    if NOT NextVisual
+     Break;
+
+    SumNalTmp := if(fPrVal(KatSopr.cVal), SpDocNal.Summa, SpDocNal.SumVal);
+
+
+    if (SpDocNal.cOrg <> 0) AND
+       (SpDocNal.cOrg <> KatSopr.cOrgBase)
+     if (SpDocNal.IsCustom AND 1) = 0     //не таможенная пошлина
+      //Налоги сопутствующих услуг, отнесенные на другого контрагента
+       {
+   //         SetNalogOtherUsl(SumNalTmp);
+         UslNalogOtherOrgRu := UslNalogOtherOrgRu + SpDocNal.Summa;
+       }
+     else
+      //Таможенные пошлины, отнесенные на таможню
+       {
+         SetNalogOtherUsl(SumNalTmp);
+
+         Customs_Price      := Customs_Price      + SumNalTmp;
+         UslNalogOtherOrgRu := UslNalogOtherOrgRu + SpDocNal.Summa;
+       }
+    else
+     //налог НДС
+     if SpDocNal.cNalog = coGetTune('Nalog.cNalogNDS')
+      NDS_Price       := NDS_Price      + SumNalTmp;
+     else
+      //налог Акциз
+      if SpDocNal.cNalog = coGetTune('Nalog.cNalogAkcis')
+       Akciz_Price    := Akciz_Price    + SumNalTmp;
+      else
+       //налог на Продажу
+       if SpDocNal.cNalog = coGetTune('Nalog.cNalogProd')
+        Prod_Price    := Prod_Price     + SumNalTmp;
+       else
+        Other_Price   := Other_Price    + SumNalTmp;
+  }
+}
+//*****************************************************************************
+//************************* Персчет в валюту накладной ************************
+//*****************************************************************************
+Function SetBasicVal(dSum0: Double): double;
+Var dValKurs: Double
+{
+  dValKurs := 1.0;
+  SetBasicVal := dSum0 / dValKurs;
+}  //***************************** GetValCurs *********************************
+
+
+
+//*****************************************************************************
+//********************** Протокол формирования цены ***************************
+//*****************************************************************************
+#include PrnInfo.vpp  //Процедуры и функции для печати в формы
+
+//******************************************************************************
+
+Procedure PrnShapingPrice;
+{
+   SetUslNalogInTmp;
+   RereadRecord(#pTmpOrgUslNal);
+
+
+   if FrmShapingPrice.Error
+     {
+       FrmShapingPrice.AbortForm;
+       Exit;
+     }
+
+   StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+                  'Формирование отчета...', 1);
+
+   FrmShapingPrice.Write(KatSopr.NRec);   //KatSopr_NRec
+   FrmShapingPrice.Write(KatSopr.nSopr);  //Номер накладной
+   FrmShapingPrice.Write(KatSopr.dSopr);  //Дата выписки накладной
+
+   PrnOrg_Bank(FrmShapingPrice.Handle, KatOrg.NRec, TRUE);  //Организация-контрагент
+   FrmShapingPrice.Write(KatOrg.Name);    //Наименование организации
+
+   if fPrVal(KatSopr.cVal)
+     {
+       FrmShapingPrice.Write(sGetTune('NDE.NameRubLah'));  //СимволНак
+       FrmShapingPrice.Write(sGetTune('NDE.SimvRub'));     //СимНак
+     }
+   else
+     {
+       FrmShapingPrice.Write(KlVal.Dollarah);              //Символ валюты
+       FrmShapingPrice.Write(KlVal.SimvolV);               //Сумма в ... ДОЛЛАРАХ, напр
+     }
+
+
+   _LOOP SpSopr
+     {
+       if NOT NextVisual
+         {
+           StopVisual('', 0);
+           FrmShapingPrice.AbortForm;
+
+           Exit;
+         }
+
+       FrmShapingPrice.Write(KatMC.Name);    //Название МЦ
+       FrmShapingPrice.Write(KatMC.BarKod);  //Номенклатурный номер МЦ
+
+       FrmShapingPrice.Write(NameEdSpSopr);  //Единица измерения
+
+
+       FrmShapingPrice.Write(SpSopr.KolFact);  //количество фактическое
+
+
+       //подсчет налогов по позиции спецификации
+       GetNalogAll;
+
+       var NalSumm: double;
+       NalSumm := if (KatSopr.VhodNal = 1, NDS_Price   / SpSopr.KolFact +
+                                           Akciz_Price / SpSopr.KolFact +
+                                           Prod_Price  / SpSopr.KolFact +
+                                           Other_Price / SpSopr.KolFact
+                                         , 0.0);
+
+       //Цена за единицу МЦ (без налогов)
+       FrmShapingPrice.Write(if (fPrVal(KatSopr.cVal), SpSopr.rPrice, SpSopr.rVPrice) - NalSumm);
+       //Стоимость МЦ (без налогов)
+       var tPriceMcUsl: double;
+       tPriceMcUsl := (if (fPrVal(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice) - NalSumm) * SpSopr.KolFact;
+
+       FrmShapingPrice.Write(tPriceMcUsl);
+
+
+       //-----------------------------------------------------------------------
+       //------------------ Налоги для позиции спецификации --------------------
+       //-----------------------------------------------------------------------
+       if GetFirst SpDocNal <> tsOk
+        FrmShapingPrice.SkipFormat(3);
+       else
+
+        _LOOP SpDocNal
+          {
+            if NOT NextVisual
+              {
+                StopVisual('', 0);
+                FrmShapingPrice.AbortForm;
+
+                Exit;
+              }
+
+   //         if (SpDocNal.cOrg <> 0) AND
+   //            (SpDocNal.cOrg = KatSopr.cOrgBase)
+            if (SpDocNal.cOrg <> 0)
+              {
+                FrmShapingPrice.Write(KatOrg0.Name);
+                //наименование налога позиции спецификации
+                FrmShapingPrice.Write(KatNalog0.Name);
+                //Сумма налога позиции спецификации
+                FrmShapingPrice.Write(if(fPrVal(KatSopr.cVal),
+                                         SpDocNal.Summa,
+                                         SpDocNal.SumVal));
+              }
+            else
+              FrmShapingPrice.SkipFormat(3);
+          }
+       FrmShapingPrice.PutEvent(feBreak);
+       //-----------------------------------------------------------------------
+       //-----------------------------------------------------------------------
+
+
+       //-----------------------------------------------------------------------
+       //-------------- СУ и их налоги для позиции спецификации ----------------
+       //-----------------------------------------------------------------------
+       if GetFirst pTmpOrgUslNal <> tsOk
+        FrmShapingPrice.SkipFormat(5);
+       else
+
+        _LOOP pTmpOrgUslNal
+          {
+            if NOT NextVisual
+              {
+                StopVisual('', 0);
+                FrmShapingPrice.AbortForm;
+
+                Exit;
+              }
+
+            //наименование контрагента
+            FrmShapingPrice.Write(if(pTmpOrgUslNal.NameOrg = '',
+                                     KatOrg.Name,
+                                     pTmpOrgUslNal.NameOrg));
+            //наименование услуги
+            FrmShapingPrice.Write(pTmpOrgUslNal.NameUsl);
+            //Сумма услуги
+            FrmShapingPrice.Write(pTmpOrgUslNal.SumUSL * tPriceMcUsl
+                                  /
+                                  (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                            KatSopr.SumVal) -
+                                   SopUslBasicOrg -
+                                   if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                            KatSopr.svNalogs)
+                                  )
+                                 );
+            //наименование налога
+            FrmShapingPrice.Write(pTmpOrgUslNal.NameNalog);
+            //Сумма налога
+            FrmShapingPrice.Write(pTmpOrgUslNal.SumNalog * tPriceMcUsl
+                                  /
+                                  (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                            KatSopr.SumVal) -
+                                   SopUslBasicOrg -
+                                   if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                            KatSopr.svNalogs)
+                                  )
+                                 );
+          }
+
+       FrmShapingPrice.PutEvent(feBreak);
+       //-----------------------------------------------------------------------
+       //-----------------------------------------------------------------------
+
+
+       //-----------------------------------------------------------------------
+       //------- Расчет Налогов и Сопутствующих услуг для общего отчета --------
+       //-----------------------------------------------------------------------
+       //СУ основного контрагента
+       FrmShapingPrice.Write(SopUslBasicOrg * tPriceMcUsl
+                             /
+                             (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                       KatSopr.SumVal) -
+                              SopUslBasicOrg -
+                              if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                       KatSopr.svNalogs)
+                             )
+                            );
+       //Налоги СУ основного контрагента
+       FrmShapingPrice.Write(UslNalogBasicOrg * tPriceMcUsl
+                             /
+                             (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                       KatSopr.SumVal) -
+                              SopUslBasicOrg -
+                              if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                       KatSopr.svNalogs)
+                             )
+                            );
+
+       //СУ другого контрагента
+       FrmShapingPrice.Write(SetBasicVal(SopUslOtherOrgRu) * tPriceMcUsl
+                             /
+                             (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                       KatSopr.SumVal) -
+                              SopUslBasicOrg -
+                              if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                       KatSopr.svNalogs)
+                             )
+                            );
+       //Налоги СУ другого контрагента
+       FrmShapingPrice.Write(SetBasicVal(UslNalogOtherOrgRu) * tPriceMcUsl
+                             /
+                             (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                       KatSopr.SumVal) -
+                              SopUslBasicOrg -
+                              if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                       KatSopr.svNalogs)
+                             )
+                            );
+       //-----------------------------------------------------------------------
+       //-----------------------------------------------------------------------
+
+
+       FrmShapingPrice.Write(NDS_Price);      //НДС
+       FrmShapingPrice.Write(Akciz_Price);    //Акциз
+       FrmShapingPrice.Write(Prod_Price);     //Нолог с продажи
+       FrmShapingPrice.Write(Customs_Price);  //Таможенные пошлины
+       FrmShapingPrice.Write(Other_Price);    //Остальные налоги
+     }
+
+   FrmShapingPrice.PutEvent(feBreak);
+   StopVisual('', 0);
+
+   FrmShapingPrice.ShowFile('Протокол формирования цены');
+}
+//*****************************************************************************
+
+HandleEvent  //Interface
+
+cmInit:
+  {
+    Abort;
+
+    if GetFirst KatSopr where((nRecKatSopr == KatSopr.NRec)) <> tsOk
+      Exit;
+
+    TypeSopr := KatSopr.VidSopr;
+
+    UslNalogBasicOrg := 0.0;
+    UslNalogOtherOrg := 0.0;
+
+    //возвратные параметры пока ни кому не нужны (потом доделаю)
+    if NRecSpSopr = 0
+      PrnShapingPrice;  //формирование отчета
+    else
+      if GetFirst SpSopr where((nRecSpSopr == SpSopr.NRec)) <> tsOk
+        Exit;
+      else
+        {
+          SetUslNalogInTmp;
+
+          //все налоги
+          GetNalogAll;
+
+          //цена за позиции без налогов
+          var dPriceSpSopr: double;
+
+          dPriceSpSopr := if (fPrVal(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice)
+                          - if (KatSopr.VhodNal = 1, NDS_Price   / SpSopr.KolFact +
+                                                     Akciz_Price / SpSopr.KolFact +
+                                                     Prod_Price  / SpSopr.KolFact +
+                                                     Other_Price / SpSopr.KolFact
+                                                   , 0.0)
+                          * SpSopr.KolFact;
+
+          //Сопутствующие услуги основного контрагента
+          SopUslBasicOrg := SopUslBasicOrg * dPriceSpSopr
+                            /
+                            (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                      KatSopr.SumVal) -
+                             SopUslBasicOrg -
+                             if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                      KatSopr.svNalogs)
+                            );
+
+          //Сопутствующие услуги другого контрагента
+          SopUslOtherOrg := SopUslOtherOrg * dPriceSpSopr
+                            /
+                            (if(fPrVal(KatSopr.cVal), KatSopr.Summa,
+                                                      KatSopr.SumVal) -
+                             SopUslBasicOrg -
+                             if(fPrVal(KatSopr.cVal), KatSopr.sNalogs,
+                                                      KatSopr.svNalogs)
+                             );
+        }
+  }   //cmInit
+
+end;  //HandleEvent Interface
+End.
+//******************************************************************************

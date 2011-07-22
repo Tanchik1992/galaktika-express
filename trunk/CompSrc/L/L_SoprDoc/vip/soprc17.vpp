@@ -1,0 +1,196 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : функции для работы с Заводской(контрактной) ценой         ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+
+Create view FactoryPrice
+var
+  VidSopr: word;
+  cParty, cMCUSL: comp;
+from
+   SpSopr
+  , KatSopr
+where
+((
+  VidSopr      == SpSopr.VidSopr  AND
+  SpSopr.cSopr == katsopr.nrec
+))
+bounds cParty   VidSopr == SpSopr.VidSopr AND
+                cParty == SpSopr.cParty
+
+bounds cMCUSL  VidSopr == SpSopr.VidSopr AND
+               cMCUSL == SpSopr.cMCUSL
+;
+
+Function CheckFactoryPriceKatParty(SpSoprNrec: comp;KatSoprNrec: comp;
+                                   KatPartyNrec: comp;VidSopr: word ): string;
+{
+  CheckFactoryPriceKatParty := '';
+  If KatPartyNrec = 0
+    Exit;
+
+  FactoryPrice.VidSopr := VidSopr;
+  FactoryPrice.cParty := KatPartyNrec;
+  FactoryPrice.PushBounds(FactoryPrice.tbcParty);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+    'Проверка наличия данной партии в сопроводительных документах.', 1);
+
+  FactoryPrice._LOOP SpSopr
+    {
+      NextVisual;
+
+      if FactoryPrice.SpSopr.PrMC <> 1 continue;
+
+      if FactoryPrice.SpSopr.cParty = KatPartyNrec AND FactoryPrice.SpSopr.Nrec<>SpSoprNrec
+        if FactoryPrice.KatSopr.Nrec <> KatSoprNrec //разные документы
+          if CheckFactoryPriceKatParty = ''
+            CheckFactoryPriceKatParty := FactoryPrice.KatSopr.NSopr;
+          else
+            IF InStr(FactoryPrice.KatSopr.NSopr, CheckFactoryPriceKatParty) = 0
+              {
+                CheckFactoryPriceKatParty := CheckFactoryPriceKatParty + ', ' + FactoryPrice.KatSopr.NSopr;
+
+                If Length(CheckFactoryPriceKatParty)>100
+                  {
+                    CheckFactoryPriceKatParty := CheckFactoryPriceKatParty + '...';
+                    Break;
+                  }
+              }
+    }
+  StopVisual('', 0);
+}
+
+Function CheckFactoryPriceKatMC(SpSoprNrec: comp;KatSoprNrec: comp;
+                                KatMCNrec: comp;VidSopr: word): string;
+{
+  CheckFactoryPriceKatMC := '';
+  If KatMCNrec = 0
+    Exit;
+
+  FactoryPrice.VidSopr := VidSopr;
+  FactoryPrice.cMCUSL := KatMCNrec;
+  FactoryPrice.PushBounds(FactoryPrice.tbcMCUSL);
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+    'Проверка наличия данной МЦ в сопроводительных документах.', 1);
+
+  FactoryPrice._LOOP SpSopr
+    {
+      NextVisual;
+
+      if FactoryPrice.SpSopr.PrMC <> 1 continue;
+
+      if FactoryPrice.SpSopr.cMCUSL = KatMCNrec AND FactoryPrice.SpSopr.Nrec <> SpSoprNrec
+       if FactoryPrice.KatSopr.Nrec <> KatSoprNrec //разные документы
+        if CheckFactoryPriceKatMC = ''
+         CheckFactoryPriceKatMC := FactoryPrice.KatSopr.NSopr;
+        else
+        IF InStr(FactoryPrice.KatSopr.NSopr, CheckFactoryPriceKatMC) = 0
+         {
+          CheckFactoryPriceKatMC := CheckFactoryPriceKatMC + ', ' + FactoryPrice.KatSopr.NSopr;
+
+          If Length(CheckFactoryPriceKatMC)>100
+            {
+              CheckFactoryPriceKatMC := CheckFactoryPriceKatMC+'...';
+              Break;
+            }
+         }
+    }
+  StopVisual('', 0);
+}
+
+Function FunMessageFactory(from_str: string;str1: string;str2: string): boolean;
+{
+  FunMessageFactory := FALSE;
+  If Message('Значение данного поля'+from_str+' используется в документах: '#13#3
+            +if(str1<>'', 'в накладных на отпуск №: '+str1+'.', '')
+            +if(str2<>'', ' в приходных накладных №: '+str2, '')+
+            ''#13#3+'Продолжить редактирование?', YesNo) = cmYes
+    FunMessageFactory := TRUE;
+}
+
+Function CheckCanModifyFactory(VidSopr: word): boolean;
+{
+  CheckCanModifyFactory := FALSE;
+
+  If SpSopr.PrMC<>1 Exit;
+
+  var str1, str2, from_str: string;
+  case VidSopr of
+    101, 108:
+      {
+        if (SpSopr.cParty <> 0) AND (NOT oFPrice.IsTaraMCOneParty)
+        {
+          str1 := CheckFactoryPriceKatParty(comp(0), comp(0), KatParty.Nrec, word(201));
+          str2 := CheckFactoryPriceKatParty(SpSopr.Nrec, KatSopr.Nrec, KatParty.Nrec, VidSopr);
+          from_str := ' (Каталог ПАРТИЙ)';
+        }
+        else
+        {
+          str1 := CheckFactoryPriceKatMC(comp(0), comp(0), KatMC.Nrec, word(201));
+          str2 := CheckFactoryPriceKatMC(SpSopr.Nrec, KatSopr.Nrec, KatMC.Nrec, VidSopr);
+          from_str := ' (Каталог МЦ)';
+        }
+
+        if str1+str2<>''
+          If not FunMessageFactory(from_str, str1, str2)
+            Exit;
+      }
+    201:
+      {
+        if (SpSopr.cParty <> 0) AND (NOT oFPrice.IsTaraMCOneParty)
+        {
+          str1 := CheckFactoryPriceKatParty(comp(0), comp(0), KatParty.Nrec, word(101));
+          str2 := CheckFactoryPriceKatParty(SpSopr.Nrec, KatSopr.Nrec, KatParty.Nrec, VidSopr);
+          from_str := ' (Каталог ПАРТИЙ)';
+        }
+        else
+        {
+          str1 := CheckFactoryPriceKatMC(comp(0), comp(0), KatMC.Nrec, word(101));
+          str2 := CheckFactoryPriceKatMC(SpSopr.Nrec, KatSopr.Nrec, KatMC.Nrec, VidSopr);
+          from_str := ' (Каталог МЦ)';
+        }
+
+        if str1+str2<>''
+          If not FunMessageFactory(from_str, str1, str2)
+            Exit;
+      }
+  end;
+  CheckCanModifyFactory := TRUE;
+}
+
+
+Function CheckModifyKatParty: boolean;
+{
+  CheckModifyKatParty := FALSE;
+  var str1, str2, from_str: string;
+
+  str1 := CheckFactoryPriceKatParty(comp(0), comp(0), KatParty.Nrec, word(201));
+  str2 := CheckFactoryPriceKatParty(comp(0), comp(0), KatParty.Nrec, word(101));
+  from_str := ' (Каталог ПАРТИЙ)';
+  if str1+str2<>''
+    If not FunMessageFactory(from_str, str1, str2)
+      Exit;
+  CheckModifyKatParty := TRUE;
+}
+
+Function CheckModifyKatMC: boolean;
+{
+  CheckModifyKatMC := FALSE;
+  var str1, str2, from_str: string;
+
+  str1 := CheckFactoryPriceKatMC(comp(0), comp(0), KatMC.Nrec, word(201));
+  str2 := CheckFactoryPriceKatMC(comp(0), comp(0), KatMC.Nrec, word(101));
+  from_str := ' (Каталог МЦ)';
+  if str1+str2<>''
+    If not FunMessageFactory(from_str, str1, str2)
+      Exit;
+  CheckModifyKatMC := TRUE;
+}

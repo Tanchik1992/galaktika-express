@@ -1,0 +1,265 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+#include SDfuns.var
+
+
+#ifndef _Update_KatSopr_VPP
+#define _Update_KatSopr_VPP
+
+
+Function Update_KatSopr(OtpPol : word) : boolean; // 1-получение
+{                                                 // 2-отпуск
+  Update_KatSopr := false;
+
+  CVAL_DPRICE;
+
+  if ( not SpPresent )
+    {
+      if ( SDocBuf.cKatSopr <> 0 )
+        Exit;
+    // вернуть на Родину таблицу LastNumD
+      if ( wGetTune('FN.AvtoNum') <> 1 )  // НЕ по последним номерам БД
+        if not (
+                 ( ( KatSopr.VidSopr = 101 ) or ( KatSopr.VidSopr = 103 ) or ( KatSopr.VidSopr = 108 )
+                  or ( KatSopr.VidSopr = 111 )) and boGetTune('Doc.Buy.NumSopr=DO')
+                  or
+                 ( KatSopr.VidSopr = 201 ) and boGetTune('Doc.Sell.NumSopr=DO')
+                  or
+                 ( KatSopr.VidSopr = 1411 ) and boGetTune('Doc.Wood.Journ.NumSopr=DO')
+                  or
+                 ( KatSopr.VidSopr = 1421) and boGetTune('Doc.Wood.Nakl.NumSopr=DO')
+                  or
+                 ( KatSopr.VidSopr = 211 ) and boGetTune('Doc.Sell.NumAkt=DO')
+               )
+          DelLastNumD(KatSopr.VidSopr, KatSopr.NSopr);
+
+      if ( delete current KatSopr <> tsOk )
+        message('Ошибка удаления записи в таблице KatSopr!', Warning + OkButton);
+
+      StopVisual('', 0);
+      Exit;
+    }
+
+  KatSopr.sNalogs  := SumNdsR;
+  KatSopr.svNalogs := SumNdsV;
+  KatSopr.Summa  := SumR + if(KatSopr.VhodNal = 1, 0, KatSopr.sNalogs);
+  KatSopr.SumVal := SumV + if(KatSopr.VhodNal = 1, 0, KatSopr.svNalogs);
+
+  if ( ( KatSopr.VidSopr = 111 ) OR ( KatSopr.VidSopr = 211 ) ) //АКТЫ
+    KatSopr.dOpr := KatSopr.dSopr;
+
+  KatSopr.cOrgPlat := if(KatSopr.VidSopr = 111, SDocBuf.cMyOrg, SDocBuf.cOrg);
+
+  if (KatSopr.VidSopr = 201)
+    if ((KatSopr.cOrgPlat = KatSopr.cOrgBase) OR (KatSopr.cOrgPlat = 0))
+      if (wGetTune('Doc.Sell.OrgPlat') = 0)
+        KatSopr.cOrgPlat := KatSopr.cOrgBase
+      else
+        KatSopr.cOrgPlat := KatSopr.cGruzFrom;
+
+  if (KatSopr.VidSopr = 1421)
+    if ((KatSopr.cOrgPlat = KatSopr.cOrgBase) OR (KatSopr.cOrgPlat = 0))
+      if (wGetTune('Doc.Wood.Nakl.OrgPlat') = 0)
+        KatSopr.cOrgPlat := KatSopr.cOrgBase
+      else
+        KatSopr.cOrgPlat := KatSopr.cGruzFrom;
+
+#ifdef _MAKENAKL_VIP_
+  if ( ( ShowRaspr = 999 ) AND (( KatSopr.VidSopr = 201 ) OR ( KatSopr.VidSopr = 1421 ))) // Form_s_d
+    {
+      if not try_sklad_passed
+        ReadMyDsk(def_sklad, 'def_sklad', false);
+
+      if not try_mol_passed
+        ReadMyDsk(def_mol, 'def_mol', false);
+
+      if ( ( def_sklad = 0 ) AND ( not try_sklad_passed ) )
+        if ( wGetSkladDialog <> 0 )
+          {
+            def_sklad := cGetSkladDialog;
+            try_sklad_passed := true;
+          }
+
+      if ( ( def_sklad = 0 ) AND ( not try_sklad_passed ) )
+        {
+          if ( RunDialog('GetSkladDialog', wGetSkladDialog) = cmOk )
+            {
+              RunInterface('GetSklad', def_sklad);
+              cGetSkladDialog := def_sklad;
+            }
+          try_sklad_passed := true;
+        }
+
+      if ( ( def_mol = 0 ) AND ( not try_mol_passed ) )
+        if ( wGetMolDialog <> 0 )
+          {
+            def_mol := cGetMolDialog;
+            try_mol_passed := true;
+          }
+
+      if ( ( def_mol = 0 ) AND ( not try_mol_passed ) )
+        if boGetTune('Pick.AvtoMol')
+          {
+            if ( RunDialog('GetMolDialog', wGetMolDialog) = cmOk )
+              {
+                RunInterface('GetMOL', def_mol, def_sklad);
+                cGetMolDialog := def_mol;
+              }
+            try_mol_passed := true;
+          }
+      var OldPodrFrom : comp; OldPodrFrom := KatSopr.cPodrFrom;
+
+    // Заполняем склад и МОЛ
+      KatSopr.cpodrFrom := def_sklad;
+      KatSopr.cmolFrom  := def_mol;
+
+      if (
+          ( SDocBuf.wTypeDoc = 3 )
+           and         // формируем по буферу BaseDoc
+          ( SDocBuf.VidDoc <> 202 )
+           and          // не отпуск на консигнацию
+          ( wGetTune('Reserv.PrSchSklad') = 0 )
+         ) // по предприятию
+        _loop SpSopr where (( KatSopr.nRec == SpSopr.cSopr and SpSopr.cOtpEd == KatOtpEd.nRec ))
+          ReservSkladDetail;
+    }//if (ShowRaspr = 999) and (KatSopr.VidSopr = 201) // Form_s_d
+#end //_MAKENAKL_VIP_
+
+  if ( KatSopr.VidSopr = 201 ) OR ( KatSopr.VidSopr = 1421 )//пир 104.1860
+    if ( ( SDocBuf.cParty <> 0 ) AND ( KatSopr.cpodrFrom = 0 ) )
+        KatSopr.cpodrFrom := SDocBuf.cParty;
+
+  if (Update_Current_KatSopr <> tsOk )
+    message('Ошибка обновления записи в таблице KatSopr!', Warning + OkButton)
+  else
+    {
+#ifdef _MAKENAKL_VIP_
+      if ( fProt <> longint(0) and not vbAktRem )
+        Form_Write('По ' + sNoSourceDoc + '  сформирован'
+                 + if((KatSopr.VidSopr <> 111) and (KatSopr.VidSopr <> 211), 'а накладная № ', ' акт № ')
+                 + KatSopr.NSopr + ' ('
+                 + if(KatSopr.VidSopr < 501,
+                     if(KatSopr.TipSopr = 1, 'закупка', 'продажа'),
+                       GetTiDkGalName(KatSopr.VidSopr))
+                 + ')', '', fProt);
+
+      SomeMade := true;
+      IsNakl   := true;
+#end //_MAKENAKL_VIP_
+    }
+
+// ТТН
+  if ( ( not isMakingAkt ) AND ( SDocBuf.cKatSopr = 0 ) )
+    {
+      if ( SDocBuf.ManualTTNInfo = 0 ) // 0 - копирование стандартной функцией
+        oSDfuns.TTNDoc_Copy(SDocBuf.wTableSource, SDocBuf.cRecSource, coKatSopr, KatSopr.nRec)
+      else // формируем ТТН сами
+        {
+          ClearBuffer(#TTNDoc);
+
+          TTNDoc.wTable    := coKatSopr;
+          TTNDoc.cDoc      := KatSopr.nRec;
+          TTNDoc.cShipment := SDocBuf.cShipment;
+          TTNDoc.cTipOtg   := SDocBuf.cTipOtg;
+          TTNDoc.cPunktP   := SDocBuf.cPunktP;
+          TTNDoc.cPunktR   := SDocBuf.cPunktR;
+
+          if ( insert current TTNDoc <> tsOk )
+            message('Ошибка вставки записи в таблице TTNDoc !', Warning + OkButton)
+          else
+            {
+              var pWayMove: comp;
+#ifdef GAL8_1
+              pWayMove := SDocBuf.cWayMove;
+#else
+              if ( GetFirst SDocBufEx1 = tsOK )
+                pWayMove := SDocBufEx1.cWayMove;
+#end
+                if ( pWayMove <> 0 )
+                  if ( GetFirst FastFirstRow WayMove where (( pWayMove == WayMove.nRec )) = tsOk )
+                    {
+                      var oExtAtr: iExtAttr;
+                      oExtAtr.sSetAttr(coTTNDoc, TTNDoc.NREC, 'СПОСОБ ТРАНСПОРТИРОВКИ', WayMove.Name);
+                    }
+            }
+        }
+    }
+
+//копирование внешней классификации и атрибутов
+  if boGetTune('Oper.ExClass_DO2Docs')
+    piExAttr.CopyAllEx(coBaseDoc, BaseDoc.NRec, coKatSopr, KatSopr.NRec);
+
+// схема связей
+  if (
+      ( ( KatSopr.VidSopr = 101 ) OR ( KatSopr.VidSopr = 103 ) OR ( KatSopr.VidSopr = 201 )
+                                  OR ( KatSopr.VidSopr = 1411) OR ( KatSopr.VidSopr = 1421))
+       AND
+      ( SDocBuf.wTypeDoc >= 1 )
+       AND
+      ( SDocBuf.wTypeDoc <= 3 )
+     )
+    {
+      var Type__ : word;
+      var NRec__ : comp;
+
+      if ( SDocBuf.wTypeDoc = 1 )
+        {
+          NRec__ := if (SDocBuf.cAppDogovor = 0, SDocBuf.cDogovor, SDocBuf.cAppDogovor);
+          Type__ := if (SDocBuf.cAppDogovor = 0, 400, 401);
+        }
+      else
+        if ( SDocBuf.wTypeDoc = 2 )
+          {
+            NRec__ := SDocBuf.cCalPlan;
+            Type__ := 403;
+          }
+        else
+          if ( SDocBuf.wTypeDoc = 3 )
+            {
+              NRec__ := SDocBuf.cBaseDoc;
+              Type__ := if (OtpPol = 1, 41, 51);
+            }
+
+      oChkSchem.CheckSchem(NRec__, Type__, KatSopr.nRec, KatSopr.VidSopr, true);
+    }
+
+  mes := mes + ' '+ KatSopr.NSopr;
+
+  SaveMyDsk (mes, 'mess_nakl');
+
+  if ( KatSopr.VidSopr = 501 )
+    {
+      // После формирования (или не формирования) накладных
+      // запускаем процесс копппп-ппирования связей
+      // вещь не очень страшная и не совсем ужастная
+      // а добрая и симпатичная
+      var ObjAcctInterCopy : LinksCopier;
+      ObjAcctInterCopy.CopyFromTo(SDocBuf.cBaseDoc /*BaseDoc.nRec*/, KatSopr.nRec);
+    }
+
+  // привязка нагрузки
+  ReSetBounds(#SpStep);
+
+  _LOOP SpSopr
+    if (GetFirst SpStep where (( SpSopr.cSpStep == SpStep.NRec )) = tsOk)
+      if (SpStep.cOwner <> 0)
+        if (GetFirst SpSopr2 where (( SpStep.cOwner == SpSopr2.cSpStep AND
+                                      SpSopr.cSopr  == SpSopr2.cSopr )) = tsOk)
+        {
+          SpSopr.cOwner := SpSopr2.NRec;
+          Update Current SpSopr;
+        }
+
+  SetBounds(#SpStep)
+
+  if ( SDocBuf.cKatSopr = 0 )
+    StopVisual('', 0);
+
+  Update_KatSopr := true;
+}
+
+#end //_Update_KatSopr_VPP

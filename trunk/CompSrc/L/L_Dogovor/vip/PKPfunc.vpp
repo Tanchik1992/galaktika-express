@@ -1,0 +1,342 @@
+
+#ifndef _PKPFUNC_VPP
+#define _PKPFUNC_VPP
+
+var pPKP : tCalPlanObjInterface;
+
+create view loCalPlan
+
+select
+  SpDocs.*,
+  SpDocsUp.*,
+  SpDogovor.*
+from
+  synonym SpDocs SpDogovor,
+  synonym SpDocs SpDocsUp,
+  synonym SpDocs SpDocs2,
+  SpDocs,
+  Dogovor,
+  CalPlan,
+  synonym CalPlan FinPlan,
+  PaySchem,
+  PlanPays,
+  KatSopr,
+  BaseDoc
+#if '#_CurInt'='MakePKPCorpoPlan'
+ ,SpSopr
+ ,KatOtpEd
+ ,IerCalPl
+ ,KatMC
+ ,KatUsl
+ ,Prices
+ ,KlPrice
+ ,TmpPotr
+ ,TmpSpDoc
+ ,TmpDoc
+#end
+;
+
+Function SumDiscount(FromSum : double) : double;
+{
+  var tmpSum : double;
+  var d      : double;
+  var s      : double;
+
+  d := loCalPlan.Dogovor.Discount;
+  s := loCalPlan.Dogovor.Summa;
+
+  case loCalPlan.Dogovor.IsExtra of
+    0: SumDiscount := if(loCalPlan.Dogovor.IsSum = 0
+                      , (FromSum * d / 100)
+                      , (FromSum / ( s + d ) * d)
+                        );
+    1: SumDiscount := -if(loCalPlan.Dogovor.IsSum = 0
+                       , (FromSum * d / 100)
+                       , (FromSum / ( s - d ) * d)
+                         );
+  end;
+}
+
+procedure NewCalPlan (DateB : date;   DateE  : date;
+                      pDog  : comp;   pSpDog : comp;
+                      Kol   : double; Price  : double);
+{
+  var NewDoc    : boolean;
+  var EditDoc   : boolean;
+  var Summa     : double;
+  var SumNal    : double;
+  var nRecNew   : comp;
+  var nRecSp    : comp;
+  var i         : word;
+  var SumPlat   : double; //общая сумма платежей по ПКП в валюте ПКП
+  var KoefPlat  : double;
+  var dSumMC    : double;
+  var dSumPlat  : double;
+  var SumOld    : double;
+  var SumNew    : double;
+  var ProcNew   : double;
+
+#include SpDocs.var
+
+  if (loCalPlan.GetFirst SpDocsUp where ((pSpDog == SpDocsUp.nRec)) <> tsOk)
+    Exit;
+
+  NewDoc  := true;
+  EditDoc := false;
+
+  loCalPlan._loop CalPlan where (( pDog    == CalPlan.cDogovor and
+                                   word(0) == CalPlan.DirectPlat ))
+    { // проверка на совпадение периода действия ПКП
+      if ((loCalPlan.CalPlan.dFrom > DateE) or (loCalPlan.CalPlan.dTo < DateB))
+        Continue;
+
+      dSumMC := loCalPlan.CalPlan.SummaSpec;
+
+      loCalPlan._loop SpDocs where (( word(403)       == SpDocs.TiDk   and
+                                      CalPlan.nRec    == SpDocs.cDoc   and
+                            loCalPlan.SpDocsUp.PrMC   == SpDocs.PrMC   and
+                            loCalPlan.SpDocsUp.Direct == SpDocs.Direct and
+                            loCalPlan.SpDocsUp.cMCUsl == SpDocs.cMCUsl (NoIndex) ))
+        {
+          NewDoc := false;
+
+          // проверка наличия у ПКП сопроводительных документов
+          if (loCalPlan.RecordExists KatSopr where ((CalPlan.nRec == KatSopr.cCalPlan)) = tsOK)
+            Break;
+
+          if (loCalPlan.RecordExists BaseDoc where ((CalPlan.nRec == BaseDoc.cCalPlan)) = tsOK)
+            Break;
+
+          // Отгрузок нет. Редактируем существующий ПКП.
+          var New_nRec_SpDocs, Old_cSpMC : comp;
+          Old_cSpMC := loCalPlan.SpDocs.nRec;
+
+          if (oSpDocs.Delete_current_SpDocs(loCalPlan.SpDocs.nRec, false) <> tsOk)
+            Break;
+
+          New_nRec_SpDocs := pPKP.MakeNewSpDocs(loCalPlan.CalPlan.nRec,
+                                                loCalPlan.SpDocsUp.Direct,
+                                                pSpDog,
+                                                Kol);
+
+          loCalPlan.update SpDocs2 where (( Old_cSpMC == SpDocs2.cSpMc ))
+            set SpDocs2.cSpMc := New_nRec_SpDocs;
+
+          EditDoc := true;
+          Break;
+        }
+
+      if EditDoc
+        {
+          Summa  := 0;
+          SumNal := 0;
+
+          loCalPlan._loop SpDocs where (( word(403)    == SpDocs.TiDk and
+                                          CalPlan.nRec == SpDocs.cDoc ))
+            {
+              if (loCalPlan.CalPlan.VhodNal = 1)
+                Summa := Summa + loCalPlan.SpDocs.Summa
+              else
+                Summa := Summa + loCalPlan.SpDocs.Summa + loCalPlan.SpDocs.SumNDS;
+
+              SumNal := SumNal + loCalPlan.SpDocs.SumNDS;
+            }
+
+          loCalPlan.CalPlan.dFrom     := DateB;
+          loCalPlan.CalPlan.dTo       := DateE;
+          loCalPlan.CalPlan.SummaSpec := Summa  - SumDiscount(Summa);
+          loCalPlan.CalPlan.SumNDS    := SumNal - SumDiscount(SumNal);
+
+          if (loCalPlan.update current CalPlan <> tsOk) {}
+
+          Summa := loCalPlan.CalPlan.SummaSpec;
+
+          i := 0;
+          SumPlat := 0.0;
+          loCalPlan._loop PaySchem where ((CalPlan.nRec == PaySchem.cMCPlan))
+            {
+              if (loCalPlan.GetFirst FinPlan
+                           where ((PaySchem.cCalPlan == FinPlan.nRec)) = tsOk)
+                {
+                  Inc(i);
+                  SumPlat := SumPlat + oValFunc.GetAnyCurrency(loCalPlan.PaySchem.cVal,
+                                                               loCalPlan.PaySchem.Summa,
+                                                               oSpDocs.GetTrueDateValCurse(loCalPlan.FinPlan.dValCurse, loCalPlan.FinPlan.dFrom, loCalPlan.FinPlan.dInput),
+                                                               loCalPlan.FinPlan.cVal);
+                }
+            }
+
+          if (i > 0) and (dSumMC <> Summa)
+            {  // Сумма, которую надо распределить по схемам платежей
+          //    KoefPlat := SumPlat/dSumMC;
+              dSumMC := (Summa - dSumMC)*SumPlat/dSumMC;
+              loCalPlan._loop PaySchem
+                        where ((CalPlan.nRec == PaySchem.cMCPlan))
+                {
+                  if (loCalPlan.GetFirst FinPlan
+                           where ((PaySchem.cCalPlan == FinPlan.nRec)) = tsOk)
+                    {
+                      if (loCalPlan.GetFirst PlanPays
+                           where ((PaySchem.cPlanPays == PlanPays.nRec)) = tsOk)
+                        {
+                          SumOld := oValFunc.GetAnyCurrency(loCalPlan.PaySchem.cVal,
+                                                            loCalPlan.PaySchem.Summa,
+                                                            oSpDocs.GetTrueDateValCurse(loCalPlan.FinPlan.dValCurse, loCalPlan.FinPlan.dFrom, loCalPlan.FinPlan.dInput),
+                                                            loCalPlan.FinPlan.cVal);
+
+                          dSumPlat := dSumMC * SumOld / SumPlat;
+
+                          loCalPlan.PlanPays.Summa := loCalPlan.PlanPays.Summa + dSumPlat;
+
+                          if (loCalPlan.update current PlanPays <> tsOk) {}
+
+                          loCalPlan.FinPlan.Summa := loCalPlan.FinPlan.Summa + dSumPlat;
+
+                          if (loCalPlan.update current FinPlan <> tsOk) {}
+
+                          loCalPlan.PaySchem.Summa := oValFunc.GetAnyCurrency(loCalPlan.FinPlan.cVal,
+                                                                              (SumOld+dSumPlat),
+                                                                              oSpDocs.GetTrueDateValCurse(loCalPlan.FinPlan.dValCurse, loCalPlan.FinPlan.dFrom, loCalPlan.FinPlan.dInput),
+                                                                              loCalPlan.PaySchem.cVal);
+
+                          if (loCalPlan.update current PaySchem <> tsOk) {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+  if NewDoc // формируем новый ПКП
+    {
+      nRecNew := pPKP.MakeNewMCCalPLan(pDog, loCalPlan.SpDocsUp.Direct);
+
+      if (nRecNew <> 0)
+        pPKP.MakeNewSpDocs(nRecNew, loCalPlan.SpDocsUp.Direct, pSpDog, Kol);
+
+      if (loCalPlan.GetFirst CalPlan where (( nRecNew == CalPlan.nRec )) = tsOk)
+        {
+          if (loCalPlan.GetFirst SpDocs
+                           where (( word(403) == SpDocs.TiDk and
+                                    nRecNew   == SpDocs.cDoc )) = tsOk)
+
+          if (loCalPlan.CalPlan.VhodNal = 1)
+            Summa := loCalPlan.SpDocs.Summa;
+          else
+            Summa := loCalPlan.SpDocs.Summa + loCalPlan.SpDocs.SumNDS;
+
+          SumNal := loCalPlan.SpDocs.SumNDS;
+
+          loCalPlan.CalPlan.dFrom       := DateB;
+          loCalPlan.CalPlan.dTo         := DateE;
+          loCalPlan.CalPlan.SummaSpec   := Summa  - SumDiscount(Summa);
+          loCalPlan.CalPlan.SumNDS      := SumNal - SumDiscount(SumNal);
+          loCalPlan.CalPlan.TipOtvPodr  := loCalPlan.SpDocsUp.TipOtvPodr;
+          loCalPlan.CalPlan.cOtvPodr    := loCalPlan.SpDocsUp.cOtvPodr;
+          loCalPlan.CalPlan.TipPlatPodr := loCalPlan.SpDocsUp.TipPlatPodr;
+          loCalPlan.CalPlan.cPlatPodr   := loCalPlan.SpDocsUp.cPlatPodr;
+
+
+          if (loCalPlan.update current CalPlan <> tsOk) {}
+        }
+    }
+}
+
+procedure CorrectCalPlan (DateB : date; DateE : date; pSpDoc : comp);
+{
+  var tmpBDate : date;
+  var tmpEDate : date;
+  var i        : word;
+  var KolDay   : word;
+
+  if (DateB > DateE)
+    {
+      Message('Не верно указан интервал дат!');
+      exit;
+    }
+
+  GetVipRef(pPKP, 'CalPlan');
+
+  if (loCalPlan.GetFirst SpDogovor where ((pSpDoc == SpDogovor.nRec)) <> tsOk)
+    Exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer + vfConfirm,
+                 ''#3'Идет корректировка календарного плана ...', 1);
+
+  if (loCalPlan.SpDogovor.Period = 0)
+    {
+      NewCalPlan(DateB
+               , DateE
+               , loCalPlan.SpDogovor.cDoc
+               , loCalPlan.SpDogovor.nRec
+               , loCalPlan.SpDogovor.Kol
+               , loCalPlan.SpDogovor.Price
+                );
+    }
+  else
+    {
+      if (loCalPlan.SpDogovor.Period = 1)
+        {
+          KolDay := word(CalcDaysBetweenDates(loCalPlan.SpDogovor.dFrom,
+                                     loCalPlan.SpDogovor.dTo, false) /
+                         loCalPlan.SpDogovor.NumPeriod);
+        }
+
+      tmpEDate := Sub_Day(loCalPlan.SpDogovor.dFrom, 1);
+      for ( i := 1; i <= loCalPlan.SpDogovor.NumPeriod; i := i + 1 )
+        {
+          tmpBDate := Add_Day(tmpEDate, 1);
+
+          case loCalPlan.SpDogovor.Period of
+          1 : {
+                tmpEDate := Add_Day(tmpBDate, KolDay+1);
+              }
+          2 : {  // ежегодно
+                tmpEDate := Date(1, 1, Year(tmpBDate));
+              }
+          3 : {  // ежеквартально
+                tmpEDate := Add_Months(Date(1, 3*(1 + ((Month(tmpBDate)-1) div 3)), Year(tmpBDate)), 1);
+              }
+          4 : {  // ежемесячно
+                tmpEDate := Add_Months(Date(1, Month(tmpBDate), Year(tmpBDate)), 1);
+              }
+          5 : {  // еженедельно
+                tmpEDate := Add_Day(tmpBDate, 8 - Day_Of_Week(tmpBDate));
+              }
+          6 : {  // ежедневно
+                tmpEDate := tmpBDate;
+              }
+          end; // case
+
+          tmpEDate := Sub_Day(tmpEDate, 1);
+
+          if ((tmpEDate < DateB) or (tmpBDate > DateE))
+            {
+              Continue;
+            }
+          else
+            {
+              if (tmpBDate < DateB)
+                tmpBDate := DateB;
+
+              if (tmpEDate > DateE)
+                tmpEDate := DateE;
+
+              if (tmpBDate > tmpEDate)
+                Continue;
+            }
+
+          NewCalPlan(tmpBDate
+                   , tmpEDate
+                   , loCalPlan.SpDogovor.cDoc
+                   , loCalPlan.SpDogovor.nRec
+                   , loCalPlan.SpDogovor.KolPeriod
+                   , loCalPlan.SpDogovor.Price
+                   );
+        }
+    }
+
+  StopVisual('',0);
+}
+
+#end //_PKPFUNC_VPP

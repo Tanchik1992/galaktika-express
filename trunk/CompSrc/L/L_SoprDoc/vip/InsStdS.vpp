@@ -1,0 +1,86 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Модуль стандатной обработки для InsMC.vpp
+//******************************************************************************
+
+#ifndef _INSSTDS_VPP
+#define _INSSTDS_VPP
+
+#include CalcFuns.var
+
+procedure onDoneInsMcInfo;
+{
+}
+
+// Установка нужной цены при ставке позиции из ДО
+function OnInsertSpSopr1(Curse : double) : boolean;
+var sPrice: double;
+{
+  OnInsertSpSopr1 := false;
+  if (not AdvansedInsMC(Curse))
+    {
+      Reason := Reason or 2;
+      Exit;
+    };
+  OnInsertSpSopr1 := true;
+#ifndef _AKTUSLB_VIP
+  if (SpStep.PrMC > 2) 
+    Exit;
+#end
+  if (SpStep.KolSkl = 0) 
+    {
+      SpSopr.Price := 0;
+      SpSopr.VPrice := 0;
+    }
+  else 
+    {
+      sPrice := (SpStep.Summa + oCalcFuns.ValNac_getPricePos(SpStep.NRec,coSpStep))/ SpStep.Kol;
+      Case BaseDoc.TipMoney of
+        1 : 
+          {
+            SpSopr.VPrice := if (Curse <> 0, sPrice / Curse, 0)
+            SpSopr.Price := sPrice;
+          }
+        2 : 
+          {
+            SpSopr.Price := sPrice * Curse;  //пир102.29511 * (1 + (BaseDoc.DopProc / 100));
+            SpSopr.VPrice := sPrice;
+            case KatSopr.VidSopr of
+             101,108,111,201,211:
+               {
+                //'Учитывать процент к курсу на день платежа в накладных и актах = ДА'
+                 IF ( boGetTune('Oper.UchProcKursDayOpl') )
+                    SpSopr.Price := SpSopr.Price*(1 + (BaseDoc.DopProc / 100));
+
+                 IF wGetTune('Doc.RegulationsRoundInStoim')=1 //учитывать правила округления
+                   IF FSRoundRub(SpSopr.Price*SpSopr.KolOpl) <> (SpSopr.Price*SpSopr.KolOpl)
+                     SpSopr.Price := FSRoundRub(SpSopr.Price*SpSopr.KolOpl)/SpSopr.KolOpl;
+               }
+            end;
+          }
+        3 : 
+          {
+            SpSopr.Price := sPrice * Curse;
+            SpSopr.VPrice := sPrice;
+          }
+      end;
+      if (KatSopr.cValut = 0) 
+        SpSopr.VPrice := 0;
+    } 
+  SpSopr.rVPrice := SpSopr.VPrice;
+  SpSopr.rPrice := SpSopr.Price;
+}
+
+function OnInsertSpSopr(Curse : double) : boolean;
+{
+  OnInsertSpSopr := false;
+  if (OnInsertSpSopr1(Curse))
+    {
+      OnInsertSpSopr := SpSopr.KolFact > 0;
+      if (SpSopr.KolFact <= 0) 
+        Reason := Reason or 1;
+    }
+}
+
+#end //_INSSTDS_VPP

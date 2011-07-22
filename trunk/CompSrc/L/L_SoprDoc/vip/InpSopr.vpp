@@ -1,0 +1,481 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Системная обработка верхних панелей всех сопр.документов
+//******************************************************************************
+
+#ifndef _INPSOPR_VPP
+#define _INPSOPR_VPP
+!-------------------------------------------------------------------------------
+#include SDfuns.var
+
+cmSetDefault :
+{
+#ifndef __RecChecker_vih__
+#warning Необходимо подключение RecChecker.vih
+#else
+  if DemoMode
+    {
+      var pRecChecker : RecChecker;
+      if not pRecChecker.CheckKatSoprRecords(KatSopr.VidSopr)
+        {
+          Abort;
+          Exit;
+        }
+    }
+#end
+
+  if (NOT boGetTune('Doc.ModSopr'))
+  {
+    ShowTune('В настройке установлен запрет редактирования сопроводительных документов!', 'Doc.ModSopr')
+    Abort;
+    Exit;
+  }
+
+!102.19899  if (not CanEditDocument)   ProtectRecord(#KatSopr,true);
+////////////////////////////////////
+  if (DesGroup <> sGetTune('User.DesGr'))
+    {
+      if (Message(''#3'При создании нового документа выбранные ограничения '+
+         'по менеджеру будут отменены и будут установлены ограничения '+
+         'по вашей личной настройке.'#13#13#3'Продолжить ?',YesNo+Confirmation) <> cmYes)
+        {
+          Abort;
+          Exit;
+        };
+      ResetDocBound;
+      DscVisible := wGetTune('Doc.Visible');
+      DesGroup   := sGetTune('User.DesGr');
+      DscName    := sGetTune('User.Descr');
+      SetDocBound;
+    }
+  KatSoprDefault;
+
+#ifndef AKT_112 // __TAXES__
+  if oStatUser.Descr_Stat_U(true, TypeSopr, DscName, KatSopr.cNote)
+    {
+      KatSopr.Status := KatNotes.Status;
+    }
+  else
+    {
+      KatSopr.cNote  := oNotes.GetFirstNote(
+#ifdef __SKYSHOP__
+                                  if(TypeSopr = 202, 202,
+                                    if (TypeSopr= 600, 600,
+                                      if (TypeSopr= 606, 606,
+                                        if (TypeSopr= 621, 621,
+                                          if (TypeSopr= 622, 622,
+                                      100))))),
+#else
+                                  if (TypeSopr= 600, 600,
+                                    if (TypeSopr= 606, 606,
+                                      if (TypeSopr= 621, 621,
+                                        if (TypeSopr= 622, 622,
+                                    100)))),
+#end
+                                  KatSopr.Status
+                                );
+    }
+#end
+
+  #ifdef AKT_112 // __TAXES__
+  // проверка защиты от пользователя (в настройках модуля)
+  ProtectFromUser_Check;
+  #end
+
+#ifdef _SOPRDOCB_VIP
+  case TypeSopr of
+   101, 102, 103, 108, 1411:
+    if ((wDateInp and 1) = 1)
+     {
+       KatSopr.dSopr    := Date(0,0,0);
+       KatSopr.YearSopr := 0;
+     }
+  end;
+#end
+#ifdef _SOPRDOC_VIP
+  case TypeSopr of
+   201, 202, 203, 1421:
+   if ((wDateInp and 1) = 1)
+    {
+      KatSopr.dSopr    := Date(0,0,0);
+      KatSopr.YearSopr := 0;
+    }
+  end;
+#end
+
+#ifdef GAL7_1
+  if ( (TypeSopr >= 500)  and
+       (TypeSopr <= 509)
+     )
+   {
+    Exit;
+// в производственных накладных не надо автовыскакивание окна редактирования
+   }
+#end
+
+#ifdef _AKTUSLB_VIP
+ If TypeSopr=111 and _KatSoprNrec<>0
+ {
+  pushpos(#KatSopr);
+  If getfirst KatSopr<>tsOK
+  {
+   poppos(#KatSopr);
+   Exit;
+//ПИР101.20102 Услуги отнесенные на др.контрагента, автооткрывание не надо
+  }
+  poppos(#KatSopr);
+ }
+#end
+
+ PutCommand(cmEditSopr);
+}
+
+!-------------------------------------------------------------------------------
+
+cmPositionChanged :
+ {
+  SaveMyDsk(comp(0), '_KatSoprnRec_LowCheckTXO');
+
+  // для накладных/актов сбыта/снабжения такая обработка не нужна
+  #ifdef _OPER_NAKL_VIH
+    Exit;
+  #end
+  if not boGetTune('Doc.ModSopr')
+    ProtectRecord(#KatSopr,true)
+  else
+    if ((((DscVisible = dcOwnOnly) or
+          (DscVisible = dcGrpRead) or
+          (DscVisible = dcOwnModifAllRead)
+         ) and (KatSopr.Descr <> DscName))
+         or
+        (((DscVisible = dcGrpModif) or
+          (DscVisible = dcGrpModifAllRead)
+         ) and (KatSopr.DesGr <> DesGroup)
+        )
+       )
+      ProtectRecord(#KatSopr,true);
+ } // cmPositionChanged
+
+!-------------------------------------------------------------------------------
+
+cmCheckField :
+  Case CurField of
+   #KatSopr.dSopr :
+     {
+       if (isFilter) and ((KatSopr.dSopr > enddate) or  (KatSopr.dSopr < begdate))
+         {
+           Message(''#3'Дата документа - вне диапазона фильтра...',CancelButton);
+           KatSopr.dSopr := StrToDate(OldFieldValue,'DD/MM/YYYY');
+           RedrawCurtable;
+           Abort;
+         }
+       else
+         set KatSopr.YearSopr := Year(KatSopr.dSopr);
+     }
+   #KatSopr.NSopr :
+     {
+       if (KatSopr.NSopr = '')
+         {
+           Message(''#3'Не указан номер документа...'#13#3+
+                           'Определите значение поля.',CancelButton);
+           set KatSopr.NSopr := OldFieldValue;
+           RedrawCurtable;
+           Abort;
+         }
+       #ifdef _SOPRDOC_VIP
+       ChangeNoDocBaseDoc;
+       #end
+     }
+  end; // case
+
+!-------------------------------------------------------------------------------
+
+cmDelOnProtect :
+  Case CurField of
+    #Valut :
+      if (not isValid(#SpSopr))
+        set KatSopr.cVal := 0;
+#ifdef __HozOperViewName__
+    #HozOperViewName :
+      {
+        if ( UpDateTable )
+        {
+          Update_Current_KatSopr;
+          ReReadRecord(#KatSopr);
+
+          iTxoBind.ResetServer;
+          iTxoBind.UnBind(SoprHoz.bufferp)
+          KatSopr.cHozOper := 0;
+          set KatSopr.SoprHoz := 0;
+
+          Update_Current_KatSopr;
+
+          iTxoBind.ProcessProtokol;
+          ReReadRecord;
+        }
+      }
+#else
+    #Hozoper.Name1 :
+      {
+        KatSopr.cHozOper := 0;
+        set KatSopr.SoprHoz := 0;
+        Update_Current_KatSopr;
+      }
+#end
+  end; // case
+
+!-------------------------------------------------------------------------------
+
+cmPickClass:
+  if ((UpdateTable) and (KatSopr.Nrec <> 0))
+   {
+     var bRes: boolean;
+    #ifdef _OPER_NAKL_VIH
+     bRes := oOtkatToOldState.OtkatToOldState(KatSopr.NRec, comp(0), FALSE, TRUE, IsProtectedKatSopr,
+                                              word(0), isCurTable, isCurCommand);
+    #else
+     bRes := CanEditDocumentNotMessage;
+    #end
+
+     SaveMyDsk(NOT bRes, '_CanEditClassifier_');
+     RunInterface(ExClassifier, word(CurTableCode), KatSopr.Nrec);
+   }
+
+!-------------------------------------------------------------------------------
+
+cmPickAttr:
+  if ((UpdateTable) and (KatSopr.Nrec <> 0))
+   {
+     var bRes: boolean;
+    #ifdef _OPER_NAKL_VIH
+     bRes := oOtkatToOldState.OtkatToOldState(KatSopr.NRec, comp(0), FALSE, TRUE, IsProtectedKatSopr,
+                                              word(0), isCurTable, isCurCommand);
+    #else
+     bRes := CanEditDocumentNotMessage;
+    #end
+
+     SaveMyDsk(NOT bRes, '_CanEditAttribute_');
+     RunInterface(Attribute, word(CurTableCode), KatSopr.Nrec);
+   }
+!-------------------------------------------------------------------------------
+
+cmExClassRepl:
+  if (UpdateTable) and (KatSopr.Nrec <> 0)
+   {
+     RunInterface('ExClassRepl', word(CurTableCode), word(0), KatSopr.nRec, MarkerNZ);
+   }
+
+cmInsertRecord :
+  {
+  if (not CanEditDocument)
+    RereadRecord(#KatSopr);
+  else{
+  Insert current KatSopr;
+  iGrPl.InsSpGrPlD_Default(KatSopr.VidSopr,  // тип документа системный
+                           KatSopr.nRec,     //ссылка на документ
+                           KatSopr.cOrg      //ссылка на контрагента
+                          );
+
+  Update_Current_KatSopr;
+
+  if (boGetTune('Ves.Use'))
+    if (IsSemaphore('Штерн-Цемент взвешивание пустого автомобиля',byte(1)))
+     PutCommand(cmPlPor33) ;
+   }
+  }
+!-------------------------------------------------------------------------------
+
+cmUpdateRecord :
+{
+  #ifdef __Function_CanLinkDogovor__
+  if CanLinkDogovor(FALSE)
+    {
+      Update_Current_KatSopr
+      Exit;
+    }
+  #end
+
+  if (not CanEditDocument)
+    RereadRecord(#KatSopr);
+  else
+  {
+    Update_Current_KatSopr;
+  }
+}
+!-------------------------------------------------------------------------------
+cmDeleteRecord :
+{
+#ifdef __objDelSopr__
+  var objDel: objDelSopr;
+  if (not LoadVipRef(objDel, 'DelSopr'))
+  {
+    message('Не загрузился интерфейс objDelSopr.'#10#13 +
+            'Удаление отменено',mfError);
+    Exit;
+  }
+//Удаление документов по маркеру MarkerNZ
+  IF (boGetTune('Doc.DelByMarker')) and
+     (GetMarkerCount(MarkerNZ) > 0)
+  {
+    PushPos(#KatSopr);
+    objDel.DeleteMarkSopr(MarkerNZ, true);
+    PopPos(#KatSopr);
+    ReReadRecord(#KatSopr);
+  }
+  ELSE
+  {
+    //поиск следующей записи
+    var pNextRec: comp;
+    PushPos(#KatSopr);
+    if (GetNext KatSopr <> tsOk)
+      if (GetPrev KatSopr = tsOk) {}
+    pNextRec := KatSopr.NRec;
+    PopPos(#KatSopr);
+    //....................................
+
+    var cDelRec: comp;
+    cDelRec := KatSopr.nRec;
+
+    if objDel.DeleteSopr(KatSopr.NRec,true,true)
+    {
+      DeleteMarker(MarkerNZ, cDelRec);
+
+      if GetLast KatSopr where ((pNextRec == KatSopr.NRec)) <> tsOK {}
+      ReReadRecord(#KatSopr);
+    }
+  }
+
+  // завершить событие! Накладная удаляется из другого интерфейса
+  stop;
+
+  if (not NullVipRef(objDel))
+    FreeVipInterface(objDel);
+#else
+ #include soprc09.vpp
+#end
+} // cmDeleteRecord;
+!-------------------------------------------------------------------------------
+
+cmPick :
+  Case CurField of
+    #KatNazna.Name :
+      RunInterface(GetSomKatNazna,False,KatSopr.cNazna);
+
+    #KatSopr.dPrice :
+    {
+      set KatSopr.dPrice := Cur_Date;
+      ProcessCommand(cmCheckField);
+    }
+
+    #Valut :
+      if (not isValid(tnSpSopr))
+        if (KatSopr.cStepDoc = 0)
+          {
+            if (RunInterface(GetValKod,KatSopr.cVal) <> cmCancel)
+            {
+              set KatSopr.cValut := KatSopr.cVal;
+              SetRoundFormat(TypeSopr);
+            } // if
+          }
+        else
+          Message(''#3'Валюта уже связана с документом-основанием...',CancelButton)
+      else
+        if (wGetTune('Oper.ModifyValut') = 1)
+        {
+         #ifdef _OPER_NAKL_VIH
+          var sRes: string;
+          sRes := CantSchFactMod + CheckcStepDoc + CheckAktUsl + CheckDateOrd + CheckOborot + CheckNaklMod;
+
+          if (sRes <> '')
+            Message(sRes)
+          else
+          {
+            if (Message('Изменить валюту в документе?', YesNo) = cmYes)
+              if (RunInterface(GetValKod,KatSopr.cVal) <> cmCancel)
+              {
+                set KatSopr.cValut := KatSopr.cVal;
+                SetRoundFormat(TypeSopr);
+
+                Update SpSopr Set cVal := KatSopr.cValut;
+
+                CheckSumma(TRUE);
+              }
+          }
+         #end
+        }
+        else
+          Message(''#3'Нельзя изменить валюту, т.к. в документе уже '+
+                  'имеются позиции спецификации...',CancelButton);
+
+#ifdef __HozOperViewName__
+    #HozOperViewName :
+      {
+        if ( UpDateTable )
+        {
+          Update_Current_KatSopr;
+
+          var TxoIsGood : boolean;
+          TxoIsGood := false;
+
+          ReReadRecord(#KatSopr); //пир 101.31453
+
+          iTxoBind.ResetServer;
+          if NullVipRef(iSHoz)
+            GetVipRef(iSHoz, 'SHmanager');
+          iShoz.CheckMagOper(#TSoprHozX(SoprHoz.bufferp), integer(1));
+
+          if ( iTxoBind.BuildTree(SoprHoz.bufferp))
+           if ( iTxoBind.Bind(SoprHoz.bufferp, 0))
+            if ( iTxoBind.RealizeOperationsTree(SoprHoz.bufferp) )
+              TxoIsGood := iTxoBind.Apply(SoprHoz.bufferp);
+
+          iTxoBind.ProcessProtokol;
+
+          if (TxoIsGood)
+          {
+            KatSopr.cHozOper := SoprHoz.cHozOper;
+            set KatSopr.SoprHoz := 1;
+            Update_Current_KatSopr;
+          }
+
+          ReReadRecord;
+          Stop;
+        }
+      }
+#else
+    #HozOper.Name1 :
+      {
+        var tmpW : word;   tmpW := TypeSopr;
+        if (TypeSopr=501 or Typesopr = 504 or Typesopr = 505) and  SoprHoz.SysOper = 555
+         if RunInterface('GetHozOT',0,tmpW,word(555),KatSopr.cHozOper) = cmDefault
+          {
+            SoprHoz.cHozOper := KatSopr.cHozOper;
+            set KatSopr.SoprHoz := 1;
+            Update_Current_KatSopr;
+          }
+          else {}
+        else
+        if (runinterface('GetHozOB',0,tmpW,KatSopr.cHozOper) = cmDefault)
+          {
+            SoprHoz.cHozOper := KatSopr.cHozOper;
+            set KatSopr.SoprHoz := 1;
+            Update_Current_KatSopr;
+          }
+      }
+#end
+    #KatPayment.Name :
+      {
+       if RunInterface('GetPayment', KatSopr.cPayment) <> cmDefault
+       Abort;
+      }
+  end; // case curfield
+
+!-------------------------------------------------------------------------------
+
+cmAbortInsert :
+  AbortNewDocument;
+
+!-------------------------------------------------------------------------------
+#end //_INPSOPR_VPP
+!------------------------------------

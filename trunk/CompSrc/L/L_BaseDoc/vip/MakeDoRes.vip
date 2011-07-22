@@ -1,0 +1,1331 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Пакетное резервирование/перенос резервов по ДО
+//******************************************************************************
+
+// данный функционал применяется только при резервировании по складскому разрезу
+
+#include TrDoRes.vih
+
+//******************************************************************************
+
+#doc
+Пакетное резервирование/перенос резервов по ДО при резервировании по складскому разрезу
+#end
+Interface MakeDoRes 'Пакетное перенаправление резервов' Cyan, EscClose, DoAccept;
+  Show at (, , 90, 27);
+
+//------------------------------------------------------------------------------
+Table STRUCT TmpBaseDoc ""
+(
+  NRec     : comp       "",
+  NoDoc    : string[20] "",
+  dDoc     : Date       "",
+  Picked   : word       ""
+)
+With Index
+(
+  TmpBaseDoc01 = NRec,
+  TmpBaseDoc02 = dDoc + NoDoc,
+  TmpBaseDoc03 = Picked
+);
+//------------------------------------------------------------------------------
+Table STRUCT TmpRes ""
+(
+  NRec     : comp    "",
+  cBaseDoc: comp    "",
+  cMC      : comp    "",
+  cDoRes   : comp    "",
+  cSpStep  : comp    "",
+  cPodr    : comp    "",
+  cMOL     : comp    "",
+  cParty   : comp    "",
+  cStepP   : comp    "",
+  Kol      : double  "",
+  Koef     : double  "",
+  Diskret  : double  ""
+)
+With Index
+(
+  TmpRes01 = NRec,
+  TmpRes02 = cBaseDoc,
+  TmpRes03 = cSpStep,
+  TmpRes04 = cMC + cParty
+);
+//------------------------------------------------------------------------------
+Create view
+Var
+//------------------------------------------------------------------------------
+  Tune_Reserv_PriorParty
+, CodeRes
+, wMC
+, wOneParty
+, wReserv
+                : word;
+//------------------------------------------------------------------------------
+  s_SimvRub
+                : string;
+//------------------------------------------------------------------------------
+  pSkladFrom
+, pMOLFrom
+, pSkladTo
+, pMOLTo
+, pMC
+, pParty
+                : comp;
+//------------------------------------------------------------------------------
+  dBegDO
+, dEndDO
+                : Date;
+//------------------------------------------------------------------------------
+  MarkerDO
+, IndexNo
+                : longint;
+//------------------------------------------------------------------------------
+  oTransferDoRes: iTransferDoRes;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if ((pMC <> 0), KatMC.Name, if ((wMC > 1), 'множественный выбор', ''))
+    ( FieldName = fMC )
+//------------------------------------------------------------------------------
+, if (TmpBaseDoc.Picked = 1, 'V', '')
+    ( FieldName = Picked )
+//------------------------------------------------------------------------------
+, if (BaseDoc.cVal = 0, s_SimvRub, KlVal.SimVolV)
+    ( FieldName = SimVolB )
+//------------------------------------------------------------------------------
+
+From
+  BaseDoc
+, StepDoc
+, SpStep
+, KatSopr
+, KatOrg
+, KlVal
+, KatNotes
+, KatPodr KatPodrTo
+, KatPodr KatPodrFrom
+, KatMOL  KatMOLTo
+, KatMOL  KatMOLFrom
+, KatMC
+, KatParty
+, DoRes
+, TekSaldo
+, Pick
+, TmpBaseDoc (TmpBaseDoc02)
+, TmpRes
+, SklOst
+, TekMC
+
+Where
+((
+     TmpBaseDoc.NRec == BaseDoc.NRec
+
+AND  BaseDoc.cOrg    == KatOrg.NRec
+AND  BaseDoc.cVal    == KlVal.NRec
+AND  BaseDoc.cNote   == KatNotes.NRec
+AND  BaseDoc.NRec    == StepDoc.cBaseDoc
+AND  StepDoc.NRec    == SpStep.cStepDoc
+
+AND  pMC             == KatMC.NRec
+AND  pParty          == KatParty.NRec
+AND  pSkladFrom      == KatPodrFrom.NRec
+AND  pMOLFrom        == KatMOLFrom.NRec
+AND  pSkladTo        == KatPodrTo.NRec
+AND  pMOLTo          == KatMOLTo.NRec
+
+AND  SpStep.cMCUSL   == SklOst.cMC
+AND  BaseDoc.cParty  == SklOst.cPodr
+AND  SpStep.cMCUSL   == TekMC.cMC
+))
+//------------------------------------------------------------------------------
+Bounds TekSal01 =  word(1)      == TekSaldo.Stat AND
+                   TmpRes.cMC   == TekSaldo.cMC
+       ordered  by TekSaldo.dGodn, TekSaldo.Kod
+//------------------------------------------------------------------------------
+Bounds TekSal02 =  word(1)      == TekSaldo.Stat AND
+                   TmpRes.cMC   == TekSaldo.cMC
+       ordered  by TekSaldo.dGodn (Desc), TekSaldo.Kod
+//------------------------------------------------------------------------------
+Bounds TekSal03 =  word(1)       == TekSaldo.Stat AND
+                   SpStep.cMCUSL == TekSaldo.cMC
+       ordered  by TekSaldo.dGodn, TekSaldo.Kod
+//------------------------------------------------------------------------------
+Bounds TekSal04 =  word(1)       == TekSaldo.Stat AND
+                   SpStep.cMCUSL == TekSaldo.cMC
+       ordered  by TekSaldo.dGodn (Desc), TekSaldo.Kod
+;
+
+//******************************************************************************
+
+Parameters
+   CodeRes; // 0 - перенаправление резервов; 1 - резервирование
+
+//******************************************************************************
+Form frmErr('Protocol.OUT', 'ERRR') with NoVisual;
+//******************************************************************************
+
+#include tekrun.var
+#include oEdIzm.var     // переменная типа интерфейса из oEdIzm.vip
+
+//******************************************************************************
+// отбор ДО для перенаправления резервов
+Function MakeTmpPerenos: boolean;
+var
+  DiskretOtpEd: word;
+  KoefOtpEd: double;
+  prRes: boolean;
+{
+
+  _LOOP BaseDoc where ((word(201) == BaseDoc.VidDoc AND
+                        word(2)   == baseDoc.Status AND
+                        dBegDO   <<= BaseDoc.dDoc AND
+                        dEndDO   >>= BaseDoc.dDoc))
+    {
+      prRes := FALSE;
+
+      _LOOP SpStep
+        {
+          // Проверяем удовлетворяет ли спецификация ДО условиям фильтрации
+
+          if (SpStep.PrMC <> 1)
+            continue;
+
+          if (wMC > 0)
+            if (GetFirst Pick where ((word(7)       == Pick.wList AND
+                                      SpStep.cMCUsl == Pick.cRec)) <> tsOk)
+              continue;
+
+          //----------------------------------------------------------------
+
+          KoefOtpEd := fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+          DiskretOtpEd := fEdIzm.GetDiskrOtpEd(SpStep.cOtpEd);
+
+          _LOOP DoRes where ((SpStep.NRec == DoRes.cSpStep))
+            {
+              // резерв не соответствует складу "откуда"
+              if ((pSkladFrom <> 0) AND (pSkladFrom <> DoRes.cPodr))
+                continue;
+
+              // резерв не соответствует МОЛ "откуда"
+              if ((pMOLFrom <> 0) AND (pMOLFrom <> DoRes.cMOL))
+                continue;
+
+              // резерв не соответствует партии "откуда"
+              if ((pParty <> 0) AND (pParty <> DoRes.cParty))
+                continue;
+
+              // резерв уже соответствует разрезу "куда"
+              if ((pSkladTo = 0) OR (pSkladTo = DoRes.cPodr))
+                if ((pMOLTo = 0) OR (pMOLTo = DoRes.cMOL))
+                  continue;
+
+              ClearBuffer(#TmpRes);
+              TmpRes.cBaseDoc := BaseDoc.NRec;
+              TmpRes.cMC      := SpStep.cMCUsl;
+              TmpRes.cDoRes   := DoRes.NRec;
+              TmpRes.cSpStep  := DoRes.cSpStep;
+              TmpRes.cPodr    := DoRes.cPodr;
+              TmpRes.cMOL     := DoRes.cMOL;
+              TmpRes.cParty   := DoRes.cParty;
+              TmpRes.cStepP   := SpStep.cParty;
+              TmpRes.Kol      := DoRes.Kol;
+              TmpRes.Koef     := KoefOtpEd;
+              TmpRes.Diskret  := DiskretOtpEd;
+              if (insert current TmpRes <> tsOk)
+                {
+                  Message('Ошибка добавления в таблице TmpRes.', Error);
+                  StopVisual('', 0);
+                  Exit;
+                }
+
+              prRes := TRUE;
+            }
+        }
+
+      if prRes // в ДО есть резервы, которые нужно перенаправлять
+        {
+          TmpBaseDoc.NRec   := BaseDoc.NRec;
+          TmpBaseDoc.dDoc   := BaseDoc.dDoc;
+          TmpBaseDoc.NoDoc  := BaseDoc.NoDoc;
+          TmpBaseDoc.Picked := 0;
+          insert current TmpBaseDoc;
+        }
+    }
+
+  MakeTmpPerenos := (GetFirst TmpBaseDoc = tsOk);
+}
+
+// процедура переноса резерва для выбранных ДО с одного складского разреза на другой
+
+//******************************************************************************
+
+Procedure PerenosDoRes;
+var
+  KolTreb, TekRes: double;
+{
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak, 'Перенаправление резервов ...'#13,
+                 RecordsInTable(#TmpRes));
+
+  _LOOP TmpBaseDoc where ((word(1) == TmpBaseDoc.Picked))
+    _LOOP TmpRes where ((TmpBaseDoc.NRec == TmpRes.cBaseDoc))
+      {
+        if (not NextVisual)
+          Break;
+
+        KolTreb := TmpRes.Kol;
+
+        PushBounds(if (Tune_Reserv_PriorParty = 1, tbTekSal02, tbTekSal01));
+
+        _LOOP teksaldo
+          {
+            if KolTreb <= 0
+              Break;
+
+            if ((pSkladTo <> comp(0)) AND (pSkladTo <> TekSaldo.cPodr))
+              continue;
+
+            if ((pMOLTo <> comp(0)) AND (pMOLTo <> TekSaldo.cMOL))
+              continue;
+
+            if ((TmpRes.cParty <> 0) AND (TmpRes.cParty <> TekSaldo.cParty))
+              continue;
+
+            TekRes := (TekSaldo.Kol - TekSaldo.Res)/TmpRes.Koef;
+
+            if (TmpRes.Diskret = 1)
+              if NOT fEdIzm.IsKolDiskret(TekRes)
+                TekRes := Round(TekRes);
+
+            if (TekRes > KolTreb)
+              TekRes := KolTreb;
+
+            if (TekRes > 0)
+              if fTekRun.ModifyAllTek(TmpRes.cMC, TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty,
+                                 0, TekRes*TmpRes.Koef)
+                {
+                  fTekRun.ModifyDoRes(TmpRes.cSpStep, TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty, TekRes);
+                  KolTreb := KolTreb - TekRes;
+                }
+          }
+
+        PopBounds(if (Tune_Reserv_PriorParty = 1, tbTekSal02, tbTekSal01));
+
+        if (KolTreb < fTekRun.GetMinQuantity)
+         // уже списали все что можно
+          {
+            if (delete DoRes where ((TmpRes.cDoRes == DoRes.NRec)) <> tsOk)
+              {
+                Message('Ошибка удаления в таблице DoRes.', Error);
+                StopVisual('', 0);
+                Exit;
+              }
+          }
+        else
+          {
+            if (GetFirst DoRes where ((TmpRes.cDoRes == DoRes.NRec)) = tsOk)
+             // оставшееся количество возвращаем в dores
+              {
+                DoRes.Kol := KolTreb;
+                if (update current DoRes <> tsOk)
+                  {
+                    Message('Ошибка модификации в таблице DoRes.', Error);
+                    StopVisual('', 0);
+                    Exit;
+                  }
+              }
+          }
+
+        // снять резерв, перенесенный на разрезы в цикле по teksaldo (чуть выше)
+        fTekRun.ModifyAllTek(TmpRes.cMC,
+                     TmpRes.cPodr, TmpRes.cMol, TmpRes.cParty,
+                     0, - (TmpRes.Kol-KolTreb)*TmpRes.Koef);
+      }
+
+  MTClear(#TmpRes, mfNormal);    // вместо deleteall
+
+  StopVisual('', 0);
+
+  Message('Перенаправление резервов завершено.');
+}
+
+//******************************************************************************
+// Отбор ДО для резервирования.
+// Пакетное резервирование осуществляется только по тем ДО, по которым вообще нет резервов.
+Function MakeTmpReserv: boolean;
+var
+  prRes: word;
+{
+
+  _LOOP BaseDoc where ((word(201) == BaseDoc.VidDoc AND
+                        word(2)   == baseDoc.Status AND
+                        dBegDO   <<= BaseDoc.dDoc AND
+                        dEndDO   >>= BaseDoc.dDoc))
+    {
+      if (CodeRes <> 0)
+        {
+          if (GetFirst FastFirstRow KatSopr where ((StepDoc.NRec == KatSopr.cStepDoc)) = tsOk)
+            Continue;
+
+          if (BaseDoc.cParty = 0) AND (wGetTune('Reserv.PrSchSklad') = 1)
+            Continue;
+        }
+
+      prRes := 0;
+
+      _LOOP SpStep
+        {
+          // Проверяем удовлетворяет ли спецификация ДО условиям фильтрации
+          if (SpStep.PrMC = 1)
+            {
+              if (wMC > 0)
+                { // фильтр по МЦ
+                  if (GetFirst Pick where ((word(7)       == Pick.wList AND
+                                            SpStep.cMCUsl == Pick.cRec)) = tsOk)
+                    {
+                      prRes := 2;
+
+                      if ( ( SpStep.Reserv > 0 ) AND ( wReserv = 0 ) )
+                        {
+                          prRes := 1;
+                          Break;
+                        }
+                    }
+                }
+              else
+                { // все МЦ
+                  prRes := 2;
+
+                  if ( ( SpStep.Reserv > 0 ) AND ( wReserv = 0 ) )
+                    {
+                      prRes := 1;
+                      Break;
+                    }
+                }
+            }
+        }
+
+      if (prRes = 2)
+        {
+          TmpBaseDoc.NRec   := BaseDoc.NRec;
+          TmpBaseDoc.dDoc   := BaseDoc.dDoc;
+          TmpBaseDoc.NoDoc  := BaseDoc.NoDoc;
+          TmpBaseDoc.Picked := 0;
+          insert current TmpBaseDoc;
+        }
+    }
+
+  MakeTmpReserv := (GetFirst TmpBaseDoc = tsOk);
+}
+
+//******************************************************************************
+#include TekOstMC.vpp // текущий остаток в оперконтуре
+//******************************************************************************
+// процедура резервирования выбранных ДО на заданном складском разрезе
+Procedure ReservRazrez;
+var
+  DiskretOtpEd: word;
+  KoefOtpEd: double;
+  KolTreb, KolRes, TekRes: double;
+  Flag: boolean;
+{
+  Flag := FALSE;
+
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak, 'Идет процесс резервирования ...',
+                 RecordsInTable(#TmpRes));
+
+  _LOOP TmpBaseDoc where ((word(1) == TmpBaseDoc.Picked))
+    {
+      _LOOP SpStep
+        {
+          if (SpStep.PrMC <> 1)
+            continue;
+
+          if (wMC > 0)
+            if (GetFirst Pick where ((word(7)       == Pick.wList AND
+                                      SpStep.cMCUsl == Pick.cRec)) <> tsOk)
+              continue;
+
+          SpStep.SrokRes := Add_Day(if(wGetTune('Reserv.CalcSrokReserv') = 0, Cur_Date, BaseDoc.dDoc), wGetTune('Reserv.SrokReserv'));
+
+          KoefOtpEd    := fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+          DiskretOtpEd := fEdIzm.GetDiskrOtpEd(SpStep.cOtpEd);
+
+          // сколько еще недозарезервировано
+          KolTreb := SpStep.KolSkl - SpStep.Reserv;
+          KolRes  := 0;
+          TekRes  := 0;
+
+          if (DiskretOtpEd = 1)
+            KolTreb := if (ABS(round(KolTreb) - KolTreb) < fTekRun.GetMinQuantity, Round(KolTreb), trunc(KolTreb));
+
+          case wGetTune('Reserv.PrSchSklad') of
+          //******************************************************************************
+            0:
+              {
+                if IsValid(#TekMC)
+                  TekRes := (TekOstMC(TekMC.cMC)/*TekMC.KolAkt*/ - TekMC.Reserve) / KoefOtpEd;
+
+                if (not f_FirstKolIsGreater(TekRes, KolTreb)) // (TekRes <= KolTreb)
+                  {
+                    case wGetTune('Reserv.OverOstatok') of
+                    //--------------------------------------------------------------------
+                      0:
+                        {
+                          if ( GetFirst FastFirstRow KatMC where (( SpStep.cMCUsl == KatMC.NRec )) = tsOk )
+                            {}
+
+                          Flag := TRUE;
+
+                          if (not f_FirstKolIsGreater(TekRes, 0)) // (TekRes <= 0)
+                            {
+                              frmErr.write('Нет свободного остатка по МЦ "' + KatMC.Name + '"');
+                              TekRes := 0;
+                            }
+                          else
+                            frmErr.write('Резервируется в рамках свободного остатка ! МЦ "' + KatMC.Name + '"');
+                        }
+                    //--------------------------------------------------------------------
+                      1:
+                        {
+                          if ( GetFirst FastFirstRow KatMC where (( SpStep.cMCUsl == KatMC.NRec )) = tsOk )
+                            {}
+
+                          if (not f_FirstKolIsGreater(TekRes, 0)) // (TekRes <= 0)
+                            {
+                              if ( Message('Нет свободного остатка !'#13
+                                         + 'МЦ "' + KatMC.Name + '"'#13#13
+                                         + 'Резервировать?', YesNo) <> cmYes )
+                                TekRes := 0
+                              else
+                                TekRes := KolTreb;
+                            }
+                          else
+                            if ( Message('Свободный остаток по МЦ "' + KatMC.Name
+                                       + '" меньше требуемого!'#13#13'Резервировать сверх свободного остатка?', YesNo) = cmYes )
+                              TekRes := KolTreb;
+                        }
+                    //--------------------------------------------------------------------
+                      2: TekRes := KolTreb;
+                    //--------------------------------------------------------------------
+                    end; //case
+                  }
+
+                if (DiskretOtpEd = 1)
+                  TekRes := if (ABS(round(TekRes) - TekRes) < fTekRun.GetMinQuantity, Round(TekRes), trunc(TekRes));
+
+                if (TekRes > KolTreb)
+                  TekRes := KolTreb;
+
+                if (TekRes > fTekRun.GetMinQuantity)
+                  {
+                    fTekRun.ModifyTekMC(SpStep.cMCUSL, 0, TekRes * KoefOtpEd);
+                    KolRes := TekRes;
+                  }
+              }
+          //******************************************************************************
+            1:
+              {
+                if IsValid(#SklOst)
+                  TekRes := (SklOst.Kol - SklOst.Res) / KoefOtpEd;
+
+                if (not f_FirstKolIsGreater(TekRes, KolTreb)) // (TekRes <= KolTreb)
+                  {
+                    case wGetTune('Reserv.OverOstatok') of
+                    //--------------------------------------------------------------------
+                      0:
+                        {
+                          if ( GetFirst FastFirstRow KatMC where (( SpStep.cMCUsl == KatMC.NRec )) = tsOk )
+                            {}
+
+                          if ( GetFirst FastFirstRow KatPodr where (( BaseDoc.cParty == KatPodr.NRec )) = tsOk )
+                            {}
+
+                          Flag := TRUE;
+
+                          if (not f_FirstKolIsGreater(TekRes, 0)) // (TekRes <= 0)
+                            {
+                              frmErr.write('Нет свободного остатка по МЦ "' + KatMC.Name
+                                         + '". Склад "' + KatPodr.Name + '"');
+                              TekRes := 0;
+                            }
+                          else
+                            frmErr.write('Резервируется в рамках свободного остатка ! МЦ "' + KatMC.Name
+                                       + '". Склад "' + KatPodr.Name + '"');
+                        }
+                    //--------------------------------------------------------------------
+                      1:
+                        {
+                          if ( GetFirst FastFirstRow KatMC where (( SpStep.cMCUsl == KatMC.NRec )) = tsOk )
+                            {}
+
+                          if ( GetFirst FastFirstRow KatPodr where (( BaseDoc.cParty == KatPodr.NRec )) = tsOk )
+                            {}
+
+                          if (not f_FirstKolIsGreater(TekRes, 0)) // (TekRes <= 0)
+                            {
+                              if ( Message('Нет свободного остатка !'#13
+                                         + 'МЦ "' + KatMC.Name + '"'#13
+                                         + 'Склад "' + KatPodr.Name + '"'#13#13
+                                         + 'Резервировать?', Confirmation + YesNo) <> cmYes )
+                                TekRes := 0
+                              else
+                                TekRes := KolTreb;
+                            }
+                          else
+                            if ( Message('Свободный остаток меньше требуемого!'#13
+                                       + 'МЦ "' + KatMC.Name + '"'#13
+                                       + 'Склад "' + KatPodr.Name + '"'#13#13
+                                       + 'Резервировать сверх свободного остатка?', YesNo) = cmYes )
+                              TekRes := KolTreb;
+                        }
+                    //--------------------------------------------------------------------
+                      2: TekRes := KolTreb;
+                    //--------------------------------------------------------------------
+                    end; //case
+                  }
+
+                if (DiskretOtpEd = 1)
+                  TekRes := if (ABS(round(TekRes) - TekRes) < fTekRun.GetMinQuantity, Round(TekRes), trunc(TekRes));
+
+                if (TekRes > KolTreb)
+                  TekRes := KolTreb;
+
+                if (TekRes > fTekRun.GetMinQuantity)
+                  {
+                    fTekRun.ModifyTekMC(SpStep.cMCUSL, 0, TekRes * KoefOtpEd);
+                    fTekRun.ModifySklOst(SpStep.cMCUSL, BaseDoc.cParty, 0, TekRes * KoefOtpEd);
+
+                    KolRes := TekRes;
+                  }
+              }
+          //******************************************************************************
+            2:
+              {
+                PushBounds(if (wGetTune('Reserv.PriorParty') = 1, tbTekSal04, tbTekSal03));
+
+                _LOOP TekSaldo
+                  {
+                    if (KolTreb <= fTekRun.GetMinQuantity)
+                      Break;
+
+                    if ((pSkladTo <> comp(0)) AND (pSkladTo <> TekSaldo.cPodr))
+                     continue;
+
+                    if ((pMOLTo <> comp(0)) AND (pMOLTo <> TekSaldo.cMOL))
+                      continue;
+
+                    if ((SpStep.cParty <> 0) AND (SpStep.cParty <> TekSaldo.cParty))
+                      continue;
+
+                    TekRes := (TekSaldo.Kol - TekSaldo.Res) / KoefOtpEd;
+
+                    if (not f_FirstKolIsGreater(TekRes, KolTreb)) // (TekRes <= KolTreb)
+                      if not boGetTune('Reserv.PartReserv')
+                        Continue
+                      else
+                        {
+                          case wGetTune('Reserv.OverOstatok') of
+                          //--------------------------------------------------------------------
+                            0:
+                              {
+                                if ( GetFirst FastFirstRow KatMC where (( SpStep.cMCUsl == KatMC.NRec )) = tsOk )
+                                  {}
+
+                                if ( GetFirst FastFirstRow KatPodr where (( TekSaldo.cPodr == KatPodr.NRec )) = tsOk )
+                                  {}
+
+                                if ( GetFirst FastFirstRow KatParty where (( TekSaldo.cParty == KatParty.NRec )) = tsOk )
+                                  {}
+
+                                if ( GetFirst FastFirstRow KatMOL where (( TekSaldo.cMOL == KatMOL.NRec )) = tsOk )
+                                  {}
+
+                                Flag := TRUE;
+
+                                if (not f_FirstKolIsGreater(TekRes, 0)) // (TekRes <= 0)
+                                  {
+                                    frmErr.write('Нет свободного остатка !"');
+                                    frmErr.write('МЦ "' + KatMC.Name + '"');
+                                    frmErr.write('Склад "' + KatPodr.Name + '"');
+                                    frmErr.write('МОЛ "' + KatMOL.Name + '"');
+                                    frmErr.write('Партия "' + KatParty.Name + '"');
+
+                                    TekRes := 0;
+                                  }
+                                else
+                                  {
+                                    frmErr.write('Резервируется в рамках свободного остатка !');
+                                    frmErr.write('МЦ "' + KatMC.Name + '"');
+                                    frmErr.write('Склад "' + KatPodr.Name + '"');
+                                    frmErr.write('МОЛ "' + KatMOL.Name + '"');
+                                    frmErr.write('Партия "' + KatParty.Name + '"');
+                                  }
+                              }
+                          //--------------------------------------------------------------------
+                            1:
+                              {
+                                if ( GetFirst FastFirstRow KatMC where (( SpStep.cMCUsl == KatMC.NRec )) = tsOk )
+                                  {}
+
+                                if ( GetFirst FastFirstRow KatPodr where (( TekSaldo.cPodr == KatPodr.NRec )) = tsOk )
+                                  {}
+
+                                if ( GetFirst FastFirstRow KatParty where (( TekSaldo.cParty == KatParty.NRec )) = tsOk )
+                                  {}
+
+                                if ( GetFirst FastFirstRow KatMOL where (( TekSaldo.cMOL == KatMOL.NRec )) = tsOk )
+                                  {}
+
+                                if (not f_FirstKolIsGreater(TekRes, 0)) // (TekRes <= 0)
+                                  {
+                                    if ( Message('Нет свободного остатка !'#13
+                                               + 'МЦ "' + KatMC.Name + '"'#13
+                                               + 'Склад "' + KatPodr.Name + '"'#13#13
+                                               + 'МОЛ "' + KatMOL.Name + '"'#13
+                                               + 'Партия "' + KatParty.Name + '"'#13#13
+                                               + 'Резервировать?', Confirmation + YesNo) <> cmYes )
+                                      TekRes := 0
+                                    else
+                                      TekRes := KolTreb;
+                                  }
+                                else
+                                  if ( Message('Свободный остаток меньше требуемого!'#13
+                                             + 'МЦ "' + KatMC.Name + '"'#13
+                                             + 'Склад "' + KatPodr.Name + '"'#13#13
+                                             + 'МОЛ "' + KatMOL.Name + '"'#13
+                                             + 'Партия "' + KatParty.Name + '"'#13#13
+                                             + 'Резервировать сверх свободного остатка?', YesNo) = cmYes )
+                                    TekRes := KolTreb;
+                              }
+                          //--------------------------------------------------------------------
+                            2: TekRes := KolTreb;
+                          //--------------------------------------------------------------------
+                          end; //case
+                        }
+
+                    if (DiskretOtpEd = 1)
+                      TekRes := if (ABS(round(TekRes) - TekRes) < fTekRun.GetMinQuantity, Round(TekRes), trunc(TekRes));
+
+                    if (TekRes > KolTreb)
+                      TekRes := KolTreb;
+
+                    if (TekRes > fTekRun.GetMinQuantity)
+                      if fTekRun.ModifyAllTek(SpStep.cMCUsl, TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty,
+                                         0, TekRes * KoefOtpEd)
+                        {
+                          fTekRun.ModifyDoRes(SpStep.NRec, TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty, TekRes);
+                          KolTreb := KolTreb - TekRes;
+                          KolRes  := KolRes + TekRes;
+                        }
+                  }
+
+                PopBounds(if (wGetTune('Reserv.PriorParty') = 1, tbTekSal04, tbTekSal03));
+              }
+          //******************************************************************************
+          end;
+
+          SpStep.Reserv := SpStep.Reserv + KolRes;
+          update current SpStep;
+        }
+    }
+
+  StopVisual('', 0);
+
+  Message('Резервирование завершено.');
+
+  if Flag
+    if frmErr.Error
+      frmErr.AbortForm
+    else
+      frmErr.ShowFile('Протокол резервирования');
+}
+
+// процедура резервирования выбранных ДО на заданном складском разрезе
+
+//******************************************************************************
+
+Procedure ReservRazrezOneParty;
+var
+  DiskretOtpEd: word;
+  KoefOtpEd: double;
+  KolTreb, KolRes, tekres: double;
+{
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak, 'Идет процесс резервирования ...'#13,
+                 RecordsInTable(#TmpRes));
+
+  _LOOP TmpBaseDoc where ((word(1) == TmpBaseDoc.Picked))
+    {
+      _LOOP SpStep
+        {
+          if (SpStep.PrMC <> 1)
+            continue;
+
+          if (wMC > 0)
+            if (GetFirst Pick where ((word(7)       == Pick.wList AND
+                                      SpStep.cMCUsl == Pick.cRec)) <> tsOk)
+              continue;
+
+          KoefOtpEd := fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+          DiskretOtpEd := fEdIzm.GetDiskrOtpEd(SpStep.cOtpEd);
+
+          // сколько еще недозарезервировано
+          KolTreb := SpStep.KolSkl - SpStep.Reserv;
+          KolRes  := 0;
+
+          if (DiskretOtpEd = 1)
+            KolTreb := if (ABS(round(KolTreb) - KolTreb) < fTekRun.GetMinQuantity, Round(KolTreb), trunc(KolTreb));
+
+          MTClear(#TmpRes, mfNormal);    // вместо deleteall
+
+          PushBounds(if (wGetTune('Reserv.PriorParty') = 1, tbTekSal04, tbTekSal03));
+
+          _LOOP TekSaldo
+            {
+              if ((pSkladTo <> comp(0)) AND (pSkladTo <> TekSaldo.cPodr))
+                continue;
+
+              if ((pMOLTo <> comp(0)) AND (pMOLTo <> TekSaldo.cMOL))
+                continue;
+
+              if ((SpStep.cParty <> 0) AND (SpStep.cParty <> TekSaldo.cParty))
+                continue;
+
+              if (GetFirst TmpRes where ((TekSaldo.cMC    == TmpRes.cMC   AND
+                                          TekSaldo.cParty == TmpRes.cParty)) <> tsOk)
+                {
+                  ClearBuffer(#TmpRes);
+                  TmpRes.cMC    := TekSaldo.cMC;
+                  TmpRes.cParty := TekSaldo.cParty;
+                  TmpRes.Kol    := (TekSaldo.Kol - TekSaldo.Res) / KoefOtpEd;
+                  if (insert current TmpRes <> tsOk)
+                    {
+                      Message('Ошибка добавления в таблице TmpRes.', Error);
+                      StopVisual('', 0);
+                      Exit;
+                    }
+                }
+              else
+                {
+                  ClearBuffer(#TmpRes);
+                  TmpRes.Kol := TmpRes.Kol + (TekSaldo.Kol - TekSaldo.Res) / KoefOtpEd;
+                  if (update current TmpRes <> tsOk)
+                    {
+                      Message('Ошибка изменения в таблице TmpRes.', Error);
+                      StopVisual('', 0);
+                      Exit;
+                    }
+                }
+            }
+
+          PopBounds(if (wGetTune('Reserv.PriorParty') = 1, tbTekSal04, tbTekSal03));
+
+          SpStep.SrokRes := Add_Day(if(wGetTune('Reserv.CalcSrokReserv') = 0, Cur_Date, BaseDoc.dDoc), wGetTune('Reserv.SrokReserv'));
+
+          _LOOP TmpRes
+            {
+              if (TmpRes.Kol < KolTreb)
+                continue;
+
+              _LOOP TekSaldo where ((TmpRes.cMC    == TekSaldo.cMC AND
+                                     TmpRes.cParty == TekSaldo.cParty AND
+                                     (1 = TekSaldo.Stat)
+                                   ))
+                {
+                  if ((pSkladTo <> comp(0)) AND (pSkladTo <> TekSaldo.cPodr))
+                    continue;
+
+                  if ((pMOLTo <> comp(0)) AND (pMOLTo <> TekSaldo.cMOL))
+                    continue;
+
+                  if (KolTreb <= fTekRun.GetMinQuantity)
+                    Break;
+
+                  TekRes := (TekSaldo.Kol - TekSaldo.Res) / KoefOtpEd;
+
+                  if (DiskretOtpEd = 1)
+                    TekRes := if (ABS(round(TekRes) - TekRes) < fTekRun.GetMinQuantity, Round(TekRes), trunc(TekRes));
+
+                  if (TekRes > KolTreb)
+                    TekRes := KolTreb;
+
+                  if (TekRes > fTekRun.GetMinQuantity)
+                    if fTekRun.ModifyAllTek(SpStep.cMCUsl, TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty,
+                                       0, TekRes * KoefOtpEd)
+                      {
+                        fTekRun.ModifyDoRes(SpStep.NRec, TekSaldo.cPodr, TekSaldo.cMOL, TekSaldo.cParty, TekRes);
+                        KolTreb := KolTreb - TekRes;
+                        KolRes  := KolRes + TekRes;
+                      }
+                }
+            }
+
+          SpStep.Reserv := SpStep.Reserv + KolRes;
+          update current SpStep;
+        }
+    }
+
+  StopVisual('', 0);
+
+  Message('Резервирование завершено.');
+}
+
+//******************************************************************************
+
+#doc
+Окно установки параметров перенаправления резервов по ДО
+#end
+Window winPar 'Настройка пакетного перенаправления резервов' DoAccept, EscClose, Gray;
+//  Show at (9, 2, 71, 15);
+
+//******************************************************************************
+
+Panel pan;
+
+Screen sc1 (, , sci1Esc);
+  bevel b1 {1,  5, 61, 10, bsRaised, bsBox};
+  bevel b2 {1, 10, 61, 14, bsRaised, bsBox};
+
+Fields
+//------------------------------------------------------------------------------
+  dBegDO           ('Начальная дата периода', , sci13Esc)
+                : [10, 'DD/MM/YYYY'], NoProtect, Centered;
+//------------------------------------------------------------------------------
+  dEndDO           ('Конечная дата периода', , sci13Esc)
+                : [10, 'DD/MM/YYYY'], NoProtect, Centered;
+//------------------------------------------------------------------------------
+  fMC              ('Выберите МЦ для перенаправления резервов', , sci13Esc)
+                : PickButton, Protect;
+//------------------------------------------------------------------------------
+  'Откуда'
+                : Skip, {Font = {Bold = TRUE}};
+//------------------------------------------------------------------------------
+  KatPodrFrom.Name ('Укажите складской разрез, с которого нужно перенаправлять резерв', , sci13Esc)
+                : Protect, PickButton;
+//------------------------------------------------------------------------------
+  KatMOLFrom.Name  ('Укажите складской разрез, с которого нужно перенаправлять резерв', , sci13Esc)
+                : Protect, PickButton;
+//------------------------------------------------------------------------------
+  KatParty.Name    ('Выберите партию для перенаправления резервов', , sci13Esc)
+                : PickButton, Protect;
+//------------------------------------------------------------------------------
+  'Куда'
+                : Skip, {Font = {Bold = TRUE}};
+//------------------------------------------------------------------------------
+  KatPodrTo.Name   ('Укажите складской разрез, на который нужно перенаправлять резерв', , sci13Esc)
+                : Protect, PickButton;
+//------------------------------------------------------------------------------
+  KatMOLTo.Name    ('Укажите складской разрез, на который нужно перенаправлять резерв', , sci13Esc)
+                : Protect, PickButton;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmYes, Default, , 'Выполнить', , sci1Esc;
+  cmCancel, , ,    'Отмена', , sci1Esc;
+
+<<
+
+          Период `с`.@@@@@@@@@@@ `по`.@@@@@@@@@@@
+
+  `МЦ    `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   .@@@@@@@
+  `Склад `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  `МОЛ   `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  `Партия`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   .@@@@@
+  `Склад `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  `МОЛ   `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+             <.  Выполнить  .>    <.Отмена.>
+>>
+end;
+
+//******************************************************************************
+
+Screen sc2 (, , sci1Esc);
+  bevel b3 {1, 5, 61, 9, bsRaised, bsBox};
+
+Fields
+//------------------------------------------------------------------------------
+  dBegDO           ('Начальная дата периода', , sci13Esc)
+                : [10, 'DD/MM/YYYY'], NoProtect, Centered;
+//------------------------------------------------------------------------------
+  dEndDO           ('Конечная дата периода', , sci13Esc)
+                : [10, 'DD/MM/YYYY'], NoProtect, Centered;
+//------------------------------------------------------------------------------
+  fMC              ('Выберите МЦ для резервирования', , sci13Esc)
+                : PickButton, Protect;
+//------------------------------------------------------------------------------
+  ' Разрез резервирования'
+                : Skip, {Font = {Bold = TRUE}};
+//------------------------------------------------------------------------------
+  KatPodrTo.Name   ('Укажите складской разрез для резервирования', , sci13Esc)
+                : Protect, PickButton;
+//------------------------------------------------------------------------------
+  KatMOLTo.Name    ('Укажите складской разрез для резервирования', , sci13Esc)
+                : Protect, PickButton;
+//------------------------------------------------------------------------------
+  wOneParty        ('Резервировать только из рамках одной партии', , )
+                : NoProtect;
+//------------------------------------------------------------------------------
+  wReserv          ('Дорезервировать частично зарезервированные позиции', , )
+                : NoProtect;
+//------------------------------------------------------------------------------
+Buttons
+  cmYes, Default, , 'Выполнить', , sci1Esc;
+  cmCancel, , ,    'Отмена', , sci1Esc;
+
+<<
+
+          Период `с`.@@@@@@@@@@@ `по`.@@@@@@@@@@@
+
+  `МЦ    `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  .@@@@@@@@@@@@@@@@@@@@@@
+  `Склад `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  `МОЛ   `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+           [.] резервировать в рамках одной партии`
+
+           [.] дорезервирование позиций`
+
+             <.  Выполнить  .>    <.Отмена.>
+>>
+end;
+
+//******************************************************************************
+
+Screen sc3 (, , sci1Esc);
+
+Fields
+//------------------------------------------------------------------------------
+  dBegDO           ('Начальная дата периода', , sci13Esc)
+                : [10, 'DD/MM/YYYY'], NoProtect, Centered;
+//------------------------------------------------------------------------------
+  dEndDO           ('Конечная дата периода', , sci13Esc)
+                : [10, 'DD/MM/YYYY'], NoProtect, Centered;
+//------------------------------------------------------------------------------
+  fMC              ('Выберите МЦ для резервирования', , sci13Esc)
+                : PickButton, Protect;
+//------------------------------------------------------------------------------
+  wReserv          ('Дорезервировать частично зарезервированные позиции', , )
+                : NoProtect;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmYes, Default, , 'Выполнить', , sci1Esc;
+  cmCancel, , ,    'Отмена', , sci1Esc;
+
+<<
+
+          Период `с`.@@@@@@@@@@@ `по`.@@@@@@@@@@@
+
+  `МЦ    `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+           [.] дорезервирование позиций`
+
+             <.  Выполнить  .>    <.Отмена.>
+>>
+end;
+
+//------------------------------------------------------------------------------
+
+HandleEvent
+cmPick:
+  case CurField of
+  //--------------
+    #KatParty.Name:
+      RunInterface('GetPar__', pParty, pMC);
+  //--------------
+    #KatPodrFrom.Name:
+      RunInterface('GetAnyPodr', pSkladFrom, 1);
+  //--------------
+    #KatMOLFrom.Name:
+      RunInterface('GetMol', pMOLFrom, pSkladFrom);
+  //--------------
+    #KatPodrTo.Name:
+      RunInterface('GetAnyPodr', pSkladTo, 1);
+  //--------------
+    #KatMOLTo.Name:
+      RunInterface('GetMol', pMOLTo, pSkladTo);
+  //--------------
+    #fMC:
+      if (RunInterface('GetSomeMC', Comp(-12347)) <> cmCancel)
+        {
+          wMC := 0;
+          set pMC := 0;
+
+          if (GetFirst Pick where ((word(7) == Pick.wList)) = tsOk)
+            {
+              wMC := 1;
+              set pMC := Pick.cRec;
+
+              if (GetNext Pick where ((word(7) == Pick.wList)) = tsOk)
+                {
+                  wMC := 2;
+                  set pMC := 0;
+                }
+            }
+        }
+  //--------------
+  end;
+
+cmDelOnProtect:
+  case CurField of
+  //--------------
+    #KatParty.Name:
+      set pParty     := 0;
+  //--------------
+    #KatPodrFrom.Name:
+      set pSkladFrom := 0;
+  //--------------
+    #KatMOLFrom.Name:
+      set pMOLFrom   := 0;
+  //--------------
+    #KatPodrTo.Name:
+      set pSkladTo   := 0;
+  //--------------
+    #KatMOLTo.Name:
+      set pMOLTo     := 0;
+  //--------------
+    #fMC:
+      {
+        wMC := 0;
+        set pMC := 0;
+
+        delete Pick where ((word(7) == Pick.wList));
+      }
+  //--------------
+  end;
+end;
+end; // Panel pan1
+
+//******************************************************************************
+
+HandleEvent
+
+cmYes:
+  {
+    if (dBegDO > dEndDO)
+      {
+        Message('Неверно задан период!', Warning + CancelButton);
+        SelectField(#dBegDO);
+        Abort;
+        Exit;
+      }
+
+    if ((pSkladTo = 0) AND (pMOLTo = 0) AND (wGetTune('Reserv.PrSchSklad') = 2))
+      {
+        if (CodeRes = 0)
+          Message('Укажите складской разрез, на который нужно перенаправлять резерв!', Warning + CancelButton)
+        else
+          Message('Укажите складской разрез для резервирования!', Warning + CancelButton)
+
+        SelectField(#KatPodrTo.Name);
+        Abort;
+        Exit;
+      }
+
+    if (CodeRes = 0)
+      if ((pSkladFrom = pSkladTo) AND (pMOLFrom = pMOLTo))
+        {
+          Message('Складской разрез "ОТКУДА" совпадает с разрезом "КУДА"!',
+                  Warning + CancelButton);
+          SelectField(#KatPodrTo.Name);
+          Abort;
+          Exit;
+        }
+
+    PutCommand (cmDefault);
+  }
+
+end;
+end; // Window winPar1
+
+//******************************************************************************
+
+Browse brListDO ('', , sci14EnIns);
+  Table TmpBaseDoc;
+
+Fields
+  { Font = { Color = if (TmpBaseDoc.Picked = 1, ColorMark, 0)} };
+//------------------------------------------------------------------------------
+  Picked           #3'V'
+                  : [1], Skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatNotes.sName   #3'Статус'
+                  : [7], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  BaseDoc.dDoc     #3'Дата' ('Дата выписки документа', , )
+                  : [10, 'DD/MM/YYYY'] , Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  BaseDoc.Descr    #3'Дескр.'
+                  : [5] , Skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  BaseDoc.NoDoc    #3'Документ№' ('Номер документа', , )
+                  : [9] , Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatOrg.Name      #3'Контрагент'
+                  : [22], Protect, NoDel;
+//------------------------------------------------------------------------------
+  BaseDoc.Total    #3'Сумма по документу' ('Сумма к оплате по документу', , )
+                  : [20, '\2p[|-]3666`666`666`666`666.88'], [brForSumma], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SimvolB          #3'Вал.'
+                  : [4], Skip, NoAutoSize, Centered, {Font = {Italic = TRUE}};
+//------------------------------------------------------------------------------
+end; // Browse brListDO
+
+HandleEvent
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    Tune_Reserv_PriorParty := wGetTune('Reserv.PriorParty');
+
+    wMC       := 0;
+    wOneParty := 0;
+
+    dBegDO := Cur_Date;
+    dEndDO := Cur_Date;
+
+    pMC        := 0;
+    pParty     := 0;
+    pSkladFrom := 0;
+    pMOLFrom   := 0;
+    pSkladTo   := 0;
+    pMOLTo     := 0;
+
+    MTClear(#TmpBaseDoc, mfNormal);    // вместо deleteall
+
+    delete Pick where ((word(7) == Pick.wList));
+
+    if (CodeRes = 0)
+      {
+        if (wGetTune('Reserv.PrSchSklad') <> 2)
+          {
+            Message('Пакетное перенаправление резерва работает'#13
+                  + 'только при установленном в настройке методе резервирования'#13
+                  + '"по полному складскому разрезу"',
+                    Information + CancelButton
+                   );
+            Abort;
+            Exit;
+          }
+
+        SetWindowHelpCtx(hcm_zakup_PakPerenapr_Rez, winPar);
+        SetWindowTitle(winPar, 'Настройка пакетного перенаправления резервов');
+        LocateWin(9, 2, 71, 18, winPar);
+        SetFormat(sc1);
+
+        if (RunWindowModal(winPar) <> cmDefault)
+          {
+            Abort;
+            Exit;
+          }
+
+        if (not MakeTmpPerenos)
+          {
+            Message('Ни один документ-основание не соответствует заданным условиям.',
+                    Information + CancelButton);
+            Abort;
+            Exit;
+          }
+      }
+    else
+      {
+        SetTitle('Пакетное резервирование');
+
+        SetWindowHelpCtx(hcm_zakup_paket_Rezerv_DO, winPar);
+        SetWindowTitle(winPar, 'Настройка пакетного резервирования');
+        if (wGetTune('Reserv.PrSchSklad') <> 2)
+          {
+            LocateWin(9, 2, 71, 9, winPar);
+            SetFormat(sc3);
+          }
+        else
+          {
+            LocateWin(9, 2, 71, 15, winPar);
+            SetFormat(sc2);
+          }
+
+        if (RunWindowModal(winPar) <> cmDefault)
+          {
+            Abort;
+            Exit;
+          }
+
+        if (not MakeTmpReserv)
+          {
+            Message('Ни один документ-основание не соответствует заданным условиям.',
+                    Information + CancelButton);
+            Abort;
+            Exit;
+          }
+      }
+  }
+
+cmDefault:
+  {
+    var cRec: comp;
+
+    cRec := TmpBaseDoc.NRec;
+
+    if (GetFirst TmpBaseDoc where ((word(1) == TmpBaseDoc.Picked)) <> tsOk)
+      {
+        if (GetFirst TmpBaseDoc where ((cRec == TmpBaseDoc.NRec)) = tsOk)
+          {
+            TmpBaseDoc.Picked := 1;
+            update current TmpBaseDoc;
+          }
+        else
+          {
+            Message('Не выбран ни один документ-основание!', Information + CancelButton);
+            Abort;
+            Exit;
+          }
+      }
+
+    if (CodeRes = 0)
+      PerenosDoRes            // перенаправление резервов
+    else
+      if (wOneParty = 0)
+        ReservRazrez          // резервирование по срокам годности
+      else
+        ReservRazrezOneParty; // резервирование в рамках одной партии
+  }
+
+cmDone:
+  delete Pick where ((word(7) == Pick.wList));
+
+cmEdit:
+  RunInterface('Vschet', BaseDoc.NRec);
+
+cmMarkUnMark:
+  {
+    TmpBaseDoc.Picked := if (TmpBaseDoc.Picked = 1, 0, 1);
+    update current TmpBaseDoc;
+
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+  }
+
+cmSelectall:
+  {
+    update TmpBaseDoc set TmpBaseDoc.Picked := 1;
+    RereadRecord;
+  }
+
+cmUnSelectall:
+  {
+    update TmpBaseDoc set TmpBaseDoc.Picked := 0;
+    RereadRecord;
+  }
+
+end;
+End.
+
+//******************************************************************************

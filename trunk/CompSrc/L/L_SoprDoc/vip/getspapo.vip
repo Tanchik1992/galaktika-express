@@ -1,0 +1,311 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Выбор спецификации из актов на прием материалов связанных с рапоряжение
+// на прием-отпуск
+//******************************************************************************
+#include ExtAttrClass.vih
+
+//******************************************************************************
+
+Table struct tblMemAktPO
+(
+  NRec    : comp
+, PrMC    : word
+, cMCUSL  : comp
+, KolFact : double
+, Kol     : double
+, cED     : comp
+, cOtpEd  : comp
+, rPrice  : double
+, rVPrice : double
+, Price  : double
+, VPrice : double
+, cVal    : comp
+, cDoc    : comp
+, VidDoc  : word
+, SpDoc   : comp
+)
+with index
+(
+  tblMemAktPO01 = NRec (Unique, AutoInc)
+, tblMemAktPO02 = VidDoc + cMCUSL + PrMC
+, tblMemAktPO03 = VidDoc + PrMC + cMCUSL
+, tblMemAktPO04 = cMCUSL + PrMC
+)
+;
+
+
+//******************************************************************************
+#doc
+Назначение:
+   Выбор спецификации из накладных
+
+
+Параметры:
+  pNRec   - ссылка на документ
+  wPrMC   - тип спецификации (мц/услуга)
+  wFiltr  - утанавливать ли фильтр по типу
+  wPList  - пик
+#end
+//********************************************************************************
+
+Interface GetDocSpAPO 'Выбор спецификации из документа' doAccept, EscClose, cyan;
+Show at (, , 100, 14);
+Create View
+Var
+  pNRec        : comp;     // ссылка на документ
+
+  wFiltr
+, wPList
+, wPrMC       : word;
+
+
+As Select
+//--------------------------------------------------------------------------------
+  if(tblMemAktPO.PrMC = 1, KatMC.Name, KatUsl.Name)
+    ( FieldName = NameMCUsl )
+//--------------------------------------------------------------------------------
+, if(tblMemAktPO.PrMC = 1, KatMC.BarKod, KatUsl.Kod)
+    ( FieldName = KodMCUsl )
+//--------------------------------------------------------------------------------
+, if(tblMemAktPO.PrMC = 1, 'Т', 'У')
+    ( FieldName = PrMCUsl )
+//--------------------------------------------------------------------------------
+, if(tblMemAktPO.cOtpEd = 0, KatEd.Name, if (wGetTune('Doc.BrAbbrEd')=0, KatOtpEd.ABBR, KatOtpEd.Name))
+    ( FieldName = OtpEd )
+//--------------------------------------------------------------------------------
+, if(tblMemAktPO.cVal = 0, tblMemAktPO.rPrice, tblMemAktPO.rVPrice)
+    ( FieldName = Prv )
+//--------------------------------------------------------------------------------
+, tblMemAktPO.KolFact * if(tblMemAktPO.cVal = 0, tblMemAktPO.price, tblMemAktPO.VPrice)
+    ( FieldName = SumPrice )
+//--------------------------------------------------------------------------------
+, if (IsValid(tnPick), '√', '')
+    (FieldName = picked)
+//--------------------------------------------------------------------------------
+, PrintNumber(KSopr.Descr, KSopr.NSopr)
+  (FieldName = Docs)
+
+From
+  KatSopr
+, KatSopr DocumSopr
+, Katsopr KSopr
+, SpSopr
+, SpSopr  DocumSpSopr
+, KatOtpEd
+, KatEd
+, KatMC
+, KatMC
+, KatUsl
+, KatUsl
+, KlVal
+, Pick
+, tblMemAktPO
+, SpOrder
+
+
+where
+((
+     pNRec                   ==  KatSopr.NRec
+AND  word(115)               ==  DocumSopr.VidSopr
+AND  KatSopr.NRec            ==  DocumSopr.cKatSopr
+AND  DocumSopr.NRec          ==  DocumSpSopr.cSopr
+AND  DocumSpSopr.cSpOrder    ==  SpOrder.NRec
+//AND  DocumSpSopr.cMCUSL      ==  KatMC.NRec
+//AND  DocumSpSopr.cMCUsl      ==  KatUsl.NRec
+
+AND  tblMemAktPO.cMcUsl      ==  KatMC.NRec
+AND  tblMemAktPO.cMCUsl      ==  KatUsl.NRec
+AND  if(tblMemAktPO.PrMc = 1,
+      KatMC.cEd, KatUsl.cEd) ==  KatEd.NRec
+AND  tblMemAktPO.cOtpEd      ==  KatOtpEd.NRec
+AND  tblMemAktPO.cVal        ==  KlVal.NRec
+AND  wPList                  ==  Pick.wList
+AND  tblMemAktPO.SpDoc       ==  Pick.cRec
+AND  tblMemAktPO.cDoc        ==  KSopr.NRec
+
+))
+
+bounds byMcUsl =
+      wPrMC == DocumSpSopr.PrMC
+
+;
+
+Parameters
+  pNRec
+, wPrMC
+, wFiltr
+, wPList
+;
+
+
+Panel pnSpecif
+  Table tblMemAktPO;
+
+Browse brSpecif ('', hcSellWNaklEditSpec, sci1EscIns)
+  Show at (, , , )
+Fields
+  {Font = {Color = if (picked <> '', ColorMark, 0) }};
+  picked               #3''                                         : [ 1], NoAutoSize, Protect;
+  PrMCUsl              #3'Т'#13#3'У'    ('Товар/услуга')            : [ 1], Protect , NoAutoSize;
+  NameMCUsl            #3'Наименование'                             : [25], Protect, NoDel;
+  KodMCUsl             #3'Код'                                      : [10], Protect, NoDel, NoAutoSize;
+  OtpEd                #3'ЕдИзм'                                    : [ 5], Protect, NoDel, NoAutoSize;
+  tblMemAktPO.KolFact  #3'Количество'                               : [10], [prSignsInKol], Protect, NoAutoSize;
+  PrV                  #3'Цена'                                     : [12], [brForSopr_RVPrice], Protect, NoAutoSize;
+  SumPrice             #3'Стоимость'                                : [12], [brForSopr_RVPrice], Protect, NoAutoSize;
+  Docs                 #3'Документ'                                 : [10], Protect, NoAutoSize;
+  Pick.PickKol         #3'Выбрано'                                  : [ 7], NoAutoSize, Protect;
+end;
+end;
+
+//******************************************************************************
+
+//******************************************************************************
+
+Function CreateTableDoc : boolean;
+{
+  _LOOP DocumSopr
+    _LOOP DocumSpSopr
+       if (DocumSpSopr.KolFact <> 0)// AND IsValid(#SpOrder)
+         {
+           ClearBuffer(#tblMemAktPO);
+           tblMemAktPO.PrMC    := DocumSpSopr.PrMC;
+           tblMemAktPO.cMCUSL  := DocumSpSopr.cMCUSL;
+           tblMemAktPO.KolFact := DocumSpSopr.KolFact;
+           tblMemAktPO.Kol     := double(0);
+   //        tblMemAktPO.cED     := if(DocumSpSopr.PrMc = 1, KatMC.cEd, KatUsl.cEd);
+           tblMemAktPO.cOtpEd  := DocumSpSopr.cOtpEd;
+           tblMemAktPO.rPrice  := DocumSpSopr.rPrice;
+           tblMemAktPO.rVPrice := DocumSpSopr.rVPrice;
+           tblMemAktPO.Price   := DocumSpSopr.rPrice;
+           tblMemAktPO.VPrice  := DocumSpSopr.rVPrice;
+           tblMemAktPO.cVal    := DocumSopr.cValut;
+           tblMemAktPO.cDoc    := DocumSopr.NRec;
+           tblMemAktPO.VidDoc  := DocumSopr.VidSopr;
+           tblMemAktPO.SpDoc   := DocumSpSopr.NRec;
+           insert current tblMemAktPO;
+         }
+
+}
+
+Procedure KillPick;
+{
+  ResetBounds(#Pick);
+  delete Pick where ((wPList == Pick.wList));
+  SetBounds(#Pick);
+}
+
+
+//******************************************************************************
+
+HandleEvent
+cmInit:
+  {
+    if (wFiltr <> 0)
+      AddBounds(tbByMcUsl);
+
+    SetTitle('Выбор спецификации по распоряжению на прием-отпуск ' + PrintNumber(KatSopr.Descr, KatSopr.NSopr));
+
+    KillPick;
+    Delete All tblMemAktPO;
+
+    CreateTableDoc;
+  }
+
+cmOpenSearch:
+  if (CurField = #Pick.PickKol)
+    {
+      var Kol_New : double; Kol_New := Pick.PickKol;
+
+      if RunDialog('GetPickKol', Kol_New) <> cmCancel
+        {
+          if (Kol_New > tblMemAktPO.KolFact)
+            Kol_New := tblMemAktPO.KolFact;
+
+          if GetFirst Pick = tsOk
+            update current Pick set Pick.PickKol := Kol_New;
+          else
+            insert Pick set Pick.cRec := tblMemAktPO.SpDoc, Pick.PickKol := Kol_New, Pick.wList := wPList;
+        }
+
+       ReReadRecord(#Pick);
+       ReReadRecord(#tblMemAktPO);
+     }
+
+cmMarkUnMark:
+  {
+    if (IsValid(#Pick))
+      delete current Pick;
+    else
+      {
+        ClearBuffer(#Pick);
+        Pick.wList   := wPList;
+        Pick.PickKol := tblMemAktPO.KolFact;
+        Pick.cRec    := tblMemAktPO.SpDoc;
+        insert current Pick;
+      }
+
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+    if (GetNext tblMemAktPO = tsOk)
+      CallToNeighbours(cmPosDown, #tblMemAktPO);
+
+    RescanPanel(#tblMemAktPO);
+#endif
+  }
+
+cmSelectAll:
+  {
+    PushPos(#tblMemAktPO);
+    StartNewVisual(vtRotateVisual
+                   , vfTimer+vfBreak+vfConfirm
+                   , 'Помечаю всю спецификацию...'#13#3
+                   , 1);
+
+    KillPick;
+
+    _LOOP tblMemAktPO
+      if (NOT NextVisual)
+        Break;
+      else
+        {
+          ClearBuffer(#Pick);
+          Pick.wList   := wPList;
+          Pick.PickKol := tblMemAktPO.KolFact;
+          Pick.cRec    := tblMemAktPO.SpDoc;
+          insert current Pick;
+        }
+
+     PopPos(#tblMemAktPO);
+     ReReadRecord;
+     RescanPanel(#tblMemAktPO);
+     StopVisual('', 0);
+   }
+
+cmUnSelectAll:
+  {
+    KillPick;
+    RescanPanel(#tblMemAktPO);
+    ReReadRecord;
+  }
+
+cmDefault:
+  if (UpdateTable)
+    {
+      ResetBounds(#Pick);
+
+      if (GetFirst Pick where ((wPList == Pick.wList)) <> tsOk)
+        {
+          ClearBuffer(#Pick);
+          Pick.wList   := wPList;
+          Pick.cRec    := tblMemAktPO.SpDoc;
+          Pick.PickKol := tblMemAktPO.KolFact;
+          insert current Pick;
+        }
+    }
+
+End; // HandleEvent
+End. // interface
