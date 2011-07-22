@@ -1,0 +1,285 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Копирование из одной накладной в другую
+//******************************************************************************
+
+#include SDfuns.var
+#include CalcFuns.var
+
+//******************************************************************************
+
+Procedure SaveCurrentDoc;
+{
+  if (KatSopr.NRec = 0)
+    {
+      Message('Текущий документ еще не оформлен...', CancelButton);
+      Exit;
+    }
+
+  if (KatSopr.wADoc = adSoprDocKN) OR (KatSopr.wADoc = adSoprDocSN)
+    {
+      Message('Документ является корректирующим для другой накладной, '+
+              'поэтому не может быть скопирован.', CancelButton);
+      Exit;
+    }
+
+  SavedDoc := KatSopr.NRec;
+  Message('Запомнен документ ' + f_sNumDate(KatSopr.nSopr, KatSopr.dSopr), Information);
+}
+
+//******************************************************************************
+
+Procedure CopyDocument;
+{
+  var NewDoc: comp;
+  var MarkerCount: longint; MarkerCount := GetMarkerCount(MarkerNZ);
+
+  if MarkerCount <> 0
+    {
+      //определить тип документа для копирования
+      var _NewSopr: word;
+      if RunInterface('iCopyWin', KatSopr.VidSopr, _NewSopr) = cmCancel
+        Exit;
+
+      if _NewSopr <> 0 //не определен тип документа для копирования
+        {
+          var i: longint; // счетчики записей в маркере
+          var pickrec  : comp;
+
+          StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Операция копирования документов', 1);
+
+          PushPos(#KatSopr);
+
+          For (i := 0; i < MarkerCount; i := i + 1)
+            {
+              GetMarker(MarkerNZ, i, pickrec);
+
+              if (GetFirst FastFirstRow KatSopr where ((pickrec == KatSopr.NRec)) = tsOk)
+                RunInterface('iCopySopr', KatSopr.NRec, _NewSopr, NewDoc);
+
+              if NOT NextVisual
+                Break;
+            }
+
+          PopPos(#KatSopr);
+          StopVisual('', 0);
+
+          ClearMarker(MarkerNZ);
+          RereadRecord(#KatSopr);
+          Message('Операция копирования завершена.', Information);
+          Exit;
+        }
+    }
+
+  if (GetFirst KatSopr where ((SavedDoc == KatSopr.NRec)) <> tsOk)
+    {
+      Message('Необходимо сохранить документ <Ctrl><F2> или пометить <Ins> для копирования.');
+      Exit;
+    }
+
+  RunInterface('iCopySopr', SavedDoc, KatSopr.VidSopr, NewDoc);
+
+  if GetFirst KatSopr where((NewDoc == KatSopr.NRec)) = tsOk
+    { };
+
+  RereadRecord(#KatSopr);
+}
+
+//******************************************************************************
+//-- дублирование позции спецификации накладной
+
+Procedure CopySpSopr;
+{
+  if not UpdateTable
+    Exit;
+
+  var piKatDopEd_: iKatDEI; // Интерфейс с public-функциями для ДЕИ
+  var kol: word;  kol := 1;
+
+  if (RunDialog(DlgDublPos, kol) = cmCancel)
+    Exit;
+
+  var KolSrc: double;           KolSrc     := SpSopr.Kol;
+  var KolFactSrc: double;       KolFactSrc := SpSopr.KolFact;
+  var KolOplSrc: double;        KolOplSrc  := SpSopr.KolOpl;
+
+  var SpSoprNRec: comp;  SpSoprNRec := SpSopr.NRec;
+
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm, 'Создание ' + string(kol) + ' копий позиции', kol);
+
+  PushPos(#SpSopr);
+
+#ifndef __MTR_TO_SPEC__
+  var cZatr: comp; cZatr := 0;
+
+  if (GetFirst SpecZatr where ((coSpSopr == SpecZatr.coTable AND SpSopr.NRec == SpecZatr.cSpec)) = tsOk)
+    cZatr := SpecZatr.cAddSumTune;
+#end
+
+  var CheckCopyRaspredSKL: boolean;
+  CheckCopyRaspredSKL := FALSE;
+
+  case KatSopr.VidSopr of
+    101, 108, 111, 552:
+    {
+      if (boGetTune('Oper.Buy.Nakl.CopyRaspredSKL'))
+        CheckCopyRaspredSKL := TRUE;
+    }
+
+    502, 505, 508:
+    {
+      CheckCopyRaspredSKL := TRUE;
+    }
+  end;
+
+  var indx: word;
+  For (indx := 1; indx <= kol; indx := indx+1)
+    {
+      if (not NextVisual)
+        Break;
+
+      SpSopr.NRec      := 0;
+      SpSopr.cSopr     := KatSopr.NRec;
+      SpSopr.dSopr     := KatSopr.dSopr;
+      SpSopr.dOprTTN   := 0;
+      SpSopr.cSpOrder  := 0;
+      SpSopr.cSpStep   := 0;
+      SpSopr.cSpSopr   := 0;
+
+      if (SpSopr.PrMC = 1)
+        SpSopr.vPriceN := 0; //для резервироания.
+
+      SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+
+      if ( Insert Current SpSopr <> tsOk)
+        {
+          Message('Операция копирования позиции неудачна...', CancelButton);
+          Break;
+        }
+      else
+        {
+          // вставка тары
+          if (GetFirst SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+          {
+            oSoprTara.InsertTara (SpSopr.cOtpEd, SpSopr.NRec, SpSopr.cSopr, SpSopr.KolFact, comp(0))
+            oSoprTara.ChangeNppSopr (KatSopr.NRec);
+          }
+
+#ifndef __MTR_TO_SPEC__
+  // копирование ссылок на статьи затрат в УКСе
+          if (cZatr <> 0)
+            {
+              ClearBuffer(#SpecZatr);
+              SpecZatr.coTable := coSpSopr;
+              SpecZatr.cAddSumTune := cZatr;
+              SpecZatr.cSpec := SpSopr.NRec;
+              SpecZatr.cUKS := SpSopr.cUKS;
+              insert current SpecZatr;
+            }
+#else
+          oMTRFun.CopySpecMTR(coSpSopr, SpSoprNRec, coSpSopr, SpSopr.NRec);
+#end
+          RunInterface('CopySpDocSmeta', word(coSpSopr), SpSoprNRec, word(coSpSopr), SpSopr.NRec);
+      //-- Копирование ДЕИ
+          if (SpSopr.PrMC = 1)
+            {
+              piKatDopEd_.CopyDopEd( word(coSpSopr)
+                                   , SpSoprNRec
+                                   , word(1)
+                                   , KolFactSrc
+                                   , word(coSpSopr)
+                                   , SpSopr.NRec
+                                   , word(1)
+                                   , SpSopr.KolFact
+                                   , SpSopr.VidSopr
+                                   );
+
+              piKatDopEd_.CopyDopEd( word(coSpSopr)
+                                   , SpSoprNRec
+                                   , word(2)
+                                   , KolSrc
+                                   , word(coSpSopr)
+                                   , SpSopr.NRec
+                                   , word(2)
+                                   , SpSopr.Kol
+                                   , SpSopr.VidSopr
+                                   );
+
+              piKatDopEd_.CopyDopEd( word(coSpSopr)
+                                   , SpSoprNRec
+                                   , word(3)
+                                   , KolOplSrc
+                                   , word(coSpSopr)
+                                   , SpSopr.NRec
+                                   , word(3)
+                                   , SpSopr.KolOpl
+                                   , SpSopr.VidSopr
+                                   );
+            }
+
+     //-- Копирование налогов по позиции
+
+          _LOOP SpDocNal where ((Comp(SpSoprNRec) == SpDocNal.cSpDoc AND
+                                  KatSopr.VidSopr == SpDocNal.TipDoc))
+            {
+              PushPos(#SpDocNal);
+              SpDocNal.NRec   := 0;
+              SpDocNal.cSpDoc := SpSopr.NRec;
+              SpDocNal.cDoc   := KatSopr.NRec;
+              if (Insert current SpDocNal <> tsOk)
+                { }
+
+              PopPos(#SpDocNal);
+            }
+
+     //-- Конец копирования налогов по позиции
+          oSdFuns.TTNDoc_Copy(coSpSopr, SpSoprNRec, coSpSopr, SpSopr.NRec);
+          oCalcFuns.ClcUsl_CopyFactPar(SpSoprNRec, coSpSopr, SpSopr.NRec, coSpSopr);
+
+    //--Копирую связь со внешними атрибутами
+          SetVisualHeader('Копируется связь со внешними атрибутами');
+
+          _LOOP AttrVal where ((coSpSopr == AttrVal.wTable AND SpSoprNRec == AttrVal.cRec))
+            {
+              NextVisual;
+              PushPos(#AttrVal);
+              AttrVal.NRec := 0;
+              AttrVal.cRec := SpSopr.NRec;
+              insert Current AttrVal;
+              PopPos(#AttrVal);
+            }
+
+        //--Копирую связь со внешней классификацией
+          SetVisualHeader('Копируется связь со внешней классификацией');
+
+          _LOOP ExClassVal where ((coSpSopr == ExClassVal.wTable AND SpSoprNRec == ExClassVal.cRec))
+            {
+              NextVisual;
+              PushPos(#ExClassVal);
+              ExClassVal.NRec := 0;
+              ExClassVal.cRec := SpSopr.NRec;
+              insert Current ExClassVal;
+              PopPos(#ExClassVal);
+            }
+        //--Копирование распределения
+          if (CheckCopyRaspredSKL)
+           _LOOP SoprOrdB where (( SpSoprNRec == SoprOrdB.cSpSopr ))
+           {
+             NextVisual;
+             PushPos(#SoprOrdB);
+             SoprOrdB.NRec     := 0;
+             SoprOrdB.cSpSopr  := SpSopr.NRec;
+             SoprOrdB.cSoprDoc := KatSopr.NRec;
+             Insert Current SoprOrdB;
+             PopPos(#SoprOrdB);
+           }
+        }
+    }
+
+  PopPos(#SpSopr);
+  RereadRecord(#SpSopr);
+  StopVisual('', 0);
+}
+
+//******************************************************************************

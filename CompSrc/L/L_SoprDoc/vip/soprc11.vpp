@@ -1,0 +1,113 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Общая проверка ПРАЙС-ЛИСТОВ в сопр.документах             ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+#ifNdef _soprc11_VPP
+#define _soprc11_VPP
+
+#include Doprice.fun
+Function PickFromPRL: boolean;
+var wPrMc, wVhNal: word;
+{
+  PickFromPRL := FALSE;
+  wPrMc := if(SpSopr.PrMC>2, 2, SpSopr.PrMC); //пир 102.49113
+  #ifdef __NOT_VERIFY_VHODNAL__
+  wVhNal := 0;
+  #else
+  wVhNal := KatSopr.VhodNal;
+  #end
+  if (pNrec = 0)
+    RunInterface(GetKlPR1, pNrec, wPrMc, wVhNal)
+  if (pNrec = 0)
+    Exit;
+  PickFromPRL := TRUE;
+}
+
+Function BeforeCheckPRL(handle_Prot: longint): boolean;
+var RecCorrects: boolean;
+{
+  BeforeCheckPRL := FALSE;
+
+  if (not ((KlPrice.Tip <> 1) xor (SpSopr.PrMC <> 1)))
+    {
+      Message('Выбран прайс-лист не того типа(МЦ/Услуга)', Information+CancelButton);
+      Exit;
+    }
+
+#ifNdef __NOT_VERIFY_VHODNAL__
+#ifndef peresort
+  if (KatSopr.VhodNal <> KlPrice.VhodNal AND KatSopr.VidSopr <> 210 AND KatSopr.VidSopr <> 229)
+    {
+      if (handle_Prot = 0)
+        Message('Входимость налогов указанного прайс-листа не совпадает'+
+             ''#13#3'с входимостью налогов документа.', Information+CancelButton)
+      else
+        Form_Write('По документу №'+KatSopr.NSopr+
+                   ' входимость налогов указанного прайс-листа не совпадает'+
+                   ' с входимостью налогов документа.', '', handle_Prot);
+      Exit;
+    }
+#end
+#end
+
+  if (KatSopr.cValut = 0)
+    set KatSopr.cValut := klPrice.cVal;
+
+  if (KatSopr.cVal <> 0)
+    {
+      if (klPrice.cVal <> KatSopr.cVal)
+        {
+          if (handle_Prot = 0)
+            Message('Не совпадает валюта выбранного прайс-листа '+
+                        'с валютой оплаты накладной...', CancelButton)
+          else
+            Form_Write('По документу №'+KatSopr.NSopr+
+                       ' не совпадает валюта выбранного прайс-листа'+
+                       ' с валютой оплаты накладной.', '', handle_Prot);
+          Exit;
+        }
+    }
+  else
+    if (KatSopr.cValut <> KlPrice.cVal)
+      if (KlPrice.TipMoney <> 0)
+        {
+          PushPos(#SpSopr);
+          RecCorrects := not IsNew;
+          if (GetFirst SpSopr
+                    where ((KatSopr.NRec == SpSopr.cSopr)) = tsOk)
+            {
+              if (RecCorrects)
+               RecCorrects := (GetNext SpSopr
+                  where ((KatSopr.NRec == SpSopr.cSopr)) <> tsOk);
+            }
+          else
+            RecCorrects := TRUE;
+          PopPos(#SpSopr);
+
+          if (not RecCorrects)
+            {
+              if (handle_Prot = 0)
+                Message('Не совпадает валюта выбранного прайс-листа '+
+                            'с валютой уже выбранных позиций...'#13, CancelButton)
+              else
+                Form_Write('В документе №'+KatSopr.NSopr+
+                           ' не совпадает валюта выбранного прайс-листа'+
+                           ' с валютой уже выбранных позиций', '', handle_Prot);
+              Exit;
+            }
+          else
+            {
+              set KatSopr.cValut := klPrice.cVal;
+              SpSopr.cVal := klPrice.cVal;
+            }
+        }
+
+  BeforeCheckPRL := TRUE;
+}
+
+#end //#ifNdef _soprc11_VPP

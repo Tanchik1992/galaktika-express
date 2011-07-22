@@ -1,0 +1,268 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Окно с редактированием налогов к позиции документа        ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ // CantEditNalogs;
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Procedure CantEditNalogs;
+{
+  Message(''#3'Данный документ составлен по ДО. Изменение налогов невозможно...',CancelButton);
+}
+
+var oldNalog : double;
+
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ // Window EditNalogs
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Window EditNalogs 'Редактирование налогов' ( , hcSpSoprEditNalogs, ) EscClose;
+  Show at (,12,110,20);
+Panel pnEditSpDocNal 
+  show at (,,,) 
+  table SpDocNal;
+Browse brEditSpDocNal ('',hcSpSoprEditNalogs,sci1Esc) 
+Fields
+  KatNalog.Name   'Налог'       :[10], skip,NoAutoSize,{font={bold=true}};
+  NalOrg.Name     'Организация' ('Контрагент - получатель суммы данного налога',,sci13Esc) :[14], protect;
+  SpDocNal.Nalog  'Ставка'      ('Ставка налога в %',,):[7],[brForSopr_RVPrice],right,NoAutoSize;
+  SpDocNal.Summa  'Сумма в НДЕ' ('Сумма налога в национальной денежной единице',,):[12],[brForSopr_Price],right,NoAutoSize;
+  SpDocNal.SumVal 'В вал.док.'  ('Сумма налога в валюте спецификации документа',,):[12],[brForSopr_VPrice],right,NoAutoSize;
+  KlVal.SimvolV   'Вал.'        ('Валюта спецификации документа',,):[4], skip, {font={italic=true}},NoAutoSize;
+  SpDocNal.SumNal 'В вал.нал.'  ('Сумма налога в валюте налога',,):[12],[brForSopr_RVPrice],right,NoAutoSize;
+  ValutNal        'Вал.'        ('Валюта налога',,):[4], skip, {font={italic=true}},NoAutoSize;
+end; // Browse
+
+HandleEvent
+
+cmPositionChanged : 
+  {
+    if (((isProtected(#SpSopr)) or (KatSopr.cStepDoc <> 0)) and
+        (KatSopr.VidSopr<>101)
+      and (KatSopr.VidSopr <> 108)
+      and (KatSopr.VidSopr <> 1411)
+      and (KatSopr.VidSopr <> 111)
+      and (KatSopr.VidSopr <> 110)
+      and (KatSopr.VidSopr <> 114)
+      and (KatSopr.VidSopr <> 106)
+      and (KatSopr.VidSopr <> 206))
+      ProtectRecord(#SpDocNal,true);
+  #ifdef _MOVENAKL_
+    if (KatSopr.VidSopr = 600) 
+      ProtectRecord(#SpDocNal,true); 
+  #end  
+    oldNalog := SpDocNal.Nalog;
+  }
+
+cmCheckRecord :
+  {
+    if ( (KatSopr.cStepDoc <> 0)
+     and (KatSopr.VidSopr <> 101)
+     and (KatSopr.VidSopr <> 108)
+     and (KatSopr.VidSopr <> 111)
+     and (KatSopr.VidSopr <> 1411)
+     and (KatSopr.VidSopr <> 110)
+     and (KatSopr.VidSopr <> 114)
+     and (KatSopr.VidSopr <> 106)
+     and (KatSopr.VidSopr <> 206))
+      {
+        CantEditNalogs;
+        Abort;
+        RereadRecord(CurTable);
+      }
+    oldNalog := SpDocNal.Nalog;
+  }
+
+cmUpdateRecord : 
+  Update current SpDocNal;
+
+cmPick : 
+  Case CurField of
+    #NalOrg.Name : 
+      {
+         if (KatSopr.VhodNal <> 1) 
+           RunInterface(GetKatOr, SpDocNal.cOrg,comp(0),false,comp(0),comp(0))
+         else 
+           Message(''#3'Изменение организации невозможно по документу, '+
+                       'у которого налоги входят в цену позиций.',CancelButton);
+         CalcSumNalogs;
+         RecalcSumm(false);
+      }
+  end; // case CurField
+
+cmCheckField :
+  {
+    if ((KatSopr.VidSopr = 101)
+    or (KatSopr.VidSopr = 108)
+    or (KatSopr.VidSopr = 1411)
+    or (KatSopr.VidSopr = 110)
+    or (KatSopr.VidSopr = 114)
+    or (KatSopr.VidSopr = 111)) // только для приходных накладных и актов
+      Case CurField of
+        #SpDocNal.Summa ,
+        #SpDocNal.SumVal, 
+        #SpDocNal.SumNal:
+          if ((KatSopr.cStepDoc <> 0) and (SpSopr.ManualTax = 0))
+            {
+              if (Message(''#3'Вы согласны внести несоответствие'#13#3'между налогами накладной и ДО ?',YesNo) = cmNo)
+               Exit;
+             }
+      end;
+
+    case CurField of 
+      #SpDocNal.Nalog:
+        if (message(''#3'Пересчитать сумму налога?', Information + YesNo) = cmYes)
+          {
+            SpDocNal.Summa  := SpDocNal.Summa  / oldNalog *  SpDocNal.Nalog;
+            SpDocNal.SumVal := SpDocNal.SumVal / oldNalog *  SpDocNal.Nalog;
+            SpDocNal.SumNal := SpDocNal.SumNal / oldNalog *  SpDocNal.Nalog;
+            oldNalog := SpDocNal.Nalog;
+          }
+    end;
+
+    Case CurField of
+     #SpDocNal.Nalog, 
+     #SpDocNal.Summa, 
+     #SpDocNal.SumVal, 
+     #SpDocNal.SumNal:
+       {
+         Set SpSopr.ManualTax := 1;
+         CalcSumNalogs;
+         SelectPanel(#SpSopr);
+         UpDate current SpSopr;
+         RecalcSumm(false);
+         SelectPanel(#SpDocNal);
+       }
+    end; // case in cmCheckField
+  }
+
+cmDelOnProtect : 
+  Abort;
+end;
+end; // panel
+
+
+HandleEvent
+
+cmInit:
+  if (GetFirst SpDocNal <> tsOk)
+    {
+      Message(''#3'По данной позиции нет налогов.',CancelButton);
+      Abort;
+    }
+  else
+    oldNalog := SpDocNal.Nalog;
+
+cmHotKeys:
+  {
+    if ((KatSopr.VidSopr = 101)
+    or (KatSopr.VidSopr = 108)
+    or (KatSopr.VidSopr = 1411)
+    or (KatSopr.VidSopr = 110)
+    or (KatSopr.VidSopr = 114)
+    or (KatSopr.VidSopr = 111)) // только для приходных накладных и актов
+      PutHotCommand(RunMenu('WspDocNal_HotKeys'));
+  }
+
+cmPlansNo:
+  {
+    //-- пересчет по новому курсу
+    if (not((KatSopr.VidSopr = 101)
+    or (KatSopr.VidSopr = 108)
+    or (KatSopr.VidSopr = 1411)
+    or (KatSopr.VidSopr = 110)
+    or (KatSopr.VidSopr = 114)
+    or (KatSopr.VidSopr = 111))) // только для приходных накладных и актов
+      exit;
+    if ((KatSopr.cStepDoc <> 0) and (SpSopr.ManualTax = 0))
+      if (Message(''#3'Вы согласны внести несоответствие'+
+                'между налогами накладной и ДО ?',YesNo) <> cmYes)
+        {
+          RereadRecord(CurTable);
+          Exit;
+        }
+
+    var dat_cur : date;
+    var cur : double;
+    var ret : word;
+    if (RunInterface(GetDCCurse,date(0,0,0)/*if(KatSopr.dPrice<>date(0,0,0),KatSopr.dPrice,KatSopr.dSopr)*/,
+                       KatSopr.cValut,dat_cur,cur) = cmDefault)
+      {
+        PushPos(#SpDocNal);
+        _LOOP SpDocNal
+          {
+            if (KatSopr.cVal = 0)
+              { //-- Rub накладная
+                SpDocNal.SumVal := SpDocNal.Summa / cur;
+                if (SpDocNal.cVal = KatSopr.cValut)
+                  SpDocNal.SumNal := SpDocNal.Summa / cur;
+              }
+            else
+              SpDocNal.Summa := SpDocNal.SumVal * cur;
+            update current SpDocNal;
+          }
+        PopPos(#SpDocNal);
+        Set SpSopr.ManualTax := 1;
+        CalcSumNalogs;
+        SelectPanel(#SpSopr);
+        UpDate current SpSopr;
+        RecalcSumm(false);
+        SelectPanel(#SpDocNal);
+        RescanPanel(#SpDocNal);
+      }
+  }
+
+cmFilialNo:
+  {
+    //-- пересчет по новому курсу
+    if (not((KatSopr.VidSopr = 101)
+    or (KatSopr.VidSopr = 108)
+    or (KatSopr.VidSopr = 1411)
+    or (KatSopr.VidSopr = 110)
+    or (KatSopr.VidSopr = 114)
+    or (KatSopr.VidSopr = 111))) // только для приходных накладных и актов
+      exit;
+    if ((KatSopr.cStepDoc <> 0) and (SpSopr.ManualTax = 0))
+      {
+        if (Message(''#3'Вы согласны внести несоответствие'+
+                        'между налогами накладной и ДО ?',YesNo) <> cmYes)
+          {
+            RereadRecord(CurTable);
+            Exit;
+          }
+       }
+    var dat_cur : date;
+    var cur : double;
+    var ret : word;
+    if (RunInterface(GetDCCurse,date(0,0,0)/*if(KatSopr.dPrice<>date(0,0,0),KatSopr.dPrice,KatSopr.dSopr)*/,
+                       KatSopr.cValut,dat_cur,cur) = cmDefault)
+      {
+        if (KatSopr.cVal = 0)
+          { //-- Rub накладная
+            SpDocNal.SumVal := SpDocNal.Summa / cur;
+            if (SpDocNal.cVal = KatSopr.cValut)
+              SpDocNal.SumNal := SpDocNal.Summa / cur;
+          }
+        else
+          SpDocNal.Summa := SpDocNal.SumVal * cur;
+        update current SpDocNal;
+
+        Set SpSopr.ManualTax := 1;
+        CalcSumNalogs;
+        SelectPanel(#SpSopr);
+        UpDate current SpSopr;
+        RecalcSumm(false);
+        SelectPanel(#SpDocNal);
+        RescanPanel(#SpDocNal);
+      }
+  }
+end; // HandleEvent window
+end; // window
+
+  // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ //
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Procedure MakeKatSoprNal;
+{
+  RunInterface('iwDocNal',KatSopr.Nrec);
+}

@@ -1,0 +1,315 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Функция формирования спецификации документа из набора
+//******************************************************************************
+
+cmValue6: // кнопка ввода (дополнения) спецификации наборами товаров
+  if EditDOPosEnabled(true, true)
+    {
+      if (
+          ((tipDO = 101) AND boGetTune('Doc.Buy.NotEditDO'))
+          OR
+          ((tipDO = 201) AND boGetTune('Doc.Sell.NotEditDO'))
+          OR
+          ((tipDO = 1410) AND boGetTune('Doc.Wood.NarAkt.NotEditDO'))
+          OR
+          ((tipDO = 1420) AND boGetTune('Doc.Wood.Schet.NotEditDO'))
+         )
+        if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+          {
+            Message('Редактирование документа-основания при наличии '+
+                    'сопроводительных или платежных документов ЗАПРЕЩЕНО!',
+                    Information);
+            Exit;
+          }
+
+      if ((BaseDoc.VidDoc = 111) OR (BaseDoc.VidDoc = 211))
+        if (BaseDoc.SpecYes = 0)
+          {
+            Abort;
+            Exit;
+          }
+
+      if (IsNew)
+        if (not IsModified)
+          { 
+            Message('Переход невозможен, так как не заполнен документ.', OkButton);
+            Exit;
+          }
+
+      if (not UpdateTable)
+        exit;
+
+      var IsUsl: boolean;    IsUsl := FALSE;
+      var MCUs: word;        MCUs  := 0;     
+      
+
+      if ((GetFirst KatCUsl = tsOk) AND (BaseDoc.VidDoc <> 202))
+        if (RunDialog(DocKompl, MCUs) <> cmOk)
+          Exit;
+        else
+          if (MCUs <> 0)
+            IsUsl := TRUE;
+
+      var ResInt    : integer;
+      var _cRec     : comp;
+      var wL        : word;
+      var bOneCompl : boolean;
+
+      wL := if(IsUsl, 36, 35);
+      bOneCompl := false;
+
+      if (IsUsl)
+        ResInt := RunInterface( GetComplUsl, _cRec );
+      else
+        ResInt := RunInterface( GetComplMC, _cRec );
+
+      if ( GetFirst Pick3 where (( word(wL) == Pick3.wList )) <> tsOk )
+        Exit;
+      else
+        {
+          if ( GetNext Pick3 where (( word(wL) == Pick3.wList )) <> tsOk )
+            bOneCompl := true;
+        }
+
+      if ( ResInt <> cmCancel )
+        {
+          var VidSel: word;
+
+          VidSel := 0;
+          PrNrec := 0;
+          PrNrec := coGetTune('Price.cPrice');
+
+          if (PrNrec <> 0)
+            {
+              VidSel := 1;
+            }
+          else
+            {
+              if boGetTune('Price.GrKontr')  // искать прайс по группе
+                {
+                  if not GetKlPriceOnGroup(BaseDoc.cOrg,
+                                           PrNrec,
+                                           word(0),
+                                           word(1),
+                                           if(IsUsl, word(2), word(1)))
+                    Exit
+                  else
+                    VidSel := 2;
+                }
+            }
+
+          if (PrNrec = 0)
+            {
+              RVhod := BaseDoc.VhodNal;
+              if (RunInterface(GetKlPr, PrNrec, RVhod, word(0), if(IsUsl, word(2), word(1))) = cmCancel)
+                PrNrec := 0;
+            }
+
+          if (PrNrec = 0)
+            Message('Не выбран прайс-лист!', Warning+OkButton);
+          else
+            if (GetFirst KlPrice
+                   where ((PrNRec == KlPrice.Nrec)) = tsOk)
+              {
+                if ((KlPrice.Tip <> 0) AND (IsUsl = FALSE))
+                  {
+                    Message(''#3+if(VidSel = 0, 'Прайс-лист',
+                                 if(VidSel = 1, 'Текущий прайс-лист',
+                                                'Прайс-лист по группе контрагентов'))+
+                                                ' не для МЦ!', Warning+OkButton);
+                    PrNrec := 0;
+                  }
+
+                if ((KlPrice.Tip = 0) AND (IsUsl = TRUE))
+                  {
+                    Message(''#3+if(VidSel = 0, 'Прайс-лист',
+                                 if(VidSel = 1, 'Текущий прайс-лист',
+                                                'Прайс-лист по группе контрагентов'))+
+                                                ' не для услуг!', Warning+OkButton);
+                    PrNrec := 0;
+                  }
+              }
+      
+          var Rez    : word;
+          var tkol1  : double;
+
+          delete all tmpPickCompl;
+
+          _loop Pick3 where (( word(wL) == Pick3.wList ))
+            {
+              if ( IsUsl )
+                {
+                  if (GetFirst FastFirstRow KatCUsl where ((Pick3.cRec == KatCUsl.nRec)) <> tsOk)
+                    continue;
+                }
+              else
+                {
+                  if (GetFirst FastFirstRow KatCompl where ((Pick3.cRec == KatCompl.nRec)) <> tsOk)
+                    continue;
+                }
+
+              if ( IsUsl )
+                Rez := GetFirst SpCUsl where ((KatCUsl.NRec == SpCUsl.cCUsl))
+              else
+                Rez := GetFirst SpCompl where ((KatCompl.NRec == SpCompl.cCompl)) 
+                                        ordered by index SpCompl05;
+
+              if ( Rez <> tsOk )
+                {
+                  if ( bOneCompl )
+                    Message('Нет спецификации в наборе!', Information+OkButton);
+                }
+              else
+                {
+                  do
+                    {
+                      NRecSp  := if (IsUsl = TRUE, SpCUsl.cUsl, SpCompl.cMC);
+                      NRecOtp := if (IsUsl = TRUE, SpCUsl.cOtpEd, SpCompl.cOtpEd);
+
+                      if ( GetFirst tmpPickCompl where ((  NRecSp  == tmpPickCompl.cRecSp
+                                                       and NRecOtp == tmpPickCompl.cRecOtp
+                                                       )) = tsOk )
+                        continue;
+
+                      insert tmpPickCompl set tmpPickCompl.cRecSp  := NRecSp
+                                            , tmpPickCompl.cRecOtp := NRecOtp;
+
+                      tkol1 := 0;
+
+                      if ( IsUsl )
+                        {
+                          _loop Pick where (( word(wL) == Pick.wList ))
+                            _loop SpCUsl2 where ((  Pick.cRec == SpCUsl2.cCUsl
+                                                and NRecSp    == SpCUsl2.cUsl   (noindex)
+                                                and NRecOtp   == SpCUsl2.cOtpEd (noindex)
+                                                ))
+                              {
+                                tkol1 := tkol1 + Pick.PickKol * SpCUsl2.Kol;
+                              }
+                        }
+                      else
+                        {
+                          _loop Pick where (( word(wL) == Pick.wList ))
+                            _loop SpCompl2 where ((  Pick.cRec == SpCompl2.cCompl
+                                                 and NRecSp    == SpCompl2.cMC 
+                                                 and NRecOtp   == SpCompl2.cOtpEd (noindex)
+                                                 ))
+                              {
+                                tkol1 := tkol1 + Pick.PickKol * SpCompl2.Kol;
+                              }
+                        }
+
+                      if (GetFirst Prices
+                              where (( NRecSp == Prices.cThing   AND
+                                       PrNrec == Prices.cKlPrice AND
+                                       (NrecOtp = Prices.cOtpEd) )) = tsOk)
+                        {
+                          isinpr := 1;   // есть в прайсе с нужной отп.ед.
+                        }
+                      else
+                        if (GetFirst Prices
+                               where (( NRecSp == Prices.cThing AND
+                                        PrNrec == Prices.cKlPrice )) = tsOk)
+                           {
+                             isinpr := 1;   // есть в прайсе, но с другой отп.ед.
+                           }
+                         else
+                           {
+                             isinpr := 0;           // нету в прайсе
+                             ClearBuffer(#Prices);
+                           }
+
+                      MakeValid(tnSpStep);
+
+                      ClearBuffer(#SpStep);
+
+                      SpStep.Garant   := Prices.Garant;
+                      SpStep.NRec     := 0;
+                      SpStep.dDoc     := BaseDoc.dDoc;
+                      SpStep.cStepDoc := StepDoc.Nrec;
+                      SpStep.PrMC     := if (IsUsl = TRUE, 2, 1);
+                      SpStep.cMCUSL   := NRecSp;
+                      SpStep.KolSkl   := tkol1;
+                      SpStep.cOtpEd   := NRecOtp;
+                      SpStep.cParty   := Prices.cParty;
+
+                      if ((BaseDoc.VidDoc = 201) AND (SpStep.PrMC = 2))  // для ДО на продажу
+                        SpStep.PrUsNkl := wGetTune('Doc.UslDoSell')
+
+                      if ((BaseDoc.VidDoc = 1420) AND (SpStep.PrMC = 2))  // для ДО на продажу
+                        SpStep.PrUsNkl := wGetTune('Doc.Wood.Schet.UslDoSell')
+
+                      if (fEdIzm.GetDiskrOtpEd(NrecOtp) = 1)
+                        if (round(SpStep.KolSkl) <> SpStep.KolSkl)
+                          set SpStep.kolskl := trunc(SpStep.kolskl) + 1;
+
+                      SpStep.Kol    := SpStep.KolSkl;
+                      SpStep.ProcUb := 0;
+                      SpStep.cVal   := BaseDoc.cVal;
+
+                      if (SpStep.PrMC = 1)
+                        if (GetFirst KatMC where ((SpStep.cMcUsl == KatMC.Nrec)) = tsOk)
+                          {
+                            SpStep.cMasEd := KatMC.cMasEd;
+                            SpStep.Netto  := KatMC.Massa;
+                            SpStep.mTara  := KatMC.mTara;
+                          }
+
+                      var NewPrice: double;
+
+                      if (isinpr = 1)
+                        {
+                          if (Prices.cOtpEd = NRecOtp)
+                            {
+                              SpStep.cPriceList := PrNrec;
+                              if (BaseDoc.cVal <> KlPrice.cVal)
+                                NewPrice := oValFunc.GetAnyCurrency(KlPrice.cVal, 
+                                                                    if (KlPrice.cVal = 0, Prices.Price, Prices.SumVal), 
+                                                                    BaseDoc.dDoc, 
+                                                                    BaseDoc.cVal);
+                              else
+                                NewPrice := if(BaseDoc.cVal = 0, Prices.Price, Prices.SumVal);
+                            }
+                          else
+                            {
+                              var k: double;  k := fEdIzm.GetKoefOtpEd(NrecOtp) / fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+                              NewPrice := if(BaseDoc.cVal = 0, Prices.Price, Prices.SumVal)*k;
+                            }
+                        }
+
+                      SpStep.Price := oDOfuns.DoRoundP(BaseDoc.cVal, tipdo, NewPrice*(1-BaseDoc.KolKompl/100));
+
+                      #ifdef __vschet__
+                      #include DOUKS.vpp
+                      #end
+
+                      SpStep.Npp  := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+                      insert current SpStep;
+
+                      if (GetFirst KlPrice where ((PrNrec == KlPrice.Nrec)) = tsOk)
+                        BaseDoc.dPrice := KlPrice.dPrice;
+                    }
+                  While ( if(IsUsl = TRUE,
+                             GetNext SpCUsl where ((KatCUsl.NRec == SpCUsl.cCUsl)) = tsOk,
+                             GetNext SpCompl where ((KatCompl.NRec == SpCompl.cCompl)) 
+                                             ordered by index SpCompl05 = tsOk));
+
+                  GetTotalSkid(false);
+
+                  if ( boGetTune('Reserv.SchReserv') AND
+                       (BaseDoc.Direct = 1) AND
+                       (BaseDoc.Status = 2) AND
+                       (BaseDoc.VidDoc <> 211) AND
+                       (SpStep.PrMc = 1) )
+                    Proc20;                // резервирование
+                } // GetFirst spcompl
+            }
+        }
+
+       AllSpStepCellVal(1);
+    }
+
+//******************************************************************************

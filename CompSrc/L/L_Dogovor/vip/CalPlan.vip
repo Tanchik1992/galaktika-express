@@ -1,0 +1,5632 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика - Договора
+// Формирование календарного плана к договору/соглашению
+//********************************************************************************
+
+#include SHManager.vih  // описание интерфейса для работы с SoprHoz
+#include iercp.vih
+#include calplan.vih
+#include SpDocs.vih
+#include katorg.vih
+#include notes.vih
+#include copyspec.vih
+#include oDEI.vih //Функции доп.ед.изм. (iKatDopEd)
+#include aStatUser.vih // права доступа
+#include oEdIzm.vih
+#include oiTPPDoc.vih
+#include FpSHOb.Vih   // финоперации
+#include fpCO.vih
+#include ClndrDog.vih
+#include dolg_dg.vih
+#include DOfuns.vih
+#include UKSfuns.vih
+#include CalcFuns.vih
+#include ExtAttr.vih
+#include ExtClass.vih
+#include Statlog.vih
+#include objintpl.vin
+#include Dog2Nakl.vih
+#include chkschem.vih
+#include MTRFuncs.vih           // функции целевого учета
+#include LinkMTR2Spec.vih       // функции целевого учета
+#include DogFuns.vih
+#include varNameMCU.vih         // Для отображения вариантов наименований
+
+//********************************************************************************
+//Сложная привязка ТХО, и запуск сложной разноски
+#include TxoBind.vih
+//********************************************************************************
+
+#include SoprHoz.vih
+#include KatStroy.vih
+#include GetObj4Rent.tbl
+#include RltFuncs.vih
+#include iPKP_ViewTable.vih
+#include setsmeta.vih
+#include ThemeFuncs.vih
+
+//********************************************************************************
+
+#doc
+Календарный плана договора/соглашения
+#end
+Interface CalPlan 'Календарный план' escclose, cyan;
+  Show at (, , 105, 20);
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string; Forward;
+
+//******************************************************************************
+
+const
+  cmGoToNextDoc   = 6006;
+  cmGoToPrevDoc   = 6007;
+  cmGoToNextLevel = 6008;
+  cmGoToPrevLevel = 6009;
+end;
+
+/*
+При нажатии на кнопки панели навигации посылаются команды:
+  cmGoToNextDoc
+  cmGoToPrevDoc
+  cmGoToNextLevel
+  cmGoToPrevLevel
+
+При этом необходимо сохранить изменения по текущей таблице
+и по CalPlan, если CalPlan не текущая
+*/
+
+#declare CalPlanNavigationHndl(Cmd)
+#Cmd:
+  if ( UpdateTable )
+    {
+      if ( ( CalPlan.DirectPlat = 0 ) AND ( CurTable <> #CalPlan ) )
+        {
+          SelectPanel(#CalPlan);
+
+          if ( not UpdateTable )
+            {
+              Stop;
+              Exit;
+            }
+        }
+
+      ProcessCommand(#Cmd);
+    }
+#end
+
+#include oEdIzm.var
+#include DOfuns.var
+#include UKSfuns.var
+#include CalcFuns.var
+#include chkschem.var
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+#include LinkMTR2Spec.var     // функции целевого учета
+#include DogFuns.var
+#include varNameMCU.var       // fVarNameMCU      Для отображения вариантов наименований
+//********************************************************************************
+Function FilterOnDirect: boolean; forward;
+//******************************************************************************
+
+Create view vwCalPlan
+var
+  pSetSmeta : iSetSmeta;
+//--------------------------------
+  prmDogovor
+, prmCalPlan
+, SavedCalPlan
+, CurGroup
+, CalPlanRef
+, cAutoNote
+, DocUpSpec
+                        : comp;
+//--------------------------------
+  ChecksOtgrState
+, ChecksAvanState
+, ChecksPayState
+, ChecksAddState
+, WasEditCalPlan
+, tmpOnlySpec
+                        : boolean;
+//--------------------------------
+  OldSpCalPlnSumma
+, OldKolDEI
+, getD1
+                        : double;
+//--------------------------------
+  rbPrintAll
+, tmpTiDk
+, DirectMCNewCP
+, DirectPlatNewCP
+, CurPayType
+, rbPrintWithSub
+, cpPeriodType
+, cpPeriodValue
+, cpCloneKol
+, getW1, getW2, getW3, getW4, getW5, getW6, getW7, getW8, getW9, getW10, getW11
+, getDays
+, RealKol
+, PeriodKol
+, TiDkUpSpec
+, DirectSpDocs
+, SummaFrom
+, wDirectPlan
+, ClassCode
+                        : word;
+//--------------------------------
+  MainTree
+, CurOrdBnd
+, CalPlanBrowserFormat
+                        : longint;
+//--------------------------------
+  getBDate
+, getEDate
+                        : Date;
+//--------------------------------
+  s_SimvRub
+, s_NameRubl
+, DocName
+                        : string;
+
+//--------------------------------
+  StatLogs              : string[80];
+
+//--------------------------------
+  myField1
+                        : string[9];
+//--------------------------------
+  hMarker                         // handle маркера
+, lMarker            : longint;   // индекс маркера
+//--------------------------------
+  oNotes        : iNotes;
+//--------------------------------
+  oCheckKon     : CheckKonObj;
+//--------------------------------
+  oStatUser     : VipStatUser;
+//--------------------------------
+  iTxoBind      : TxoBinder;
+//--------------------------------
+  oCF           : ClndrDog;
+//--------------------------------
+  oStatlog      : vipStatlog;
+//--------------------------------
+  oExtAtr       : iExtAttr;
+//--------------------------------
+  oPKP_ViewTable: tPKP_ViewTable;
+//--------------------------------
+  oThemeFuncs   : iThemeFuncs;
+//--------------------------------
+
+//********************************************************************************
+
+As select
+//--------------------------------------------------------------------------------
+  if ( CalPlan.cVal = 0, s_SimvRub, KlVal.SimvolV )
+    ( FieldName = ValutName )
+//--------------------------------------------------------------------------------
+, if ( CalPlan.cVal = 0, s_NameRubl, KlVal.Dollar )
+    ( FieldName = ValutFullName )
+//--------------------------------------------------------------------------------
+, if ( CalPlan.DirectMC = 1, 'от контраг. 1 контраг. 2',
+    if ( CalPlan.DirectMC = 2, 'от контраг. 2 контраг. 1',
+    '!НЕКОРРЕКТНО!'))
+    ( FieldName = CalPlanDirectMC )
+//--------------------------------------------------------------------------------
+, if ( CalPlan.DirectPlat = 1, 'от контраг. 2 контраг. 1',
+    if ( CalPlan.DirectPlat = 2, 'от контраг. 1 контраг. 2',
+    '!НЕКОРРЕКТНО!'))
+    ( FieldName = CalPlanDirectPlat )
+//--------------------------------------------------------------------------------
+, if (CalPlan.DirectMC = 0, 'нет',
+    if (CalPlan.DirectMC = 1, '1->2',
+    if (CalPlan.DirectMC = 2, '2->1',
+    if (CalPlan.DirectMC = 100, '',
+    '!НЕК'))))
+    ( FieldName = CalPlanDirectMC_s )
+//--------------------------------------------------------------------------------
+, if (CalPlan.DirectPlat = 0, 'нет',
+    if (CalPlan.DirectPlat = 1, '2->1',
+    if (CalPlan.DirectPlat = 2, '1->2',
+    if (CalPlan.DirectPlat = 100, '',
+    '!НЕК'))))
+    ( FieldName = CalPlanDirectPlat_s )
+//--------------------------------------------------------------------------------
+, if ( (SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), GroupUsl.Name, GroupMC.Name)
+    ( FieldName = SpCalPlnGrName )
+//--------------------------------------------------------------------------------
+, if ( (SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), KatUsl.Name, KatMC.Name)
+    ( FieldName = SpCalPlnObjName )
+//--------------------------------------------------------------------------------
+, if ( (SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), KatUsl.Kod, KatMC.BarKod)
+    ( FieldName = SpCalPlnObjKod )
+//--------------------------------------------------------------------------------
+, if ( ( not IsValid(tnPlanPaysAvan)), 0,
+    if ( PlanPaysAvan.DefBy = 0, 0,
+    if ( PlanPaysAvan.DefBy = 1, PlanPaysAvan.Summa,
+    if ( PlanPaysAvan.DefBy = 2, CalPlan.Summa*PlanPaysAvan.Percent/100, 0))))
+    ( FieldName = CalPlanAvanSumma )
+//--------------------------------------------------------------------------------
+, if ( ( not IsValid(tnPlanPaysAdd) ), 0,
+    if ( PlanPaysAdd.DefBy = 0, 0,
+    if ( PlanPaysAdd.DefBy = 1, PlanPaysAdd.Summa,
+    if ( PlanPaysAdd.DefBy = 2, CalPlan.Summa*PlanPaysAdd.Percent/100, 0))))
+    ( FieldName = CalPlanAddSumma )
+//--------------------------------------------------------------------------------
+, if ( ( not IsValid(tnPlanPaysAvan) ), 'не определены',
+    if ( PlanPaysAvan.DefBy = 0, 'не определены',
+    if ( PlanPaysAvan.DefBy = 1, 'на сумму: '+trim(to_char(PlanPaysAvan.Summa, 17, 2))+' '+ValutName,
+    if ( PlanPaysAvan.DefBy = 2, '('+trim(to_char(PlanPaysAvan.Percent, 6, 2))+'%) на сумму '+
+                                    trim(to_char(CalPlan.Summa*PlanPaysAvan.Percent/100, 17, 2))+' '+ValutName,
+    '!Ошибка вида аванса!'))))
+    ( FieldName = CalPlanAvanState )
+//--------------------------------------------------------------------------------
+, if ( ( not IsValid(tnPlanPaysAdd) ), 'не определены',
+    if ( PlanPaysAdd.DefBy = 0, 'не определены',
+    if ( PlanPaysAdd.DefBy = 1, 'на сумму '+trim(to_char(PlanPaysAdd.Summa, 17, 2))+' '+ValutName,
+    if ( PlanPaysAdd.DefBy = 2, '('+trim(to_char(PlanPaysAdd.Percent, 6, 2))+'%) на сумму '+
+                                    trim(to_char(CalPlan.Summa*PlanPaysAdd.Percent/100, 17, 2))+' '+ValutName,
+    '!Ошибка вида доп. платежа!'))))
+    ( FieldName = CalPlanAddState )
+//--------------------------------------------------------------------------------
+, if (Dogovor.cDogovor = 0, 'Договор ', 'Соглашение ')+
+  '№ '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc, 'DD/MM/YYYY')+' на сумму '+
+      DoubleToStr(Dogovor.Summa, '\2p[|-]3666, 666, 666, 666, 666.88')+' '+if(Dogovor.cVal = 0, s_SimvRub, DogKlVal.SimvolV)+
+      if (Dogovor.cDogovor = 0, '', ', дог. № '+Dogovor2.NoDoc+' от '+DateToStr(Dogovor2.dDoc, 'DD/MM/YYYY'))
+    ( FieldName = DogovorName )
+//--------------------------------------------------------------------------------
+, if (CalPlan.cCalPlan = 0, '',
+  '№ '+OwnerCP.NoDoc+' от '+DateToStr(OwnerCP.dInput, 'DD/MM/YYYY'))
+    ( FieldName = PKPName )
+//--------------------------------------------------------------------------------
+, if ( CalPlan.cVal = 0,    s_SimvRub,   KlVal.SimVolV)
+    ( FieldName = SimVolB )
+//--------------------------------------------------------------------------------
+, if ( SpDocNal.cVal = 0,   s_SimvRub,   KlValNal.SimVolV)
+    ( FieldName = SimvNal )
+//--------------------------------------------------------------------------------
+, if(IsValid(tnSpDocs), if(SpDocs.ManualTax = 0, 'расчетные ', 'ручные '), '')
++ if(CalPlan.VhodNal = 1, 'входят', 'не входят') + ' в цену товара'
+    ( FieldName = VhodNalCalPlan )
+//--------------------------------------------------------------------------------
+, if ( IsValid(tnAvanScheme), 'определена', 'не определена')
+    ( FieldName = CalPlanAvanScheme )
+//--------------------------------------------------------------------------------
+, if ( IsValid(tnPayScheme), 'определена', 'не определена')
+    ( FieldName = CalPlanPayScheme )
+//--------------------------------------------------------------------------------
+, if ( IsValid(tnAddScheme), 'определена',
+    'не определена')
+    ( FieldName = CalPlanAddScheme )
+//--------------------------------------------------------------------------------
+, if ( CalPlan.TermDefBy = 0, DateToStr(CalPlan.dFrom, 'DD/MM/YYYY')+'...'+DateToStr(CalPlan.dTo, 'DD/MM/YYYY'),
+    'в течение '+string(CalPlan.nDays)+' дней после №'+PredPlan.NoDoc)
+    ( FieldName = period )
+//--------------------------------------------------------------------------------
+, if (SpDocs.PrNorma = 0, HDR_PS.Name,
+      if (SpDocs.PrNorma = 1, KatMarsh.Name,
+          if(SpDocs.PrNorma = toKatDSNor, KatDSNor.Name, '')))
+    ( FieldName = NormaName )
+//--------------------------------------------------------------------------------
+, if (((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3)), KatMC2.Name, KatUsl2.Name)
+    ( FieldName = UpPosName )
+//--------------------------------------------------------------------------------
+, if (((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3)), GroupMC2.Name, GroupUsl2.Name)
+    ( FieldName = UpPosGrName )
+//--------------------------------------------------------------------------------
+, if (SpDocs.cMCUsl = 0, '',
+   if ((SpDocs.prMC = 1) or (SpDocs.prMC = 4) or (SpDocs.prMC = 5),
+      if (IsValid(tnKatMC), '0' + String(SpDocs.prMC) + KatMC.Name,
+                            '0' + String(SpDocs.prMC) + '? MC ' + String(SpDocs.cMCUsl)),
+   if ((SpDocs.prMC = 2) or (SpDocs.prMC = 3),
+       if (IsValid(tnKatUsl), '1' + String(SpDocs.prMC) + KatUsl.Name,
+                              '1' + String(SpDocs.prMC) + '? Услуга ' + String(SpDocs.cMCUsl)),
+       '')))
+    ( FieldName = SpSortName )
+//--------------------------------------------------------------------------------
+, if (SpDocs.cMCUsl = 0, '',
+   if ((SpDocs.prMC = 1) or (SpDocs.prMC = 4) or (SpDocs.prMC = 5),
+      if (IsValid(tnKatMC), '0' + String(SpDocs.prMC) + KatMC.BarKod,
+                            '0' + String(SpDocs.prMC) + '? MC ' + String(SpDocs.cMCUsl)),
+   if ((SpDocs.prMC = 2) or (SpDocs.prMC = 3),
+       if (IsValid(tnKatUsl), '1' + String(SpDocs.prMC) + KatUsl.Kod,
+                              '1' + String(SpDocs.prMC) + '? Услуга ' + String(SpDocs.cMCUsl)),
+       '')))
+    ( FieldName = SpSortBarKod )
+//--------------------------------------------------------------------------------
+, if (SpDocs.cMCUsl = 0, '',
+   if ((SpDocs.prMC = 1) or (SpDocs.prMC = 4) or (SpDocs.prMC = 5), '0' + String(SpDocs.prMC),
+   if ((SpDocs.prMC = 2) or (SpDocs.prMC = 3), '1' + String(SpDocs.prMC), '')))
+    ( FieldName = SpSoprNPP )
+//--------------------------------------------------------------------------------
+, if(IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ': ' + SmetaStroy.Name, '')
+    ( FieldName = SmetaMy )
+//--------------------------------------------------------------------------------
+, if(IsValid(tnSmetaSpec), string(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') '
+                        + SmetaSpec.Name, '')
+    ( FieldName = SmetaSpMy )
+//--------------------------------------------------------------------------------
+, if(IsValid(tnSoprHoz), iTxoBind.ShowName(SoprHoz.BufferP), '')
+    ( FieldName = HozOperViewName )
+//--------------------------------------------------------------------------------
+, if(rltLinks.VidObj = roRoom, rltRooms.NoFact,
+    if(rltLinks.VidObj = roPlace, if(trim(rltPlaces.Name) = '', rltPlaces.Addr, rltPlaces.Name), ''))
+    ( FieldName = rltObjName )
+//--------------------------------------------------------------------------------
+, if ( SearchMarker(hMarker, CalPlan.NRec, lMarker), 'V', '') // признак маркера
+    ( FieldName = sMarker )
+//--------------------------------------------------------------------------------
+ , oExtAtr.mGetAttr(coCalPlan, CalPlan.nRec, 'НИОКР. Наименование этапа')
+    ( FieldName = NIOKR_StepName )
+//--------------------------------------------------------------------------------
+ , oExtAtr.sGetAttr(coCalPlan, CalPlan.nRec, 'НИОКР. Вид отчетности')
+    ( FieldName = NIOKR_VipRep )
+//--------------------------------------------------------------------------------
+, oThemeFuncs.GetThemeNumber(oThemeFuncs.GetStageOnCalPlan(CalPlan.nRec))
+    ( FieldName = PKP_Stage )
+//--------------------------------------------------------------------------------
+
+, OtvPodr.Name
+, OtvPodr2.Name
+, GetKAUField(1)  ( FieldName = vsKau1 )
+, GetKAUField(2)  ( FieldName = vsKau2 )
+, GetKAUField(3)  ( FieldName = vsKau3 )
+, GetKAUField(4)  ( FieldName = vsKau4 )
+, GetKAUField(5)  ( FieldName = vsKau5 )
+, GetKAUField(6)  ( FieldName = vsKau6 )
+, GetKAUField(7)  ( FieldName = vsKau7 )
+, GetKAUField(8)  ( FieldName = vsKau8 )
+, GetKAUField(9)  ( FieldName = vsKau9 )
+, GetKAUField(10) ( FieldName = vsKau10 )
+, *
+
+from
+  calplan
+, spdocs
+, SpDocs   SpDocs439
+, SoprHoz
+, PlanPays PlanPaysAvan
+, PlanPays PlanPaysMain
+, PlanPays PlanPaysAdd
+, PaySchem AvanScheme
+, PaySchem PayScheme
+, PaySchem AddScheme
+, PaySchem PaySchem_s
+, CheckPln
+, Dogovor
+, KatOrg
+, KatOrg GrOtp
+, KatOrg GrPol
+, MarPunkt OtpPunkt
+, MarPunkt PolPunkt
+, MarAvt
+, KatCity GrOtpCity
+, KatCity GrPolCity
+, KatState GrOtpState
+, KatState GrPolState
+, Shipment
+, TipOtg
+, WayMove
+, Shipment ShipmentSP
+, TipOtg TipOtgSp
+, WayMove WayMoveSp
+, KatOrg OrgPol
+, KatBank PolBank
+, KatOrg OrgPlat
+, KatBank PlatBank
+, KlVal
+, klval DogKlVal
+, ResOtgr
+, GroupMC
+, GroupUsl
+, KatMC
+, KatUsl
+, KatOtpEd
+, MoveCell
+, CalPlan calplan_s
+, CalPlan calplan_s1
+, CalPlan CalPlanStatus
+, CheckPln CheckPln_s
+, SpDocs SpDocs_s
+, Dogovor Dogovor2
+, GroupSch
+, SpGrSch
+, GrNal
+, GrPlat
+, KatSopr
+, SpGrSch SpGrSch2
+, HDR_PS
+, KatMarsh
+, KatDSNor
+, KatNazna
+, SpDocs SpDocs2
+, klprice
+, KatOrgDescr
+, KatNotes KatNotes1
+, KatNotes KatNotesSt
+, KatNotes
+, KatMC KatMC2
+, GroupMC GroupMC2
+, KatUsl KatUsl2
+, GroupUsl GroupUsl2
+, CalPlan CalPlan1
+, CalPlan CPAttach
+, CalPlan PredPlan
+, CalPlan OwnerCP
+, CalPlan OwnerSt
+, CalPlan PredAttach
+, KlVal KlValNal
+, KatOrg NalOrg
+, SpDocNal
+, KatNalog
+, KatPodr
+, KatPodr KuratPodr
+, FPCO OtvPodr
+, FPCO OtvPodr2
+, AttrDog Dog_AttrDog
+, GrPrice SpGrPrice
+, KatStroy
+, SpecZatr
+, AddSumTune
+, KatVidD
+, PickSmeta
+, SpDocSmeta
+, SmetaStroy
+, SmetaSpec
+, SpDocs SpDocsSmet
+, rltLinks
+, rltRooms
+, rltPlaces
+, Obj4RentPick
+, MarRel
+, MarPunkt
+, PaySchem
+, PlanPays
+, PickPric
+, Pick
+, TempSpec
+, TempPart
+, SGetDocs
+, DocSchem
+, SpSchem
+, DogMail
+, UrgentM
+, SpecMTR
+, SaldTune
+, SpDopEd    SpDopEd1
+, SpDopEd    SpDopEd2
+, KatDopEd   KatDopEd1
+, KatDopEd   KatDopEd2
+, IerCalPl
+
+Where ((
+     prmDogovor           ==  CalPlan1.cDogovor
+AND  CurGroup             ==  CalPlan1.cCalPlan
+AND  CalPlan1.nRec        ==  CalPlan.nRec
+AND  CalPlan.cPredPlan    ==  PredPlan.nRec
+AND  prmDogovor           ==  CPAttach.cDogovor
+AND  CalPlan.nRec         ==  CPAttach.cCalPlan
+AND  CalPlan.cCalPlan     ==  OwnerCP.nRec
+AND  CalPlan.nRec         ==  PredAttach.cPredPlan
+AND  cAutoNote            ==  KatNotes1.nRec
+AND  word(403)            ==  SpDocs.TiDk
+AND  CalPlan.nRec         ==  SpDocs.cDoc
+AND  word(403)            ==  SoprHoz.TipDoc
+AND  CalPlan.nRec         ==  SoprHoz.cSoprDoc         // Запись в журнале хозопераций
+AND  CalPlan.nRec         ==  PlanPaysMain.cCalPlan    // Основные платежи по пункту плана
+AND  word(0)              ==  PlanPaysMain.VidPlat     // --/--
+AND  CalPlan.nRec         ==  PlanPaysAvan.cCalPlan    // Авансовые платежи по пункту плана
+AND  word(1)              ==  PlanPaysAvan.VidPlat     // --/--
+AND  CalPlan.nRec         ==  PlanPaysAdd.cCalPlan     // Дополнительные платежи по пункту плана
+AND  word(2)              ==  PlanPaysAdd.VidPlat      // --/--
+AND  PlanPaysMain.nRec    ==  PayScheme.cPlanPays
+AND  word(2)              ==  PayScheme.PayType
+AND  PlanPaysAvan.nRec    ==  AvanScheme.cPlanPays
+AND  word(1)              ==  AvanScheme.PayType
+AND  PlanPaysAdd.nRec     ==  AddScheme.cPlanPays
+AND  word(3)              ==  AddScheme.PayType
+AND  CalPlan.nRec         ==  CheckPln.cCalPlan
+AND  prmDogovor           ==  Dogovor.nRec
+AND  Dogovor.cVal         ==  DogKlVal.nRec
+AND  Dogovor.cDogovor     ==  Dogovor2.nRec
+AND  Dogovor.cCurPodr     ==  KuratPodr.nRec
+
+AND  Dogovor.cVidDog      ==  KatVidD.nRec
+AND  CalPlan.cOrg         ==  KatOrg.nRec
+
+AND  CalPlan.cGrOtp       ==  GrOtp.nRec
+AND  CalPlan.cPunktP      ==  OtpPunkt.nRec
+AND  GrOtp.cState         ==  GrOtpState.nRec
+AND  GrOtp.cCity          ==  GrOtpCity.nRec
+
+AND  CalPlan.cGrPol       ==  GrPol.nRec
+AND  CalPlan.cPunktR      ==  PolPunkt.nRec
+AND  GrPol.cState         ==  GrPolState.nRec
+AND  GrPol.cCity          ==  GrPolCity.nRec
+
+AND  CalPlan.cMarAvt      ==  MarAvt.nRec
+AND  CalPlan.cShipment    ==  Shipment.nRec
+AND  CalPlan.cTipOtg      ==  TipOtg.nRec
+AND  CalPlan.cWayMove     ==  WayMove.nRec
+AND  CalPlan.cPol         ==  OrgPol.nRec
+AND  CalPlan.cPolBank     ==  PolBank.nRec
+AND  CalPlan.cPlat        ==  OrgPlat.nRec
+AND  CalPlan.cPlatBank    ==  PlatBank.nRec
+AND  CalPlan.cVal         ==  KlVal.nRec
+AND  CalPlan.cNote        ==  KatNotes.nRec
+
+AND  word(2)              ==  SpGrSch.wList
+AND  CalPlan.nRec         ==  SpGrSch.cBaseDoc
+AND  SpGrSch.cGroupSch    ==  GroupSch.Nrec
+
+AND  CalPlan.cNazna       ==  KatNazna.NRec
+
+AND  SpDocs.cGrNal        ==  GrNal.nRec
+AND  SpDocs.cResOtgr      ==  ResOtgr.nRec
+AND  SpDocs.cGrMCUsl      ==  GroupMC.nRec
+AND  SpDocs.cGrMCUsl      ==  GroupUsl.nRec
+AND  SpDocs.cMCUSL        ==  KatMC.nRec
+AND  SpDocs.cMCUSL        ==  KatUsl.nRec
+AND  SpDocs.cOtpEd        ==  KatOtpEd.nRec
+AND  SpDocs.cShipment     ==  ShipmentSP.nRec
+AND  SpDocs.cTipOtg       ==  TipOtgSp.nRec
+AND  SpDocs.cWayMove      ==  WayMoveSp.nRec
+AND  SpDocs.cMoveCell     ==  MoveCell.nRec
+AND  SpDocs.cPriceLs      ==  KlPrice.nRec
+AND  KlPrice.cGrPrice     ==  SpGrPrice.NRec
+
+AND  word(439)            ==  SpDocs439.TiDk
+AND  SpDocs.nRec          ==  SpDocs439.cDoc
+AND  SpDocs.cNorma        ==  HDR_PS.nRec
+AND  SpDocs.cNorma        ==  KatMarsh.nRec
+AND  SpDocs.cNorma        ==  KatDSNor.nRec
+
+AND  SpDocs.cSpMC         ==  SpDocs2.nRec
+AND  SpDocs2.cMCUsl       ==  KatMC2.NRec
+AND  SpDocs2.cGrMCUsl     ==  GroupMC2.NRec
+AND  SpDocs2.cMCUsl       ==  KatUsl2.NRec
+AND  SpDocs2.cGrMCUsl     ==  GroupUsl2.NRec
+
+AND  PayScheme.PayForm    ==  GrPlat.nRec
+
+AND  CalPlan.cOtvPodr     ==  OtvPodr.nRec
+AND  CalPlan.cPlatPodr    ==  OtvPodr2.nRec
+AND  Dogovor.NRec         ==  Dog_AttrDog.cDogovor
+AND  SpDocs.Nrec          ==  SpDocNal.cSpDoc
+AND  SpDocs.TiDk          ==  SpDocNal.TipDoc
+AND  SpDocNal.cNalog      ==  KatNalog.Nrec
+AND  SpDocNal.cOrg        ==  NalOrg.Nrec
+AND  SpDocNal.cVal        ==  KlValNal.Nrec
+AND  SpDocs.cUks          ==  KatStroy.nRec
+AND  SpDocs.nRec          ==  SpecZatr.cSpec
+AND  coSpDocs             ==  SpecZatr.coTable
+AND  SpecZatr.cAddSumTune ==  AddSumTune.nRec
+AND  coSpDocs             ==  SpDocSmeta.coTable
+AND  SpDocs.nRec          ==  SpDocSmeta.cSpec
+AND  SpDocSmeta.cSmeta    ==  SmetaStroy.NRec
+AND  SpDocSmeta.cPosition ==  SmetaSpec.NRec
+AND  SpDocs.nRec          ==  rltLinks.cSpDocs
+AND  rltLinks.cObj        ==  rltRooms.nRec
+AND  rltLinks.cObj        ==  rltPlaces.nRec
+and  coSpDocs             ==  SpecMTR.coTable
+and  SpDocs.nRec          ==  SpecMTR.cSpec
+and  SpecMTR.cSaldTune    ==  SaldTune.nRec
+
+and  coSpDocs             ==  SpDopEd1.wTable
+and  SpDocs.nRec          ==  SpDopEd1.cRec
+and  2                    ==  SpDopEd1.wTipKol
+and  1                    ==  SpDopEd1.Npp
+and  SpDopEd1.cDopEd      ==  KatDopEd1.nRec
+
+and  coSpDocs             ==  SpDopEd2.wTable
+and  SpDocs.nRec          ==  SpDopEd2.cRec
+and  2                    ==  SpDopEd2.wTipKol
+and  2                    ==  SpDopEd2.Npp
+and  SpDopEd2.cDopEd      ==  KatDopEd2.nRec
+))
+
+//********************************************************************************
+
+Bounds Ord_NoDoc  ordered by CalPlan1.cDogovor, CalPlan1.cCalPlan, CalPlan1.NoDoc
+Bounds Ord_Status ordered by CalPlan1.cDogovor, CalPlan1.cCalPlan, CalPlan1.Status, CalPlan1.NoDoc
+Bounds Ord_DesGr  ordered by CalPlan1.cDogovor, CalPlan1.cCalPlan, CalPlan1.DesGr , CalPlan1.NoDoc
+Bounds Ord_Descr  ordered by CalPlan1.cDogovor, CalPlan1.cCalPlan, CalPlan1.Descr , CalPlan1.NoDoc
+Bounds Ord_Dates  ordered by CalPlan1.cDogovor, CalPlan1.cCalPlan, CalPlan1.dTo
+
+Condition ByDirect FilterOnDirect
+
+;
+
+//******************************************************************************
+// wDirectPlan = 1 - фильтр по товарным ПКП
+// wDirectPlan = 2 - фильтр по финансовым ПКП
+//******************************************************************************
+Function FilterOnDirect: boolean;
+{
+  Result := ( wDirectPlan = 0 )
+             OR
+            ( wDirectPlan = 1 ) AND ( CalPlan1.DirectMC > 0 )
+             OR
+            ( wDirectPlan = 2 ) AND ( CalPlan1.DirectPlat > 0 );
+}
+
+//********************************************************************************
+
+Parameters
+  prmDogovor, prmCalPlan;
+
+//********************************************************************************
+
+form frmCP('calplan.out', 'Dogovor_CalPlan') with novisual;
+Form frmErr('Errr.out','Errr2') with novisual;
+
+//********************************************************************************
+
+#include dolg_dg.var
+
+//********************************************************************************
+
+#include DogNav.tb
+
+//********************************************************************************
+
+Function MakeSpecOnlyFromOwner: boolean;Forward;
+
+//********************************************************************************
+
+Procedure DogToObj;
+{
+  if UKS_Used
+    if UpdateTable
+      oUKSfuns.JoinCalPlan(CalPlan.nRec, 403, 128);
+}
+
+//********************************************************************************
+
+Procedure UpdateToolBarView;
+{
+  SetCommandEnabled(cmGoToNextLevel, IsValid(#CPAttach)       );
+  SetCommandEnabled(cmGoToPrevLevel, (CalPlan1.cCalPlan <> 0) );
+}
+
+//********************************************************************************
+// Проверка возможности редактирования
+//********************************************************************************
+#include GetCurTunes.vpp
+#include EditPos.vpp
+//********************************************************************************
+
+Function GetDocTreeType: byte;
+{
+  if RecordExists CPAttach <> tsOk
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(MainTree), ntfOpen, ntfClose);
+}
+
+//********************************************************************************
+#define SHOW_NOTES_ICONS
+#include DogIcons.vpp
+
+//********************************************************************************
+
+var oChkLink: CheckLinksObj;
+
+//********************************************************************************
+
+var piKatDopEd: iKatDEI; // Интерфейс с public-функциями для ДЕИ
+var UseDEI: boolean;       // признак использования ДЕИ
+var AutoDEI: boolean;       // автоформирование ДЕИ
+
+var oExtCls: iExtClass;
+
+var iSHoz: ObjSHmanager;     // интерфейс для работы с SoprHoz
+
+//********************************************************************************
+
+Function OnSetDefaultPlanPaysAvan: boolean;
+{
+  OnSetDefaultPlanPaysAvan := TRUE;
+
+  if CurPayType = 1
+    {
+      OnSetDefaultPlanPaysAvan := FALSE;
+      Exit;
+    }
+
+  ClearBuffer(#PlanPaysAvan);
+  PlanPaysAvan.VidPlat   := 1;
+  PlanPaysAvan.cCalPlan  := CalPlan.nRec;
+  PlanPaysAvan.cVal      := CalPlan.cVal;
+  PlanPaysAvan.Summa     := CalPlan.Summa;
+  PlanPaysAvan.DefBy     := 1;
+  PlanPaysAvan.TermDefBy := 0;
+
+  if CalPlan.cCalPlan = 0
+    {
+      PlanPaysAvan.dFrom := Dogovor.dBeg;
+      PlanPaysAvan.dTo   := Dogovor.dEnd;
+    }
+  else
+    {
+      PlanPaysAvan.dFrom := OwnerCP.dFrom;
+      PlanPaysAvan.dTo   := OwnerCP.dTo;
+    }
+}
+
+//********************************************************************************
+
+Function OnSetDefaultPlanPaysAdd: boolean;
+{
+  OnSetDefaultPlanPaysAdd := TRUE;
+  if CurPayType = 0
+    {
+      OnSetDefaultPlanPaysAdd := FALSE;
+      Exit;
+    }
+
+  ClearBuffer(#PlanPaysAdd);
+  PlanPaysAdd.VidPlat   := 2;
+  PlanPaysAdd.cCalPlan  := CalPlan.nRec;
+  PlanPaysAdd.cVal      := CalPlan.cVal;
+  PlanPaysAdd.Summa     := CalPlan.Summa;
+  PlanPaysAdd.DefBy     := 1;
+  PlanPaysAdd.TermDefBy := 1;
+  if CalPlan.cCalPlan = 0
+    {
+      PlanPaysAdd.dFrom := Dogovor.dEnd;
+      PlanPaysAdd.dTo   := Dogovor.dEnd;
+    }
+  else
+    {
+      PlanPaysAdd.dFrom := OwnerCP.dTo;
+      PlanPaysAdd.dTo   := OwnerCP.dTo;
+    }
+}
+
+//********************************************************************************
+
+#include FpRSHOb.Vpp       // связь с книгой финансовых операций (Sanny)
+
+//********************************************************************************
+//формирует буфер информации о документе
+Function GetBufferDoc(var bDocInfo: tInfoDocument): boolean;
+{
+  GetBufferDoc := TRUE;
+
+  var cVal   : comp;    cVal   := CalPlan.cVal;
+  var Summa  : double;  Summa  := CalPlan.Summa;
+  var SumVal: double;  SumVal := if(cVal<>0, Summa, 0);
+
+  bDocInfo.Descr    := CalPlan.Descr;   // "дескриптор к номеру документа"
+  bDocInfo.DesGr    := CalPlan.DesGr;   // "код группы пользователей"
+  bDocInfo.NoDoc    := CalPlan.NoDoc;   // "Номер документа",
+  bDocInfo.TiDkGal  := cgDoc_0403;      // "Тип документа системный",
+  bDocInfo.TiDk     := cgDoc_0403;      // "Тип первичного документа",
+  bDocInfo.cSoprDoc := CalPlan.Nrec;    // "Ссылка на первичный документ",
+  bDocInfo.cSoprHoz := SoprHoz.Nrec;    // "Ссылка на SoprHoz",
+  bDocInfo.Summa    := Summa;           // "Сумма операции в НДЕ",
+  bDocInfo.SumVal   := SumVal;          // "Сумма операции в валюте",
+  bDocInfo.cVal     := cVal;            // "Код валюты операции",
+  bDocInfo.Kol      := 0;               // "Количество по операции",
+  bDocInfo.cEd      := 0;               // "Ссылка на единицу измерения",
+  bDocInfo.wDocSp   := 0;               // "Тип спецификации",
+  bDocInfo.cDocSp   := 0;               // "Ссылка на спецификацию ДО",
+  bDocInfo.dDoc     := 0;
+  bDocInfo.dBeg     := 0;
+  bDocInfo.dEnd     := 0;
+}
+
+//********************************************************************************
+//формирует буфер информации о спецификации документа
+Function  GetBufferSpDoc(var bDocInfo: tInfoDocument): boolean;
+{ GetBufferSpDoc := TRUE;
+
+  var cVal  : comp;    cVal   := CalPlan.cVal;
+  var Summa: double;  Summa  := CalPlan.Summa;
+  var SumVal: double;  SumVal := if(cVal<>0, Summa, 0);
+
+  bDocInfo.Descr    := CalPlan.Descr;   // "дескриптор к номеру документа"
+  bDocInfo.DesGr    := CalPlan.DesGr;   // "код группы пользователей"
+  bDocInfo.NoDoc    := CalPlan.NoDoc;   // "Номер документа",
+  bDocInfo.TiDkGal  := cgDoc_0403;      // "Тип документа системный",
+  bDocInfo.TiDk     := cgDoc_0403;      // "Тип первичного документа",
+  bDocInfo.cSoprDoc := CalPlan.Nrec;    // "Ссылка на первичный документ",
+  bDocInfo.cSoprHoz := SoprHoz.Nrec;    // "Ссылка на SoprHoz",
+  bDocInfo.Summa    := Summa;           // "Сумма операции в НДЕ",
+  bDocInfo.SumVal   := SumVal;          // "Сумма операции в валюте",
+  bDocInfo.cVal     := cVal;            // "Код валюты операции",
+  bDocInfo.Kol      := 0;               // "Количество по операции",
+  bDocInfo.cEd      := 0;               // "Ссылка на единицу измерения",
+  bDocInfo.wDocSp   := 0;               // "Тип спецификации",
+  bDocInfo.cDocSp   := 0;               // "Ссылка на спецификацию ДО",
+  bDocInfo.dDoc     := 0;
+  bDocInfo.dBeg     := 0;
+  bDocInfo.dEnd     := 0;
+  bDocInfo.wDocSp   := SpDocs.TiDk;       // "Тип спецификации",
+  bDocInfo.cDocSp   := SpDocS.Nrec;       // "Ссылка на спецификацию ДО",
+}
+
+//********************************************************************************
+//аналитика документа
+Function GetKAU(wMode: word; wKau: word): comp;
+{
+  GetKau := 0;
+
+  case wKau of
+  //----------
+    cgKau_KatOrg:
+      GetKau := Dogovor.cOrg;
+  //----------
+    cgKau_Dogovor:
+      GetKau := Dogovor.Nrec;
+  //----------
+  end;
+}
+
+#include ShowKau.vpp
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string;
+{
+  GetKAUField := #ShowKau(if(pNum = 1, SaldTune.wObj, SaldTune.wKau[pNum - 1]), if(pNum = 1, SpecMTR.cObj, SpecMTR.cKau[pNum - 1]));
+}
+
+//******************************************************************************
+
+function GetClassName : boolean;
+{
+  GetClassName := FALSE;
+
+  if ( boGetTune('Dog.DocNameKlas') )
+    {
+      DocName := oExtCls.GetSegName(ClassCode, CalPlan.nRec);
+
+      if ( DocName <> '' )
+        GetClassName := TRUE;
+    }
+}
+
+//******************************************************************************
+
+var wDO_Date, wDO_Date2, wNaklAkt, WhereTransf: word;
+var DO_Date: date;
+
+#doc
+Окно параметров формирования сопроводительного документа по ПКП
+#end
+Window WinScrbe3 'Параметры формирования' doAccept, EscClose;
+  Show at (,, 41, 11)
+
+Panel pbe3
+
+Screen scrbe3
+Fields
+//******************************************************************************
+  wDO_Date ('Задайте алгоритм выбора даты'): NoProtect;
+//******************************************************************************
+  DO_Date ('Задайте дату'): NoProtect;
+//******************************************************************************
+  wDO_Date2 ('Задайте откуда брать дату'):
+    [LIST 0 'дата формирования',
+            'начало периода',
+            'конец периода'], Protect;
+//******************************************************************************
+  wNaklAkt ('Что переносить из договоров/планов', , sci1Esc): NoProtect;
+//******************************************************************************
+  WhereTransf('Куда переносить услуги в сбыте', , sci13Esc):
+    [LIST 'акт', 'накладную'], Protect;
+//******************************************************************************
+Buttons
+  cmYes   , Default, , 'Продолжить формирование', , sci1Esc;
+  cmCancel,        , , 'Отмена'                 , , sci1Esc;
+<<
+
+ `Дата формируемых сопр.документов:`
+  (.) задать явно`          .@@@@@@@@@@
+  (.) из ПКП     ` .@@@@@@@@@@@@@@@@@@@
+
+  [.] Переносить МЦ     `
+  [.] Переносить Услуги ` в .@@@@@@@@@@
+
+  <. Продолжить .>  <.   Отмена   .>
+
+>>
+end; //screen
+
+HandleEvent
+
+cmCheckField:
+  case CurField of
+  //**************
+    #wDO_Date:
+      {
+        SetFieldVisible(#wDO_Date , wDO_Date = 0);
+        SetFieldVisible(#wDO_Date2, wDO_Date = 1);
+      }
+  //**************
+    #wNaklAkt:
+      {
+        SetFieldSelectable(#WhereTransf, (wNaklAkt and 2) <> 0);
+
+        SetCommandEnabled(cmYes, wNaklAkt <> 0);
+      }
+  //**************
+  end;
+
+end;
+
+end; //Panel
+
+HandleEvent
+
+cmInit:
+  {
+    var datechanged: boolean;
+
+    if ( Not ReadMyDsk(wDO_Date, 'GetDocs3_wDO_Date', Datechanged) )
+      wDO_Date := 0;
+
+    if ( Not ReadMyDsk(wDO_Date2, 'GetDocs3_wDO_Date2', Datechanged) )
+      wDO_Date2 := 0;
+
+    if ( Not ReadMyDsk(DO_Date, 'GetDocs3_DO_Date', Datechanged) or ( DO_Date = ZeroDate ) )
+      DO_Date := Cur_Date;
+
+    if ( Not ReadMyDsk(wNaklAkt, 'Dog2Nakl_wNaklAkt', datechanged) )
+      wNaklAkt := 1 + 2;
+
+    if ( ( Not ReadMyDsk(WhereTransf, 'Dog2Nakl_WhereTransf', datechanged) ) OR datechanged )
+      WhereTransf := wGetTune('Doc.UslDoSell'); // 0-закрываются актом; 1-переносятся в накладную
+
+    case wDO_Date of
+      0: SetFieldVisible(#wDO_Date2, FALSE);
+      1: SetFieldVisible(#DO_Date  , FALSE);
+    end;
+
+    if ( (wNaklAkt and 2) = 0 )
+      SetFieldSelectable(#WhereTransf, FALSE);
+
+    SetCommandEnabled(cmYes, wNaklAkt <> 0);
+  }
+
+cmYes:
+  {
+    PackFields;
+    PutCommand(cmDefault);
+
+    SaveMyDsk(wDO_Date   , 'GetDocs3_wDO_Date');
+    SaveMyDsk(wDO_Date2  , 'GetDocs3_wDO_Date2');
+    SaveMyDsk(DO_Date    , 'GetDocs3_DO_Date');
+    SaveMyDsk(wNaklAkt   , 'Dog2Nakl_wNaklAkt');
+    SaveMyDsk(WhereTransf, 'Dog2Nakl_WhereTransf');
+  }
+
+end;
+end; // Window
+
+//******************************************************************************
+
+var iIerCP: IerCP;
+#include SpDocs.var
+
+#include ROUNDDOG.VPP  // функции округления
+#include DOPRICE.FUN
+#include wsortnom.vpp  // Окно установки полей для пересортировки спецификации
+
+//********************************************************************************
+
+#doc
+Окно просмотра водимости ПКП в группы документов
+#end
+Window wGroupSch 'Входимость ПКП в группы документов' EscClose;
+  Show at (, , 40, 15);
+Panel pSpGrSch;
+  Table SpGrSch;
+Browse br10 (, hcKouDocFGroup, sci1378Esc);
+Fields
+  GroupSch.Kod  'Код' ('Код группы документов'): [8], protect;
+  GroupSch.Name 'Документ входит в группы: '('Наименование группы документов'): [32];
+End;
+
+//********************************************************************************
+
+HandleEvent
+
+cmDelOnProtect:
+  Abort;
+
+cmSetDefault:
+  if NOT EditPlanPosEnabled(false)
+    Abort
+  else
+    {
+      ClearBuffer(#SpGrSch);
+      PutCommand(cmPick);
+    }
+
+cmPick:
+  {
+    if NOT EditPlanPosEnabled(true)
+      {
+        Abort;
+        Exit;
+      }
+
+    case CurField of
+    //--------------
+      #GroupSch.Name
+    , #GroupSch.Kod:
+        {
+          var OldGroupSch: comp;  OldGroupSch := SpGrSch.cGroupSch;
+
+          PushPos(#SpGrSch);
+          if ( RunInterface('GetGroupSch', 3, 3, 0, FALSE, SpGrSch.cGroupSch, FALSE) <> cmDefault )
+            PopPos(#SpGrSch);
+          else
+            {
+              if (OldGroupSch = SpGrSch.cGroupSch)
+                {
+                  DropPos(#SpGrSch);
+                  Exit;
+                }
+
+              if ((SpGrSch.cGroupSch <> 0) AND (GroupSch.cOrg <> 0) AND (CalPlan.cOrg <> GroupSch.cOrg))
+                {
+                  Message('Выбранная группа документов относится к другому контрагенту!');
+                  PopPos(#SpGrSch);
+                }
+              else
+                {
+                  if (GetFirst FastFirstRow SpGrSch2
+                         where (( SpGrSch.cGroupSch == SpGrSch2.cGroupSch AND
+                                  word(2)           == SpGrSch2.wList     AND
+                                  CalPlan.nRec      == SpGrSch2.cBaseDoc )) <> tsOk)
+                    DropPos(#SpGrSch);
+                  else
+                    {
+                      Message('Данный ПКП уже входит в выбранную группу!');
+                      PopPos(#SpGrSch);
+                    }
+                }
+
+              RescanPanel(#SpGrSch);
+            }
+        }
+    //--------------
+    end;
+  }
+
+cmCheckRecord:
+  if (SpGrSch.cGroupSch = 0)
+    {
+      Message('Укажите группу документов!');
+      PutCommand(cmPick);
+      Abort;
+    }
+
+cmDeleteRecord:
+  if NOT EditPlanPosEnabled(true)
+    Abort
+  else
+    if (message('Удалить входимость документа в группу?', YesNo) <> yes)
+      Abort;
+    else
+      delete current SpGrSch;
+
+cmUpdateRecord:
+  Update current SpGrSch;
+
+cmInsertRecord:
+  insert current SpGrSch;
+
+end; // HandleEvent
+end; // Panel pSpGrSch
+
+end // Window wGroupSch
+
+//********************************************************************************
+
+#doc
+Окно параметров печати календарного плана
+#end
+Window winPrintParams 'Параметры печати календарного плана'
+  (, hci_dog_Pech_PKP, ) escclose, doaccept, gray;
+  Show at (, , 40, 9);
+
+Panel panPrintParams;
+
+Screen scrPrintParams;
+
+Fields
+  rbPrintAll ('Выберите требуемый режим печати плана', , sci1EnEsc): noprotect;
+  rbPrintWithSub ('Печать с/без подчиненных', , sci1EnEsc): noprotect;
+Buttons
+  cmOk, Default, , 'Продолжить формирование', , sci1Esc;
+  cmCancel,    , , 'Отмена'                 , , sci1Esc;
+<<
+
+  (.) печать текущего пункта плана `
+  (.) печать планов текущего уровня`
+
+  [.] Печать с подчиненными        `
+
+  <. Продолжить .>  <.   Отмена   .>
+>>
+end; // Screen
+end; // Panel
+
+ HandleEvent
+  cmOk:
+    PutCommand(cmDefault)
+ end;
+
+end; // Window
+
+//********************************************************************************
+
+Procedure PutBufferCalPlanSoprHoz;
+var tmpSumma: double;
+{
+  SoprHoz.cSoprDoc := CalPlan.nRec;
+
+  if ( Dogovor.cDogovor = 0 )
+    {
+      SoprHoz.cDogovor := Dogovor.nRec;
+      SoprHoz.cAppDogovor := 0;
+    }
+  else
+    {
+      SoprHoz.cDogovor := Dogovor.cDogovor;
+      SoprHoz.cAppDogovor := Dogovor.nRec;
+    }
+
+  SoprHoz.DatOb   := CalPlan.dInput;
+  SoprHoz.TipDoc  := 403;
+  SoprHoz.TiDkGal := 403;
+  SoprHoz.NoDoc   := CalPlan.NoDoc;
+  SoprHoz.Descr   := CalPlan.Descr;
+  SoprHoz.DesGr   := CalPlan.DesGr;
+
+  if ( CalPlan.DirectPlat = 0 )
+    tmpSumma := CalPlan.SummaSpec;
+  else
+    if ( CalPlan.DirectMC = 0 )
+      tmpSumma := CalPlan.Summa;
+
+  if ( CalPlan.cVal = 0 )
+    SoprHoz.Summa := tmpSumma
+  else
+    SoprHoz.Summa := oValFunc.GetNatCurrency(CalPlan.cVal, tmpSumma,
+                                     if (CalPlan.dValCurse = Date(0, 0, 0), CalPlan.dInput, CalPlan.dValCurse));
+
+  SoprHoz.KodValut := CalPlan.cVal;
+  if ( CalPlan.cVal <> 0 )
+    SoprHoz.SumValut := tmpSumma;
+}
+
+//********************************************************************************
+
+Function InsertCalPlanSoprHoz: boolean;
+{
+  if (CalPlan.DirectMC = 100)
+    {
+      InsertCalPlanSoprHoz := TRUE;
+      Exit;
+    }
+
+  InsertCalPlanSoprHoz := FALSE;
+
+  ClearBuffer(#SoprHoz);
+
+  PutBufferCalPlanSoprHoz;
+
+  InsertCalPlanSoprHoz := iSHoz.InsByHan(SoprHoz.Bufferp) = tsOk;
+}
+
+//********************************************************************************
+
+Function UpdateCalPlanSoprHoz: boolean;
+{
+  if (CalPlan.DirectMC = 100)
+    {
+      UpdateCalPlanSoprHoz := TRUE;
+      Exit;
+    }
+
+  UpdateCalPlanSoprHoz := FALSE;
+
+  RereadRecord(#SoprHoz);
+
+  PutBufferCalPlanSoprHoz;
+
+  if (IsValid(#SoprHoz))
+    UpdateCalPlanSoprHoz := iSHoz.UpdByHan(SoprHoz.Bufferp) = tsOk
+  else
+    UpdateCalPlanSoprHoz := iSHoz.InsByHan(SoprHoz.Bufferp) = tsOk;
+
+  RereadRecord(#SoprHoz);
+}
+
+//********************************************************************************
+
+Procedure MySetFieldSpDocs;
+{
+  SetFieldVisible(#UpPosGrName, (SpDocs.PrMC = 2) or (SpDocs.PrMC = 3));
+  SetFieldVisible(#UpPosName,   (SpDocs.PrMC = 2) or (SpDocs.PrMC = 3));
+
+  SetFieldVisible(#NormaName, (SpDocs.PrMC > 2));
+
+  if ( not Lic_ItemExists('SmetaDocs') )
+    {
+      ClearFieldState(#SmetaMy,   sfVisible);
+      ClearFieldState(#SmetaSpMy, sfVisible);
+      DisableCommand(cmMulSelDO);
+    }
+}
+
+//********************************************************************************
+
+#include PKPmake.vpp
+#include p_calpln.vpp
+#include cppaste.vpp
+
+//********************************************************************************
+
+var oldNalog: double;
+
+//********************************************************************************
+
+#doc
+Окно просмотра налогов по позиции
+#end
+Window  wSpDocsNal 'Налоги по позиции' escClose;
+  Show at (4, 19, 75, 27);
+Panel p1;
+  Show at (, , , );
+  Table SpDocNal;
+Browse scwSpDocsNal (, hcKouDocFSpNal, sci1Esc);
+Fields
+  KatNalog.Name   'Налог': [10], Skip;
+  SpDocNal.Nalog  '%': [5, 2];
+  NalOrg.Name     'Контрагент'('Контрагент- получатель суммы данного налога'): [15], protect;
+  SpDocNal.SumVal 'Сумма налога'('При необходимости уточните сумму налогов для позиции'): [13, 2];
+  SimVolB         'Вал.'('Валюта документа'): [4], Skip;
+  SpDocNal.SumNal 'Сумма налога'('Сумма налога в валюте налога'): [13, 2], protect;
+  SimvNal         'Вал.'('Валюта налога'): [4], protect;
+end;// Browse
+
+procedure RecalcNalog;
+{
+  var SumNds : double;
+
+  PushPos(#SpDocNal);
+  SumNds := 0;
+
+  _loop SpDocNal
+
+    {
+      if (Dogovor.cOrg = SpDocNal.cOrg)
+        SumNds := SumNds + SpDocNal.SumVal;
+    }
+  PopPos(#SpDocNal);
+
+  set SpDocs.SumNDS := SumNds;
+}
+
+HandleEvent
+
+cmPositionChanged:
+ {
+   oldNalog := SpDocNal.Nalog;
+
+   ProtectRecord(#SpDocNal, NOT EditPlanPosEnabled(false))
+ }
+
+cmPick:
+  if (CurField = #NalOrg.Name)
+    if (CalPlan.VhodNal = 1) //налоги входят
+      Message('Налог входит в цену товара.'#13'Изменение получателя суммы налога запрещено!', Information)
+    else
+      RunInterface(GetKatOr, SpDocNal.cOrg, comp(0), FALSE, comp(0), comp(0));
+
+cmCheckField:
+  {
+    case CurField of
+    //--------------
+      #SpDocNal.SumVal:
+        {
+          var dValNalog: Date;
+          dValNalog := if (CalPlan.dValCurse = Date(0, 0, 0), CalPlan.dInput, CalPlan.dValCurse);
+
+          set SpDocs.ManualTax := 1;
+          SpDocNal.SumNal := oValFunc.GetAnyCurrency(CalPlan.cVal, SpDocNal.SumVal, dValNalog, SpDocNal.cVal);
+          SpDocNal.Summa  := oValFunc.GetNatCurrency (CalPlan.cVal,SpDocNal.SumVal, dValNalog);
+        }
+    //--------------
+      #SpDocNal.Nalog:
+        {
+          set SpDocs.ManualTax := 1;
+          SpDocNal.Summa  := SpDocNal.Summa  / oldNalog *  SpDocNal.Nalog;
+          SpDocNal.SumVal := SpDocNal.SumVal / oldNalog *  SpDocNal.Nalog;
+          SpDocNal.SumNal := SpDocNal.SumNal / oldNalog *  SpDocNal.Nalog;
+          oldNalog := SpDocNal.Nalog;
+        }
+    //--------------
+    end; //case
+
+    if (update current SpDocNal = tsOk)
+      RecalcNalog;
+  }
+
+end; // HandleEvent
+end; // Panel p1
+
+
+HandleEvent
+
+cmDone:
+  if (isModified)
+    if (not UpdateTable)
+      Abort;
+
+end; //handle
+end;// Window
+
+//********************************************************************************
+
+var RltInfo: TRltInfo;
+
+#doc
+Окно просмотра информации по объекту недвижимости
+#end
+Window winSpCalPln_Rlt 'Информация по объекту недвижимости' escclose;
+  Show at (, 10, 109, );
+
+Screen scRltObjInfo 'Объект недвижимости' (, , sci1Esc);
+  Table SpDocs;
+
+Buttons
+  cmValFld11, , , 'Информация по объекту недвижимости', , sci1Esc;
+
+Fields
+  RltInfo.InfoLbl01: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl02: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl09: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoTxt01: skip;
+  RltInfo.InfoTxt02: skip;
+  RltInfo.InfoTxt09: skip;
+
+  RltInfo.InfoLbl03: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl04: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl10: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoTxt03: skip;
+  RltInfo.InfoTxt04: skip;
+  RltInfo.InfoTxt10: skip;
+
+  RltInfo.InfoLbl05: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl06: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl11: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoTxt05: skip;
+  RltInfo.InfoTxt06: skip;
+  RltInfo.InfoTxt11: skip;
+
+  RltInfo.InfoLbl07: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl08: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoLbl12: skip, { Font = { Bold = TRUE } };
+  RltInfo.InfoTxt07: skip;
+  RltInfo.InfoTxt08: skip;
+  RltInfo.InfoTxt12: skip;
+<<
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ <. Информация по объекту недвижимости .>
+>>
+end;// Screen
+
+HandleEvent
+
+  cmInit:
+    if (Dogovor.VidDog = 12)
+      {
+        var oRltInfo: RltFuncs;
+        oRltInfo.GetObjInfoOnSpDocs(SpDocs.nRec, CalPlan.dFrom, RltInfo);
+        RedrawPanel(#SpDocs);
+      }
+
+  cmValFld11:
+    {
+      var oRltInfo: RltFuncs;
+      var wVidObj  : word;
+      var pObj     : comp;
+
+      if ( oRltInfo.GetObjOnSpDocs(SpDocs.nRec, wVidObj, pObj, TRUE) )
+        {
+          oRltInfo.GetObjInfoOnSpDocs(SpDocs.nRec, Dogovor.dBeg, RltInfo);
+          RedrawPanel(#SpDocs);
+        }
+    }
+
+end;
+end;// Window
+
+//********************************************************************************
+
+#doc
+Окно дополнительной информации по спецификации
+#end
+Window winSpCalPln_Add 'Дополнительная информация по спецификации' escclose;
+  Show at (1, 1, 105, 28);
+
+Panel panSpCalPln_Add;
+  Table SpDocs;
+
+Screen scrSpCalPln_Add (, hcdog_rasch_spesifika, );
+  Show at (, , , 12);
+
+Fields
+  SpDocs.Code     ('Номер позиции спецификации', , sci178Esc);
+  SpDocs.PrMc     ('Признак МЦ или услуги', , sci1378Esc):
+                     [LIST 1 'МЦ', 'Услуга' , 'Услуга по переработке', 'Давальческое сырье', 'Готовая продукция'], protect;
+  SpCalPlnGrName  ('Группа МЦ/услуг', , sci1378Esc): protect;
+  SpCalPlnObjName ('Наименование МЦ/услуги', , sci1378Esc): protect;
+  UpPosGrName     ('Товарная позиция, к которой относится услуга', , sci1378Esc): protect;
+  UpPosName       ('Товарная позиция, к которой относится услуга', , sci1378Esc): protect;
+  SpDocs.Kol      ('Количество МЦ/услуг', , sci178Esc): [10.3], noprotect, CalcButton;
+  KatOtpEd.Abbr   ('Наименование отпускной единицы измерения', , sci1378Esc): protect;
+  SpDocs.Ostatok / fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd)
+                  ('Остаток МЦ/услуг', , sci178Esc): [10.3], skip;
+  SpDocs.Price    ('Цена за единицу МЦ/услуги', , sci178Esc): [15.2, '\2p[|-]3666`666`666`666.88'], CalcButton; // [15.2];
+  ValutName       : skip;
+  SpDocs.Summa    ('Сумма по позиции', , sci178Esc): [18.2, '\2p[|-]36`666`666`666`666.88']; // [18.2];
+  ValutName       : skip;
+  SpDocs.SumNDS   ('Налоги по позиции', , sci178Esc): [18.2, '\2p[|-]36`666`666`666`666.88'], skip; // [18.2];
+  ValutName       : skip;
+  VhodNalCalPlan  : skip;
+  GrNal.Name      ('Группа налогов', , sci1378Esc): protect;
+  KlPrice.Name    : skip;
+
+Buttons
+  cmValue5, , , 'Вызов окна с транспортной информацией ', , sci1Esc;
+  cmValue11, , , 'Налоги по позиции ', , sci1Esc;
+  cmValFld20, , , 'Информация по объекту недвижимости', , sci1Esc;
+<<
+`Номер позиции`      .@@@@@@@@@@@@
+`Признак МЦ/услуги`  .@@@@@@@@@@@@@@@@@@@@@@@`Группа`.@@@@@@@@@@@@@@@@@@@@@@@
+`МЦ/услуга`          .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Относится к позиции`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@
+`Количество`         .@@@@@@@@@@@@`Отп.ед`.@@@@@@@@@@@@@@`Остаток`.@@@@@@@@@@
+`Цена`               .@@@@@@@@@@@@.@@@@@  `Стоимость`.@@@@@@@@@@@@.@@@@@
+`Налоги`             .@@@@@@@@@@@@.@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Группа налогов`     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Цена по прайс-листу .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ <. ТТИ .>  <. Налоги по позиции .>  <. Информация по объекту недвижимости .>
+>>
+end;  // Screen
+
+TabbedSheet Bottom tsKauEdit
+  Show at (,13,,);
+
+Screen scrSpCalPln_Add2 'Отгрузка' (, hcdog_rasch_spesifika, );
+  Table SpDocs;
+
+Fields
+  ResOtgr.Name    ('Наименование ресурса отгрузки', , sci1378Esc): protect;
+  MoveCell.Name   ('Единица подвижного состава', , sci1378Esc): protect;
+
+  ShipmentSP.Name ('Наименование способа отгрузки', , sci1378Esc): protect, QuickChoice;
+  TipOtgSp.Name   ('Базис поставки', , sci1378Esc): protect, QuickChoice;
+  WayMoveSp.Name  ('Способ транспортировки', , sci1378Esc): protect, QuickChoice;
+  SpDocs.ShipValType ('Способ оценки мин./макс. объемов отгрузки', , sci178Esc): noprotect;
+  SpDocs.MinValue ('', , sci178Esc): [10.3];
+  SpDocs.MaxValue ('', , sci178Esc): [10.3];
+  KatOtpEd.Abbr   : skip;
+  SpDocs.MinSumma ('', , sci178Esc): [17.2, '\2p[|-]366`666`666`666`666.88']; // [17.2];
+  SpDocs.MaxSumma ('', , sci178Esc): [17.2, '\2p[|-]366`666`666`666`666.88']; // [17.2];
+  ValutName         : skip;
+  SpDocs.ShipAddTerms ('Дополнительные условия отгрузки', , sci178Esc);
+  SpDocs.dPost  ('Рекомендуемая дата поставки', , sci13Esc): noprotect;
+  NormaName     ('Норма', , sci13Esc), protect;
+<<
+
+`Ресурс отгрузки`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Ед.подвижного состава`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Способ отгрузки`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Базис поставки`     .@@@@@@@@@@@@@@@@@@`Транспорт`.@@@@@@@@@@@@@@@@@@@@@@@@@
+ Объем разовой отгрузки
+ [.] в натуральном `       `мин.`.@@@@@@@@@@@@@@`макс.`.@@@@@@@@@@@@@@.@@@@@@
+ [.] в стоимостном `       `мин.`.@@@@@@@@@@@@@@`макс.`.@@@@@@@@@@@@@@.@@@@@@
+`Дополнительные условия отгрузки`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Рекомендуемая дата поставки`    .@@@@@@@@@@@
+`Норма`              .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;  // Screen
+
+Embedded scKauEdit 'Целевой учет' Interface;
+end;
+
+end; // TabbedSheet
+
+//********************************************************************************
+
+HandleEvent
+  cmPick:
+    {
+      if (CurField <> #KatNotes.Name)
+        if (NOT EditPlanPosEnabled(true))
+          {
+            Abort;
+            Exit;
+          }
+
+      if boGetTune('DOC.EDITSPCALPLAN')
+        if (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+          {
+            Message('По данному пункту календарного плана'#13+
+                    'сформированы сопроводительные документы.'#13#13+
+                    'Редактирование спецификации невозможно!', Information+OkButton);
+
+            Abort;
+            Exit;
+          }
+
+      if ((CurField = #UpPosGrName) or (CurField = #UpPosName))
+         RunInterface(GetDogovorMC, SpDocs.cDoc, SpDocs.TiDk, if (SpDocs.PrMC = 2, 1, 5), SpDocs.Direct, SpDocs.cSpMC);
+    }
+
+  cmDelOnProtect:
+    {
+      if (NOT EditPlanPosEnabled(false))
+      or (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+      AND boGetTune('DOC.EDITSPCALPLAN')
+      {
+        Abort;
+        Stop;
+        Exit;
+      }
+      case CurField of
+        #UpPosGrName, #UpPosName:
+          set SpDocs.cSpMC := 0;
+   //---------------------------------------------
+    #SmetaMy,
+    #SmetaSpMy:
+      {
+        delete SpDocSmeta where (( coSpDocs    == SpDocSmeta.coTable and
+                                   SpDocs.nRec == SpDocSmeta.cSpec  ))
+
+        ReScanPanel(#SpDocs);
+      }
+   //---------------------------------------------
+    #SaldTune.Name
+  , #vsKau1
+  , #vsKau2
+  , #vsKau3
+  , #vsKau4
+  , #vsKau5
+  , #vsKau6
+  , #vsKau7
+  , #vsKau8
+  , #vsKau9
+  , #vsKau10 :
+      {
+        Abort;
+        PutCommand(cmIerarchy);
+        RereadRecord;
+      }
+      end;
+    }
+end; // handleevent 4 window
+end; // panel
+
+//********************************************************************************
+//********************************************************************************
+
+Function GetSmetMCUSL : boolean;
+Var
+  PrNom     : word;
+
+  bisNew
+, firstRec
+            : boolean;
+
+  NSpecif
+            : string;
+
+  nzap
+, cv
+            : comp;
+
+  dValDog
+            : date;
+
+  NewPrice
+            : double;
+{
+  firstRec := true;
+  GetSmetMCUSL := False;
+  bisNew := IsNew;
+
+  if (RunInterface('GetSmetaMCU'
+                   ,string(403) //строковый тип документа для хранения настроек в DSK
+                   ,0       //0-строительство/1-ремонты/100-все (SmetaStroy.coTable)
+                   ,2       //контроль остатков МЦ (0-нет/1-да/2-на выбор)
+                   ,0       //на будущее
+                   ,0       //ссылка на смету
+                   ,0       //ссылка на спецификацию сметы
+                   ,0       //признак 0-МЦ/1-Услуги
+                   ,0       //1-МЦ/2-Услуга
+                   ,0       //Подразделение (для МЦ)
+                   ,0       //МОЛ           (для МЦ)
+                   ,0       //Партия        (для МЦ)
+                   ,0       //режимы выбора
+                  ) <> cmDefault)
+    Exit;
+
+  if (not bisNew)
+    oSpDocs.Delete_current_SpDocs(SpDocs.nRec, true);
+
+  _Loop PickSmeta where ((word(0) == PickSmeta.wList))
+  {
+    _Loop SpDocSmeta where ((coSpDocs == SpDocSmeta.coTable and
+                                    CalPlan.NRec == SpDocSmeta.cDoc and
+                                    PickSmeta.cPosition == SpDocSmeta.cPosition))
+      if (GetFirst SpDocsSmet where ((SpDocSmeta.cSpec == SpDocsSmet.nRec)) = tsOk)
+      {
+        if (not bisNew)
+          PushPos(#SpDocs);
+
+        if (GetFirst SpDocs where ((SpDocsSmet.nRec == SpDocs.nRec)) = tsOk)
+          oSpDocs.Delete_current_SpDocs(SpDocs.nRec, true);
+
+        if (not bisNew)
+          PopPos(#SpDocs);
+      }
+  }
+
+  if (GetFirst PickSmeta where ((word(0) == PickSmeta.wList))
+                         ordered by PickSmeta.Npp = tsOk)
+   {
+    do
+    {
+      ClearBuffer(#SpDocs);
+
+      SpDocs.cMCUsl    := PickSmeta.cMCUsl;
+      SpDocs.Kol       := PickSmeta.Kol;
+      SpDocs.PrMC      := PickSmeta.PrMC;
+      OldSpCalPlnSumma := 0;
+
+      SelectField(#SpCalPlnObjName);
+
+      MySetFieldSpDocs;
+
+      if ( GetFirst KatOtpEd where ((  SpDocs.PrMC   == KatOtpEd.PrMC
+                                   and SpDocs.cMCUsl == KatOtpEd.cMCUSL
+                                   and word(1)       == KatOtpEd.Akt
+                                   )) = tsOk )
+        {
+          SpDocs.cOtpEd := KatOtpEd.nRec;
+          SpDocs.Kol    := SpDocs.Kol / KatOtpEd.Koef;
+
+          if ( (KatOtpEd.Diskret = 1) and ((SpDocs.Kol - trunc(SpDocs.Kol) > 0.00001)) )
+            set SpDocs.Kol := trunc(SpDocs.Kol);
+        }
+      else
+        {
+          SpDocs.cOtpEd := 0;
+        }
+
+      //--Сметные цены
+      if ( GetFirst FastFirstRow SmetaStroy where (( PickSmeta.cSmeta == SmetaStroy.NRec )) = tsOk )
+        {
+          dValDog      := if (CalPlan.dValCurse = ZeroDate, CalPlan.dInPut, CalPlan.dValCurse);
+          cv           := SpDocs.cVal;
+
+          NewPrice     := oValFunc.GetAnyCurrency(SmetaStroy.cVal, PickSmeta.Price, dValDog, cv);
+
+          if ( IsValid(#KatOtpEd) )
+            NewPrice := NewPrice * KatOtpEd.Koef;
+
+          SpDocs.Price := DogRound_P(CalPlan.cVal <> 0, NewPrice);
+        }
+
+      case SpDocs.PrMC of
+
+        1, 4, 5:
+          {
+            if ( GetFirst KatMC = tsOK )
+              {
+                if ( SpDocs.cGrMCUsl = 0 )
+                  SpDocs.cGrMCUsl := KatMC.cGroupMC;
+
+                if ( SpDocs.cGrNal = 0 )
+                  SpDocs.cGrNal := KatMC.cGrNal;
+              }
+          }
+
+      else
+        {
+          if ( GetFirst KatUsl = tsOK )
+            {
+              if ( SpDocs.Kol < 0.000001 )
+                SpDocs.Kol := KatUsl.KolAkt;
+
+              if ( SpDocs.cGrMCUsl = 0 )
+                SpDocs.cGrMCUsl := KatUsl.cGroupUsl;
+
+              if ( SpDocs.cGrNal = 0 )
+                SpDocs.cGrNal := KatUsl.cGrNal;
+            }
+        }
+
+      end;
+
+#include doguks.vpp
+
+      oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+      if ((KatUsl.TYPEUSL = 1) and ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3)))
+        {
+          RunInterface('GETPAR3', 0
+                                , SpDocs.Nrec
+                                , KatUsl.Nrec
+                                , SpDocs.Price
+                                , SpDocs.Kol
+                                , word(coSpDocs));
+
+          oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+        }
+
+      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+
+      SetFieldProtected(#SpDocs.Kol, FALSE);
+
+      if firstRec
+      {
+        nzap := SpDocs.Nrec;
+        firstRec := false;
+      }
+
+      oMTRFun.GenSpecMTRForUKS(coSpDocs, SpDocs.nRec, PickSmeta.cObj, PickSmeta.cAddSumTune);
+
+      //--Обновляем связь спецификации документа со сметой
+      ClearBuffer(#SpDocSmeta);
+      SpDocSmeta.coTable   := coSpDocs;
+      SpDocSmeta.cDoc      := CalPlan.NRec;
+      SpDocSmeta.cSpec     := SpDocs.nRec;
+      SpDocSmeta.cSmeta    := PickSmeta.cSmeta;
+      SpDocSmeta.cPosition := PickSmeta.cPosition;
+      SpDocSmeta.cResource := PickSmeta.cResource;
+      SpDocSmeta.TipRes    := PickSmeta.TipRes;
+      SpDocSmeta.Kol       := PickSmeta.KolJob;
+      insert current SpDocSmeta;
+
+
+    } while (GetNext PickSmeta where ((word(0) == PickSmeta.wList))
+                               ordered by PickSmeta.Npp = tsOk);
+    Delete PickSmeta where ((word(0) == PickSmeta.wList));
+
+    SpDocs.Nrec := nzap;
+    GetEqual(#SpDocs, 0);
+  }
+  RereadRecord(#SpDocs);
+  SelectField(#SpDocs.Kol);
+  GetSmetMCUSL := True;
+}
+
+//********************************************************************************
+//********************************************************************************
+#declare HandleValFld(No)
+cmValFld#No:
+  {
+    if NOT EditPlanPosEnabled(false)
+        OR
+       boGetTune('DOC.EDITSPCALPLAN') AND (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+      {
+        Abort;
+        Exit;
+      }
+
+    HandleValFld0#No;
+  }
+#end
+
+//********************************************************************************
+//********************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    MySetFieldSpDocs;
+    SetCommandEnabled(cmValFld20, Dogovor.VidDog = 12);
+  }
+
+cmCancel:
+  SelectField(#SpCalPlnObjName);
+
+cmClose:
+  SelectField(#SpCalPlnObjName);
+
+cmMulSelDO : //Ctrl+I : Выбор из смет
+{
+  if (NOT EditPlanPosEnabled(false) or (not UKS_Used) or (MakeSpecOnlyFromOwner))
+    {
+      abort;
+      exit;
+    }
+
+  GetSmetMCUSL;
+  ReReadRecord(#SpDocs) ;
+}
+!cmValFld3
+#HandleValFld(3)
+!cmValFld4
+#HandleValFld(4)
+!cmValFld5
+#HandleValFld(5)
+!cmValFld6
+#HandleValFld(6)
+
+cmValue5:  //-- интерфейс с товарно-транспортной информацией
+  if UpdateTable
+    {
+      SaveMyDSK(EditPlanPosEnabled(false), '_CanEditTTNDoc_');
+      RunInterface(SpTTNDoc, word(coSpDocs), SpDocs.NRec);
+    }
+
+cmValue11:
+  {
+    if UpdateTable
+      RunWindowModal(wSpDocsNal);
+  }
+
+cmValFld20:
+  if UpdateTable
+    RunWindowModal(winSpCalPln_Rlt);
+
+cmFilialNo:
+  {
+    if (IsValid(#SpDocSmeta))
+      {
+        Message('Спецификация сформирована по смете!'#13+'Замена недопустима!', Warning);
+        Abort;
+        Exit;
+      }
+
+    if (SpDocs.cMCUsl <> 0)
+      RunInterface(ZamenMcSPec, word(439), SpDocs.NRec);
+    else
+      Message('Операция доступна только для МЦ/услуг.', 2);
+  }
+
+cmOpenSearch:
+  {
+    if (NOT EditPlanPosEnabled(false) AND (CurField <> #KatNotes.Name))
+      {
+        Abort;
+        Exit;
+      }
+
+    if boGetTune('DOC.EDITSPCALPLAN')
+      if (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+        {
+          Message('По данному пункту календарного плана'#13 +
+                  'сформированы сопроводительные документы.'#13#13 +
+                  'Редактирование спецификации невозможно !', Information+OkButton);
+
+          Abort;
+          Exit;
+        }
+
+    case CurField of
+    //--------------
+      #ShipmentSp.Name:
+        {
+          QuickChoiceName := 'qcShipmentName';
+          ProcessCommand(cmPick);
+        }
+    //--------------
+      #TipOtgSp.Name:
+        {
+          QuickChoiceName := 'qcTipOtgName';
+          ProcessCommand(cmPick);
+        }
+    //--------------
+      #WayMoveSp.Name:
+        {
+          QuickChoiceName := 'qcWayMoveName';
+          ProcessCommand(cmPick);
+        }
+    //--------------
+    end;
+  }
+
+cmDelOnProtect:
+  {
+    if NOT EditPlanPosEnabled(false)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (CurField = #NormaName)
+      set SpDocs.cNorma := 0;
+  }
+
+cmRestoreDoc:
+  {var varcBaseDoc, varcKatDSNor : comp;
+   var varKolNorm : double;
+   var varListPick : word;
+
+    if NOT EditPlanPosEnabled(false)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (CurField = #NormaName)
+
+    varcBaseDoc  := -1;
+    varcKatDSNor := SpDocs.cNorma;
+    varListPick := 0;
+    if (RunInterface('M_DVS::DsNormRed', varcBaseDoc, varcKatDSNor, 1, varKolNorm, varListPick) <> cmCancel )
+       {
+        SpDocs.cNorma := varcKatDSNor;
+        set SpDocs.PrNorma := toKatDSNor;
+       }
+  }
+
+end;
+end; // Window
+
+//********************************************************************************
+
+Procedure SetProtectCalPlanCommon(boInEdit: boolean);
+{
+  var b: boolean; b := NOT EditPlanPosEnabled(false);
+
+  if boInEdit
+    {
+      SetFieldProtected(#CalPlan.NoDoc    , b);
+      SetFieldProtected(#CalPlan.NoDoc_Ext, b);
+    }
+  else
+    {
+      SetFieldProtected(#CalPlan.NoDoc    , b OR ( CurWindow = -1 ));
+      SetFieldProtected(#CalPlan.NoDoc_Ext, b OR ( CurWindow = -1 ));
+    }
+
+  SetFieldProtected(#CalPlan.dInput, b);
+  SetFieldProtected(#CalPlan.dFrom , b);
+  SetFieldProtected(#CalPlan.dTo   , b);
+}
+
+//********************************************************************************
+
+#doc
+Окно редактирования обобщенного ПКП
+#end
+Window winCalPlan_Common 'Обобщенный ПКП' escclose;
+  Show at (, , , 5);
+
+Panel panCalPlan_Common;
+  Table CalPlan;
+
+Screen scrCalPlan_Common (, hcDG_ObobPKP, sci13Esc);
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+#else
+    tbPrintDoc
+  , tbAttrClass
+#end
+  , DogNavigator
+;
+
+Fields
+  DogovorName: skip;
+  CalPlan.DesGr     ('Код группы пользователей'): protect;
+  CalPlan.Descr     ('Дескриптор(идентификатор) пользователя'): protect;
+  CalPlan.NoDoc_Ext ('Входящий номер пункта плана', , sci1Esc): noprotect;
+  CalPlan.NoDoc     ('Номер пункта плана', , sci1Esc): noprotect;
+  CalPlan.dInput    ('Дата ввода пункта плана', , sci13Esc): [, 'DD/MM/YYYY'], noprotect;
+  CalPlan.dFrom     ('Начальная дата периода исполнения'): noprotect;
+  CalPlan.dTo       ('Конечная дата периода исполнения'): noprotect;
+<<
+ Документ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@/.@@@@@`Входящий №`.@@@@@@@@@@@@@@@@`Внутренний №`.@@@@@@@@@@@@@@@@
+`Дата ввода`.@@@@@@@@@@@ Период исполнения `с`.@@@@@@@@@@@`по`.@@@@@@@@@@@
+>>
+end; // Screen
+end; // Panel
+
+HandleEvent
+
+cmInit:
+  {
+    SetProtectCalPlanCommon(TRUE);
+  }
+//******************************************************************************
+#CalPlanNavigationHndl(cmGoToNextLevel)
+//******************************************************************************
+#CalPlanNavigationHndl(cmGoToPrevLevel)
+//******************************************************************************
+#CalPlanNavigationHndl(cmGoToNextDoc)
+//******************************************************************************
+#CalPlanNavigationHndl(cmGoToPrevDoc)
+//******************************************************************************
+end;
+end; // Window
+
+//********************************************************************************
+
+#doc
+Окно редактирования условий отгрузки/поставки/оказания услуг по пункту плана
+#end
+Window winCalPlan_Otgr 'Условия отгрузки/поставки/оказания услуг по пункту плана' escclose;
+  Show at (, , 120, 31 );
+
+Panel panCalPlan_Otgr;
+  Table CalPlan;
+
+Screen scrCalPlan_Otgr (, hcDogTopicPlanCondition, sci13Esc);
+  Show at (, , , 17);
+
+ToolBar
+    F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+  , DogNavigator
+;
+
+Fields
+  DogovorName: skip;
+  KatOrg.Name: skip;
+  CalPlan.DesGr     ('Код группы пользователей'): protect;
+  CalPlan.Descr     ('Дескриптор(идентификатор) пользователя'): protect;
+  CalPlan.NoDoc_Ext ('Входящий номер пункта плана', , sci1Esc);
+  CalPlan.NoDoc     ('Номер пункта плана', , sci1Esc);
+  CalPlan.dInput    ('Дата ввода пункта плана'): [, 'DD/MM/YYYY'], noprotect;
+  KatNotes.Name     ('Статус' ): PickButton, protect;
+  ValutFullName     ('Денежная единица пункта плана'): protect;
+  CalPlan.dValCurse ('Дата для определения курсов денежной единицы'): [, 'DD/MM/YYYY'];
+  OtvPodr.Name      ('Центр ответственности, ответственный за выполнение.'), PickButton;
+  OtvPodr2.Name     ('Центр ответственности, на бюджет которого относятся затраты.'), PickButton;
+  KatNazna.Name     ('Назначение документа'): PickButton, protect;
+  KatNazna.NazCode  ('Назначение документа'): PickButton, protect;
+  KuratPodr.Name    ('Курирующее подразделение', , sci1Esc): protect, NoDel;
+  myField1          ('Наименование ТХО'): skip;
+  HozOperViewName   ('Наименование ТХО'), PickButton, protect;
+  CalPlanDirectMC   : skip;
+  CalPlan.SummaSpec: [, '\2p[|-]3666`666`666`666.88'], skip;
+  ValutName         : skip;
+  CalPlan.SumNDS    : [, '\2p[|-]3666`666`666`666.88'], skip;
+  ValutName         : skip;
+
+  CalPlan.TermDefBy ('Способ определения периода отгрузки/выполнения услуг', , sci1Esc): noprotect;
+  CalPlan.dFrom    ('Начальная дата периода отгрузки'): [, 'DD/MM/YYYY'];
+  CalPlan.dTo      ('Конечная дата периода отгрузки'): [, 'DD/MM/YYYY'];
+  CalPlan.nDays    ('Количество дней с момента выполнения условий определяют период отгрузки', , sci1Esc):
+    SpinButton[1, 0, 1000];
+  [PredPlanInfoOtgr '']
+    '№'+PredPlan.NoDoc+' от '+DateToStr(PredPlan.dInput, 'DD/MM/YYYYг.')
+    ('Предшествующий пункт календарного плана'), protect, PickButton,
+    { Font = {BackColor = if (IsValid(#PredPlan), 0, ColorNeed) }};
+  Shipment.Name    ('Способ отгрузки'): protect, QuickChoice;
+  TipOtg.Name      ('Базис поставки'): protect, QuickChoice;
+  WayMove.Name     ('Способ транспортировки'): protect, QuickChoice;
+  CalPlan.AddTerms ('Дополнительная информация (указания) по отгрузке', , sci1Esc);
+
+  GrOtp.Name       ('Организация-грузоотправитель'): protect, QuickChoice;
+  OtpPunkt.Name    ('Пункт погрузки/отправки'): protect;
+  GrOtpState.Name  : skip;
+  GrOtpCity.Name   : skip;
+  GrOtp.Addr       : skip;
+
+  GrPol.Name       ('Организация-грузополучатель'): protect, QuickChoice;
+  PolPunkt.Name    ('Пункт назначения/разгрузки'): protect;
+  GrPolState.Name  : skip;
+  GrPolCity.Name   : skip;
+  GrPol.Addr       : skip;
+
+  PKP_Stage        ('Этап заказа НИОКР',,sci1Esc): Protect;
+  NIOKR_StepName   ('Наименование этапа',,sci1Esc): NoProtect;
+  NIOKR_VipRep     ('Вид отчетности',,sci1Esc): NoProtect;
+<<
+ Документ   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Контрагент .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@/.@@@@@`Входящий №`.@@@@@@@@@@`Внутренний №`.@@@@@@@@@@`Дата ввода`.@@@@@@@@@@`Статус`.@@@@@@@@@@@@@@
+`Денежная единица` .@@@@@@@@@@@@@@@@@`Дата для пересчета курсов`.@@@@@@@@@@@
+`Центр ответственности`.@@@@@@@@@@@@@@@@@@@@@@@@`Отнести на центр ответственности`.@@@@@@@@@@@@@@@@@@@@@@@@@
+`Назначение`.@@@@@@@@@@@@@@@@@@@@@@@@@@`Код`.@@@@@@@@@@@`Курирующее подразделение`.@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Направление.@@@@@@@@@@@@@@@@@@@@@@@@@@@@  Сумма.@@@@@@@@@@@@@@@@@@@.@@@@@@  Налоги.@@@@@@@@@@@@@@@@@.@@@@@@
+ (.) Отгрузить МЦ  ` `с` .@@@@@@@@@@ `по` .@@@@@@@@@@
+ (.) либо в течение` .@@@@@ дней после выполнения .@@@@@@@@@@@@@@@@@@@@@@@@@
+`Способ отгрузки`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Базис`.@@@@@@@@@@@@@@@`Транспорт`.@@@@@@@@@@@@@@@@@@@@
+`Дополнительно`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Грузоотправитель`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Пункт отправления`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Страна: .@@@@@@@@@@@@@@@  Город: .@@@@@@@@@@@@@@@@@@@  Адрес :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Грузополучатель` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Пункт назначения` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Страна: .@@@@@@@@@@@@@@@  Город: .@@@@@@@@@@@@@@@@@@@  Адрес :.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Этап`.@@@@@@@@@@@@@
+`Наименование этапа`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Вид отчетности`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+
+end; /// Screen
+
+HandleEvent
+
+cmExprFieldChanged:
+  case CurField of
+    #NIOKR_StepName:
+      oExtAtr.mSetAttr(coCalPlan, CalPlan.nRec, 'НИОКР. Наименование этапа', ExprFieldValue);
+    #NIOKR_VipRep:
+      oExtAtr.sSetAttr(coCalPlan, CalPlan.nRec, 'НИОКР. Вид отчетности'    , ExprFieldValue);
+  end;
+
+end;
+
+end; // Panel
+
+//********************************************************************************
+Panel panSpCalPln_Edit;
+  Table SpDocs;
+
+Tree 4 brSpCalPln_Edit (, hcDogTopicPlanCondition, );
+  Show at (, 18, , 27);
+
+ToolBar
+    F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+  , DogNavigator
+;
+
+Fields
+  SpDocs.Code     #3'№',
+                  #3'п/п'    ('Номер позиции спецификации. Расширенная информация - <CTRL+ENTER>', , sci178Esc): [4], NoAutoSize;
+//********************************************************************************
+  SpDocs.Direct   #3'Отно-',
+                  #3'шения'  ('Направление отношений', , sci1378Esc): [ 5], protect, [LIST 1 '1->2', '2->1'], Centered, NoAutoSize;
+//********************************************************************************
+  SpDocs.PrMc     #3'Тип'    ('Признак МЦ или услуги. Расширенная информация - <CTRL+ENTER>', , sci1378Esc):
+    [LIST 1 'МЦ', 'Усл', 'УП', 'ДС', 'ГП'], [3], protect, Centered, NoAutoSize;
+//********************************************************************************
+  SpCalPlnGrName  #3'Группа' ('Группа МЦ/услуг. Расширенная информация - <CTRL+ENTER>', , sci1378Esc): [15], protect;
+//********************************************************************************
+  SpCalPlnObjName #3'Наименование',
+                  #3'позиции спецификации'
+                             ('Наименование МЦ/услуги. Расширенная информация - <CTRL+ENTER>', , sci1378Esc): [20], protect;
+//********************************************************************************
+  KatOtpEd.Abbr   #3'Отп.',
+                  #3'ЕдИзм'  ('Наименование отпускной единицы измерения. Расширенная информация - <CTRL+ENTER>', , sci1378Esc): [6], protect, NoAutoSize;
+//********************************************************************************
+  SpDocs.Kol      #3'Количество'
+                             ('Количество МЦ/услуг. Расширенная информация - <CTRL+ENTER>', , sci178Esc): [10.3], noprotect, CalcButton, NoAutoSize;
+//********************************************************************************
+  KatDopEd1.ShortName  #3'ДЕИ 1'        ('', , sci178Esc)                           : [5], protect, NoAutoSize, NoPickButton;
+  SpDopEd1.Kol         #3'Количество'   ('')                                        : [10], [prSignsInKol], Protect, NoAutoSize, NoPickButton;
+  KatDopEd2.ShortName  #3'ДЕИ 2'        ('', , sci178Esc)                           : [5], protect, NoAutoSize, NoPickButton;
+  SpDopEd2.Kol         #3'Количество'   ('')                                        : [10], [prSignsInKol], Protect, NoAutoSize, NoPickButton;
+//********************************************************************************
+  ValutName       #3'Вал.'   ('Валюта. Расширенная информация - <CTRL+ENTER>', , sci178Esc): [4], skip, {font = {italic=TRUE}}, NoAutoSize, Centered;
+//********************************************************************************
+  SpDocs.Price    #3'Цена'   ('Цена за единицу МЦ/услуги. Расширенная информация - <CTRL+ENTER>', , sci178Esc): [15.2, '\2p[|-]3666`666`666`666.88'], CalcButton, NoProtect, NoAutoSize; // [15, 2];
+//********************************************************************************
+  SpDocs.Summa    #3'Сумма'  ('Сумма по позиции. Расширенная информация - <CTRL+ENTER>', , sci178Esc): [17.2, '\2p[|-]36`666`666`666`666.88'], NoProtect, NoAutoSize; // [17, 2];
+//********************************************************************************
+  SpDocs.SumNDS   #3'Налоги' ('Налоги по позиции. Расширенная информация - <CTRL+ENTER>', , sci178Esc): [17.2, '\2p[|-]36`666`666`666`666.88'], Protect, NoAutoSize; // [17, 2];
+//********************************************************************************
+  ResOtgr.Name    #3'Ресурс' ('Наименование ресурса отгрузки. Расширенная информация - <CTRL+ENTER>', , sci1378Esc): [12], protect;
+  rltObjName      #3'Объект недвижимости'  ('Объект недвижимости.', , sci1378Esc): [10], protect;
+  SaldTune.Name   #3'Объект ЦУ' (,, sci1378Esc): [10], Protect, NoAutoSize, PickButton;
+  vsKau1          #3'КАУ 1' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau2          #3'КАУ 2' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau3          #3'КАУ 3' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau4          #3'КАУ 4' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau5          #3'КАУ 5' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau6          #3'КАУ 6' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau7          #3'КАУ 7' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau8          #3'КАУ 8' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau9          #3'КАУ 9' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  vsKau10         #3'КАУ 10' ('',, sci1378Esc): [12], Protect, NoAutoSize, PickButton;
+  SmetaMy         #3'Смета'                ('Локальная смета: "Номер": "Наименование"', , sci1378Esc): [15], protect, PickButton;
+  SmetaSpMy       #3'Спецификация сметы'   ('Спецификация сметы: "N п/п" ("Код") "Наименование"', , sci1378Esc): [20], protect, PickButton;
+end;
+
+HandleEvent
+
+cmTreeNodeType:
+  TreeSetNodeType(brSpCalPln_Edit, 2, if(RecordExists SpDocs439 = tsOk, #AddComp('L_DOGOVOR')'bmpGsSpDocsZamen', ''));
+
+cmCheckField:
+  if (CurField = #SpDocs.PrMC)
+    MySetFieldSpDocs;
+
+end;
+
+end; // Panel
+
+//********************************************************************************
+#include longnamemcdog.pan
+//********************************************************************************
+
+Function CheckOtgr: boolean;
+{
+  CheckOtgr := TRUE;
+  if (CalPlan.DirectMC = 100)
+    Exit;
+
+  if ( ( CalPlan.TermDefBy = 0 ) AND
+        ( longint(Dogovor.dBeg) <> 0 ) AND ( longint(Dogovor.dEnd) <> 0 ) )
+    if ( CalPlan.dFrom > CalPlan.dTo ) or ( CalPlan.dFrom < Dogovor.dBeg ) or
+        ( CalPlan.dTo > Dogovor.dEnd )
+      {
+        Message('Период отгрузки должен быть корректно определен и не должен '+
+                'выходить за рамки действия договора!'#13+
+                'Период действия договора - c '+DateToStr(Dogovor.dBeg, 'DD/MM/YYYY') +
+                ' по '+DateToStr(Dogovor.dEnd, 'DD/MM/YYYY'), OkButton);
+        SelectField(#CalPlan.dFrom);
+        CheckOtgr := FALSE;
+      }
+}
+
+//********************************************************************************
+
+Procedure SetProtectCalPlanMC(boInEdit: boolean);
+{
+  var b: boolean; b := NOT EditPlanPosEnabled(false);
+
+  if boInEdit
+    {
+      SetFieldProtected(#CalPlan.NoDoc    , b);
+      SetFieldProtected(#CalPlan.NoDoc_Ext, b);
+    }
+  else
+    {
+      SetFieldProtected(#CalPlan.NoDoc    , b OR ( CurWindow = -1 ));
+      SetFieldProtected(#CalPlan.NoDoc_Ext, b OR ( CurWindow = -1 ));
+    }
+
+  SetFieldProtected(#CalPlan.dInput    ,  b);
+  SetFieldProtected(#CalPlan.dValCurse ,  b);
+  SetFieldProtected(#CalPlan.TermDefBy ,  b);
+  SetFieldProtected(#CalPlan.dFrom     ,  b);
+  SetFieldProtected(#CalPlan.dTo       ,  b);
+  SetFieldProtected(#CalPlan.nDays     ,  b);
+  SetFieldProtected(#CalPlan.AddTerms  ,  b);
+  SetFieldProtected(#NIOKR_StepName    ,  b);
+  SetFieldProtected(#NIOKR_VipRep      ,  b);
+
+  if (Not boGetTune('Doc.PickOtvPodr'))
+    SetFieldSelectable(#KatPodr.Name, FALSE);
+}
+
+//********************************************************************************
+
+Procedure SetProtectCalPlanSpDocs;
+var f: boolean;
+{
+  f := EditPlanPosEnabled(false)
+        AND
+       (
+         Not boGetTune('DOC.EDITSPCALPLAN')
+          OR
+         ( RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) <> tsOk )
+          AND
+         boGetTune('DOC.EDITSPCALPLAN')
+       );
+
+  SetFieldProtected(#SpDocs.Code        , Not f);
+  SetFieldProtected(#SpDocs.Kol         , Not f);
+  SetFieldProtected(#SpDocs.Price       , Not f);
+  SetFieldProtected(#SpDocs.Summa       , Not f);
+  SetFieldProtected(#SpDocs.ShipValType , Not f);
+  SetFieldProtected(#SpDocs.MinValue    , Not f);
+  SetFieldProtected(#SpDocs.MaxValue    , Not f);
+  SetFieldProtected(#SpDocs.MinSumma    , Not f);
+  SetFieldProtected(#SpDocs.MaxSumma    , Not f);
+  SetFieldProtected(#SpDocs.ShipAddTerms, Not f);
+
+  if f
+    {
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Code    , sci178Esc , 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.PrMc    , sci1378Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpCalPlnGrName , sci1378Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #KatOtpEd.Abbr  , sci1378Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpCalPlnObjName, sci1378Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Kol     , sci178Esc , 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Price   , sci178Esc , 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #ValutName      , sci178Esc , 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Summa   , sci178Esc , 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #ResOtgr.Name   , sci1378Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SmetaMy        , sci178Esc , 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SmetaSpMy      , sci178Esc , 0);
+
+      if (Not UseDEI)
+        SetHelpAndStatusContext(scrSpCalPln_Add, #SpDocs.Kol, sci178Esc, 0)
+      else
+        {
+          SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Kol, sci1378Esc, 0);
+          SetHelpAndStatusContext(scrSpCalPln_Add, #SpDocs.Kol, sci1378Esc, 0);
+        }
+    }
+  else
+    {
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Code    , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.PrMc    , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpCalPlnGrName , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #KatOtpEd.Abbr  , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpCalPlnObjName, sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Kol     , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Price   , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #ValutName      , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Summa   , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #ResOtgr.Name   , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SmetaMy        , sci1Esc, 0);
+      SetHelpAndStatusContext(brSpCalPln_Edit, #SmetaSpMy      , sci1Esc, 0);
+
+      SetHelpAndStatusContext(scrSpCalPln_Add, #SpDocs.Kol, sci178Esc, 0);
+    }
+
+  f := if (CalPlan.cCalPlan = 0, GetFirst CPAttach <> tsOk, OwnerCP.DirectMC <> 100);
+
+  SetFieldSelectable(#CalPlan.TermDefBy, f);
+  SetFieldSelectable(#PredPlanInfoOtgr,  f);
+
+  RescanPanel(#SpDocs);
+}
+
+//********************************************************************************
+
+#include lm2sautopick.vpp
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    SetProtectCalPlanMC(TRUE);
+    SetProtectCalPlanSpDocs;
+
+    if ( (not ExistTune('Doc.DEI.ViewDoc')) or (not UseDEI) )
+      {
+        SetFieldVisible(#KatDopEd1.ShortName, false);
+        SetFieldVisible(#KatDopEd2.ShortName, false);
+        SetFieldVisible(#SpDopEd1.Kol, false);
+        SetFieldVisible(#SpDopEd2.Kol, false);
+      }
+    else
+      case wGetTune('Doc.DEI.ViewDoc') of
+
+        0:
+          {
+            SetFieldVisible(#KatDopEd1.ShortName, false);
+            SetFieldVisible(#KatDopEd2.ShortName, false);
+            SetFieldVisible(#SpDopEd1.Kol, false);
+            SetFieldVisible(#SpDopEd2.Kol, false);
+          }
+
+        1:
+          {
+            SetFieldVisible(#KatDopEd1.ShortName, true);
+            SetFieldVisible(#KatDopEd2.ShortName, false);
+            SetFieldVisible(#SpDopEd1.Kol, true);
+            SetFieldVisible(#SpDopEd2.Kol, false);
+          }
+
+        2:
+          {
+            SetFieldVisible(#KatDopEd1.ShortName, true);
+            SetFieldVisible(#KatDopEd2.ShortName, true);
+            SetFieldVisible(#SpDopEd1.Kol, true);
+            SetFieldVisible(#SpDopEd2.Kol, true);
+          }
+
+      end;
+  }
+
+cmDone:
+  {
+    if not UpdateTable
+      {
+        Abort;
+        Exit;
+      }
+
+    SelectPanel(#CalPlan);
+    SelectField(#CalPlan.NoDoc);
+    DogToObj;
+  }
+
+#CalPlanNavigationHndl(cmGoToNextLevel)
+#CalPlanNavigationHndl(cmGoToPrevLevel)
+#CalPlanNavigationHndl(cmGoToNextDoc)
+#CalPlanNavigationHndl(cmGoToPrevDoc)
+
+cmIerarchy :
+{
+  var vcSp : comp;
+
+  if ( (CurTable = #SpDocs) and (IsValid(#SpDocs)) )
+    {
+      if ( not EditPlanPosEnabled(false) )
+        RunInterface('EditMtr2Spec', 1, GetLinkMTRAutoPick(CurField), word(coSpDocs), SpDocs.nRec);
+      else
+        RunInterface('EditMtr2Spec', if(IsValid(#SpDocs2), 1, if(IsValid(#SmetaStroy), 2, 0)), GetLinkMTRAutoPick(CurField), word(coSpDocs), SpDocs.nRec);
+
+      SetModified(true);
+      UpdateTable;
+    }
+
+  vcSp := SpDocs.nRec;
+  PushPos(#SpDocs);
+  _Loop SpDocs where ((vcSp == SpDocs.cSpMC))
+    oMTRFun.CopySpecMTR(coSpDocs, vcSp, coSpDocs, SpDocs.nRec);
+
+  PopPos(#SpDocs);
+}
+
+cmFilialNo:
+  {
+    if (CurTable <> #SpDocs)
+      Exit;
+
+    if (IsValid(#SpDocSmeta))
+      {
+        Message('Спецификация сформирована по смете!'#13+'Замена недопустима!', Warning);
+        Abort;
+        Exit;
+      }
+
+    if (SpDocs.cMCUsl <> 0)
+      RunInterface(ZamenMcSPec, word(439), SpDocs.NRec);
+    else
+      Message('Операция доступна только для МЦ/услуг', 2);
+  }
+
+//********************************************************************************
+// редактирование составляющих комплентного МТР
+cmInsertEditKN:
+  {
+    if (CurTable <> #SpDocs)
+      Exit;
+
+    if ((SpDocs.cMCUsl <> 0) AND (SpDocs.PrMC = 1))
+      RunInterface(ComplMcSpec, SpDocs.NRec, 0);
+    else
+      Message('Операция доступна только для МЦ.', 2);
+  }
+
+// Печать ведомости определения учетных цен комплектных МТР
+cmValue27 :
+{
+  if (CurTable <> #SpDocs)
+    Exit;
+
+  if ((SpDocs.cMCUsl <> 0) AND (SpDocs.PrMC = 1))
+    RunInterface(ComplMcSpec, SpDocs.NRec, 1);
+  else
+    Message('Операция доступна только для МЦ.', 2);
+}
+
+// Настройка ведомости определения учетных цен комплектных МТР
+cmValue28 :
+  {
+    RunInterface(ComplMcSpec, SpDocs.NRec, 2);
+  }
+
+//********************************************************************************
+
+cmValue2:
+  {
+    SetModified(true);
+    UpdateTable;
+
+    RunInterface(CheckPln, CalPlan.nRec, comp(0), word(1), CalPlan.CondStatus);
+
+    set CalPlan.CondStatus := CalPlan.CondStatus;
+
+    SetFieldVisible(#CalPlan.dCond, CalPlan.CondStatus = 2);
+
+    if ( CalPlan.CondStatus = 2 )
+      {
+        if ( longint(CalPlan.dCond) = 0 )
+          set CalPlan.dCond := Cur_Date;
+      }
+    else
+      set CalPlan.dCond := 0;
+  }
+
+cmAttrib:
+  if ( CurTable = #SpDocs )
+    {
+      if ( CurTable = #SpDocs and IsValid(#SpDocs) )
+        if ( not EditPlanPosEnabled(false) )
+          oLinkMTR2Spec.SetObjParam(word(coSpDocs), SpDocs.nRec, 1);
+        else
+          oLinkMTR2Spec.SetObjParam(word(coSpDocs), SpDocs.nRec, if(IsValid(#SpDocs2), 1, if(IsValid(#SmetaStroy), 2, 0)));
+
+      oLinkMTR2Spec.SelFormat(IsValid(#SpDocs));
+
+      RunWindow(winSpCalPln_Add);
+      SelectField(#SpCalPlnObjName);
+    }
+
+cmCancel:
+  if ( not CheckOtgr )
+    Abort;
+
+cmClose:
+  if ( not CheckOtgr )
+    Abort;
+
+cmMulSelDO : //Ctrl+I : Выбор из смет
+{
+  if (NOT EditPlanPosEnabled(false) or (not UKS_Used) or (MakeSpecOnlyFromOwner))
+    {
+      abort;
+      exit;
+    }
+
+  GetSmetMCUSL;
+  ReReadRecord(#SpDocs) ;
+}
+
+  #HandleValFld(3)
+  #HandleValFld(4)
+  #HandleValFld(5)
+  #HandleValFld(6)
+
+cmValue12:
+  {
+    UpdateTable;
+    RunWindowModal(wGroupSch);
+  }
+
+cmHotKeys:
+  ProcessCommand(cmHotKeys);
+
+cmPickClass:
+   ProcessCommand(cmPickClass);
+
+cmPickAttr:
+  ProcessCommand(cmPickAttr);
+
+cmCopySpecFromClipboard:
+  ProcessCommand(cmCopySpecFromClipboard);
+
+cmViewSpecClipboard:
+  ProcessCommand(cmViewSpecClipboard);
+
+cmCopySpecToClipboard:
+  ProcessCommand(cmCopySpecToClipboard);
+
+cmPrintDoc:
+  if (IsValid(#CalPlan) AND IsValidNew(#CalPlan))
+    PrintCalPlan
+  else
+    Message('Нет пунктов календарного плана', okButton)
+
+cmOpenSearch:
+  {
+    if (NOT EditPlanPosEnabled(false) AND (CurField <> #KatNotes.Name))
+      {
+        Abort;
+        Exit;
+      }
+
+    if boGetTune('DOC.EDITSPCALPLAN')
+      if (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+        {
+          Message('По данному пункту календарного плана'#13+
+                  'сформированы сопроводительные документы.'#13#13+
+                  'Редактирование спецификации невозможно !',
+                  Information+OkButton);
+
+          Abort;
+          Exit;
+        }
+
+    case CurField of
+    //--------------
+      #Shipment.Name:
+        {
+          QuickChoiceName := 'qcShipmentName';
+          ProcessCommand(cmPick);
+        }
+    //--------------
+      #TipOtg.Name:
+        {
+          QuickChoiceName := 'qcTipOtgName';
+          ProcessCommand(cmPick);
+        }
+    //--------------
+      #WayMove.Name:
+        {
+          QuickChoiceName := 'qcWayMoveName';
+          ProcessCommand(cmPick);
+        }
+    //--------------
+      #GrPol.Name
+    , #GrOtp.Name:
+        {
+          if NullVipRef(oChkLink)
+            GetVipRef(oChkLink, 'KatOrg');
+
+          if oChkLink.CheckLinks(coKatOrgDescr)
+           QuickChoiceName := 'qcKatOrgName'
+         else
+           QuickChoiceName := 'qcKatOrgTreeName';
+
+         ProcessCommand(cmPick);
+        }
+    //--------------
+     end;
+   }
+
+cmValue21: //Рассчитать стоимость услуги как % от стоимости МЦ
+  if ((CurTable = #SpDocs) AND (SpDocs.prMC = 2))
+    {
+      var Sum: double;     Sum := 0;
+      var procent: double; procent := 0;
+      var GrKod: string;   GrKod := if(SpDocs.cMcUsl = 0, GroupMC.Kod, KatMC.kGroupMC);
+
+
+      if ( RunDialog('PerCent', procent) <> cmCancel )
+        {
+          PushPos(#SpDocs);
+
+          _LOOP SpDocs
+            if (
+                (SpDocs.PrMC = 1)
+                 AND
+                (pos(upcase(trim(sGetTune('Tara.KodGrMcTara'))), Upcase(GrKod)) <> 1)
+               )
+              Sum := Sum + SpDocs.Summa*procent/100;
+
+          PopPos(#SpDocs);
+          SpDocs.Kol := 1;
+
+          if (IsValid(#KatOtpEd))
+            if (KatOtpEd.Diskret <> 1)
+              SpDocs.Kol := procent;
+
+          set SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, Sum/SpDocs.Kol);
+
+          if (UpdateTable)
+            {};
+
+          oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+          SetSummaSpec;
+        }
+    }
+
+cmValue20: //Расчет стоимости услуги
+  oCalcFuns.RunCostUslRep(SpDocs.NRec, coSpDocs, 0);
+
+cmValue17: //Параметры расчетной услуги
+  if ((KatUsl.TYPEUSL = 1) AND (SpDocs.PrMC = 2))
+    {
+      RunInterface('GETPAR3', 1, SpDocs.Nrec, KatUsl.Nrec, SpDocs.Price, SpDocs.Kol, word(coSpDocs));
+
+      oSpDocs.UpDate_current_SpDocs(SpDocs.BufferP);
+      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+      RereadRecord(#SpDocs);
+    }
+
+#include lnkdoccp.vpp // просмотр схемы связей документов
+
+#include fpBook01.vpp //связь с книгой финансовых операций
+
+cmValFld17:
+{
+  if not UpdateTable
+    Exit;
+
+  if ( not IsValid(#SpDocs) )
+    Exit;
+
+  if ( Message('Пересчитать налоги в спецификации?', Confirmation + YesNo) <> cmYes )
+    Exit;
+
+  PushPos(#SpDocs);
+
+  _LOOP SpDocs
+    {
+      delete safe SpDocNal;
+      update current SpDocs set SpDocs.ManualTax := 0;
+      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, SpDocs.cDoc, SpDocs.nRec);
+    }
+
+  PopPos(#SpDocs);
+
+  SetSummaSpec;
+
+  RereadRecord(#SpDocs);
+  RereadRecord(#SpDocNal);
+}
+
+cmValFld12:
+  {
+    if not UpdateTable
+      Exit;
+
+    var doKoef: double;
+
+    if (RunDialog(RecalcKoef, doKoef) = cmCancel)
+      Exit;
+
+    _LOOP SpDocs
+      {
+        SpDocs.Price := SpDocs.Price * doKoef;
+        SpDocs.Summa := DogRound(SpDocs.cVal <> 0, SpDocs.Price * SpDocs.Kol);
+
+        oSpDocs.UpDate_current_SpDocs(SpDocs.BufferP);
+
+        oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+
+        SetSummaSpec;
+
+        UpdateCalPlan;
+      }
+
+    RereadRecord(#CalPlan1);
+    RereadRecord(#SpDocs);
+    Message('Пересчет завершен', Information);
+  }
+
+cmSortMC:
+  {
+    if (CurTable <> #CalPlan)
+      Exit;
+
+    var NumPP  : string;
+    var NumRec: longint;
+
+    if (not IsValid(#SpDocs))
+      Exit;
+
+    if (RunWindowModal(wGetSpecSort) = cmCancel)
+      Exit;
+
+    UpdateTable;
+
+    Delete all NoVisual TempPart;
+    NumRec := 0;
+    StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm,
+                   'Обработка спецификации...', 1);
+
+    PushPos(#SpDocs);
+
+    _LOOP SpDocs
+      {
+        if not NextVisual
+          {
+            NumRec := 0;
+            Break;
+          }
+
+        ClearBuffer(#TempPart);
+
+        TempPart.cMC := SpDocs.NRec;
+
+        case WhatSpecSort of
+        //------------------
+          0: TempPart.MCName := SpSortName;
+        //------------------
+          1:
+          {
+            TempPart.MCName   := SpSortBarKod;
+            TempPart.MCBarKod := SpCalPlnObjName;
+          }
+        //------------------
+          2:
+          {
+            TempPart.MCName := SpSoprNPP + if (IsValid(#SpGrPrice), SpGrPrice.Name, '');
+
+            if (IsValid(#KlPrice))
+              TempPart.MCBarKod := KlPrice.Name;
+
+            TempPart.PrName := SpCalPlnObjName;
+          }
+        //------------------
+          3:
+          {
+            TempPart.MCName := if ((SpDocs.PrMC <> 2) and (SpDocs.PrMC <> 3)
+                                  , '0' + if (IsValid(#GroupMC), GroupMC.Name, '')
+                                  , '1' + if (IsValid(#GroupUsl), GroupUsl.Name, ''));
+
+            TempPart.MCBarKod := if ((SpDocs.PrMC <> 2) and (SpDocs.PrMC <> 3)
+                                    , KatMC.Name
+                                    , KatUsl.Name);
+
+            TempPart.PrName := if ((SpDocs.PrMC <> 2) and (SpDocs.PrMC <> 3)
+                                  , KatMC.BarKod
+                                  , KatUsl.Kod);
+          }
+        end;
+
+        Insert current TempPart;
+
+        NumRec := NumRec + 1;
+      }
+
+    StopVisual ('', 0);
+
+    if (NumRec > 0)
+      {
+        StartNewVisual(vtIndicatorVisual, vfTimer, 'Пересортировка спецификации...', NumRec);
+        NumPP := '0001';
+
+        _LOOP TempPart ordered by index TempPart01
+          {
+            NextVisual;
+            Update NoVisual SpDocs where ((TempPart.cMC == SpDocs.NRec))
+              Set SpDocs.Code := NumPP;
+            NextNumStr(NumPP);
+          }
+
+        StopVisual ('', 0);
+      }
+
+    PopPos(#SpDocs);
+    RereadRecord(#SpDocs);
+    RereadRecord(#CalPlan1);
+  }
+
+cmVal8 :
+  {
+    if (not UpDateTable)
+    {
+      Abort;
+      Exit;
+    }
+
+    RunInterface('GetSpDocsMTR', word(coCalPlan), CalPlan.NRec);
+
+    ReReadRecord(#SpDocs);
+  }
+
+cmValue60:
+  RunInterface('ShowSpesHowSmeta', CalPlan.nRec, word(coCalPlan));
+
+end; // HandleEvent
+
+end; // Window
+
+//********************************************************************************
+
+#doc
+Окно редактирования финансового ПКП
+#end
+Window winCalPlan_Opl 'Платежи по пункту плана' escclose;
+  Show at (1, 1, 78, 19);
+
+Panel panCalPlan_OplAvance1;
+
+Screen scrPlanPaysHeader(, hcDogTopicPlanPayment, sci1Esc);
+  Show at (, , , 9);
+  Table CalPlan
+
+ToolBar
+    F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+  , DogNavigator
+;
+
+Fields
+  DogovorName: skip;
+  PKPName: skip;
+  KatOrg.Name: skip;
+  CalPlan.DesGr     ('Код группы пользователей', , sci13Esc): protect;
+  CalPlan.Descr     ('Дескриптор(идентификатор) пользователя', , sci13Esc): protect;
+  CalPlan.NoDoc_Ext ('Входящий номер пункта плана');
+  KatNotes.Name     ('Статус', , sci13Esc): PickButton, protect;
+  CalPlan.NoDoc     ('Номер пункта плана');
+  CalPlan.dInput    ('Дата ввода пункта плана', , sci13Esc): [, 'DD/MM/YYYY'], noprotect;
+  ValutFullName     ('Денежная единица пункта плана', , sci13Esc): protect;
+  CalPlan.dValCurse ('Дата для определения курсов денежной единицы', , sci13Esc): [, 'DD/MM/YYYY'];
+  OtvPodr.Name      ('Центр ответственности, ответственный за выполнение.', , sci13Esc), PickButton;
+  OtvPodr2.Name     ('Центр ответственности, на бюджет которого относятся затраты.', , sci13Esc), PickButton;
+  KatNazna.Name     ('Назначение документа', , sci13Esc): PickButton, protect;
+  KatNazna.NazCode  ('Назначение документа', , sci13Esc): PickButton, protect;
+  KuratPodr.Name    ('Курирующее подразделение'): protect, NoDel;
+  myField1          ('Наименование ТХО'): skip;
+  HozOperViewName   ('Наименование ТХО', , sci13Esc), PickButton, protect;
+<<
+ Документ   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ по ПКП     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Контрагент .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@/.@@@@@`Входящий №`.@@@@@@@@@@    `Статус`.@@@@@@@@@@@@@@@@@@@@@@@@@@
+            `Внутренний №`.@@@@@@@@@@`Дата ввода`.@@@@@@@@@@@
+`Денежная единица` .@@@@@@@@@@@@@@@@@`Дата для пересчета курсов`.@@@@@@@@@@@
+`Центр ответственности`            .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Отнести на центр ответственности` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Назначение`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Код`.@@@@@@@@@@@@@@
+`Курирующее подразделение`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@@@@   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+end;
+
+//********************************************************************************
+Panel panCalPlan_OplAvance;
+  Table PlanPaysAvan;
+
+Screen scrCalPlan_OplAvance (, hcDogPlanAdvPayment, sci1Esc);
+  Show at (, 10, , );
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+#else
+    tbPrintDoc
+  , tbAttrClass
+#end
+  , DogNavigator
+;
+
+Fields
+  CurPayType             ('Вид платежей', , sci13Esc):
+     [LIST 'авансовые', 'по факту'], protect;
+  CalPlan.RunOK          ('Признак платежей', , sci13Esc):
+     [LIST 'необязательные', 'обязательные'], protect;
+  PlanPaysAvan.Summa     ('Сумма платежа'): [, '\2p[|-]366`666`666`666.88'], noprotect, CalcButton;
+  ValutName              : skip, left;
+  [ProcOfDog]
+  100 * PlanPaysAvan.Summa / Dogovor.Summa
+                         ('Процент от суммы договора'): [, '\2p[|-]3666.88'], noprotect;
+  CalPlan.SumNDS         ('Сумма налогов'): [, '\2p[|-]366`666`666`666.88'], noprotect, CalcButton;
+  ValutName              : skip, left;
+  PlanPaysAvan.dFrom     ('Начальная дата периода платежа'): [, 'DD/MM/YYYY'], noprotect;
+  PlanPaysAvan.dTo       ('Конечная дата периода платежа'): [, 'DD/MM/YYYY'], noprotect;
+  CalPlanAvanScheme    : skip;
+  PlanPaysAvan.AddTerms  ('Дополнительная информация (указания) по авансовому платежу');
+Buttons
+  cmValue10, , , 'Определение схемы оплат для авансового платежа', hcDogPaymentScheme, sci1Esc;
+<<
+ `Вид платежей`      .@@@@@@@@@@@@@@@@`Признак` .@@@@@@@@@@@@@@@@@@@@@@
+ `На сумму`          .@@@@@@@@@@@@@@@@.@@@@`% от суммы договора`.@@@@@@
+ `В т.ч. налоги`     .@@@@@@@@@@@@@@@@.@@@@
+ `Выполнить с `      .@@@@@@@@@@@ `по`.@@@@@@@@@@@
+
+  <.Схема платежей.> .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Дополнительно`     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+HandleEvent
+
+cmExprFieldChanged:
+{
+  case CurField of
+    #ProcOfDog:
+      {
+        if ( Message('Рассчитать сумму ПКП относительно суммы договора?', Confirmation + YesNo) <> cmYes )
+          Exit;
+
+        set PlanPaysAvan.Summa := DogRound(PlanPaysAvan.cVal <> 0, Dogovor.Summa  * double(ExprFieldValue) / 100);
+        set CalPlan.SumNDS     := DogRound(PlanPaysAvan.cVal <> 0, Dogovor.SumNDS * double(ExprFieldValue) / 100);
+        set CalPlan.Summa      := PlanPaysAvan.Summa;
+      }
+  end;
+}
+end;
+
+end; // Panel
+
+//********************************************************************************
+
+Panel panCalPlan_OplAdd;
+  Table PlanPaysAdd;
+
+Screen scrCalPlan_OplAdd (, hcDogPlanAddPayment, );
+  Show at (, 10, , );
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+#else
+    tbPrintDoc
+  , tbAttrClass
+#end
+  , DogNavigator
+;
+
+Fields
+  CurPayType             ('Вид платежей', , sci13Esc):
+     [LIST 'авансовые', 'по факту'], protect;
+  CalPlan.RunOK          ('Признак платежей', , sci13Esc):
+     [LIST 'необязательные', 'обязательные'], protect;
+  PlanPaysAdd.Summa      ('Сумма платежа', , sci1Esc): [17.2, '\2p[|-]366`666`666`666.88'], noprotect, CalcButton; // [6.2], noprotect;
+  ValutName              : skip;
+  CalPlan.SumNDS         ('Сумма налогов'): [17.2, '\2p[|-]366`666`666`666.88'], noprotect, CalcButton; //;[17.2], noprotect;
+  ValutName              : skip;
+  PlanPaysAdd.nDays      ('Количество дней с момента выполнения условий определяют период платежа', , sci1Esc): noprotect,
+    SpinButton[1, 0, 1000];
+  [PredPlanInfo '']
+    '№'+PredPlan.NoDoc+' от '+DateToStr(PredPlan.dInput, 'DD/MM/YYYYг.')
+    ('Предшествующий пункт календарного плана', , sci13Esc), protect, PickButton,
+    { Font = {BackColor = if (IsValid(#PredPlan), 0, ColorNeed) }};
+  CalPlanAddScheme       : skip;
+  PlanPaysAdd.AddTerms   ('Дополнительная информация (указания) по дополнительному платежу', , sci1Esc);
+Buttons
+  cmValue9, , , 'Определение схемы оплат для дополнительного платежа', hcDogPaymentScheme, sci1Esc;
+<<
+ `Вид платежей`      .@@@@@@@@@@@@@@@@ `Признак` .@@@@@@@@@@@@@@@@@@@@@@
+ `На сумму`          .@@@@@@@@@@@@@@@@ .@@@@@
+ `В т.ч. налоги`     .@@@@@@@@@@@@@@@@ .@@@@@
+ `В течение `        .@@@@ дней`после выполнения`.@@@@@@@@@@@@@@@@@@@@@@
+
+  <.Схема платежей.> .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Дополнительно`     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+end; // Panel
+
+//********************************************************************************
+
+Procedure ChangePayType(IsChanging: boolean);
+{
+  if IsChanging
+    {
+      set CalPlan.RunOK := wGetTune('Dog.PKPRunOKDef');
+      set CalPlan.cPredPlan := 0;
+
+      if (CurPayType = 0)
+        {
+          if CalPlan.cCalPlan = 0
+            {
+              CalPlan.dFrom := Dogovor.dBeg;
+              CalPlan.dTo   := Dogovor.dEnd;
+            }
+          else
+            {
+              CalPlan.dFrom := OwnerCP.dFrom;
+              CalPlan.dTo   := OwnerCP.dTo;
+            }
+
+          iIerCP.UpdateDates(CalPlan.nRec);
+        }
+
+      set CalPlan.TermDefBy := CurPayType;
+
+      UpdateTable;
+
+      if delete safe AvanScheme = tsOk
+        {};
+
+      if delete safe PlanPaysAvan = tsOk
+        {};
+
+      if delete safe AddScheme = tsOk
+        {};
+
+      if delete safe PlanPaysAdd = tsOk
+        {};
+    }
+
+  case CurTable of
+    #PlanPaysAvan
+  , #PlanPaysAdd:
+      SetModified(false);
+  end
+
+  if CurPayType = 0
+    {
+      if IsChanging
+        if GetFirst PlanPaysAvan <> tsOk
+          {
+            OnSetDefaultPlanPaysAvan;
+            if insert current PlanPaysAvan = tsOk {}
+          }
+
+      SetFormat(scrCalPlan_OplAvance);
+    }
+  else
+    {
+      if IsChanging
+        if GetFirst PlanPaysAdd <> tsOk
+          {
+            OnSetDefaultPlanPaysAdd;
+            if insert current PlanPaysAdd = tsOk {}
+          }
+
+      SetFormat(scrCalPlan_OplAdd);
+    }
+}
+
+//********************************************************************************
+
+Procedure SetProtectCalPlanFin(boInEdit: boolean);
+{
+  var b: boolean; b := NOT EditPlanPosEnabled(false);
+
+  if boInEdit
+    {
+      SetFieldProtected(#CalPlan.NoDoc    , b);
+      SetFieldProtected(#CalPlan.NoDoc_Ext, b);
+    }
+  else
+    {
+      SetFieldProtected(#CalPlan.NoDoc    , b OR ( CurWindow = -1 ));
+      SetFieldProtected(#CalPlan.NoDoc_Ext, b OR ( CurWindow = -1 ));
+    }
+
+  SetFieldProtected(#CalPlan.dInput       , b);
+  SetFieldProtected(#CalPlan.dValCurse    , b);
+  SetFieldProtected(#CalPlan.SumNDS       , b);
+  SetFieldProtected(#ProcOfDog            , b);
+  SetFieldProtected(#PlanPaysAvan.Summa   , b);
+  SetFieldProtected(#PlanPaysAvan.dFrom   , b);
+  SetFieldProtected(#PlanPaysAvan.dTo     , b);
+  SetFieldProtected(#PlanPaysAvan.AddTerms, b);
+  SetFieldProtected(#PlanPaysAdd.Summa    , b);
+  SetFieldProtected(#PlanPaysAdd.nDays    , b);
+  SetFieldProtected(#PlanPaysAdd.AddTerms , b);
+
+  var f: boolean;
+
+  f := if(CalPlan.cCalPlan = 0, GetFirst CPAttach <> tsOK, OwnerCP.DirectMC = 100);
+
+  SetFieldSelectable(#CurPayType   , f);
+  SetFieldSelectable(#CalPlan.RunOK, f);
+  SetFieldSelectable(#PredPlanInfo , f);
+
+  CurPayType := if(GetFirst PlanPaysAdd = tsOK, word(1), word(0));
+
+  case CurPayType of
+    0: ReReadRecord(#PlanPaysAvan);
+    1: ReReadRecord(#PlanPaysAdd);
+  end;
+}
+
+//********************************************************************************
+
+Panel p1
+  Table PlanPaysAvan
+
+HandleEvent
+  cmCheckField:
+    case CurField of
+    //--------------
+      #CurPayType:
+        if (word(OldFieldValue) <> CurPayType)
+          {
+            ChangePayType(true);
+            PutCommand(cmValFld1);
+          }
+    //--------------
+      #PlanPaysAvan.Summa:
+        {
+          set CalPlan.Summa := PlanPaysAvan.Summa;
+          UpdateTable;
+        }
+    //--------------
+      #CalPlan.RunOK:
+        {
+          set CalPlan.RunOK := CalPlan.RunOK;
+          UpdateTable;
+        }
+    //--------------
+    end;
+
+cmPick:
+  if (CurField <> #KatNotes.Name)
+    if (NOT EditPlanPosEnabled(false))
+      {
+        Abort;
+        Exit;
+      }
+  end;
+
+end;
+
+//********************************************************************************
+
+Panel p2
+  Table PlanPaysAdd
+
+HandleEvent
+cmCheckField:
+  case CurField of
+  //--------------
+    #CurPayType:
+      if (word(OldFieldValue) <> CurPayType)
+        {
+          ChangePayType(true);
+          PutCommand(cmValFld1);
+        }
+  //--------------
+    #PlanPaysAdd.Summa:
+      {
+        set CalPlan.Summa := PlanPaysAdd.Summa;
+        UpdateTable;
+      }
+  //--------------
+    #CalPlan.RunOK:
+      {
+        set CalPlan.RunOK := CalPlan.RunOK;
+        UpdateTable;
+      }
+  //--------------
+    #PlanPaysAdd.nDays:
+      {
+        set CalPlan.nDays := PlanPaysAdd.nDays;
+        if IsValid(#PredPlan)
+          {
+            set PlanPaysAdd.dFrom := Add_Day(PredPlan.dTo, 1);
+            set PlanPaysAdd.dTo   := oCF.AddWorkDay(CalPlan.cDogovor
+                                                  , PlanPaysAdd.dFrom
+                                                  , if(PlanPaysAdd.nDays = 0, 0, PlanPaysAdd.nDays - 1));
+
+            set CalPlan.dFrom     := PlanPaysAdd.dFrom;
+            set CalPlan.dTo       := PlanPaysAdd.dTo;
+
+          }
+        UpdateTable;
+      }
+  //--------------
+  end;
+
+cmPick:
+  {
+    if (CurField <> #KatNotes.Name)
+      if (NOT EditPlanPosEnabled(false))
+        {
+          Abort;
+          Exit;
+        }
+
+    case CurField of
+      #PredPlanInfo:
+        {
+          RunInterface(GetCalPlan, word(0FFFFh), word(0), CalPlan.cDogovor, CalPlan.cPredPlan);
+
+          if iIerCP.CheckF3(CalPlan.nRec, CalPlan.cPredPlan)
+            {
+              set CalPlan.cPredPlan := CalPlan.cPredPlan;
+              set PlanPaysAdd.dFrom := Add_day(PredPlan.dTo, 1);
+              set PlanPaysAdd.dTo   := oCF.AddWorkDay(CalPlan.cDogovor
+                                                    , PlanPaysAdd.dFrom
+                                                    , if(PlanPaysAdd.nDays = 0, 0, PlanPaysAdd.nDays - 1));
+              set CalPlan.dFrom := PlanPaysAdd.dFrom;
+              set CalPlan.dTo   := PlanPaysAdd.dTo;
+
+              if (abs(PlanPaysAdd.Summa) < 0.00001) AND (PredPlan.DirectMC <> 0)
+                {
+                  set PlanPaysAdd.Summa := PredPlan.SummaSpec;
+                  set CalPlan.Summa     := PlanPaysAdd.Summa;
+                  set CalPlan.SumNDS    := PredPlan.SumNDS;
+                }
+            }
+          else
+            {
+              Message('Нельзя выбрать данный ПКП.'#13'Произойдет зацикливание ссылок!', Information);
+              set CalPlan.cPredPlan := 0;
+            }
+
+          UpdateTable;
+        }
+    end;
+  }
+
+cmDelOnProtect:
+  {
+    if (NOT EditPlanPosEnabled(false))
+     OR
+       boGetTune('DOC.EDITSPCALPLAN')
+       AND
+       (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+      {
+        Abort;
+        Stop;
+        Exit;
+      }
+
+    if CurField = #PredPlanInfo
+      set CalPlan.cPredPlan := 0;
+  }
+end;
+end;
+
+//********************************************************************************
+
+HandleEvent
+cmInit:
+  {
+    SetProtectCalPlanFin(TRUE);
+    PutCommand(cmValue6);
+  }
+
+cmValFld1:
+  {
+    SelectPanel(if(CurPayType = 0, #PlanPaysAvan, #PlanPaysAdd));
+    SetModified(true);
+  }
+
+cmValue6:
+  ChangePayType(false);
+
+cmDone:
+  {
+    if not UpdateTable
+      {
+        Abort;
+        Exit;
+      }
+
+    if (CalPlan.DirectMC = 0) AND (CurPayType = 1)
+      if not IsValid(#PredPlan)
+        {
+          Message('Необходимо указать предшествующий ПКП!', Warning);
+          SelectPanel(#PlanPaysAdd);
+          SelectField(#PredPlanInfo);
+          Abort;
+          Exit;
+        }
+
+    SelectPanel(#CalPlan);
+    SelectField(#CalPlan.NoDoc);
+  }
+
+cmValue9:
+  {
+    SetModified(true);
+
+    if not UpdateTable
+      Exit;
+
+    UpdateCalPlan;
+
+    RunInterface(SchemeOpl, PlanPaysAdd.nRec, word(3));
+
+    RereadRecord;
+    RereadRecord(#CalPlan);
+
+    UpdateCalPlanSoprHoz;
+
+    iIerCP.UpdateDates(CalPlan.nRec);
+
+    RescanPanel(#PlanPaysAdd);
+  }
+
+cmValue10:
+  {
+    SetModified(true);
+
+    if not UpdateTable
+      Exit;
+
+    UpdateCalPlan;
+
+    RunInterface(SchemeOpl, PlanPaysAvan.nRec, word(1));
+
+    RereadRecord;
+    RereadRecord(#CalPlan);
+
+    UpdateCalPlanSoprHoz;
+
+    iIerCP.UpdateDates(CalPlan.nRec);
+
+    RescanPanel(#PlanPaysAvan);
+  }
+
+cmOpenSearch:
+  if (NOT EditPlanPosEnabled(false) AND (CurField <> #KatNotes.Name))
+    {
+      Abort;
+      Exit;
+    }
+
+cmValue12:
+  RunWindowModal(wGroupSch);
+
+cmHotKeys:
+  ProcessCommand(cmHotKeys);
+
+cmPrintDoc:
+  ProcessCommand(cmPrintDoc);
+
+cmPickClass:
+  ProcessCommand(cmPickClass);
+
+cmPickAttr:
+  ProcessCommand(cmPickAttr);
+
+//связь с книгой финансовых операций
+#include fpBook01.vpp
+
+#CalPlanNavigationHndl(cmGoToNextLevel)
+#CalPlanNavigationHndl(cmGoToPrevLevel)
+#CalPlanNavigationHndl(cmGoToNextDoc)
+#CalPlanNavigationHndl(cmGoToPrevDoc)
+
+end; // HandleEvent
+end; // Window
+
+//********************************************************************************
+
+Panel scrCalPlan_Edit
+  Table CalPlan;
+
+//********************************************************************************
+
+Procedure SetProtectCalPlan(boInEdit: boolean);
+{
+  var b:boolean; b := NOT EditPlanPosEnabled(false);
+
+  SetFieldProtected(#CalPlan.NoDoc    , b OR not boInEdit OR ( CurWindow = -1 ));
+  SetFieldProtected(#CalPlan.NoDoc_Ext, b OR not boInEdit OR ( CurWindow = -1 ));
+  SetFieldProtected(#CalPlan.dInput   , b);
+  SetFieldProtected(#CalPlan.dValCurse, b);
+  SetFieldProtected(#CalPlan.SummaSpec, b);
+  SetFieldProtected(#CalPlan.Summa    , b);
+}
+
+//********************************************************************************
+
+HandleEvent // Panel
+
+cmPick:
+  {
+    if NotEditPlanPos(true)
+      {
+        abort;
+        Exit;
+      }
+
+    if ((CurField <> #HozOperViewName) and (CurField <> #KatNotes.Name))
+      {
+        if NotEditPlanPosStatus(true)
+          {
+            Abort;
+            Exit;
+          }
+      }
+
+    case CurField of
+    //--------------
+      #OtvPodr.Name:
+        if RunInterface('GetCO', word(cgiPick), comp(0), comp(0), CalPlan.cOtvPodr) <> cmCancel
+          set CalPlan.cOtvPodr := CalPlan.cOtvPodr;
+    //--------------
+      #OtvPodr2.Name:
+        if RunInterface('GetCO', word(cgiPick), comp(0), comp(0), CalPlan.cPlatPodr) <> cmCancel
+          set CalPlan.cPlatPodr := CalPlan.cPlatPodr;
+    //--------------
+      #KatNazna.Name, #KatNazna.NazCode:
+        if (RunInterface('GetSomKatNazna', FALSE, CalPlan.cNazna) <> cmCancel)
+          set CalPlan.cNazna := CalPlan.cNazna;
+    //--------------
+      #HozOperViewName:
+        if ( UpdateTable )
+          {
+            iTxoBind.ResetServer;
+            iShoz.CheckMagOper(#TSoprHozX(SoprHoz.BufferP), integer(1));
+
+            if ( iTxoBind.BuildTree(SoprHoz.BufferP) )
+              if ( iTxoBind.Bind(SoprHoz.BufferP, 0) )
+                if ( iTxoBind.RealizeOperationsTree(SoprHoz.BufferP) )
+                  iTxoBind.Apply(SoprHoz.BufferP);
+
+            iTxoBind.ProcessProtokol;
+            RereadRecord;
+          }
+    //--------------
+    end; //case
+  }
+
+cmDelOnProtect:
+  {
+    if (NOT EditPlanPosEnabled(false))
+    or
+      boGetTune('DOC.EDITSPCALPLAN')
+      AND
+      (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+      {
+        Abort;
+        Stop;
+      }
+
+    case CurField of
+    //--------------
+      #OtvPodr.Name:
+        set CalPlan.cOtvPodr := 0;
+    //--------------
+      #OtvPodr2.Name:
+        set CalPlan.cPlatPodr := 0;
+    //--------------
+      #HozOperViewName:
+        if ( UpdateTable )
+          {
+            iTxoBind.ResetServer;
+            iTxoBind.UnBind(SoprHoz.BufferP);
+            iTxoBind.ProcessProtokol;
+
+            RereadRecord;
+          }
+    end; //case
+  }
+
+cmPositionChanged:
+  SetProtectCalPlan(FALSE);
+
+end;
+end; // Panel
+
+//********************************************************************************
+
+Panel panCalPlan1;
+  Table CalPlan1
+
+Tree brCalPlan1 (, hcDogPlan, sci1478EnInsEscExTreeA);
+  show at(,,, 17)
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbTree_brows
+  , F_Common::tbPrintDoc
+  , F_Common::tbAttrClass
+  , F_BuhRep::tbTreeControl
+#else
+    tbTree_brows
+  , tbPrintDoc
+  , tbAttrClass
+  , tbTreeControl
+#end
+;
+
+Fields
+  {Font = {Color = if (sMarker = 'V', ColorMark, 0) }};
+  [CalPlanName '']
+  if(IsValid(#CalPlan),
+    if(GetClassName, DocName,
+      if(CalPlan.DirectMC   = 0, 'Финансовый',
+      if(CalPlan.DirectPlat = 0,  'МЦ/Услуги', 'Обобщенный'))), '')
+                 #3'Вид ПКП': [15], protect;
+  CalPlan.DesGr  #3'Группа'    ('Код группы пользователей'): [5], protect, Centered, NoAutoSize;
+  CalPlan.Descr  #3'Дескр.'  ('Дескриптор(идентификатор) пользователя'): [5], protect, Centered, NoAutoSize;
+  CalPlan.NoDoc  #3'Номер'  ('Номер пункта плана', , ): [5], protect, NoAutoSize;
+  CalPlan.NoDoc_Ext #3'Вх.номер' ('Входящий номер пункта плана', , ): [8], protect, NoAutoSize;
+  [CalPlanNote '']
+  if(CalPlan.DirectMC = 100, '', KatNotes.sName)
+                 #3'Статус'            ('Статус документа'): [8], skip, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+  if(CalPlan.DirectPlat = 0, CalPlanDirectMC_s, CalPlanDirectPlat_s)
+                 '' ('Направление отгрузок/оказания услуг/платежей', , ): [4], protect, NoAutoSize;
+  if(CalPlan.DirectPlat = 0, CalPlan.SummaSpec, CalPlan.Summa)
+                 #3'Сумма'             ('Сумма отгрузок/платежей по пункту плана', , ): [17, '\2p[|-]366`666`666`666`666.88'], protect, NoAutoSize, LessNull;
+  ValutName      #3'Вал.'              ('Денежная единица'):  [3], protect, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+  period         #3'Отгрузки/Платежи'  ('Период отгрузок')  : [30], protect;
+  HozOperViewName#3'Наименование ТХО'  ('Наименование ТХО'): [20], protect, NoAutoSize;
+  sMarker        #3'' : [1], Skip, Centered, NoAutoSize;
+end; // Browse
+
+Screen srHIOKR
+  show at(, 18,,)
+Fields
+  NIOKR_StepName: skip, left;
+  NIOKR_VipRep: skip, left;
+  PKP_Stage: skip, left;
+<<
+  Наименование этапа.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Вид отчетности    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@Этап.@@@@@@@@@@@@
+>>
+end;
+
+Embedded brCalPlanList Interface oPKP_ViewTable;
+  Show at (,,, 17);
+;
+
+end;
+
+Screen srCalPlanList
+  show at(, 18,,)
+<<
+>>
+end;
+
+//********************************************************************************
+
+Function CheckChangeStatus(_Nrec : comp) : boolean;
+{
+  CheckChangeStatus := TRUE;
+
+  if (CalPlan.cCalPlan <> 0) and (OwnerCP.DirectMC <> 100)
+    {
+      CheckChangeStatus := FALSE;
+      Exit;
+    }
+}
+
+Procedure ChangeStatus(_NRec : comp; _Note : comp);
+{
+  var _Stat : word;
+
+  if (GetFirst CalPlanStatus where ((_Nrec == CalPlanStatus.nRec)) = tsOk)
+    {
+
+      if (GetFirst KatNotesSt where ((_Note == KatNotesSt.NRec)) <> tsOk)
+        {}
+
+      var wMaska  : word;   wMaska  := 0;
+
+      if boGetTune('Dog.CloseIspPKP')
+        {
+          var SumDolg : double; SumDolg := 0;
+
+          // расчет суммы отгрузок по ПКП на дату
+          if (CalPlanStatus.DirectMC <> 0)
+            {
+              if iDolg_DG.GetSumOtgr_Plan(CalPLanStatus.cDogovor,
+                                          CalPlanStatus.NRec,
+                                          Cur_Date,
+                                          double(0),
+                                          SumDolg)
+                {
+                  if (SumDolg >= 0.01)
+                    wMaska := 16;
+                }
+            }
+
+           // расчет сумм поступивших платежей по ПКП
+           if (CalPlanStatus.DirectPlat <> 0)
+            {
+              if iDolg_DG.GetSumOpl_Plan(CalPLanStatus.cDogovor,
+                                         CalPlanStatus.NRec,
+                                         Cur_Date,
+                                         double(0),
+                                         double(0),
+                                         double(0),
+                                         SumDolg)
+                {
+                  if (SumDolg >= 0.01)
+                    wMaska := 16;
+                }
+            }
+        }
+
+      _Stat := wMaska and word(1 shl KatNotesSt.Status);
+
+      if (_Stat <> 0)
+        {
+          frmErr.Write('Статус ' + KatNotesSt.Name + ' не разрешен для календарного плана №' + (CalPlanStatus.NoDoc) + '.');
+          Exit;
+        }
+
+      if (oStatlog.StatLog_InsNewStat(word(403),
+                                      CalPlanStatus.nRec,
+                                      CalPlanStatus.Status,
+                                      CalPlanStatus.cNote,
+                                      KatNotesSt.Status,
+                                      KatNotesSt.NRec,
+                                      StatLogs) = tsOk)
+        {
+          update current CalPlanStatus
+                 set CalPlanStatus.Status := KatNotesSt.Status,
+                     CalPlanStatus.cNote  := KatNotesSt.NRec;
+
+          frmErr.Write('В календарном плане №' + String(CalPlanStatus.NoDoc) + ' успешно изменен статус на ' + KatNotesSt.Name + '.');
+        }
+      else
+        frmErr.Write('В календарном плане №' + String(CalPlanStatus.NoDoc) + ' статус не изменен.');
+
+      var Flag: boolean; Flag := false;
+
+      if (CalPlanStatus.cCalPlan = 0)
+        Flag := true
+      else
+        Flag := (OwnerSt.DirectMC = 100);
+
+      if Flag
+        iIerCP.DoSynchr_PKP_Status(CalPlanStatus.cDogovor, CalPlanStatus.nRec, CalPlanStatus.Status);
+
+      if (CalPlanStatus.DirectPlat = 0)
+        SetProtectCalPlanMC(FALSE);
+
+      if (CalPlanStatus.DirectMC = 0)
+        SetProtectCalPlanFin(FALSE);
+
+      if (CalPlanStatus.DirectMC = 100)
+        SetProtectCalPlanCommon(FALSE);
+
+      SetProtectCalPlanSpDocs;
+  }
+}
+
+Function CheckDeleteCalPlan (wMSG : word //0 - одиночный выбор, // 1 - множественный с протоколом // 2 - множественный без протокола
+                            ) : boolean;
+{
+  CheckDeleteCalPlan := FALSE;
+
+  if (RecordExists CPAttach = tsOk)
+    {
+      case wMSG of
+        0 : Message('ПКП удалить нельзя!'#13'На основании него сформированы подчиненные ПКП.', Information+OkButton);
+        1 : frmErr.Write('Календарный план №' + String(CalPlan.NoDoc) + ' удалить нельзя! На основании него сформированы подчиненные ПКП.');
+      end;
+      Exit;
+    }
+
+  if (RecordExists PredAttach = tsOk)
+    {
+      case wMSG of
+        0 : Message('ПКП удалить нельзя!'#13'Он является предшественником других ПКП.',Information+OkButton);
+        1 : frmErr.Write('Календарный план №' + String(CalPlan.NoDoc) + ' удалить нельзя! Он является предшественником других ПКП.');
+      end;
+      Exit;
+    }
+
+  if ( CalPlan.Status <> 0 )
+    {
+      case wMSG of
+        0 : Message(''#3'ПКП можно удалить только в статусе "оформляемый" !', Information + OkButton);
+        1 : frmErr.Write('Календарный план №' + String(CalPlan.NoDoc) + ' удалить нельзя! ПКП можно удалить только в статусе "оформляемый" !');
+      end;
+      Exit;
+    }
+
+  CheckDeleteCalPlan := TRUE;
+}
+
+Procedure DeleteSomeCalPlan;
+{
+  var lCount, i, iC  : longint;
+  var _NRec      : comp;
+  var bDel       : boolean;
+  var sMSG       : string;
+  var wMSG       : word;
+
+  iC := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm
+               , 'Идет пакетное удаление ПКП...',Information);
+  lCount := GetMarkerCount(hMarker);
+
+  if (lCount = 0)
+    {
+      InvertMarker(hMarker, CalPlan.NRec);
+      lCount := GetMarkerCount(hMarker);
+    }
+
+  sMSG := if (lCount = 1, 'Удалить пункт календарного плана?', 'Удалить все ПКП?');
+  wMSG := if (lCount = 1, 0, 2);
+
+  TreePushPos(brCalPlan1);
+
+  if (message(sMSG, YesNo) = cmYes)
+    do
+      {
+        bDel := FALSE;
+
+        for ( i := 0; i <= lCount-1; inc(i) )
+          if NOT (NextVisual)
+            {
+              frmErr.PutEvent(feBreak);
+              Exit;
+            }
+          else
+            if GetMarker(hMarker, i, _NRec)
+              if (GetFirst CalPlan where ((_NRec == CalPlan.NRec)) = tsOK)
+                if CheckDeleteCalPlan(wMSG)
+                  {
+                    DeleteCalPlan;
+                    WasEditCalPlan := TRUE;
+                    bDel := TRUE;
+                    inc(iC);
+                  }
+
+        for ( i := 0; i <= lCount-1; inc(i) )
+          if GetMarker(hMarker, i, _NRec)
+            if (GetFirst CalPlan where ((_NRec == CalPlan.NRec)) <> tsOK)
+              InvertMarker(hMarker, _NRec);
+
+        lCount := GetMarkerCount(hMarker);
+      }
+   while (bDel AND NextVisual and lCount > 0)
+
+   if (GetMarkerCount(hMarker) <> 0)
+     {
+       for ( i := 0; i <= lCount-1; inc(i) )
+         if GetMarker(hMarker, i, _NRec)
+           if (GetFirst CalPlan where ((_NRec == CalPlan.NRec)) = tsOK)
+             CheckDeleteCalPlan(1);
+
+       message('Помеченые ПКП невозможно удалить!');
+     }
+   else
+     frmErr.Write('Удалено ПКП : ' +  string(iC));
+
+   StopVisual('',0);
+   ReReadRecord;
+   TreePopPos(brCalPlan1);
+   RescanPanel(#CalPlan1);
+
+   frmErr.PutEvent(feBreak);
+
+   if (NOT frmErr.Error)
+     frmErr.ShowFile('');
+   else
+     frmErr.AbortForm;
+}
+
+HandleEvent
+
+cmTreeTop:
+  CurGroup := 0;
+
+cmTreeUp:
+  CurGroup := CalPlan.cCalPlan;
+
+cmTreeDown:
+  CurGroup := CalPlan.NRec;
+
+cmTreeNodeType:
+  {
+    var DocTreeType: byte; DocTreeType := GetDocTreeType;
+
+    if (CalPlan.DirectMC = 100)
+      {
+        TreeSetNodeType(brCalPlan1, DocTreeType);
+        Exit;
+      }
+
+    TreeSetNodeType(brCalPlan1, DocTreeType, GetDocTreeIconEx(word(403), CalPlan1.Status, DocTreeType, CalPlan.cNote));
+  }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(brCalPlan1, CalPlan.cCalPlan);
+
+cmDeleteRecord:
+  {
+    if (NOT EditPlanPosEnabled(true))
+      {
+        abort;
+        exit;
+      }
+
+    DeleteSomeCalPlan;
+  }
+
+cmDefault:
+  PutCommand(cmEdit);
+
+cmAddNewRec:
+  {
+    if (Dogovor.cOrg = 0)
+      {
+        Message('В договоре не установлен контрагент!'#13'Создание ПКП невозможно', Warning);
+        Exit;
+      }
+
+    if (Dogovor.Status = 4)
+      {
+        Message('Договор/соглашение имеет статус "закрыт".'#13'Создание ПКП невозможно');
+        Exit;
+      }
+
+    var Cmd: word; Cmd := cmAltInsert;
+
+    SetCommandEnabled(cmValue5, (OwnerCP.Status = 0) and (CalPlan.cCalPlan <> 0));
+
+    var MenuName: string;
+    MenuName := if (Dogovor.Direct <= 2, 'mnuCalPlanNew', 'mnuCalPlanNew2');
+
+    if (KatVidD.VidDog = word(1))
+      MenuName := 'mnuCalPlanNew2';
+
+    MenuName := #AddComp('L_DOGOVOR')MenuName;
+
+    EnableCommand(cmValue1);
+    EnableCommand(cmValue2);
+    EnableCommand(cmValue3);
+
+    if ConditionActiveInLeave(tcByDirect, #CalPlan1)
+      if ( wDirectPlan = 1 )
+        DisableCommand(cmValue2)
+      else
+        {
+          DisableCommand(cmValue1);
+          DisableCommand(cmValue3);
+        }
+
+    case RunMenu(MenuName) of
+    //-----------------------
+      cmValue1:
+        {
+          DirectMCNewCP := 2-(Dogovor.Direct mod 2);
+          DirectPlatNewCP := 0;
+        }
+    //-----------------------
+      cmValue2:
+        {
+          DirectMCNewCP := 0;
+          DirectPlatNewCP := if(Dogovor.Direct = 1, 1, 2);
+        }
+    //-----------------------
+      cmValue3:
+        {
+          DirectMCNewCP := 1+(Dogovor.Direct mod 2);
+          DirectPlatNewCP := 0;
+        }
+    //-----------------------
+      cmValue4:
+        {
+          DirectMCNewCP := 100;
+          DirectPlatNewCP := 100;
+        }
+    //-----------------------
+      cmValue5:
+        {
+          var c: comp; c := CalPlan.cCalPlan;
+
+          CurGroup := OwnerCP.cCalPlan;
+          TreeJumpToRecord(brCalPlan1, c);
+          RescanPanel(#CalPlan1);
+          Cmd := cmInsLowLevel;
+        }
+    //-----------------------
+      else
+        Exit;
+    //-----------------------
+    end;
+
+    EnableCommand(cmValue5);
+    PutCommand(Cmd);
+  }
+
+cmDelOnProtect:
+  Abort;
+
+cmMarkUnMark:
+//  if CheckChangeStatus(CalPlan.NRec)
+    {
+      InvertMarker( hMarker, CalPlan.NRec );
+      TreeGetNext(brCalPlan1);
+      ReReadRecord;
+      RescanPanel(#CalPlan);
+    }
+
+cmSelectAll:
+  {
+    TreePushPos(brCalPlan1);
+    ClearMarker( hMarker );
+    StartNewVisual(vtRotateVisual, vfTimer + vfBreak + vfConfirm, 'Выбираю все календарные планы...', 1);
+
+
+    if TreeGetFirst(brCalPlan1)
+      do
+  //      if CheckChangeStatus(CalPlan.NRec)
+          InsertMarker( hMarker, CalPlan.NRec );
+      while TreeGetNext(brCalPlan1) and NextVisual
+
+    TreePopPos(brCalPlan1);
+    ReReadRecord;
+    RescanPanel(#CalPlan);
+    StopVisual('', 0);
+  }
+
+cmUnselectAll:
+  {
+    ClearMarker( hMarker );
+    ReReadRecord;
+    RescanPanel(#CalPlan);
+  }
+
+
+end; // HandleEvent
+
+end; // Panel
+
+//********************************************************************************
+
+#include h_calpln.vpp
+#include DOGSOPH.VPP
+
+//********************************************************************************
+
+Function CheckCalPlan: boolean;
+  {
+    CheckCalPlan := TRUE;
+    var tmpSumma: double;
+    tmpSumma := 0;
+    UpdateTable;
+  }
+
+//********************************************************************************
+
+Procedure UpdateView;
+{
+  RescanPanel(#CalPlan1);
+  RescanPanel(#CalPlan);
+  RescanPanel(#PlanPaysAvan);
+  RescanPanel(#PlanPaysAdd);
+
+  if (CalPlan.DirectPlat = 0)
+    SetProtectCalPlanMC(FALSE);
+
+  if (CalPlan.DirectMC = 0)
+    {
+      SetProtectCalPlanFin(FALSE);
+      ChangePayType(FALSE);
+    }
+
+  if (CalPlan.DirectMC = 100)
+    SetProtectCalPlanCommon(FALSE);
+
+  SetProtectCalPlanSpDocs;
+  SetFieldStates(#CalPlan, CalPlan.TermDefBy, 0);
+  SetCalPlanFieldStates;
+
+  UpdateToolBarView;
+}
+
+//********************************************************************************
+
+Procedure NewCalPlan;
+{
+  var f: boolean;
+  f := (CalPlan.DirectMC = 0) AND (CalPlanRef <> 0);
+
+  SetDefaultCalPlan;
+  InsertCalPlan(true);
+
+  if (CalPlan.DirectPlat = 0)
+    MakeSpGrSch;
+
+  var c1, c2: comp;
+  c1 := CalPlan.nRec;
+  c2 := CalPlan.cCalPlan;
+
+  if f
+    MakePlanPaysOnOwner(c1);
+
+  CurGroup := c2;
+  TreeJumpToRecord(brCalPlan1, c1);
+
+  RereadRecord(#CalPlan1);
+
+  SetCalPlanFieldStates;
+
+  if not f AND (CalPlanRef = 0) AND (CalPlan.DirectMC = 0)
+    {
+      CurPayType := wGetTune('Dog.PKPTypeDef');
+      case CurPayType of
+      //----------------
+        0:
+          {
+            OnSetDefaultPlanPaysAvan;
+            if insert current PlanPaysAvan = tsOk
+              {};
+          }
+      //----------------
+        1:
+          {
+            OnSetDefaultPlanPaysAdd;
+            if insert current PlanPaysAdd = tsOk
+              {};
+
+            set CalPlan.TermDefBy := 1;
+
+            UpdateTable;
+          }
+      //----------------
+      end;
+    }
+
+  DirectMCNewCP := 0;
+  DirectPlatNewCP := 0;
+  PutCommand(cmEdit);
+}
+
+//********************************************************************************
+
+Procedure GetSumMCAndPlat (var SM: double; var SMNal: double;
+                           var SP: double; var SPNal: double);
+var dValDog: Date;
+{
+  SM := 0;
+  SP := 0;
+  SMNal := 0;
+  SPNal := 0;
+
+  dValDog := if (Dogovor.dValCurse <> Date(0, 0, 0), Dogovor.dValCurse, Dogovor.dDoc);
+
+  if (Dogovor.Direct = 3)
+    _LOOP CalPlan_s where (( prmDogovor         == CalPlan_s.cDogovor AND
+                             word(2)            == CalPlan_s.DirectMC AND
+                             CalPlan_s.cCalPlan == CalPlan_s1.nRec ))
+      {
+        if (CalPlan_s.cCalPlan <> comp(0))
+          if (CalPlan_s1.DirectMC <> 100)
+            Continue;
+
+        SM    := SM    + oValFunc.GetAnyCurrency(CalPlan_s.cVal, CalPlan_s.SummaSpec, dValDog, Dogovor.cVal);
+        SMNal := SMNal + oValFunc.GetAnyCurrency(CalPlan_s.cVal, CalPlan_s.SumNDS   , dValDog, Dogovor.cVal);
+      }
+  else
+    _LOOP CalPlan_s where (( prmDogovor         == CalPlan_s.cDogovor AND
+                             CalPlan_s.cCalPlan == CalPlan_s1.nRec ))
+      {
+        if (CalPlan_s.cCalPlan <> comp(0))
+          if (CalPlan_s1.DirectMC <> 100)
+            Continue;
+
+        if (CalPlan_s.DirectPlat = 0)
+          {
+            SM    := SM    + oValFunc.GetAnyCurrency(CalPlan_s.cVal, CalPlan_s.SummaSpec, dValDog, Dogovor.cVal);
+            SMNal := SMNal + oValFunc.GetAnyCurrency(CalPlan_s.cVal, CalPlan_s.SumNDS   , dValDog, Dogovor.cVal);
+          }
+
+        if (CalPlan_s.DirectMC = 0)
+          {
+            SP    := SP    + oValFunc.GetAnyCurrency(CalPlan_s.cVal, CalPlan_s.Summa , dValDog, Dogovor.cVal);
+            SPNal := SPNal + oValFunc.GetAnyCurrency(CalPlan_s.cVal, CalPlan_s.SumNDS, dValDog, Dogovor.cVal);
+          }
+      }
+}
+
+//********************************************************************************
+
+Procedure PereSchetSumDog;
+var SMC, SMCNal, SPlat, SPlatNal: double;
+{
+  if not WasEditCalPlan
+    Exit;
+
+  if ( wGetTune('Dog.ReSchetSumDog') = 0 )
+    Exit;
+
+  GetSumMCAndPlat(SMC, SMCNal, SPlat, SPlatNal);
+
+  if ( SMC < SPlat )
+    {
+      SMC    := SPlat;
+      SMCNal := SPlatNal;
+    }
+
+  if f_DoublesAreEqual(Dogovor.Summa, SMC, 0.001)
+    Exit;
+
+  case wGetTune('Dog.ReSchetSumDog') of
+  //-----------------------------------
+    1:
+      {
+      }
+  //-----------------------------------
+    2:
+      {
+        if ( Message('Изменилась сумма по календарному плану.'#13+
+                     'Установить сумму по договору равной сумме календарного плана?', YesNo) <> cmYes )
+          Exit;
+      }
+  //-----------------------------------
+  else
+    Exit;
+  end;
+
+  Dogovor.Summa  := SMC;
+  Dogovor.SumNDS := SMCNal;
+
+  if ( update current Dogovor = tsOk )
+    {
+      oDogFuns.UpDateInsertDogovorSoprHoz(Dogovor.Buffer);
+      oDogFuns.RecalcSchema(Dogovor.nRec);
+    }
+}
+
+Procedure RunCalPlanDopFunc(sDopFunc: string);
+{
+  if not UpdateTable
+    Exit;
+
+  RunInterface('SimpleWayToRunAlgorithm', coGetTune('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc' + sDopFunc)
+                                        , word(0)
+                                        , prmDogovor
+                                        , CalPlan.nRec);
+  RereadRecord(#CalPlan1);
+}
+
+//******************************************************************************
+
+Procedure OnAccording;
+{
+  SetFormat(srHIOKR);
+  SetFormat(brCalPlan1);
+}
+
+//********************************************************************************
+var
+  PrMCType  : array[1..2] of string;
+  PrMCTypeDS: array[1..5] of string;
+
+//********************************************************************************
+
+Procedure ToMenuAdd(TuneName: string; TuneCommand: word; aMenu: longint);
+var AlgName: string;
+{
+  AlgName := sGetTune(TuneName);
+
+  if ( AlgName <> '' )
+    AddMenuItemEx(aMenu, AlgName, AlgName, 'Zakaz_UserLM', TuneCommand, 0)
+}
+
+//******************************************************************************
+
+HandleEvent
+
+//********************************************************************************
+
+cmEdit:
+  {
+    if GetFirst CalPlan <> tsOk
+      Exit;
+
+    UpdateToolBarView;
+
+    WasEditCalPlan := TRUE;
+
+    if CalPlan.DirectPlat = 0
+      oChkSchem.CheckSchem(CalPlan.cDogovor, Dogovor.TiDk, CalPlan.nRec, word(403), TRUE);
+
+    if CalPlan.DirectMC = 0
+      RunWindowModal(winCalPlan_Opl)
+    else
+      if CalPlan.DirectMC = 100
+        RunWindowModal(winCalPlan_Common)
+      else
+        RunWindowModal(winCalPlan_Otgr);
+
+    DogToObj;
+
+    var c: comp; c := CalPlan.nRec;
+    var c2: comp; c2 := CalPlan.cCalPlan;
+
+    UpdateTable;
+
+    CurGroup := c2;
+
+    TreeJumpToRecord(brCalPlan1, c);
+
+    RescanPanel(#CalPlan1);
+
+    SetFieldProtected(#CalPlan.NoDoc    , TRUE);
+    SetFieldProtected(#CalPlan.NoDoc_Ext, TRUE);
+  }
+
+//********************************************************************************
+
+cmQueryStartDrag:
+  if  (DNDCurField = #CalPlanName)
+      AND
+      ((CalPlan1.DirectMC*CalPlan1.DirectPlat) = 0)
+      AND
+      if(CalPlan1.cCalPlan = 0, TRUE, OwnerCP.DirectMC = 100)
+    {
+      DNDSetDropEffect(DROPEFFECT_COPY or DROPEFFECT_MOVE);
+      DNDSetData(CalPlanBrowserFormat, CalPlan1.nRec);
+    }
+
+//********************************************************************************
+
+cmDragEnter:
+  if  (DNDCurField = #CalPlanName)
+      AND
+      (DNDQueryGetData(CalPlanBrowserFormat) = S_OK)
+    {
+      if DNDCheckKeyState(MK_SHIFT)
+        DNDSetDropEffect(DROPEFFECT_COPY)
+      else
+        DNDSetDropEffect(DROPEFFECT_MOVE);
+    }
+
+//********************************************************************************
+
+cmDragOver:
+  if (DNDCurField = #CalPlanName)
+    {
+      if not TreeNodeIsOpen(MainTree)
+        {
+          TreeOpenNode(MainTree);
+          RescanPanel(#CalPlan1);
+        }
+
+      if DNDCheckKeyState(MK_SHIFT)
+        DNDSetDropEffect(DROPEFFECT_COPY)
+      else
+        DNDSetDropEffect(DROPEFFECT_MOVE);
+    }
+
+//********************************************************************************
+
+cmDrop:
+  if  (DNDCurField = #CalPlanName)
+        AND
+        (DNDQueryGetData(CalPlanBrowserFormat) = S_OK)
+        AND
+        (CalPlan1.DirectMC = 100)
+    {
+      var pCalPlan: comp;
+      DNDGetData(CalPlanBrowserFormat, pCalPlan);
+      if DNDCheckKeyState(MK_SHIFT)
+        {
+          DNDSetDropEffect(DROPEFFECT_COPY);
+          iIerCP.MakeCopyIerarhyOfCalPlan(prmDogovor, prmDogovor, pCalPlan, CalPlan1.nRec, FALSE, FALSE, word(1));
+        }
+      else
+        {
+          DNDSetDropEffect(DROPEFFECT_MOVE);
+          iIerCP.SetCalPlanOwner(CalPlan.cDogovor, pCalPlan, if(DNDCheckKeyState(MK_CONTROL), comp(0), CalPlan.nRec));
+        }
+
+      RereadRecord(#CalPlan1);
+    }
+
+//********************************************************************************
+
+cmAfterEndDrag:
+  {
+  }
+
+//********************************************************************************
+
+cmInit:
+  {
+    oExtAtr.CreateAttr(coCalPlan, 'НИОКР. Наименование этапа', cgAttrType_Memo);
+    oExtAtr.CreateAttr(coCalPlan, 'НИОКР. Вид отчетности'    , cgAttrType_Str);
+
+    SetFieldAndLabelVisible(#PKP_Stage, oThemeFuncs.NIOKR_Used);
+
+    // Регистрация формата 'CalPlanBrowser'
+    CalPlanBrowserFormat := DNDRegisterFormat('CalPlanBrowser');
+
+    // Устанавливаем приемник
+    DNDFieldAcceptDrag (brCalPlan1, #CalPlanName);
+
+    // Устанавливаем источник
+    DNDFieldDropSource (brCalPlan1, #CalPlanName);
+
+    ClassCode := oExtCls.GetClassCode(coCalPlan,'Наименование ПКП');
+
+    if ( ClassCode = 0)
+      {
+        oExtCls.CreateClass(coCalPlan,'Наименование ПКП',ClassCode);
+        ClassCode := oExtCls.GetClassCode(coCalPlan,'Наименование ПКП');
+      }
+
+    InitDocIconsArray;
+
+    WasEditCalPlan := FALSE;
+    if GetFirst IerCalPl <> tsOk
+      iIerCP.CreateIerCalPlan(0);
+
+    MainTree := brCalPlan1;
+    DirectMCNewCP := 0;
+    DirectPlatNewCP := 0;
+
+    SetColumnSorting(brCalPlan1, #CalPlan.NoDoc, -1);
+    CurOrdBnd := tbOrd_NoDoc;
+    AddBounds(CurOrdBnd);
+    PrMCType[1] := 'Т';
+    PrMCType[2] := 'У';
+
+    PrMCTypeDS[1] := 'Т';
+    PrMCTypeDS[2] := 'У';
+    PrMCTypeDS[3] := 'УП';
+    PrMCTypeDS[4] := 'ДС';
+    PrMCTypeDS[5] := 'ГП';
+
+    if (Dogovor.Direct = 3)
+      SetEnumList(brSpCalPln_Edit, #SpDocs.PrMC, PrMCTypeDS)
+    else
+      SetEnumList(brSpCalPln_Edit, #SpDocs.PrMC, PrMCType);
+
+    SavedCalPlan := 0;
+
+    SetHelpAndStatusContext(brCalPlan1, #KatNotes.sName, sci1478EnEscExTreeA, 0);
+    SetHelpAndStatusContext(brCalPlan1, #ValutName     , sci1478EnEscExTreeA, 0);
+    SetHelpAndStatusContext(brCalPlan1, #period        , sci1478EnEscExTreeA, 0);
+
+    SetFieldVisible(#rltObjName, (Dogovor.VidDog = 12));
+
+    myField1 := 'Операция';
+
+    if (not boGetTune('TProv.PrvzTXO'))
+      {
+        SetFieldVisible(#HozOperViewName, FALSE);
+        SetFieldVisible(#MyField1       , FALSE);
+      }
+
+    InitServTXO(0);
+
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    s_NameRubl := sGetTune('NDE.NameRubl');
+
+    UseDEI := boGetTune('Doc.DEI.CalPlan');
+    AutoDEI := boGetTune('Doc.DEI.Auto.CalPlan');
+
+    if (UseDEI)
+      {
+        cfsSetCurrentContainer('CalPlan');
+
+        cfsSetProp('c_BRSPCALPLN_EDIT_SPDOCS.KOL_Количество', 'CalcButton', FALSE);
+        cfsSetProp('i_SCRSPCALPLN_ADD_SPDOCS.KOL'           , 'CalcButton', FALSE);
+
+        SetHelpAndStatusContext(brSpCalPln_Edit, #SpDocs.Kol, sci1378Esc, 0);
+        SetHelpAndStatusContext(scrSpCalPln_Add, #SpDocs.Kol, sci1378Esc, 0);
+      }
+
+    if (not GetVipRef(iSHoz, 'SHmanager'))
+      {
+        Message('Ошибка: не удалось загрузить интерфейс для работы с журналом хозопераций!', Error);
+        Abort;
+        Exit;
+      }
+
+    if (prmCalPlan = 0)
+      CurGroup := 0
+    else
+      {
+        if (GetFirst CalPlan1 where (( prmCalPlan == CalPlan1.nRec )) <> tsOk)
+          {
+            Message('Пункт календарного плана (CalPlan.nRec = '+string(prmCalPlan)+') не найден', Information);
+            CurGroup := 0;
+          }
+        else
+          {
+            if (CalPlan1.cDogovor <> prmDogovor)
+              {
+                Message('Пункт календарного плана (CalPlan.nRec = '+string(prmCalPlan)+')'#13+
+                        'создан не по договору №'+Dogovor.NoDoc+DateToStr(Dogovor.dDoc, ' от DD/MM/YYYY г.'), Information);
+                CurGroup := 0;
+                TreeGetFirst(MainTree);
+              }
+            else
+              {
+                CurGroup := CalPlan1.cCalPlan;
+                TreeJumpToRecord(MainTree, prmCalPlan);
+                PutCommand(cmEdit);
+              }
+          }
+      }
+
+    hMarker := InitMarker('CalPlan_Marker', 8, 100, 100);
+    ClearMarker(hMarker);
+
+    if ( not Lic_ItemExists('CEL_UCH') )
+      SetTabbedSheetVisible(scKauEdit, false);
+    else
+      BindEmbeddedInterface(scKauEdit, oLinkMtr2Spec);
+
+    if ( (not Lic_ItemExists('CEL_UCH')) or (not boGetTune('Oper.CelUch.ShowKAU')) )
+      {
+        SetFieldVisible(#SaldTune.Name, false);
+        SetFieldVisible(#vsKau1, false);
+        SetFieldVisible(#vsKau2, false);
+        SetFieldVisible(#vsKau3, false);
+        SetFieldVisible(#vsKau4, false);
+        SetFieldVisible(#vsKau5, false);
+        SetFieldVisible(#vsKau6, false);
+        SetFieldVisible(#vsKau7, false);
+        SetFieldVisible(#vsKau8, false);
+        SetFieldVisible(#vsKau9, false);
+        SetFieldVisible(#vsKau10, false);
+      }
+
+    RescanPanel(#CalPlan1);
+  }
+
+//********************************************************************************
+
+cmOnVipLoad:
+  ProcessCommand(cmInit);
+
+//********************************************************************************
+
+cmOnVipUnload:
+  ProcessCommand(cmDone);
+
+//********************************************************************************
+
+cmDone:
+  {
+    DoneServTXO;
+    if (Dogovor.Status = 0)
+      PereSchetSumDog;
+
+    DoneMarker( hMarker, 'CalPlan_Marker' );
+  }
+
+//********************************************************************************
+
+cmSaveDoc:
+  {
+    if NOT IsValid(#CalPlan)
+      Exit;
+
+    SavedCalPlan := CalPlan.nRec;
+
+    if (CalPlan.DirectMC = 0)
+      Message('Запомнен пункт плана №'+CalPlan.NoDoc+' на сумму платежей '+string(CalPlan.Summa)+' '
+                   +string(ValutName)+' ('+DogovorName+')', OkButton)
+    else
+      if (CalPlan.DirectMC = 100)
+        Message('Запомнен обобщенный пункт плана №'+CalPlan.NoDoc, OkButton)
+      else
+        Message('Запомнен пункт плана №'+CalPlan.NoDoc+' на сумму отгрузок '+string(CalPlan.SummaSpec)+' '
+                     +string(ValutName)+' ('+DogovorName+')', OkButton);
+  }
+
+//********************************************************************************
+
+cmRestoreDoc:
+  {
+    if (CurWindow = -1)
+      RestoreCalPlan;
+
+    var c: comp; c := CalPlan.nRec;
+
+    CurGroup := CalPlan.cCalPlan;
+
+    TreeJumpToRecord(MainTree, c);
+
+    RescanPanel(#CalPlan1);
+    RereadRecord(#CalPlan1);
+
+    Stop;
+  }
+
+//********************************************************************************
+
+cmPrintDoc:
+  if (IsValid(#CalPlan) AND IsValidNew(#CalPlan))
+    PrintCalPlan
+  else
+    Message('Нет пунктов календарного плана.', okButton)
+
+//********************************************************************************
+
+cmCancel:
+  if ( not CheckCalPlan )
+    Abort;
+
+//********************************************************************************
+
+cmClose:
+  if ( not CheckCalPlan )
+    Abort;
+
+//********************************************************************************
+
+cmHotKeys:
+  {
+    EnableCommand(cmCopySpecFromClipboard);
+    EnableCommand(cmCopySpecToClipboard);
+    EnableCommand(cmVal6);
+
+    if not IsValid(#CalPlan)
+      {
+        DisableCommand(cmCopySpecFromClipboard);
+        DisableCommand(cmCopySpecToClipboard);
+        DisableCommand(cmVal6);
+      }
+    else
+      {
+        if NOT EditPlanPosEnabled(false)
+        or MakeSpecOnlyFromOwner
+        or (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+           AND
+           boGetTune('DOC.EDITSPCALPLAN')
+          DisableCommand(cmCopySpecFromClipboard)
+        else
+          EnableCommand(cmCopySpecFromClipboard);
+      }
+
+    SetCommandEnabled(cmVal1, (CurTable = #SpDocs) OR (Dogovor.Direct <= 2));
+
+    var Flag: boolean;
+
+    Flag := EditPlanPosEnabled(false) AND not MakeSpecOnlyFromOwner;
+
+    SetCommandEnabled(cmVal7, Flag);
+    SetCommandEnabled(cmVal8, Flag);
+
+    case CurTable of
+    //--------------
+      #SpDocs:
+         {
+           // динамически добавляется меню
+           // связь с книгой финансовых операций (Sanny)
+           if ((SpDocs.PrMC = 2) AND EditPlanPosEnabled(false))
+             {
+               EnableCommand(cmValue21);
+               SetCommandEnabled(cmValue17, (KatUsl.TYPEUSL = 1));
+               SetCommandEnabled(cmValue20, (KatUsl.TYPEUSL = 1));
+             }
+           else
+             {
+               DisableCommand(cmValue21);    //Рассчитать стоимость услуги как % от стоимости МЦ
+               DisableCommand(cmValue17);    //Параметры расчетной услуги
+               DisableCommand(cmValue20);    //Расчет стоимости услуги
+             }
+
+           PutHotCommand(RunDynMenu(MakeMenuWithViewFpOborot(#AddComp('L_DOGOVOR')'mnuCalPlanSp')));
+         }
+    //--------------
+      else
+         {
+           if ( CurWindow = -1)
+             {
+               DisableCommand(cmVal4);
+
+               if IsValid(#CalPlan)
+                 if ( ( CalPlan.DirectPlat = 0 ) AND ( CalPlan.Status = 1 ) AND ( Dogovor.Direct <= 2 ) )
+                   EnableCommand(cmVal4);
+
+               var mnuName, sExtraMnu: string;
+
+               mnuName := #AddComp('L_DOGOVOR')if(Dogovor.Direct > 2, 'mnuCalPlanDS', 'mnuCalPlan');
+
+               sExtraMnu := sGetTune('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc01')
+                          + sGetTune('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc02')
+                          + sGetTune('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc03')
+                          + sGetTune('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc04');
+
+               if ( sExtraMnu <> '' )
+                 {
+                    var MenuID: longint;
+
+                    MenuID := LoadMenu(mnuName);
+
+                    AddMenuItem(MenuID, 'SEPARATOR', 0);
+
+                    ToMenuAdd('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc01', cmValFld7 , MenuID)
+                    ToMenuAdd('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc02', cmValFld8 , MenuID)
+                    ToMenuAdd('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc03', cmValFld9 , MenuID)
+                    ToMenuAdd('OPER.DOGOVOR.LocMnu.CalPlan.DopFunc04', cmValFld10, MenuID)
+
+                    PutHotCommand(RunLoadMenu(MenuID));
+                 }
+               else
+                 PutHotCommand(RunMenu(mnuName));
+             }
+           else
+             if (CalPlan.DirectMC = 0)
+               // динамически добавляется меню
+               // связь с книгой финансовых операций (Sanny)
+               PutHotCommand(RunDynMenu( MakeMenuWithViewFpOborot(#AddComp('L_DOGOVOR')'mnuCalPlanMainFin') ));
+             else
+               // динамически добавляется меню
+               // связь с книгой финансовых операций (Sanny)
+               PutHotCommand(RunDynMenu( MakeMenuWithViewFpOborot(#AddComp('L_DOGOVOR')'mnuCalPlanMain') ));
+         }
+    //--------------
+    end;
+
+    EnableCommand(cmLegend);
+    EnableCommand(cmVal1);
+  }
+
+//********************************************************************************
+
+cmCopySpecFromClipboard:
+  {
+    if (NOT EditPlanPosEnabled(false))
+    or (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+       AND
+       boGetTune('DOC.EDITSPCALPLAN')
+      {
+        Abort;
+        Exit;
+      }
+    else
+      PasteFromSpecClipboard;
+  }
+
+//********************************************************************************
+
+cmViewSpecClipboard:
+  RunInterface ( AdvSpecClipboard, CalPlan.nRec, word(403), word(800) );
+
+//********************************************************************************
+
+cmCopySpecToClipboard:
+{
+  var oCopySpec: iCopySpec;
+
+  oCopySpec.CopySpecDogovorToClipboard(CalPlan.nRec, word(403));
+}
+
+//********************************************************************************
+cmAccording:
+{
+  Stop;
+
+  if NullVipRef(oPKP_ViewTable)
+    {
+      if Not GetVipRef(oPKP_ViewTable, 'iPKP_ViewTable')
+        {
+          Message('Ошибка загрузки интерфейса L_Dogovor::iPKP_ViewTable', Warning);
+          Exit;
+        }
+
+      BindEvent(OnAccording, oPKP_ViewTable.OnAccording);
+    }
+
+  case GetCurrentFormat of
+    srHIOKR, brCalPlan1:
+    {
+      if oPKP_ViewTable.BuildListPKP(prmDogovor)
+        {
+          SetFormat(brCalPlanList);
+          SetFormat(srCalPlanList);
+        }
+    }
+  end;
+}
+//******************************************************************************
+
+cmPickClass:
+  {
+    if (isNew)
+      if (not IsModified)
+        {
+          Message('Переход невозможен, так как не заполнен документ.', okButton);
+          Exit;
+        }
+
+    if (UpdateTable)
+      case CurTable of
+      //--------------
+        #CalPlan1,
+        #CalPlan:
+         if (CalPlan.NRec <> 0)
+           {
+             SaveMyDsk(NOT EditPlanPosEnabled(false), '_CanEditClassifier_');
+             RunInterface(ExClassifier, word(CurTableCode), CalPlan.NRec);
+             RereadRecord(#CalPlan1);
+           }
+      //--------------
+        #SpDocs:
+         if (SpDocs.NRec <> 0)
+           {
+             var _CanEditClassifier_: boolean;
+             _CanEditClassifier_ := FALSE;
+
+             if boGetTune('DOC.EDITSPCALPLAN')
+               if (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+                 _CanEditClassifier_ := TRUE;
+
+             if (not _CanEditClassifier_ AND NOT EditPlanPosEnabled(false))
+               _CanEditClassifier_ := TRUE;
+
+             SaveMyDsk(_CanEditClassifier_, '_CanEditClassifier_');
+             RunInterface(ExClassifier, word(CurTableCode), SpDocs.NRec);
+             RereadRecord(#SpDocs);
+           }
+      //--------------
+      end;
+  }
+
+//********************************************************************************
+
+cmPickAttr:
+  {
+    if (isNew)
+      if (not IsModified)
+        {
+          Message('Переход невозможен, так как не заполнен документ.', okButton);
+          Exit;
+        }
+
+    if (UpdateTable)
+      case CurTable of
+      //--------------
+        #CalPlan1,
+        #CalPlan:
+          if (CalPlan.NRec <> 0)
+            {
+              SaveMyDsk(NOT EditPlanPosEnabled(false), '_CanEditAttribute_');
+              RunInterface(Attribute, word(CurTableCode), CalPlan.NRec);
+              RereadRecord(#CalPlan1);
+            }
+      //--------------
+        #SpDocs:
+          if (SpDocs.NRec <> 0)
+            {
+              var _CanEditAttribute_: boolean;
+              _CanEditAttribute_ := FALSE;
+
+              if boGetTune('DOC.EDITSPCALPLAN')
+                if (RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOk)
+                  _CanEditAttribute_ := TRUE;
+
+              if (not _CanEditAttribute_ AND NOT EditPlanPosEnabled(false))
+                _CanEditAttribute_ := TRUE;
+
+              SaveMyDsk(_CanEditAttribute_, '_CanEditAttribute_');
+              RunInterface(Attribute, word(CurTableCode), SpDocs.NRec);
+              RereadRecord(#SpDocs);
+            }
+      //--------------
+      end;
+  }
+
+//********************************************************************************
+
+cmSetCurTable:
+  {
+    if (
+        (CurTable = #SpDocs)
+        AND
+        ((Target = #CalPlan) or (Target = #CalPlan1))
+       )
+      SetSummaSpec;
+
+    if Target = #SpDocs
+      SetProtectCalPlanSpDocs;
+  }
+
+//********************************************************************************
+
+cmAltInsert:
+  {
+    CalPlanRef := 0;
+    NewCalPlan;
+  }
+
+//********************************************************************************
+
+cmInsLowLevel:
+  {
+    if not IsValid(#CalPlan)
+      Exit;
+
+    if (CalPlan.Status <> 0)
+      {
+        Message('Формирование подчиненных ПКП разрешено только для "оформляемого" ПКП!', Information);
+        Exit;
+      }
+
+    CalPlanRef := CalPlan.nRec;
+    DirectMCNewCP := CalPlan.DirectMC;
+    DirectPlatNewCP := CalPlan.DirectPlat;
+    NewCalPlan;
+  }
+
+//********************************************************************************
+
+cmGoToPrevDoc:
+  {
+    if not UpdateTable
+      Exit;
+
+    var w: word; w := CalPlan1.DirectMC;
+
+    if (GetPrev CalPlan1 = tsOk)
+      {
+        UpdateView;
+
+        if (w = CalPlan1.DirectMC)
+          PutCommand(cmInit);
+        else
+          {
+            PutCommand(cmCancel);
+            PutCommand(cmEdit);
+          }
+      }
+  }
+
+//********************************************************************************
+
+cmGoToNextDoc:
+{
+  if not UpdateTable
+    Exit;
+
+  var w: word; w := CalPlan1.DirectMC;
+
+  if (GetNext CalPlan1 = tsOk)
+    {
+      UpdateView;
+      if (w = CalPlan1.DirectMC)
+        PutCommand(cmInit);
+      else
+        {
+          PutCommand(cmCancel);
+          PutCommand(cmEdit);
+        }
+    }
+}
+
+//********************************************************************************
+
+cmGoToPrevLevel:
+{
+  if not UpdateTable
+    Exit;
+
+  var w: word; w := CalPlan1.DirectMC;
+
+  if (CalPlan1.cCalplan <> 0)
+    if TreeJumpToRecord(MainTree, CalPlan1.cCalplan)
+      {
+        UpdateView;
+        if (w = CalPlan1.DirectMC)
+          PutCommand(cmInit);
+        else
+          {
+            PutCommand(cmCancel);
+            PutCommand(cmEdit);
+          }
+      }
+}
+
+//********************************************************************************
+
+cmGoToNextLevel:
+{
+  if not UpdateTable
+    Exit;
+
+  var w: word; w := CalPlan1.DirectMC;
+
+  if IsValid(#CPAttach)
+    if TreeJumpToRecord(MainTree, CPAttach.nRec)
+      {
+        UpdateView;
+
+        if (w = CalPlan1.DirectMC)
+          PutCommand(cmInit);
+        else
+          {
+            PutCommand(cmCancel);
+            PutCommand(cmEdit);
+          }
+      }
+}
+
+//********************************************************************************
+
+cmNal:
+  if CurWindow = -1
+    {
+      if (Dogovor.Status = 4)
+        {
+          Message('Договор/соглашение имеет статус "закрыт".'#13'Создание ПКП невозможно');
+          Exit;
+        }
+
+      AutoMakeCalPlan;
+      WasEditCalPlan := TRUE;
+    }
+
+//********************************************************************************
+
+cmVal1:
+  if CurWindow = -1
+    {
+      if (Dogovor.Status = 4)
+        {
+          Message('Договор/соглашение имеет статус "закрыт".'#13'Создание ПКП невозможно');
+          Exit;
+        }
+
+      AutoMakeCalPlanOnPodr;
+      WasEditCalPlan := TRUE;
+    }
+
+//********************************************************************************
+
+cmVal2:
+  if CurWindow = -1
+    {
+      if (Dogovor.Status = 4)
+        {
+          Message('Договор/соглашение имеет статус "закрыт".'#13+
+                  'Создание ПКП невозможно');
+          Exit;
+        }
+
+      if (Dogovor.cOrg = 0)
+        {
+          Message('В договоре не установлен контрагент!'#13+
+                  'Автоформирование ПКП невозможно.', Warning);
+          Exit;
+        }
+
+      case Dogovor.Direct of
+      //--------------------
+        1: RunInterface('MakePKPCorpoPlan', Dogovor.nRec, word(1), word(1));  // продажа
+      //--------------------
+        2: RunInterface('MakePKPCorpoPlan', Dogovor.nRec, word(2), word(2));  // закупка
+      //--------------------
+        3: RunInterface('MakePKPCorpoPlan', Dogovor.nRec, word(3), word(1));  // давальческое сырье
+      //--------------------
+      end; //case
+
+      RereadRecord;
+      WasEditCalPlan := TRUE;
+    }
+
+//********************************************************************************
+
+cmVal3:
+  if CurWindow = -1
+    {
+      if (Dogovor.Status = 4)
+        {
+          Message('Договор/соглашение имеет статус "закрыт".'#13+
+                  'Создание ПКП невозможно');
+          Exit;
+        }
+
+      if (Dogovor.cOrg = 0)
+        {
+          Message('В договоре не установлен контрагент!'#13+
+                  'Автоформирование ПКП невозможно.', Warning);
+          Exit;
+        }
+
+      if (Dogovor.Direct = 3)
+        RunInterface('MakePKPCorpoPlan', Dogovor.nRec, word(3), word(2));    // готовая продукция
+
+      RereadRecord;
+      WasEditCalPlan := TRUE;
+    }
+
+//********************************************************************************
+
+cmVal4:
+  {
+    if ( RunWindowModal(WinScrbe3) = cmCancel )
+      Exit;
+
+    var refObj: Dog2AnyDocsObj;
+    GetVipRef(refObj, 'Dog2Nakl');
+
+    var M_DOpredopl: longint;
+    M_DOpredopl := InitMarker('GetDocs', 8, 100, 10, FALSE);
+    ClearMarker(M_DOpredopl);
+
+    delete all SGetDocs;
+
+    ClearBuffer(#SGetDocs);
+
+    SGetDocs.nRec     := 0;
+    SGetDocs.wDocType := 4;
+    SGetDocs.cCalPlan := CalPlan.nRec;
+
+    insert current SGetDocs;
+
+    InsertMarker(M_DOpredopl, SGetDocs.nRec);
+
+    var wParams: word;
+
+    wParams := wNaklAkt;
+    if ( WhereTransf = 1 )
+      wParams := wParams or 256;
+
+    refObj.MakeDocBySelection(M_DOpredopl, 0, 0, 3, wParams);
+
+    DoneMarker(M_DOpredopl, 'GetDocs');
+  }
+
+//********************************************************************************
+
+#include lnkdoccp.vpp // просмотр схемы связей документов
+
+//********************************************************************************
+
+//связь с книгой финансовых операций
+#include fpBook01.vpp
+
+//********************************************************************************
+
+cmHozOper:
+  {
+    if IsModified
+      if not UpDateTable
+        Exit;
+
+    if ( GetFirst FastFirstRow SoprHoz = tsOk )
+      RunInterface('SoprHoz', 1, word(403), 0, SoprHoz.nRec)
+    else
+      Message('Хозоперации по документу отсутствуют', Information);
+
+    // прочитать изменения сделанные в окне привязки ТХО
+    ReReadRecord;
+  }
+
+//********************************************************************************
+
+cmColumnClicked:
+  {
+    var ColSort: longint;
+    ColSort := GetColumnSorting(brCalPlan1, Target);
+    case Target of
+    //------------
+      #CalPlan.NoDoc,
+      #CalPlan.DesGr,
+      #CalPlan.Descr,
+      #CalPlanNote,
+      #period:
+        {
+          SubBounds(CurOrdBnd);
+
+          SetTableBackOrderIn(tnCalPlan1, (ColSort = -1));
+
+          SetColumnSorting(brCalPlan1, Target, if(ColSort <> -1, -1, 1));
+
+          case Target of
+            #CalPlan.NoDoc: CurOrdBnd := tbOrd_NoDoc;
+            #CalPlan.DesGr: CurOrdBnd := tbOrd_DesGr;
+            #CalPlan.Descr: CurOrdBnd := tbOrd_Descr;
+            #CalPlanNote  : CurOrdBnd := tbOrd_Status;
+            #period       : CurOrdBnd := tbOrd_Dates;
+          end;
+
+          AddBounds(CurOrdBnd);
+        }
+    //------------
+    end;
+
+    RescanPanel(#CalPlan1);
+ }
+
+cmValue13:
+  {
+    var lCount, i     : longint;
+    var _NRec , _Note : comp;
+    var kDostup       : word;
+    var bopr_form     : boolean;
+    bopr_form := FALSE;
+    StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm
+                 , 'Идет пакетное изменение статусов ПКП...',Information);
+    lCount := GetMarkerCount(hMarker);
+
+    if (lCount = 0)
+      {
+        InvertMarker(hMarker, CalPlan.NRec);
+        lCount := GetMarkerCount(hMarker);
+      }
+
+    if oStatUser.Stat_Nastr(403)
+      kDostup := 1024;
+
+    if (RunInterface('GetSomKatNotes'
+                   , word(403)
+                   , kDostup
+                   , word(0)
+                   , FALSE
+                  , _Note ) <> cmCancel)
+      {
+        bopr_form := TRUE;
+        StatLogs := 'Пакетное изменение статусов';
+
+        if ( RunDialog(StatlogDial, StatLogs) <> cmCancel )
+          for ( i := 0; i <= lCount-1; inc(i) )
+            if NOT (NextVisual)
+              {
+                frmErr.PutEvent(feBreak);
+                Exit;
+              }
+            else
+              if GetMarker(hMarker, i, _NRec)
+                if CheckChangeStatus(_NRec)
+                  ChangeStatus(_NRec, _Note);
+      }
+
+    ClearMarker(hMarker);
+
+    StopVisual('',0);
+    ReReadRecord;
+
+    if bopr_form  //если Esc при выборе статуса док., протокол выводиться не будет
+      {
+        frmErr.PutEvent(feBreak);
+        if (NOT frmErr.Error)
+          frmErr.ShowFile('');
+        else
+          frmErr.AbortForm;
+      }
+
+  }
+
+cmValue14:
+  if (coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP') <> 0)
+    {
+      var lCount, i     : longint;
+      var _NRec , _Note : comp;
+      var kDostup       : word;
+
+      StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm
+                 ,  'Идет перенумерация ПКП...',Information);
+
+      lCount := GetMarkerCount(hMarker);
+
+      if (lCount = 0)
+        {
+          InvertMarker(hMarker, CalPlan.NRec);
+          lCount := GetMarkerCount(hMarker);
+        }
+
+
+      for ( i := 0; i <= lCount-1; inc(i) )
+        if NOT (NextVisual)
+          Exit;
+        else
+          if GetMarker(hMarker, i, _NRec)
+            if CheckChangeStatus(_NRec)
+              RunInterface('SimpleWayToRunAlgorithm'
+                   , coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP')
+                   , word(0)
+                   , _NRec
+                   , comp(0));
+
+
+      ClearMarker(hMarker);
+      StopVisual('',0);
+      ReReadRecord;
+    }
+  else
+    message('Задайте алгоритм формирования номеров ПКП');
+
+cmVal5:
+  RunInterface('UrgentM', CalPlan.NRec);
+
+cmVal6 :
+  RunInterface('BatchCopyMTR', prmDogovor, hMarker);
+
+//********************************************************************************
+
+cmShowAll: // Раскрыть все ветки
+  {
+    var sav_NRec : comp; sav_NRec := CalPlan1.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, 'Раскрытие всех веток...'#13, 1);
+
+    if ( TreeGetFirst(MainTree) )
+      do
+        {
+          NextVisual;
+          TreeOpenNode(MainTree);
+        }
+      while TreeGetNext(MainTree);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(MainTree, sav_NRec);
+
+    ReScanPanel(#CalPlan1);
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    var sav_NRec : comp;
+
+    while (CalPlan1.cCalPlan <> 0) do
+      TreeJumpToRecord(MainTree, CalPlan1.cCalPlan);
+
+    sav_NRec := CalPlan1.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, 'Сворачивание всех веток...'#13, 1);
+
+    if ( TreeGetFirst(MainTree) )
+      do
+        {
+          NextVisual;
+          TreeCloseNode(MainTree);
+        }
+    while TreeGetNext(MainTree);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(MainTree, sav_NRec);
+
+    ReScanPanel(#CalPlan1);
+  }
+
+//******************************************************************************
+// Установка/Снятие фильтра по типу ПКП
+//******************************************************************************
+cmValue8:
+  {
+    if ConditionActiveInLeave(tcByDirect, #CalPlan1)
+      {
+        PopConditionForLeave(tcByDirect, #CalPlan1);
+        TreeGetFirst(MainTree);
+        ReScanPanel(#CalPlan1);
+      }
+  }
+
+cmValue9:
+  {
+    if Not ConditionActiveInLeave(tcByDirect, #CalPlan1)
+      PushConditionForLeave(tcByDirect, #CalPlan1);
+
+    wDirectPlan := 1;
+
+    TreeGetFirst(MainTree);
+    ReScanPanel(#CalPlan1);
+  }
+
+cmValue10:
+  {
+    if Not ConditionActiveInLeave(tcByDirect, #CalPlan1)
+      PushConditionForLeave(tcByDirect, #CalPlan1);
+
+    wDirectPlan := 2;
+
+    TreeGetFirst(MainTree);
+    ReScanPanel(#CalPlan1);
+  }
+
+cmValFld7:
+  RunCalPlanDopFunc('01');
+
+cmValFld8:
+  RunCalPlanDopFunc('02');
+
+cmValFld9:
+  RunCalPlanDopFunc('03');
+
+cmValFld10:
+  RunCalPlanDopFunc('04');
+
+end;  // HandleEvent
+
+End. // Interface;
+
+//******************************************************************************
+//******************************************************************************
+//******************************************************************************
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+#end
+mnuCalPlan Menu
+{
+- 'Печать пунктов календарного плана', cmPrintDoc, 'Печать пунктов календарного плана', hcdg_pech_PKP, 'Ctrl+P', kbCtrlP, sci1Esc;
+- 'Пакетное изменение статусов ПКП', cmValue13, 'Пакетное изменение статусов ПКП', hcM_dogov_Paket_Izm_Statys, , , sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+ = 'Фильтр по типу ПКП', , hcBCTO_Filtr_TipPKP, scMenuCtx;
+{
+  - 'снять'         , cmValue8 , 'Снять фильтр по типу ПКП'        , hcBCTO_Filtr_TipPKP, , , sci1Esc;
+  - 'товарные ПКП'  , cmValue9 , 'Отобразить только товарные ПКП'  , hcBCTO_Filtr_TipPKP, , , sci1Esc;
+  - 'финансовые ПКП', cmValue10, 'Отобразить только финансовые ПКП', hcBCTO_Filtr_TipPKP, , , sci1Esc;
+}
+-----------;
+- 'Сохранить документ в буфер', cmSaveDoc, 'Сохранение документа в буфер', hcctxSoprSaveDoc, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+- 'Копирование документа из буфера', cmRestoreDoc, 'Копировать сохраненный в буфере документ', hcctxSoprRestoreDoc, 'Ctrl+F3', kbCtrlF3, sci1Esc;
+-----------;
+- 'Представление товарных ПКП в виде списка/таблицы', cmAccording, 'Переключает режим отображения на табличный', hcBCTO_Predst_Tov_PKP,'Alt+S', kbAltS, sci1Esc;
+-----------;
+ = 'Автоформирование пунктов календарного плана', , , scMenuCtx;
+{
+  - 'пакетное', cmNal, 'Пакетное формирование ПКП', hcdgAvtoMakePlanPunkt, 'Alt+F', kbAltF, sci1Esc;
+  - 'с группировкой по центрам ответственности', cmVal1, 'Автоформирование ПКП с группировкой по центрам ответственности', hcdgAvtoMakePlanPunkt, '', , sci1Esc;
+  - 'на основе корпоративных планов', cmVal2, 'Автоформирование ПКП на основе корпоративных планов', hcdgLocMAutoPKPCorpPlan, '', , sci1Esc;
+}
+- 'Формирование сопроводительного документа по ПКП', cmVal4, 'Формирование сопроводительного документа на основе текущего ПКП', hcN_Form_Soprov_Dok, '', , sci1Esc;
+-----------;
+- 'Хозоперации по документу', cmHozOper, 'Просмотр хозопераций по документу', hcXozOperDOC, 'Ctrl+H', kbCtrlH, sci1Esc;
+- 'Неотложные мероприятия', cmVal5, 'Неотложные мероприятия по ПКП', hcN_Klassif_Neotl_Meropr, '', , sci1Esc;
+-----------;
+- 'Перенумеровать номера ПКП', cmValue14, 'Перенумеровать номера ПКП', hcM_dogov_Perenym_N_PKP,,,sci1Esc;
+-----------;
+- 'Пакетная привязка спецификации ПКП к объекту целевого учета', cmVal6, 'Пакетная привязка спецификации ПКП к объекту целевого учета', hci_dogov_Priv_Pak_PKP, '', , sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+Для КП давальческого договора/соглашения
+#end
+mnuCalPlanDS Menu
+{
+- 'Печать пунктов календарного плана', cmPrintDoc, 'Печать пунктов календарного плана', hcdg_pech_PKP, 'Ctrl+P', kbCtrlP, sci1Esc;
+- 'Пакетное изменение статусов ПКП', cmValue13, 'Пакетное изменение статусов ПКП', hcM_dogov_Paket_Izm_Statys, , , sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+ = 'Фильтр по типу ПКП', , hcBCTO_Filtr_TipPKP, scMenuCtx;
+{
+  - 'снять'         , cmValue8 , 'Снять фильтр по типу ПКП'        , hcBCTO_Filtr_TipPKP, , , sci1Esc;
+  - 'товарные ПКП'  , cmValue9 , 'Отобразить только товарные ПКП'  , hcBCTO_Filtr_TipPKP, , , sci1Esc;
+  - 'финансовые ПКП', cmValue10, 'Отобразить только финансовые ПКП', hcBCTO_Filtr_TipPKP, , , sci1Esc;
+}
+-----------;
+- 'Сохранить документ в буфер', cmSaveDoc, 'Сохранение документа в буфер', hcctxSoprSaveDoc, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+- 'Копирование документа из буфера', cmRestoreDoc, 'Копировать сохраненный в буфере документ', hcctxSoprRestoreDoc, 'Ctrl+F3', kbCtrlF3, sci1Esc;
+-----------;
+- 'Представление товарных ПКП в виде списка/таблицы', cmAccording, 'Переключает режим отображения на табличный', hcBCTO_Predst_Tov_PKP,'Alt+S', kbAltS, sci1Esc;
+-----------;
+ = 'Автоформирование пунктов календарного плана', , , scMenuCtx;
+{
+  - 'пакетное', cmNal, 'Пакетное формирование ПКП', hcdgAvtoMakePlanPunkt, 'Alt+F', kbAltF, sci1Esc;
+  - 'с группировкой по центрам ответственности', cmVal1, 'Автоформирование ПКП с группировкой по центрам ответственности', hcdgAvtoMakePlanPunkt, '', , sci1Esc;
+  - 'на передачу давальческого сырья', cmVal2, 'Автоформирование ПКП на основе корпоративных планов', hcdgLocMAutoPKPDavS, '', , sci1Esc;
+  - 'на возврат готовой продукции', cmVal3, 'Автоформирование ПКП на основе корпоративных планов', hcdgLocMAutoPKPDavProd, '', , sci1Esc;
+}
+-----------;
+- 'Хозоперации по документу', cmHozOper, 'Просмотр хозопераций по документу', hcXozOperDOC, '', , sci1Esc;
+- 'Неотложные мероприятия', cmVal5, 'Неотложные мероприятия по ПКП', hcN_Klassif_Neotl_Meropr, '', , sci1Esc;
+-----------;
+- 'Перенумеровать номера ПКП', cmValue14, 'Перенумеровать номера ПКП', hcM_dogov_Perenym_N_PKP,,,sci1Esc;
+-----------;
+- 'Пакетная привязка спецификации ПКП к объекту целевого учета', cmVal6, 'Пакетная привязка спецификации ПКП к объекту целевого учета', hci_dogov_Priv_Pak_PKP, '', , sci1Esc;
+}
+//******************************************************************************
+
+#doc
+Локальное меню шапки товарного ПКП окна редактирования интерфейса <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+#end
+mnuCalPlanMain Menu
+{
+- 'Печать пунктов календарного плана', cmPrintDoc, 'Печать пунктов календарного плана', hcdg_pech_PKP, 'Ctrl+P', kbCtrlP, sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+- 'Вхождение в группы документов', cmValue12, 'в группы документов', hcDG_VxodGruppDok, '', , sci1Esc;
+- 'Просмотр схем связей между документами', cmLegend, 'Просмотр схем связей между документами', hcdgDocRelationView, 'Alt+U', kbAltU, sci1Esc;
+- 'Формирование схемы связей между документами', cmValue11, 'Автоматическое формирование схемы связей между документами', hcdgM1DocRelationPlan, , , sci1Esc;
+-----------;
+#include clipbrd.mnh
+---------------;
+- 'Разноска Объектов целевого учета по спецификации', cmVal8, 'Выбор Объектов целевого учета для нескольких позиций спецификации', hcUKS_RaznosPoSpesific, '', , sci1Esc;
+-----------;
+- 'Отобразить спецификацию в виде сметы', cmValue60, 'Отобразить спецификацию в виде сметы', hcuks_Otobraz_Sp_VidSmet,'', , sci1Esc;
+---------------;
+- 'Пересчитать цены по коэффициенту', cmValFld12, 'Пересчитать цены по коэффициенту', hcm_dogov_Peresch_Koff, '', , sci1Esc;
+- 'Пересортировка спецификации', cmSortMC, 'Пересортировка спецификации', hcCtxSortMC, , , sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Локальное меню финансового ПКП окна редактирования интерфейса <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+#end
+mnuCalPlanMainFin Menu
+{
+- 'Печать пунктов календарного плана', cmPrintDoc, 'Печать пунктов календарного плана', hcdg_pech_PKP, 'Ctrl+P', kbCtrlP, sci1Esc;
+-----------;
+- 'Вхождение в группы документов', cmValue12, 'в группы документов', hcDG_VxodGruppDok, '', , sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Локальное меню спецификации товарного ПКП окна редактирования интерфейса <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+Для КП давальческого договора/соглашения
+#end
+mnuCalPlanSp Menu
+{
+- 'Замены', cmFilialNo, 'Формирование возможных замен для позиции', hcDogM_Zamen, 'Alt+N', kbAltN, sci1Esc;
+- 'Составляющие комплекта', cmInsertEditKN, 'Просмотр составляющих комплекта', hcBSTO_Sost_Komplekt, 'Alt+K', kbAltK, sci1Esc;
+= 'Ведомость определения учетных цен комплектных МТР', 'Ведомость определения учетных цен комплектных МТР',, sci1Esc;
+  {
+    - 'Печать',    cmValue27,,,,, sci1Esc;
+    - 'Настройка Excel-отчета', cmValue28,,,,, sci1Esc;
+  }
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt+C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt+A', kbAltA, sci1Esc;
+-----------;
+- 'Рассчитать стоимость услуги как % от стоимости МЦ', cmValue21, 'Рассчитать стоимость услуги как % от стоимости МЦ', hcSellM1SumUslPart, , , sci1Esc;
+- 'Расчет стоимости услуги', cmValue20, 'Отчет - Расчет стоимости услуги', hccuMCalc, '', , sci1Esc;
+- 'Параметры расчетной услуги', cmValue17, 'Просмотр и изменение параметров расчетной услуги', hccuMInPar, '', , sci1Esc;
+-----------;
+- 'Пересчет налогов спецификации', cmValFld17, 'Пересчет налогов спецификации', , , , sci1Esc;
+-----------;
+-'Целевой учет', cmIerarchy, '', hcUKS_LokM_Chelev, 'Ctrl+U', kbCtrlU, sci1Esc;
+#include clipbrd.mnh
+}
+
+//******************************************************************************
+
+#doc
+Для выбора типа создаваемого документа. Используется в интерфейсе <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+#end
+mnuCalPlanNew Menu
+{
+- 'Движение МЦ/Услуг', cmValue1, 'Создать пункт плана на движение товаров/услуг', hcDg_Lok_dvMat, , , sci1Esc;
+- 'Движение финансов', cmValue2, 'Создать пункт плана на движение финансов'     , hcDg_Lok_Finans, , , sci1Esc;
+- 'Обобщенный ПКП'   , cmValue4, 'Создать обобщенный пункт плана'               , hcDG_ObobPKP, , , sci1Esc;
+-----------;
+- 'Подчиненный на текущем уровне', cmValue5, 'Создать подчиненный ПКП на текущем уровне', hcDg_Lok_PodTek, , , sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Для выбора типа создаваемого документа. Используется в интерфейсе <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+#end
+mnuCalPlanNew2 Menu
+{
+ = 'Движение МЦ/Услуг', 'Создать пункт плана на движение товаров/услуг', hcDg_Lok_dvMat, scMenuCtx;
+{
+  - 'с направлением договора/соглашения'                , cmValue1, 'Создать пункт плана на движение товаров/услуг', hcDg_Lok_dvMat, , , sci1Esc;
+  - 'с направлением противоположным договору/соглашению', cmValue3, 'Создать пункт плана на движение товаров/услуг', hcDg_Lok_dvMat, , , sci1Esc;
+}
+- 'Движение финансов', cmValue2, 'Создать пункт плана на движение финансов' , hcDg_Lok_Finans, , , sci1Esc;
+- 'Обобщенный ПКП'   , cmValue4, 'Создать обобщенный пункт плана'           , hcDG_ObobPKP   , , , sci1Esc;
+-----------;
+- 'Подчиненный на текущем уровне', cmValue5, 'Создать подчиненный ПКП на текущем уровне', hcDg_Lok_PodTek, , , sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Для определения источника позиций, добавляемых в ПКП. Используется в интерфейсе <link Interface L_Dogovor::CalPlan>L_Dogovor::CalPlan - Календарный план</link>
+#end
+mnuCalPlanSpSogl Menu
+{
+-'Выбор из спецификации договора', cmValFld3, 'Выбор МЦ/услуг из спецификации договора', , '', , sci1Esc;
+-'Выбор из прайс-листа', cmValFld4, 'Выбор МЦ/услуг из прайс-листа', , '', , sci1Esc;
+-'Выбор из каталога', cmValFld5, 'Выбор МЦ/услуг из каталога', , '', , sci1Esc;
+-'Выбор из объектов недвижимости', cmValFld6, 'Выбор из объектов недвижимости', hcm_nedvig_Fynk_VB_ObDogovor, '', , sci1Esc;
+-'Выбор из смет', cmMulSelDO, 'Выбор позиции из смет', hcm_zakup_Lok_Smeta, 'Ctrl+I', kbCtrlI, sci1Esc;
+}
+
+//******************************************************************************
+
+RecalcKoef DIALOG
+  HelpCtx hcm_dogov_Peresch_Koff;
+  StatusCtx scGalDial;
+Fields
+  doKoef('Коэффициент пересчета'): double[12.4];
+Buttons
+  cmOk, Default, , 'Подтверждение ввода';
+  cmCancel, , , 'Выход';
+
+<<'Коэффициент пересчета'
+
+ Коэффициент пересчета .@@@@@@@
+
+ <.~П~родолжить.>  <. ~О~тмена .>
+>>
+
+//******************************************************************************
+
+StatlogDial DIALOG
+  HelpCtx   hcM_dogov_Paket_Izm_Statys;
+  StatusCtx scGalDial;
+Fields
+  StLogs('Примечание Пояснение к изменению статуса документа'): string[80];
+Buttons
+  cmOk, Default, , 'Подтверждение ввода';
+<<' Комментарий к изменению статуса'
+
+ Комментарий к изменению статуса:
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+                          <.~П~родолжить.>
+>>
+
+//******************************************************************************

@@ -1,0 +1,157 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Печать накладной на отпуск самовывозом                    ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+! Описание номеров полей смотри в файле DOCFRM\albums.doc (форма ПД9)
+
+#include oEdIzm.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Печать накладной на отпуск самовывозом
+
+Параметры:
+  pNRec - ссылка на сопр.документ
+#end
+
+//******************************************************************************
+
+Interface PrintNakSamVivoz 'Печать накладной на самовывоз' EscClose;
+
+#include oEdIzm.var
+
+Create view
+var
+  x            : word;
+  pNRec: comp;
+  koefp,aSumma,
+  aNDS,aGSM,
+  aMassa       : double;
+from
+  KatSopr
+, SpSopr
+, KatMC
+, SpDocNal
+, StepDoc
+, BaseDoc
+, KatOrg
+, NZakaz
+, KatOtpEd
+, KatEd
+;
+parameters
+  pNRec;
+
+form FrmSamVivoz('samvivoz.rtf','naksamvivoz') with novisual;
+
+HandleEvent
+cmInit :
+  {
+    Abort;
+    if (GetFirst KatSopr where ((pNRec == KatSopr.NRec)) <> tsOk)
+      {
+        Message(''#3'Невозможно найти печатаемый документ...',CancelButton);
+        Exit;
+      }
+    if (GetFirst SpSopr where ((word(1)      == SpSopr.PRMC and
+                                KatSopr.NRec == SpSopr.cSopr)) <> tsOK)
+      {
+        Message(''#3'В документе нет позиций спецификации с матценностями...',CancelButton);
+        Exit;
+      }
+    if ( (KatSopr.cStepdoc <> 0) and
+         (GetFirst StepDoc where ((KatSopr.cStepDoc == StepDoc.NRec)) = tsOk) and
+         (GetFirst BaseDoc where ((StepDoc.cBaseDoc == BaseDoc.NRec)) = tsOk) )
+      frmSamVivoz.Write(BaseDoc.NoDoc);
+    else
+      frmSamVivoz.SkipFormat(1)
+
+    if (GetFirst KatOrg where ((KatSopr.cGruzFrom == KatOrg.NRec)) = tsOk)
+      frmSamVivoz.Write(KatOrg.Name)
+    else
+      frmSamVivoz.SkipFormat(1);
+
+    if (GetFirst KatOrg where ((KatSopr.cGruzTo == KatOrg.NRec)) = tsOk)
+      {
+        frmSamVivoz.Write(KatOrg.Name);
+        frmSamVivoz.Write(KatOrg.Addr);
+      }
+    else
+      frmSamVivoz.SkipFormat(2);
+
+    frmSamVivoz.Write(KatSopr.sDover);
+    frmSamVivoz.SkipFormat(1);
+    if ( (KatSopr.cNZakaz <> 0) and
+         (GetFirst NZakaz where ((KatSopr.cNZakaz == NZakaz.NRec)) = tsOk) )
+      frmSamVivoz.Write(NZakaz.NoDoc);
+    else
+      frmSamVivoz.SkipFormat(1);
+
+    if (GetFirst KatOrg where ((KatSopr.cOrg == KatOrg.NRec)) = tsOk)
+      frmSamVivoz.Write(KatOrg.Name);
+    else
+      frmSamVivoz.Skipformat(1);
+
+    frmSamVivoz.Write(KatSopr.NSopr);
+    aSumma := 0;  aNDS := 0; aGSM := 0; aMassa := 0;
+    _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+                                ordered by index SpSopr02
+      if (SpSopr.PRMC = 1)
+        {
+          if (GetFirst FastFirstRow KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) <> tsOk)
+            ClearBuffer(#KatMC);
+          frmSamVivoz.Write(KatMC.Name);
+          koefp := 1;
+          if (SpSopr.cOtpEd <> 0)
+            {
+              frmSamVivoz.Write(fEdIzm.GetNameOtpEd(SpSopr.cOtpEd));
+              koefp := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+            }
+          else
+            frmSamVivoz.Write(fEdIzm.GetKatEdName(KatMC.cEd));
+
+          frmSamVivoz.Write(SpSopr.KolFact * koefp * KatMC.massa,3);
+          aMassa := aMassa + (SpSopr.KolFact * koefp * KatMC.Massa);
+          if (katSopr.VhodNal <> 1)
+            {
+              frmSamVivoz.Write(SpSopr.Price,2);
+              frmSamVivoz.Write(SpSopr.KolFact * SpSopr.Price,2);
+              aSumma := aSumma + (SpSopr.Price * SpSopr.KolFact);
+            }
+          else
+            {
+              frmSamVivoz.Write(SpSopr.Price - (SpSopr.SumNDS / SpSopr.KolFact),2);
+              frmSamVivoz.Write((SpSopr.KolFact * SpSopr.Price) - SpSopr.SumNDS,2);
+              aSumma := aSumma + (SpSopr.Price * SpSopr.KolFact) - SpSopr.SumNDS;
+            }
+          _LOOP SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc and
+                                     SpSopr.NRec == SpDocNal.cSpDoc))
+            {
+              if (SpDocNal.cNalog = coGetTune('Nalog.cNalogNDS'))
+                aNDS := aNds + SpDocNal.Summa;
+              if (SpDocNal.cNalog = coGetTune('Nalog.cNalogAkcis'))
+                aGSM := aGSM + SpDocNal.Summa;
+            }
+        }
+    frmSamVivoz.PutEvent(feBreak);
+    if (aGSM <> 0)
+      frmSamVivoz.Write(aGSM / aSumma * 100,2)
+    else
+      frmSamVivoz.Write(0);
+
+    frmSamVivoz.Write(aGSM,2);
+
+    if (aNDS <> 0)
+      frmSamVivoz.Write(aNDS / aSumma * 100,2)
+    else
+      frmSamVivoz.Write(0);
+
+    frmSamVivoz.Write(aNDS,2);
+    frmSamVivoz.Write(aSumma + aGSM + aNDS,2);
+    frmSamVivoz.Write(aMassa,3);
+    frmSamVivoz.ShowFile;
+  }
+end;
+
+End.

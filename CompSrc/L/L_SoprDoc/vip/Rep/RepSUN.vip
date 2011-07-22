@@ -1,0 +1,734 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+//******************************************************************************
+#include tgFpVal.vih
+#include xlReport.Vih  //Excel
+#include oEdIzm.vih
+//******************************************************************************
+
+Interface iRepSUN 'Отчет о поставках за период' EscClose, Cyan;
+  Show at (,,100,20);
+
+Table STRUCT tmpKat ""
+(
+  NRec          : comp        
+, cMC           : comp
+, cCompl        : comp
+, cOrg          : comp
+, cDogovor      : comp
+, cAppDogovor   : comp
+, Sum           : Array [1..8] of Double
+, Kol           : double
+, NoDoc         : string
+, dDoc          : date
+, sEdIzm        : string
+, nSogl         : string
+, dSogl         : date
+)
+With Index
+(
+  tmpKat01 = NRec(Unique,AutoInc)
+, tmpKat02 = cOrg + cDogovor + cAppDogovor + cMc + cCompl
+, tmpKat03 = dDoc + NoDoc
+, tmpKat04 = cCompl
+);
+
+//******************************************************************************
+Var pxlrepsetup : xlrepsetup;
+//******************************************************************************
+
+Create View
+Var
+  cNastr
+, CurGroup  : comp;
+  
+  NumPick
+, TypeSopr  : Word;
+
+  ID
+, sXLSFileName
+, sXLTFileName : string;
+
+  pXL       : XLSRepBuilder;      // Excel
+
+As select
+  *
+from
+  KatSopr
+, KatSopr ActMC
+, SpSopr
+, SpSopr  SpActMC
+, UserDeskRep
+, KatMC
+, KatMC   KatMC2
+, KatMC   KatMC3
+, KatOrg
+, KatOrg  KatOrg2
+, Dogovor
+, Dogovor Dogovor1
+, Dogovor AppDogovor
+, SpDocs
+, SpDocs  SpDocs2
+, PickRep
+, tmpKat
+, tmpKat tmpKat2
+, KatOtpEd
+
+where
+((
+      cNastr                  == UserDeskRep.NRec
+  AND KatSopr.cDogovor        == Dogovor1.NRec
+  AND KatSopr.cAppDogovor     == AppDogovor.NRec
+
+  AND word(1)                 == SpSopr.PrMC
+  AND SpSopr.cMcUsl           == KatMC.NRec
+
+  AND tmpKat.cOrg             == KatOrg.NRec
+  AND tmpKat.cMc              == KatMC2.NRec
+
+  AND tmpKat2.cOrg             == KatOrg2.NRec
+  AND tmpKat2.cMc              == KatMC3.NRec
+))
+
+bounds byDate =
+        TypeSopr               ==  KatSopr.VidSopr
+    AND UserDeskRep.ResDate[1] <<= KatSopr.dSopr
+    AND UserDeskRep.ResDate[2] >>= KatSopr.dSopr 
+      
+;
+
+//************************************************************************
+
+Procedure PrintDocuments;
+var 
+  Koef, Sum2, Sum3, Sum4, Sum5, Sum6, Sum7 : double;
+{
+#ifdef Gal8_1
+  ID := 'L_SoprDoc\OtchUN';
+#else
+  ID := 'oper\OtchUN';
+#end
+
+  if (UserDeskRep.ResName[5] = '')
+    {
+      if (not ReadMyDsk(sXLTFileName,ID,true))
+#ifdef Atl51
+        set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+#else
+        Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+#endif
+    }
+  else
+    set sXLTFileName := UserDeskRep.ResName[5];
+
+  if not pxlrepsetup.checkParam(0,ID,sXLTFileName)
+    runinterface('xlrepsetup',1,ID,sXLTFileName);
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+!   Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);                           
+  pXL.SetStringVar('CurDate', DateToStr(Cur_Date, 'DD/MM/YYYY'));
+  pXL.SetStringVar('bDate'  , DateToStr(UserDeskRep.ResDate[1], 'DD/MM/YYYY'));
+  pXL.SetStringVar('eDate'  , DateToStr(UserDeskRep.ResDate[2], 'DD/MM/YYYY'));
+  pXL.PublishVar;  // Excel                      
+                                                         
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('Nakl');
+
+  pXL.CreateTblFld('NPP');
+  pXL.CreateTblFld('Kotragent');
+  pXL.CreateTblFld('DogNum');
+  pXL.CreateTblFld('DogDate');
+  pXL.CreateTblFld('SpecNum');
+  pXL.CreateTblFld('SpecDate');
+  pXL.CreateTblFld('MCName');
+  pXL.CreateTblFld('MCKod');
+  pXL.CreateTblFld('EdIzm');
+  pXL.CreateTblFld('Kol');
+  pXL.CreateTblFld('Sum');
+  pXL.CreateTblFld('Vsego');
+  pXL.CreateTblFld('MTRPut');
+  pXL.CreateTblFld('NeOtP');
+  pXL.CreateTblFld('PostAD');
+  pXL.CreateTblFld('OtvXr');
+  pXL.CreateTblFld('NalPos');
+
+  var nPP : longint; nPP := 0;
+
+  _LOOP tmpKat ordered by index tmpKat03
+     {
+       if (tmpKat.cCompl <> 0)
+         Continue;
+
+       Sum3 := tmpKat.Sum[5] - tmpKat.Sum[6];
+       Sum4 := tmpKat.Sum[2] - tmpKat.Sum[3];
+       Sum5 := tmpKat.Sum[3];
+       Sum6 := tmpKat.Sum[4];
+       Sum7 := tmpKat.Sum[7] - tmpKat.Sum[8];
+
+       _LOOP tmpKat2 where (( tmpKat.cMC == tmpKat2.cCompl ))
+        {
+          Sum3 := Sum3 + tmpKat2.Sum[5] - tmpKat2.Sum[6];
+          Sum4 := Sum4 + tmpKat2.Sum[2] - tmpKat2.Sum[3];
+          Sum5 := Sum5 + tmpKat2.Sum[3];
+          Sum6 := Sum6 + tmpKat2.Sum[4];
+          Sum7 := Sum7 + tmpKat2.Sum[7] - tmpKat2.Sum[8];
+        }
+
+       Sum2 := Sum3 + Sum4 + Sum5 + Sum6;
+
+       inc(nPP);
+       
+       pXL.ClearTblBuffer;
+       pXL.SetTblNumberFldValue('NPP'      , nPP);
+
+       if IsValid(#KatOrg)
+         pXL.SetTblStringFldValue('Kotragent', KatOrg.Name);
+
+       pXL.SetTblStringFldValue('DogNum'   , tmpKat.NoDoc);
+       pXL.SetTblStringFldValue('DogDate'  , DateToStr(tmpKat.dDoc, 'DD/MM/YYYY'));
+       pXL.SetTblStringFldValue('EdIzm'    , tmpKat.sEdIzm);
+       pXL.SetTblNumberFldValue('Kol'      , tmpKat.Kol);
+       pXL.SetTblStringFldValue('SpecNum'  , tmpKat.nSogl);
+
+       if (tmpKat.dSogl <> ZeroDate)
+         pXL.SetTblStringFldValue('SpecDate' , DateToStr(tmpKat.dSogl, 'DD/MM/YYYY'));
+
+       if IsValid(#KatMC2)
+         {
+           pXL.SetTblStringFldValue('MCName'   , KatMC2.Name); 
+           pXL.SetTblStringFldValue('MCKod'    , KatMC2.BarKod);
+         }
+
+       pXL.SetTblNumberFldValue('Sum'   , tmpKat.Sum[1]); // сумма по договору
+       pXL.SetTblNumberFldValue('Vsego' , Sum2); // всего поставлено по актам
+       pXL.SetTblNumberFldValue('MTRPut', Sum3); // МТР в пути
+       pXL.SetTblNumberFldValue('NeOtP' , Sum4); // неотфактурованные поставки
+       pXL.SetTblNumberFldValue('PostAD', Sum5); // поставки, подтвержденные накладными
+       pXL.SetTblNumberFldValue('OtvXr' , Sum6); // принято на ответ.хранение
+       pXL.SetTblNumberFldValue('NalPos', Sum7); // накладные, не подтвержденные актами
+       pXL.InsTblRow;
+
+       _LOOP tmpKat2 where (( tmpKat.cMC == tmpKat2.cCompl ))
+         {
+           Koef := tmpKat2.Sum[1] / tmpKat.Sum[1];
+
+           Sum3 := tmpKat.Sum[5] - tmpKat.Sum[6];
+           Sum4 := tmpKat.Sum[2] - tmpKat.Sum[3];
+           Sum5 := tmpKat.Sum[3];
+           Sum6 := tmpKat.Sum[4];
+           Sum7 := tmpKat.Sum[7] - tmpKat.Sum[8];
+           
+           Sum3 := Koef * Sum3 + tmpKat2.Sum[5] - tmpKat2.Sum[6];
+           Sum4 := Koef * Sum4 + tmpKat2.Sum[2] - tmpKat2.Sum[3];
+           Sum5 := Koef * Sum5 + tmpKat2.Sum[3];
+           Sum6 := Koef * Sum6 + tmpKat2.Sum[4];
+           Sum7 := Koef * Sum7 + tmpKat2.Sum[7] - tmpKat2.Sum[8];
+
+           Sum2 := Sum3 + Sum4 + Sum5 + Sum6;
+
+           inc(nPP);
+
+           pXL.ClearTblBuffer;
+           pXL.SetTblNumberFldValue('NPP'      , nPP);
+
+           if IsValid(#KatOrg)
+             pXL.SetTblStringFldValue('Kotragent', KatOrg2.Name);
+
+           pXL.SetTblStringFldValue('DogNum'   , tmpKat2.NoDoc);
+           pXL.SetTblStringFldValue('DogDate'  , DateToStr(tmpKat2.dDoc, 'DD/MM/YYYY'));
+           pXL.SetTblStringFldValue('EdIzm'    , tmpKat2.sEdIzm);
+           pXL.SetTblNumberFldValue('Kol'      , tmpKat2.Kol);
+           pXL.SetTblStringFldValue('SpecNum'  , tmpKat2.nSogl);
+
+           if (tmpKat.dSogl <> ZeroDate)
+             pXL.SetTblStringFldValue('SpecDate' , DateToStr(tmpKat2.dSogl, 'DD/MM/YYYY'));
+
+           if IsValid(#KatMC3)
+             {
+               pXL.SetTblStringFldValue('MCName'   , '     ' + KatMC3.Name); 
+               pXL.SetTblStringFldValue('MCKod'    , KatMC3.BarKod);
+             }
+
+           pXL.SetTblNumberFldValue('Sum'   , tmpKat2.Sum[1]); // сумма по договору
+           pXL.SetTblNumberFldValue('Vsego' , Sum2); // всего поставлено по актам
+           pXL.SetTblNumberFldValue('MTRPut', Sum3); // МТР в пути
+           pXL.SetTblNumberFldValue('NeOtP' , Sum4); // неотфактурованные поставки
+           pXL.SetTblNumberFldValue('PostAD', Sum5); // поставки, подтвержденные накладными
+           pXL.SetTblNumberFldValue('OtvXr' , Sum6); // принято на ответ.хранение
+           pXL.SetTblNumberFldValue('NalPos', Sum7); // накладные, не подтвержденные актами
+           pXL.InsTblRow;
+         }
+     }
+
+  pXL.PublishTbl('Nakl');
+  pXL.LoadReport(sXLSFileName);
+  
+  StopVisual('', 0);
+  
+  pXL.DisConnectExcel;         
+}
+
+//************************************************************************
+Function CheckTovPut : boolean;
+{
+  CheckTovPut := FALSE;
+                
+  if (UserDeskRep.ResWord[29] = 0)
+    Exit;
+
+  if (UserDeskRep.ResComp[9] <> Comp(0))
+    { 
+      if (GetFirst Dogovor where ((UserDeskRep.ResComp[9] == Dogovor.NRec)) = tsOk )
+        if (Dogovor.TiDk = word(400))
+          { 
+            if (UserDeskRep.ResComp[9] <> KatSopr.cDogovor )
+              Exit;
+          } 
+        else
+          if (UserDeskRep.ResComp[9] <> KatSopr.cAppDogovor )
+            Exit;
+    }
+  else
+      {
+        var cDogS : comp; cDogS := comp(0);
+
+        cDogS := if (KatSopr.cAppDogovor <> comp(0), KatSopr.cAppDogovor,
+                   if (KatSopr.cDogovor <> comp(0), KatSopr.cDogovor, comp(0)));
+
+        if (cDogS = comp(0))
+          Exit;
+
+        if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                     UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                     UserDeskRep.ResWord[19] == PickRep.wList        and
+                                     cDogS                   == PickRep.cRec )) <> tsOk)
+          Exit;
+      }
+  
+  CheckTovPut := TRUE;
+}
+
+//************************************************************************
+//
+Function ChkFilter : boolean;
+{
+  ChkFilter := FALSE;
+
+  // фильтр по контрагенту
+  if ((UserDeskRep.ResWord[3] and 1) = 1)
+    {
+      // единичный фильтр
+      if (UserDeskRep.ResComp[7] <> Comp(0))
+        {
+          if (UserDeskRep.ResComp[7] <> KatSopr.cOrgBase )
+            Exit;
+        }
+      // множественный фильтр
+      else
+        {
+          if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                       UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                       UserDeskRep.ResWord[17] == PickRep.wList        and
+                                       KatSopr.cOrgBase        == PickRep.cRec )) <> tsOk)
+            Exit;
+        }
+    }
+
+  // Фильтр по договорам
+  if ((UserDeskRep.ResWord[3] and 2) = 2)
+    if (UserDeskRep.ResComp[8] <> Comp(0))
+      { 
+        if (GetFirst Dogovor where ((UserDeskRep.ResComp[8] == Dogovor.NRec)) = tsOk )
+          if (Dogovor.TiDk = word(400))
+            { 
+              if (UserDeskRep.ResComp[8] <> KatSopr.cDogovor )
+                Exit;
+            } 
+          else
+            if (UserDeskRep.ResComp[8] <> KatSopr.cAppDogovor )
+              Exit;
+      }
+    else
+      {
+        var cDogS : comp; cDogS := comp(0);
+
+        cDogS := if (KatSopr.cAppDogovor <> comp(0), KatSopr.cAppDogovor,
+                   if (KatSopr.cDogovor <> comp(0), KatSopr.cDogovor, comp(0)));
+                   
+        if (cDogS = comp(0))
+          Exit;
+
+        if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                     UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                     UserDeskRep.ResWord[18] == PickRep.wList        and
+                                     cDogS                   == PickRep.cRec )) <> tsOk)
+          Exit;
+      }
+
+  ChkFilter := TRUE;
+}
+
+//************************************************************************
+// расчет количества по спецификации накладной, закрытого актами М-7
+//
+Function KolZakrNakl (pMC : comp; pOtpEd : comp) : double;
+var dUsed : double;
+{
+  dUsed := 0;
+
+  _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cAddSumTune))
+    {
+      if (SpecZatr.coTable = 0)
+        if (GetFirst SpActMC where ((SpecZatr.cUKS == SpActMC.NRec)) = tsOk)
+          if (SpActMC.cMCUsl = pMC)
+            dUsed := dUsed + double(SpecZatr.cSpec);
+    }
+
+  KolZakrNakl := 0.000001 * dUsed / fEdIzm.GetKoefOtpEd(pOtpEd);
+}
+
+//************************************************************************
+// расчет суммы по спецификации актов М-7, подтвержденной накладными
+//
+Function KolZakrAkt : double;
+var dUsed : double;
+{
+  dUsed := 0;
+
+  _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cUKS))
+    if (SpecZatr.coTable = 0)
+      dUsed := dUsed + 0.000001 * double(SpecZatr.cSpec) / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+  KolZakrAkt := dUsed;
+}
+
+//************************************************************************
+//
+
+Procedure CreateTmpKat (code : word; pMC, pCompl, pOtpEd : comp);
+var Price0 : double;
+{
+  ClearBuffer(#tmpKat);
+
+  tmpKat.cMC         := pMC;
+  tmpKat.cCompl      := pCompl;
+  tmpKat.cOrg        := KatSopr.cOrgBase;
+  tmpKat.cDogovor    := KatSopr.cDogovor;
+  tmpKat.cAppDogovor := KatSopr.cAppDogovor;
+  tmpKat.NoDoc       := Dogovor1.NoDoc;
+  tmpKat.dDoc        := Dogovor1.dDoc;
+
+  if IsValid(#AppDogovor)
+    {
+      tmpKat.nSogl := AppDogovor.NoDoc;
+      tmpKat.dSogl := AppDogovor.dDoc;                
+    }
+
+  if GetFirst KatOtpEd where ((pOtpEd == KatOtpEd.NRec)) = tsOk
+    tmpKat.sEdIzm := KatOtpEd.Abbr;
+
+  if (code = 0)
+    {
+      tmpKat.Kol    := SpDocs.Kol;
+      tmpKat.Sum[1] := SpDocs.Summa;
+    }
+  else
+    {
+      Price0 := oValFunc.GetNatCurrency(SpDocs2.cVal, SpDocs2.Price, UserDeskRep.ResDate[2]);
+
+      tmpKat.Kol    := SpDocs.Kol * SpDocs2.Kol;
+      tmpKat.Sum[1] := Price0 * tmpKat.Kol;
+    }
+
+  if ( Insert current tmpKat <> tsOk )
+    { } 
+}
+
+//************************************************************************
+// 
+Procedure VigrDocs101;
+var 
+  cDoc       : comp;
+  wTiDk      : word;
+  Price0     : double;
+  Sum0, SumA : double;
+{
+  _LOOP KatSopr
+    {
+      if (IsValid(#Dogovor1))  
+        {
+          if ( Dogovor1.Status <> 1 ) 
+            Continue;
+
+          if (IsValid(#AppDogovor))  
+            if ( AppDogovor.Status <> 1 ) 
+              Continue;
+        }
+      else
+        Continue;
+
+      if (NOT ChkFilter)
+        Continue;
+
+      if (KatSopr.cAppDogovor <> 0)
+        {
+          cDoc  := KatSopr.cAppDogovor;
+          wTiDk := 401;
+        }
+      else 
+        {
+          cDoc  := KatSopr.cDogovor;
+          wTiDk := 400;
+        }
+
+      // заполнение таблицы в памяти спецификацией накладной (только МЦ)
+      _LOOP SpSopr where (( KatSopr.NRec == SpSopr.cSopr and
+                            word(1)      == SpSopr.PrMC ))
+        {
+          if (SpSopr.cSpDocs = 0)
+            Continue;
+
+          if (GetFirst SpDocs where (( SpSopr.cSpDocs == SpDocs.NRec )) <> tsOk)
+            Continue;
+
+          if ( GetFirst tmpKat where (( KatSopr.cOrgBase    == tmpKat.cOrg AND
+                                        KatSopr.cDogovor    == tmpKat.cDogovor AND
+                                        KatSopr.cAppDogovor == tmpKat.cAppDogovor AND
+                                        SpDocs.cMCUsl       == tmpKat.cMC AND 
+                                        comp(0)             == tmpKat.cCompl )) <> tsOk )
+            {
+              CreateTmpKat(0, SpDocs.cMCUsl, 0, SpDocs.cOtpEd);
+            }
+
+          Sum0 := SpSopr.KolFact * SpSopr.Price;
+          SumA := SpSopr.Price * KolZakrNakl(SpSopr.cMCUsl, SpSopr.cOtpEd);
+          
+          if (CheckTovPut)
+            {
+              if (KatSopr.Status = 1)
+                {
+                  tmpKat.Sum[5] := tmpKat.Sum[5] + Sum0; // МТР в пути 
+                  tmpKat.Sum[6] := tmpKat.Sum[6] + SumA; // МТР в пути, закрытые актами
+                }
+            }
+          else
+            {
+              tmpKat.Sum[7] := tmpKat.Sum[7] + Sum0; // сумма по накладным
+              tmpKat.Sum[8] := tmpKat.Sum[8] + SumA; // сумма по накладным, закрытая актами
+            }
+
+          if ( Update current tmpKat <> tsOk )
+            { }
+
+          _LOOP SpDocs2 where (( word(438)   == SpDocs2.TiDk AND
+                                 SpDocs.NRec == SpDocs2.cDoc ))
+            {
+              if ( GetFirst tmpKat where (( KatSopr.cOrgBase    == tmpKat.cOrg AND
+                                            KatSopr.cDogovor    == tmpKat.cDogovor AND
+                                            KatSopr.cAppDogovor == tmpKat.cAppDogovor AND
+                                            SpDocs2.cMCUsl      == tmpKat.cMC AND
+                                            SpDocs.cMCUsl       == tmpKat.cCompl )) <> tsOk )
+                {
+                  CreateTmpKat(1, SpDocs2.cMCUsl, SpDocs.cMCUsl, SpDocs2.cOtpEd);
+                }
+
+              Price0 := oValFunc.GetNatCurrency(SpDocs2.cVal, SpDocs2.Price, UserDeskRep.ResDate[2]);
+              SumA   := Price0 * KolZakrNakl(SpDocs2.cMCUsl, SpDocs2.cOtpEd);
+
+              if (CheckTovPut)
+                {
+                  if (KatSopr.Status = 1)
+                    tmpKat.Sum[6] := tmpKat.Sum[6] + SumA; // МТР в пути, закрытые актами
+                }
+              else
+                {
+                  tmpKat.Sum[8] := tmpKat.Sum[8] + SumA; // сумма по накладным, закрытая актами
+                }
+
+              if ( Update current tmpKat <> tsOk )
+                { }
+            }
+        }
+    }
+}
+
+//************************************************************************
+// 
+Procedure VigrDocs115;
+var 
+  cDoc, cSpDoc : comp;
+  wTiDk        : word;
+  Sum0, SumA   : double;
+{
+  _LOOP KatSopr
+    {
+      if (IsValid(#Dogovor1))  
+        {
+          if ( Dogovor1.Status <> 1 ) 
+            Continue;
+
+          if (IsValid(#AppDogovor))  
+            if ( AppDogovor.Status <> 1 ) 
+              Continue;
+        }
+      else
+        Continue;
+
+      if (NOT ChkFilter)
+        Continue;
+
+      if (KatSopr.cAppDogovor <> 0)
+        {
+          cDoc  := KatSopr.cAppDogovor;
+          wTiDk := 401;
+        }
+      else 
+        {
+          cDoc  := KatSopr.cDogovor;
+          wTiDk := 400;
+        }
+
+      // заполнение таблицы в памяти спецификацией накладной (только МЦ)
+      _LOOP SpSopr where (( KatSopr.NRec == SpSopr.cSopr and
+                            word(1)      == SpSopr.PrMC ))
+        {
+          if (SpSopr.cSpDocs = 0)
+            Continue;
+
+          if (GetFirst SpDocs where (( SpSopr.cSpDocs == SpDocs.NRec )) <> tsOk)
+            Continue;
+
+          Sum0 := SpSopr.KolFact * SpSopr.Price;
+          SumA := KolZakrAkt * SpSopr.Price;
+
+          if (SpDocs.TiDk <> 438)
+            {
+              if ( GetFirst tmpKat where (( KatSopr.cOrgBase    == tmpKat.cOrg AND
+                                            KatSopr.cDogovor    == tmpKat.cDogovor AND
+                                            KatSopr.cAppDogovor == tmpKat.cAppDogovor AND
+                                            SpDocs.cMCUsl       == tmpKat.cMC AND 
+                                            comp(0)             == tmpKat.cCompl )) <> tsOk )
+                {
+                  CreateTmpKat(0, SpDocs.cMCUsl, 0, SpDocs.cOtpEd);
+                }
+
+              tmpKat.Sum[2] := tmpKat.Sum[2] + Sum0;   // сумма по актам
+              tmpKat.Sum[3] := tmpKat.Sum[3] + SumA;   // сумма по актам, подтвержденная накладными
+              
+              if (KatSopr.Reserved = 1)
+                tmpKat.Sum[4] := tmpKat.Sum[4] + Sum0; //  принятое на ответственное хранение
+
+              if ( Update current tmpKat <> tsOk )
+                { } 
+            }
+          else
+            {
+              cSpDoc := SpDocs.cDoc;
+
+              if (GetFirst SpDocs where (( cSpDoc == SpDocs.NRec )) <> tsOk)
+                Continue;
+
+              if ( GetFirst tmpKat where (( KatSopr.cOrgBase    == tmpKat.cOrg AND
+                                            KatSopr.cDogovor    == tmpKat.cDogovor AND
+                                            KatSopr.cAppDogovor == tmpKat.cAppDogovor AND
+                                            SpDocs.cMCUsl       == tmpKat.cMC AND 
+                                            comp(0)             == tmpKat.cCompl )) <> tsOk )
+                {
+                  CreateTmpKat(0, SpDocs.cMCUsl, 0, SpDocs.cOtpEd);
+                }
+
+              _LOOP SpDocs2 where (( word(438)   == SpDocs2.TiDk AND
+                                     SpDocs.NRec == SpDocs2.cDoc ))
+                {
+                  if ( GetFirst tmpKat where (( KatSopr.cOrgBase    == tmpKat.cOrg AND
+                                                KatSopr.cDogovor    == tmpKat.cDogovor AND
+                                                KatSopr.cAppDogovor == tmpKat.cAppDogovor AND
+                                                SpDocs2.cMCUsl      == tmpKat.cMC AND
+                                                SpDocs.cMCUsl       == tmpKat.cCompl )) <> tsOk )
+                    {
+                      CreateTmpKat(1, SpDocs2.cMCUsl, SpDocs.cMCUsl, SpDocs2.cOtpEd);
+                    }
+
+                  if (SpSopr.cSpDocs = SpDocs2.NRec)
+                    {
+                      tmpKat.Sum[2] := tmpKat.Sum[2] + Sum0;   // сумма по актам
+                      tmpKat.Sum[3] := tmpKat.Sum[3] + SumA;   // сумма по актам, подтвержденная накладными
+                      
+                      if (KatSopr.Reserved = 1)
+                        tmpKat.Sum[4] := tmpKat.Sum[4] + Sum0; //  принятое на ответственное хранение
+
+                      if ( Update current tmpKat <> tsOk )
+                        { } 
+                    }
+                }
+            }
+        }
+    }
+}
+
+//************************************************************************
+
+Function MakeTree : boolean;
+var 
+  Koef, Sum2, Sum3, Sum4, Sum5, Sum6, Sum7 : double;
+{         
+  MakeTree := FALSE;
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, ''#3'Отбор документов для отчета', 1);
+
+  Delete All tmpKat;
+
+  set TypeSopr := word(101);
+
+  if NOT BoundActive(tbbyDate)
+    AddBounds(tbbyDate);
+
+  VigrDocs101;
+
+  set TypeSopr := word(115);
+
+  VigrDocs115;
+
+  if (GetFirst tmpKat <> tsOk)
+    {
+      StopVisual('', 0);
+      Message(''#3'Отчет не содержит ни одного документа');
+      Exit;
+    }
+
+  MakeTree := TRUE;
+  StopVisual('',0);
+}
+
+HandleEvent
+cmInit:
+  {
+    cNastr := comp(0);
+    
+    if (RunInterface('iNastRep', cgReport_4102, cNastr) <> cmCancel)
+      {
+        if GetFirst UserDeskRep <> tsOk
+          {
+            Abort;
+            Exit;  
+          }
+
+        if MakeTree
+          PrintDocuments;
+      }
+
+    Abort;
+    Exit;  
+  }
+
+End; // HandleEvent
+end.

@@ -1,0 +1,115 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Обработка хозопераций в накладных: УСТАРЕВШИЙ VPP - не использовать 
+//******************************************************************************
+// !! в случае исправления ошибок в данном файле все изменения должны быть    !!
+// !! продублированы в SDfuns                                                 !!
+//******************************************************************************
+
+#ifndef _SSOPRHOZ_VPP
+#define _SSOPRHOZ_VPP
+
+//******************************************************************************
+#error Вместо подключения SSoprHoz.vpp необходимо использовать методы SDfuns.vih
+//******************************************************************************
+
+#include KontrBal.var
+
+Create view loSS
+From Filial;
+
+Procedure UpdateSoprHoz;
+var isExist : boolean;
+{
+  if ( KatSopr.NRec = 0 )
+    Exit;
+
+  isExist := ( GetFirst fastfirstrow SoprHoz
+                  where (( KatSopr.VidSopr == SoprHoz.TipDoc and
+                           KatSopr.NRec    == SoprHoz.cSoprDoc )) = tsOk );
+
+  if ( not isExist )
+    ClearBuffer(#SoprHoz);
+
+  if ( KatSopr.cOrg <> 0 )
+    {
+      var pOrg : comp;
+      pOrg := KatSopr.cOrg;
+
+      if ( loSS.GetFirst fastfirstrow Filial where (( pOrg == Filial.cOrg )) = tsOK )
+        SoprHoz.cFilKor := loSS.Filial.nRec;
+    }
+  else
+    SoprHoz.cFilKor := 0;
+
+  SoprHoz.DatOb       := KatSopr.dSopr;
+  SoprHoz.Summa       := KatSopr.Summa;
+  SoprHoz.FilialNo    := lGetTune('Konsolid.FilialNo');
+  SoprHoz.KodValut    := KatSopr.cVal;
+  SoprHoz.NoDoc       := KatSopr.NSopr;
+  SoprHoz.Direct      := KatSopr.TipSopr;
+  SoprHoz.TipDoc      := KatSopr.VidSopr;
+  SoprHoz.cSoprDoc    := KatSopr.NRec;
+  SoprHoz.cStepDoc    := KatSopr.cStepDoc;
+  SoprHoz.TiDkGal     := SoprHoz.TipDoc;
+  SoprHoz.Descr       := KatSopr.Descr;
+  SoprHoz.DesGr       := KatSopr.DesGr; 
+  SoprHoz.cDogovor    := KatSopr.cDogovor;
+  SoprHoz.cAppDogovor := KatSopr.cAppDogovor;
+  SoprHoz.cCalPlan    := katSopr.cCalPlan;
+  SoprHoz.VhSumHoz := '+';
+  SoprHoz.cOrg := if ( KatSopr.cOrgBase <> comp(0), KatSopr.cOrgBase, KatSopr.cOrg );
+
+  if ( KatSopr.cVal <> 0 )
+    SoprHoz.SumValut  := KatSopr.SumVal;
+
+#ifdef _SHManager_Vih_
+  #ifndef __var_iSHoz_isdef__
+  var iSHoz : ObjSHmanager; // интерфейс для работы с SoprHoz
+  #end
+  if NullVipRef(iSHoz)
+    GetVipRef(iSHoz, 'SHmanager');
+
+  if ( isExist )
+    iSHoz.UpdByHan(SoprHoz.BufferP)
+  else
+    iSHoz.InsByHan(SoprHoz.BufferP);
+#else
+#warning Требуется подключение SHManager.vih !!!
+  if ( isExist )
+    update current SoprHoz
+  else
+    insert current SoprHoz;
+#end
+}
+
+Create view oSS From ActSaldo, Oborot;
+
+Function DeleteOborot : boolean;
+{
+  // сброс актуальности сальдо... можно через iSaldoActuality.DropActualityForPlansSch(0);
+  oSS.update ActSaldo where (( 0 << ActSaldo.dActSaldo ))// tActSaldo может быть любым, в том числе = 0
+    set ActSaldo.dActSaldo := 0,
+        ActSaldo.tActSaldo := 0;
+
+  var wTipDoc : word; wTipDoc  := SoprHoz.TipDoc;
+  var pSoprDoc: comp; pSoprDoc := SoprHoz.cSoprDoc
+
+  DeleteOborot := oSS.delete NoVisual Oborot where (( wTipDoc == Oborot.TiDk and pSoprDoc == Oborot.cSoprDoc )) = tsOk;
+}
+
+// Удаление SoprHoz вместе с оборотами
+Procedure DeleteSoprHoz;
+{
+  if ( GetFirst SoprHoz where (( KatSopr.VidSopr == SoprHoz.TipDoc   and
+                                 KatSopr.NRec    == SoprHoz.cSoprDoc )) = tsOk )
+    {
+      DeleteOborot;
+      if ( delete current SoprHoz = tsOk )
+        {
+        }
+    }
+}
+
+#end //_SSOPRHOZ_VPP

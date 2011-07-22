@@ -1,0 +1,1488 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Настрока фильтров и формирования таблицы в памяти
+// для интерфейса "Просмотр документов" и "Отчет о ходе исполнения договора"
+//********************************************************************************
+
+var MasPar1 : array [5..20] of comp;
+var MasPar2 : array [1..20] of byte;
+
+var tmprec : comp;
+
+var bPrint : boolean;
+
+var sDesGr
+  , sDescr : string;
+
+var begDate
+  , endDate
+  , bDateSrok
+  , eDateSrok : date;
+
+var w_Status
+  , status_count_bit
+  , pos_Status : word;
+
+var Marker_Kontr
+  , Marker_Plat
+  , Marker_Pol
+  , Marker_Stat
+  , Marker_StatPKP
+  , Marker_StatSogl
+  , Marker_VidD
+  , Marker_loop1
+  , Marker_loop2
+  , IndexDocs : longint;
+
+!---------------------------------------------
+
+Create view Add_log
+Var
+  cOwner1
+, cOwner2 : comp;
+
+From
+  Dogovor                            // Dogovor02 = cDogovor + dDoc + NoDoc
+, CalPlan                            // CalPlan02 = cDogovor + NoDoc
+#ifdef GetDocs2_VIP
+, Dogovor  DogovorZam
+#end
+, Dogovor  Dogovor2
+, SGetDocs SAppDog
+, SGetDocs SCalPlan
+, SGetDocs SGetDocs2
+, KlVal
+, KlVal    KlVal2
+, IerDog
+, IerDog   IerDogUtmost
+, IerCalPl IerCalPlUtmost
+, SoprHoz
+, SpSopr   SpS
+, SpSopr   ReklSpS
+, KatSopr  KS
+, SpOrder
+, BaseFin
+, KatVidD
+#ifdef GetDocs2_VIP
+, SpGrSch
+, SGetDocsZam
+#end
+, AttrDog
+
+Where
+((
+    cOwner1        == IerDogUtmost.cUpRec
+and word(1)        == IerDogUtmost.isLeaf
+
+and cOwner2        == IerCalPlUtmost.cDogovor
+and word(1)        == IerCalPlUtmost.isLeaf
+and SGetDocs2.nRec == Dogovor2.nRec
+and Dogovor.cVal   == KlVal.nRec
+and CalPlan.cVal   == KlVal2.nRec
+))
+
+Bounds OnIerDog   = Add_log.IerDog.cRec == Dogovor.nRec
+!-- Группа 1 ------------------------------------------------------------------
+// 1 vcGetDog_DesGr
+Bounds C_Main     = SGetDocs2.nRec == CalPlan.cDogovor (NoIndex)
+
+Bounds D_DesGr    = sDesGr == Dogovor.DesGr (NoIndex)
+Bounds C_DesGr    = sDesGr == CalPlan.DesGr (NoIndex)
+// 2 vcGetDog_Descr
+Bounds D_Descr    = sDescr == Dogovor.Descr (NoIndex)
+Bounds C_Descr    = sDescr == CalPlan.Descr (NoIndex)
+// 3 vcGetDog_Date
+Bounds D_Date     = begDate <<= Dogovor.dDoc (NoIndex) and
+                    endDate >>= Dogovor.dDoc (NoIndex)
+
+Bounds C_Date     = begDate <<= CalPlan.dInput (NoIndex) and
+                    endDate >>= CalPlan.dInput (NoIndex)
+// 4 vcGetDog_DateSrok
+Bounds D_DateSrok = ZeroDate <<= Dogovor.dBeg (NoIndex) and
+                    (
+                     (
+                      ( bDateSrok <= Dogovor.dBeg )
+                       and
+                      ( eDateSrok >= Dogovor.dBeg )
+                     )
+                      or
+                     (
+                      ( bDateSrok <= Dogovor.dEnd )
+                       and
+                      ( eDateSrok >= Dogovor.dEnd )
+                     )
+                      or
+                     (
+                      ( bDateSrok >= Dogovor.dBeg )
+                       and
+                      ( eDateSrok <= Dogovor.dEnd )
+                     )
+                    ) // полностью внутри интервала
+
+Bounds C_DateSrok = ZeroDate <<= CalPlan.dFrom (NoIndex) and
+                    (
+                     (
+                      ( bDateSrok <= CalPlan.dFrom )
+                       and
+                      ( eDateSrok >= CalPlan.dFrom )
+                     )
+                      or
+                     (
+                      ( bDateSrok <= CalPlan.dTo )
+                       and
+                      ( eDateSrok >= CalPlan.dTo )
+                     )
+                      or
+                     (
+                      ( bDateSrok >= CalPlan.dFrom )
+                       and
+                      ( eDateSrok <= CalPlan.dTo )
+                     )
+                    ) // полностью внутри интервала
+!-- Группа 2 ------------------------------------------------------------------
+// 5 vcGetDog_MyOrg
+Bounds D_MyOrg    = MasPar1[5] == Dogovor.cMyOrg (NoIndex)
+// 6 vcGetDog_Kontr
+Bounds D_Kontr    = MasPar1[6] == Dogovor.cOrg (NoIndex)
+Bounds C_Kontr    = MasPar1[6] == CalPlan.cOrg (NoIndex)
+// 7 vcGetDog_GruzFrom
+Bounds C_GruzFrom = MasPar1[7] == CalPlan.cGrOtp (NoIndex)
+// 8 vcGetDog_GruzTo
+Bounds C_GruzTo   = MasPar1[8] == CalPlan.cGrPol (NoIndex)
+// 9 vcGetDog_Plat
+Bounds D_Plat     = MasPar1[9] == Dogovor.cPlat (NoIndex)
+Bounds C_Plat     = MasPar1[9] == CalPlan.cPlat (NoIndex)
+// 10 vcGetDog_Pol
+Bounds D_Pol      = MasPar1[10] == Dogovor.cPol (NoIndex)
+Bounds C_Pol      = MasPar1[10] == CalPlan.cPol (NoIndex)
+// 11 vcGetDog_Valut
+Bounds D_Valut    = MasPar1[11] == Dogovor.cVal (NoIndex)
+Bounds C_Valut    = MasPar1[11] == CalPlan.cVal (NoIndex)
+!-- Группа 3 ------------------------------------------------------------------
+// 12 vcGetDog_Progr
+Bounds D_Progr    = MasPar1[12] == Dogovor.cProg (NoIndex)
+// 13 vcGetDog_VidDoc
+Bounds D_VidDoc   = MasPar1[13] == Dogovor.cVidDog (NoIndex)
+// 14 vcGetDog_Status (маска разрешенных)
+Bounds D_Status   = pos_Status == Dogovor.Status (NoIndex)
+Bounds C_Status   = pos_Status == CalPlan.Status (NoIndex)
+// 15 vcGetDog_KatStatus
+Bounds C_KatStatus = MasPar1[20] == CalPlan.cNote (NoIndex)
+!-- Группа 4 ------------------------------------------------------------------
+// 19 vcGetDog_NoFinKP
+Bounds C_NoFinKP  = word(0) << CalPlan.DirectMC (NoIndex)
+// 20 vcGetDog_NoMCKP
+Bounds C_NoMCKP   = word(0) << CalPlan.DirectPlat (NoIndex)
+;
+
+Procedure Init_DSK_Params;
+var datechanged : boolean;
+{
+!-- Группа 1 ------------------------------------------------------------------
+  // 1 vcGetDog_DesGr
+  if ( not ReadMyDsk(sDesgr, 'GetDAK_Desgr', datechanged) )
+    sDesgr := '';
+
+  if ( not ReadMyDsk(MasPar2[1], 'GetDAK_Desgr_e', datechanged) )
+    MasPar2[1] := 0;
+
+  // 2 vcGetDog_Descr
+  if ( not ReadMyDsk(sDescr, 'GetDAK_Descr', datechanged) )
+    sDescr := '';
+
+  if ( not ReadMyDsk(MasPar2[2], 'GetDAK_Descr_e', datechanged) )
+    MasPar2[2] := 0;
+  // 3 vcGetDog_Date
+  if ( not ReadMyDsk(begDate, 'GetDAK_begDate', datechanged) )
+    begDate := ZeroDate;
+
+  if ( not ReadMyDsk(endDate, 'GetDAK_endDate', datechanged) )
+    endDate := Date(1, 1, 2099);
+
+  if ( not ReadMyDsk(MasPar2[3], 'GetDAK_Date_e', datechanged) )
+    MasPar2[3] := 0;
+  // 4 vcGetDog_DateSrok
+  if ( not ReadMyDsk(bDateSrok, 'GetDAK_begDateSrok', datechanged) )
+    bDateSrok := ZeroDate;
+
+  if ( not ReadMyDsk(eDateSrok, 'GetDAK_endDateSrok', datechanged) )
+    eDateSrok := Date(1, 1, 2099);
+
+  if ( not ReadMyDsk(MasPar2[4], 'GetDAK_DateSrok_e', datechanged) )
+    MasPar2[4] := 0;
+!-- Группа 2 ------------------------------------------------------------------
+  // 5 vcGetDog_MyOrg
+  if ( not ReadMyDsk(MasPar1[5], 'GetDAK_MyOrg', datechanged) )
+    MasPar1[5] := 0;
+
+  if ( not ReadMyDsk(MasPar2[5], 'GetDAK_MyOrg_e', datechanged) )
+    MasPar2[5] := 0;
+  // 6 vcGetDog_Kontr
+  if ( not ReadMyDsk(MasPar1[6], 'GetDAK_Kontr', datechanged) )
+    MasPar1[6] := 0;
+
+  if ( not ReadMyDsk(MasPar2[6], 'GetDAK_Kontr_e', datechanged) )
+    MasPar2[6] := 0;
+  // 7 vcGetDog_GruzFrom
+  if ( not ReadMyDsk(MasPar1[7], 'GetDAK_GruzFrom', datechanged) )
+    MasPar1[7] := 0;
+  // 8 vcGetDog_GruzTo
+  if ( not ReadMyDsk(MasPar1[8], 'GetDAK_GruzTo', datechanged) )
+    MasPar1[8] := 0;
+  // 9 vcGetDog_Plat
+  if ( not ReadMyDsk(MasPar1[9], 'GetDAK_Plat', datechanged) )
+    MasPar1[9] := 0;
+
+  if ( not ReadMyDsk(MasPar2[9], 'GetDAK_Plat_e', datechanged) )
+    MasPar2[9] := 0;
+  // 10 vcGetDog_Pol
+  if ( not ReadMyDsk(MasPar1[10], 'GetDAK_Pol', datechanged) )
+    MasPar1[10] := 0;
+
+  if ( not ReadMyDsk(MasPar2[10], 'GetDAK_Pol_e', datechanged) )
+    MasPar2[10] := 0;
+  // 11 vcGetDog_Valut
+  if ( not ReadMyDsk(MasPar1[11], 'GetDAK_Valut', datechanged) )
+    MasPar1[11] := 0;
+
+  if ( not ReadMyDsk(MasPar2[11], 'GetDAK_Valut_e', datechanged) )
+    MasPar2[11] := 0;
+!-- Группа 3 ------------------------------------------------------------------
+  // 12 vcGetDog_Progr
+  if ( not ReadMyDsk(MasPar1[12], 'GetDAK_Progr', datechanged) )
+    MasPar1[12] := 0;
+
+  if ( not ReadMyDsk(MasPar2[12], 'GetDAK_Progr_e', datechanged) )
+    MasPar2[12] := 0;
+  // 13 vcGetDog_VidDoc
+  if ( not ReadMyDsk(MasPar1[13], 'GetDAK_VidDoc', datechanged) )
+    MasPar1[13] := 0;
+
+  if ( not ReadMyDsk(MasPar2[13], 'GetDAK_VidDoc_e', datechanged) )
+    MasPar2[13] := 0;
+  // 14 vcGetDog_Status (маска разрешенных)
+  if ( not ReadMyDsk(w_Status, 'GetDAK_Status', datechanged) )
+    w_Status := 0FFFFh;
+
+  if ( (DskParams and vcGetDog_Status) <> 0 )
+    if ( w_Status = 0 )
+      message('При вызове интерфейса не указано'#13''
+            + 'ни одного разрешенного статуса !', Warning + OkButton);
+
+  if ( not ReadMyDsk(MasPar2[14], 'GetDAK_Status_e', datechanged) )
+    MasPar2[14] := 0;
+  // 15 vcGetDog_KatStatus
+  if ( not ReadMyDsk(MasPar1[15], 'GetDAK_KatStatus', datechanged) )
+    MasPar1[15] := 0;
+
+  if ( not ReadMyDsk(MasPar2[15], 'GetDAK_KatStatus_e', datechanged) )
+    MasPar2[15] := 0;
+  // 15 vcGetDog_KatStatusPKP
+  if ( not ReadMyDsk(MasPar1[20], 'GetDAK_KatStatusPKP', datechanged) )
+    MasPar1[20] := 0;
+!-- Группа 4 ------------------------------------------------------------------
+  // 16 vcGetDog_Dogovor
+  if ( not ReadMyDsk(MasPar1[16], 'GetDAK_Dogovor', datechanged) )
+    MasPar1[16] := 0;
+  // 17 vcGetDog_AppDog
+  if ( not ReadMyDsk(MasPar1[17], 'GetDAK_AppDog', datechanged) )
+    MasPar1[17] := 0;
+
+  if ( ( (DskParams and vcGetDog_AppDog) <> 0 ) AND ( MasPar1[16] = 0 ) )
+    message('При вызове интерфейса указан фильтр на соглашение, '#13
+          + 'но не указан NRec договора !', Warning + OkButton);
+
+  // 18 vcGetDog_CalPlan
+  if ( not ReadMyDsk(MasPar1[18], 'GetDAK_CalPlan', datechanged) )
+    MasPar1[18] := 0;
+  // 19 vcGetDog_OtvPodr
+  if ( not ReadMyDsk(MasPar1[19], 'GetDAK_OtvPodr', datechanged) )
+    MasPar1[19] := 0;
+
+  if ( not ReadMyDsk(MasPar2[19], 'GetDAK_OtvPodr_e', datechanged) )
+    MasPar2[19] := 0;
+
+  // 20 vcGetDog_CurPodr
+  if ( not ReadMyDsk(MasPar1[20], 'GetDAK_CurPodr', datechanged) )
+    MasPar1[20] := 0;
+
+  if ( not ReadMyDsk(MasPar2[20], 'GetDAK_CurPodr_e', datechanged) )
+    MasPar2[20] := 0;
+}
+
+Procedure SetAppDogBounds;
+var level : word;
+{
+  level := 2 + 1;
+  // Сначала снимаем все предыдущие фильтры после Alt+B
+  if Add_log.BoundActive(Add_log.tbD_DesGr)    Add_log.SubBounds(Add_log.tbD_DesGr);
+  if Add_log.BoundActive(Add_log.tbD_Descr)    Add_log.SubBounds(Add_log.tbD_Descr);
+  if Add_log.BoundActive(Add_log.tbD_Date)     Add_log.SubBounds(Add_log.tbD_Date);
+  if Add_log.BoundActive(Add_log.tbD_DateSrok) Add_log.SubBounds(Add_log.tbD_DateSrok);
+  if Add_log.BoundActive(Add_log.tbD_MyOrg)    Add_log.SubBounds(Add_log.tbD_MyOrg);
+  if Add_log.BoundActive(Add_log.tbD_Kontr)    Add_log.SubBounds(Add_log.tbD_Kontr);
+  if Add_log.BoundActive(Add_log.tbD_Plat)     Add_log.SubBounds(Add_log.tbD_Plat);
+  if Add_log.BoundActive(Add_log.tbD_Pol)      Add_log.SubBounds(Add_log.tbD_Pol);
+  if Add_log.BoundActive(Add_log.tbD_Valut)    Add_log.SubBounds(Add_log.tbD_Valut);
+  if Add_log.BoundActive(Add_log.tbD_Progr)    Add_log.SubBounds(Add_log.tbD_Progr);
+  if Add_log.BoundActive(Add_log.tbD_VidDoc)   Add_log.SubBounds(Add_log.tbD_VidDoc);
+  if Add_log.BoundActive(Add_log.tbD_Status)   Add_log.SubBounds(Add_log.tbD_Status);
+!-- Группа 1 ------------------------------------------------------------------
+  // 1
+  if ( (DskParams and vcGetDog_DesGr) <> 0 )
+    if ( ( MasPar2[1] = 0 ) OR ( (MasPar2[1] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_DesGr);
+  // 2
+  if ( (DskParams and vcGetDog_Descr) <> 0 )
+    if ( ( MasPar2[2] = 0 ) OR ( (MasPar2[2] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_Descr);
+  // 3
+  if ( (DskParams and vcGetDog_Date) <> 0 )
+    if ( ( MasPar2[3] = 0 ) OR ( (MasPar2[3] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_Date);
+  // 4
+  if ( (DskParams and vcGetDog_DateSrok) <> 0 )
+    if ( ( MasPar2[4] = 0 ) OR ( (MasPar2[4] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_DateSrok);
+!-- Группа 2 ------------------------------------------------------------------
+  // 5
+  if ( (DskParams and vcGetDog_MyOrg) <> 0 )
+    if ( ( MasPar2[5] = 0 ) OR ( (MasPar2[5] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_MyOrg);
+  // 6
+  if ( (DskParams and vcGetDog_Kontr) <> 0 )
+    if ( MasPar1[6] <> 0 )
+      if ( ( MasPar2[6] = 0 ) OR ( (MasPar2[6] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbD_Kontr);
+  // 9
+  if ( (DskParams and vcGetDog_Plat) <> 0 )
+    if ( MasPar1[9] <> 0 )
+      if ( ( MasPar2[9] = 0 ) OR ( (MasPar2[9] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbD_Plat);
+  // 10
+  if ( (DskParams and vcGetDog_Pol) <> 0 )
+    if ( MasPar1[10] <> 0 )
+      if ( ( MasPar2[10] = 0 ) OR ( (MasPar2[10] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbD_Pol);
+  // 11
+  if ( (DskParams and vcGetDog_Valut) <> 0 )
+    if ( ( MasPar2[11] = 0 ) OR ( (MasPar2[11] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_Valut);
+!-- Группа 3 ------------------------------------------------------------------
+  // 12
+  if ( (DskParams and vcGetDog_Progr) <> 0 )
+    if ( ( MasPar2[12] = 0 ) OR ( (MasPar2[12] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbD_Progr);
+  // 13
+  if ( (DskParams and vcGetDog_VidDoc) <> 0 )
+    if ( MasPar1[13] <> 0 )
+      if ( ( MasPar2[13] = 0 ) OR ( (MasPar2[13] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbD_VidDoc);
+
+  // 14 Маска разрешенных
+  if ( (DskParams and vcGetDog_Status) <> 0 )
+    if ( ( MasPar2[14] = 0 ) OR ( (MasPar2[14] and level) <> 0 ) )
+      {
+        var ii, _pStatus : word;
+
+        status_count_bit := 0;
+
+        _pStatus := w_Status;
+
+        for(ii := 0; ii <= 4; inc(ii))
+          {
+            if ( (_pStatus and 1) <> 0 )
+              {
+                inc(status_count_bit);
+                pos_Status := ii;
+              }
+            _pStatus := _pStatus shr 1;
+          }
+
+        if ( status_count_bit = 1 )
+          Add_log.AddBounds(Add_log.tbD_Status);
+      }
+}
+
+Procedure SetPlanBounds;
+var level : word;
+{
+  level := 4;
+  // Сначала снимаем все предыдущие фильтры после Alt+B
+  if not (Add_log.BoundActive(Add_log.tbC_Main))
+    Add_log.AddBounds(Add_log.tbC_Main);
+
+  if Add_log.BoundActive(Add_log.tbC_DesGr)     Add_log.SubBounds(Add_log.tbC_DesGr);
+  if Add_log.BoundActive(Add_log.tbC_Descr)     Add_log.SubBounds(Add_log.tbC_Descr);
+  if Add_log.BoundActive(Add_log.tbC_Date)      Add_log.SubBounds(Add_log.tbC_Date);
+  if Add_log.BoundActive(Add_log.tbC_DateSrok)  Add_log.SubBounds(Add_log.tbC_DateSrok);
+  if Add_log.BoundActive(Add_log.tbC_Kontr)     Add_log.SubBounds(Add_log.tbC_Kontr);
+  if Add_log.BoundActive(Add_log.tbC_GruzFrom)  Add_log.SubBounds(Add_log.tbC_GruzFrom);
+  if Add_log.BoundActive(Add_log.tbC_GruzTo)    Add_log.SubBounds(Add_log.tbC_GruzTo);
+  if Add_log.BoundActive(Add_log.tbC_Plat)      Add_log.SubBounds(Add_log.tbC_Plat);
+  if Add_log.BoundActive(Add_log.tbC_Pol)       Add_log.SubBounds(Add_log.tbC_Pol);
+  if Add_log.BoundActive(Add_log.tbC_Valut)     Add_log.SubBounds(Add_log.tbC_Valut);
+  if Add_log.BoundActive(Add_log.tbC_Status)    Add_log.SubBounds(Add_log.tbC_Status);
+  if Add_log.BoundActive(Add_log.tbC_KatStatus) Add_log.SubBounds(Add_log.tbC_KatStatus);
+  if Add_log.BoundActive(Add_log.tbC_NoFinKP)   Add_log.SubBounds(Add_log.tbC_NoFinKP);
+  if Add_log.BoundActive(Add_log.tbC_NoMCKP )   Add_log.SubBounds(Add_log.tbC_NoMCKP);
+!-- Группа 1 ------------------------------------------------------------------
+  // 1
+  if ( (DskParams and vcGetDog_DesGr) <> 0 )
+    if ( ( MasPar2[1] = 0 ) OR ( (MasPar2[1] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbC_DesGr);
+  // 2
+  if ( (DskParams and vcGetDog_Descr) <> 0 )
+    if ( ( MasPar2[2] = 0 ) OR ( (MasPar2[2] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbC_Descr);
+  // 3
+  if ( (DskParams and vcGetDog_Date) <> 0 )
+    if ( ( MasPar2[3] = 0 ) OR ( (MasPar2[3] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbC_Date);
+  // 4
+  if ( (DskParams and vcGetDog_DateSrok) <> 0 )
+    if ( ( MasPar2[4] = 0 ) OR ( (MasPar2[4] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbC_DateSrok);
+!-- Группа 2 ------------------------------------------------------------------
+  // 6
+  if ( (DskParams and vcGetDog_Kontr) <> 0 )
+    if ( MasPar1[6] <> 0 )
+      if ( ( MasPar2[6] = 0 ) OR ( (MasPar2[6] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbC_Kontr);
+  // 7
+  if ( (DskParams and vcGetDog_GruzFrom) <> 0 )
+    Add_log.AddBounds(Add_log.tbC_GruzFrom);
+  // 8
+  if ( (DskParams and vcGetDog_GruzTo) <> 0 )
+    Add_log.AddBounds(Add_log.tbC_GruzTo);
+  // 9
+  if ( (DskParams and vcGetDog_Plat) <> 0 )
+    if (MasPar1[9] <> 0)
+      if ( ( MasPar2[9] = 0 ) OR ( (MasPar2[9] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbC_Plat);
+  // 10
+  if ( (DskParams and vcGetDog_Pol) <> 0 )
+    if ( MasPar1[10] <> 0 )
+      if ( ( MasPar2[10] = 0 ) OR ( (MasPar2[10] and level) <> 0 ) )
+        Add_log.AddBounds(Add_log.tbC_Pol);
+  // 11
+  if ( (DskParams and vcGetDog_Valut) <> 0 )
+    if ( ( MasPar2[11] = 0 ) OR ( (MasPar2[11] and level) <> 0 ) )
+      Add_log.AddBounds(Add_log.tbC_Valut);
+!-- Группа 3 ------------------------------------------------------------------
+  // 14 Маска разрешенных
+  if ( (DskParams and vcGetDog_Status) <> 0 )
+    if ( ( MasPar2[14] = 0 ) OR ( (MasPar2[14] and level) <> 0 ) )
+      {
+        var ii, _pStatus : word;
+
+        status_count_bit := 0;
+
+        _pStatus  := w_Status;
+
+        for(ii := 0; ii <= 4; inc(ii))
+          {
+            if ( (_pStatus and 1) <> 0 )
+              {
+                inc(status_count_bit);
+                pos_Status := ii;
+              }
+            _pStatus := _pStatus shr 1;
+          }
+
+        if ( status_count_bit = 1 )
+          Add_log.AddBounds(Add_log.tbC_Status);
+      }
+  // 15
+  if ( (DskParams and vcGetDog_KatStatusPKP) <> 0 )
+    if ( MasPar1[20] <> 0 )
+      Add_log.AddBounds(Add_log.tbC_KatStatus);
+  // 19
+
+  if ( (DskParams and vcGetDog_NoFinKP) <> 0 )
+    Add_log.AddBounds(Add_log.tbC_NoFinKP);
+
+  if ( (DskParams and vcGetDog_NoMCKP) <> 0 )
+    Add_log.AddBounds(Add_log.tbC_NoMCKP);
+}
+
+Function Check_Params(level : byte) : boolean;
+{
+  Check_Params := true;
+!-- Группа 1 ------------------------------------------------------------------
+!-- Группа 2 ------------------------------------------------------------------
+  // 6
+  if ( (DskParams and vcGetDog_Kontr) <> 0 )
+    if ( MasPar1[6] = 0 )
+      if ( ( MasPar2[6] = 0 ) OR ( (MasPar2[6] and level) <> 0 ) )
+        {
+          if ( level = 1 )
+            if not SearchMarker(Marker_Kontr, SGetDocs.cOrg, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 2 )
+            if not SearchMarker(Marker_Kontr, Add_log.SAppDog.cOrg, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 4 )
+            if not SearchMarker(Marker_Kontr, Add_log.SCalPlan.cOrg, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+        }
+  // 9
+  if ( (DskParams and vcGetDog_Plat) <> 0 )
+    if ( MasPar1[9] = 0 )
+      if ( ( MasPar2[9] = 0 ) OR ( (MasPar2[9] and level) <> 0 ) )
+        {
+          if ( level = 1 )
+            if not SearchMarker(Marker_Plat, SGetDocs.cPlat, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 2 )
+            if not SearchMarker(Marker_Plat, Add_log.SAppDog.cPlat, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 4 )
+            if not SearchMarker(Marker_Plat, Add_log.SCalPlan.cPlat, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+        }
+  // 10
+  if ( (DskParams and vcGetDog_Pol) <> 0 )
+    if ( MasPar1[10] = 0 )
+      if ( ( MasPar2[10] = 0 ) OR ( (MasPar2[10] and level) <> 0 ) )
+        {
+          if ( level = 1 )
+            if not SearchMarker(Marker_Pol, SGetDocs.cPol, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 2 )
+            if not SearchMarker(Marker_Pol, Add_log.SAppDog.cPol, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 4 )
+            if not SearchMarker(Marker_Pol, Add_log.SCalPlan.cPol, IndexDocs)
+              {
+                Check_Params := false;
+                Exit;
+              }
+        }
+!-- Группа 3 ------------------------------------------------------------------
+  // 13
+  if ( (DskParams and vcGetDog_VidDoc) <> 0 )
+      if ( MasPar1[13] = 0 )
+        if ( ( MasPar2[13] = 0 ) OR ( (MasPar2[13] and level) <> 0 ) )
+          {
+            if ( level = 1 )
+              if not SearchMarker(Marker_VidD, SGetDocs.cVidDog, IndexDocs)
+                {
+                  Check_Params := false;
+                  Exit;
+                }
+
+            if ( level = 2 )
+              if not SearchMarker(Marker_VidD, Add_log.SAppDog.cVidDog, IndexDocs)
+                {
+                  Check_Params := false;
+                  Exit;
+                }
+          }
+  // 14 Маска разрешенных
+  if ( (DskParams and vcGetDog_Status) <> 0 )
+    if ( status_count_bit <> 1 )
+      if ( ( MasPar2[14] = 0 ) OR ( (MasPar2[14] and level) <> 0 ) )
+        {
+          if ( level = 1 )
+            if ( (w_Status and word(1 shl SGetDocs.Status )) = 0 )
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 2 )
+            if ( (w_Status and word(1 shl Add_log.SAppDog.Status )) = 0 )
+              {
+                Check_Params := false;
+                Exit;
+              }
+
+          if ( level = 4 )
+            if ( (w_Status and word(1 shl Add_log.SCalPlan.Status)) = 0 )
+              {
+                Check_Params := false;
+                Exit;
+              }
+        }
+  // 15
+  if ( level = 1 )
+    if ( (DskParams and vcGetDog_KatStatus) <> 0 )
+      if ( ( MasPar2[15] = 0 ) OR ( (MasPar2[15] and level) <> 0 ) )
+        if not SearchMarker(Marker_Stat, SGetDocs.cNote, IndexDocs)
+          {
+            Check_Params := false;
+            Exit;
+          }
+
+  if ( level = 2 )
+    if ( (DskParams and vcGetDog_KatStatusSogl) <> 0 )
+      if not SearchMarker(Marker_StatSogl, Add_log.SAppDog.cNote, IndexDocs)
+        {
+          Check_Params := false;
+          Exit;
+        }
+
+  if ( level = 4 )
+    if ( (DskParams and vcGetDog_KatStatusPKP) <> 0 )
+      if ( MasPar1[20] = 0 )
+        if not SearchMarker(Marker_StatPKP, Add_log.SCalPlan.cNote, IndexDocs)
+          {
+            Check_Params := false;
+            Exit;
+          }
+
+  // 16
+  if ( (DskParams and vcGetDog_OtvPodr) <> 0 )
+    if ( level = 1 )
+      if ( MasPar1[19] <> SGetDocs.cOtvPodr )
+        {
+          Check_Params := false;
+          Exit;
+        }
+
+  if ( (DskParams and vcGetDog_CurPodr) <> 0 )
+    if ( level = 1 )
+      if ( MasPar1[20] <> SGetDocs.cCurPodr )
+        {
+          Check_Params := false;
+          Exit;
+        }
+
+  if ( (DskParams and vcGetDog_NoCommiss) <> 0 )
+    if ( level <= 2 )
+      {
+        var pKatVidD : comp;
+
+        pKatVidD := if(level = 1, SGetDocs.cVidDog, Add_log.SAppDog.cVidDog);
+
+        if ( Add_log.GetFirst fastfirstrow KatVidD where (( pKatVidD == KatVidD.nRec )) = tsOk )
+          if ( Add_log.KatVidD.VidDog = 1 )
+            {
+              Check_Params := false;
+              Exit;
+            }
+      }
+!-- Группа 4 ------------------------------------------------------------------
+}
+
+Function CheckAppDog_WithKP(_Owner2 : comp) : boolean;
+{
+  CheckAppDog_WithKP := false;
+
+  Add_log.cOwner2 := _Owner2;
+
+  Add_log._loop IerCalPlUtmost // все висюльки КП у договора
+    if ( Add_log.GetFirst fastfirstrow SCalPlan where (( IerCalPlUtmost.cRec == SCalPlan.cCalPlan )) = tsOk )
+      if Check_Params(4) // проверяем КП
+        {
+          CheckAppDog_WithKP := true;
+          Break;
+        }
+}
+
+Function CheckDog_WithKP : boolean;
+var
+  NoAppDog : boolean;
+{
+  CheckDog_WithKP := false;
+  NoAppDog        := true;
+  Add_log.cOwner1 := SGetDocs.nRec;
+
+  if ( Add_log.GetFirst fastfirstrow IerDogUtmost = tsOk )
+    if ( Add_log.IerDogUtmost.cUpRec <> Add_log.IerDogUtmost.cRec )
+    // есть соглашения
+      Add_log._loop IerDogUtmost
+        if ( Add_log.GetFirst fastfirstrow SAppDog where (( IerDogUtmost.cRec == SAppDog.nRec )) = tsOk )
+          if Check_Params(2) // проверяем соглашение
+            {
+              NoAppDog := false;
+              if CheckAppDog_WithKP(Add_log.SAppDog.nRec)
+                {
+                  CheckDog_WithKP := true;
+                  Break;
+                }
+            }
+
+  if NoAppDog
+    if CheckAppDog_WithKP(SGetDocs.nRec)
+      CheckDog_WithKP := true
+}
+
+//Расчет суммы возврата
+Function SumReklSopr(_cRecKatSopr : comp) : double;
+var Sum : double;
+{
+  SumReklSopr := 0;
+  Sum := 0;
+
+  if ( Add_log.GetFirst fastfirstrow KS where (( _cRecKatSopr == KS.nRec )) = tsOk )
+    {
+      if ( longint(Add_log.KS.dOpr) = 0 )
+        Exit;
+
+      Add_log._loop SpS where (( _cRecKatSopr == SpS.cSopr ))
+        Add_log._loop SpOrder where (( Add_log.SpS.nRec == SpOrder.cSpSopr ))
+          Add_log._loop ReklSpS where (( Add_log.SpOrder.nRec == ReklSpS.cSpOrder ))
+            Sum := Sum + Add_log.ReklSpS.Price * Add_log.ReklSpS.KolFact;
+    }
+
+  SumReklSopr := Sum;
+}
+
+Function Check_CalPlan(_cOwner2 : comp; CurIsDog : boolean) : boolean;
+var c_cOwner : comp;
+{
+  Check_CalPlan := false;
+
+  ClearMarker(Marker_loop2);
+  InsertMarker(Marker_loop2, comp(0));
+  // пробег по всему дереву подчиненных КП
+  while ( GetMarkerCount(Marker_loop2) > 0 ) do
+    {
+      GetMarker(Marker_loop2, 0, c_cOwner);
+
+      Add_log._loop SCalPlan where ((
+                                     _cOwner2 == SCalPlan.cOwner
+                                  and c_cOwner == SCalPlan.cOwnerPlan
+                                  and word(4)  == SCalPlan.wDocType
+                                   ))
+        {
+          if ( not Check_Params(4) )
+            Continue;
+
+          if CurIsDog
+            Add_log.SCalPlan.cAppDogovor := 0 // КП привязан к договору
+          else
+            Add_log.SCalPlan.cDogovor := Add_log.SAppDog.cDogovor; // корректируем ссылку на договор
+
+          Add_log.SCalPlan.NeedDel := 0; // не нужно удалять
+
+          if ( Add_log.update current SCalPlan <> tsOk )
+            {
+              message('Ошибка построения дерева 5', Error + CancelButton);
+              Exit;
+            }
+
+          InsertMarker(Marker_loop2, Add_log.SCalPlan.cCalPlan);
+        }
+
+      AtDeleteMarker(Marker_loop2, 0);
+    }
+
+  Check_CalPlan := true;
+}
+
+Function Check_DogApp(_cOwner1 : comp) : boolean;
+var c_cOwner : comp;
+{
+  Check_DogApp := false;
+
+  ClearMarker(Marker_loop1);
+  InsertMarker(Marker_loop1, _cOwner1);
+  // пробег по всему дереву подчиненных соглашений
+  while ( GetMarkerCount(Marker_loop1) > 0 ) do
+    {
+      GetMarker(Marker_loop1, 0, c_cOwner);
+
+      Add_log._loop SAppDog where (( c_cOwner == SAppDog.cOwner AND word(2) == SAppDog.wDocType ))
+        {
+          if ( not Check_Params(2) )
+            Continue;
+
+          if ( (DskParams and vcGetDog_ExistKP) <> 0 ) // наличие к.плана
+            if ( not CheckAppDog_WithKP(Add_log.SAppDog.nRec) )
+              Continue;
+
+          Add_log.SAppDog.NeedDel := 0; // не нужно удалять
+
+          if ( Add_log.update current SAppDog <> tsOk )
+            {
+              message('Ошибка построения дерева 4', Error + CancelButton);
+              Exit;
+            }
+
+          InsertMarker(Marker_loop1, Add_log.SAppDog.nRec);
+
+          if ( not Check_CalPlan(Add_log.SAppDog.nRec, false) ) // Dogovor.nRec
+            Exit;
+        }
+
+      AtDeleteMarker(Marker_loop1, 0);
+    }
+
+  Check_DogApp := true;
+}
+
+Procedure ProcessSopHoz(pAppDogovor : comp; dVCur : date);
+var
+  SumSH, SumRekl: double;
+{
+
+  if (
+      ( Add_log.SoprHoz.VhSumHoz = '-' )
+       OR
+      ( Add_log.SoprHoz.Direct < 1 )
+       OR
+      ( Add_log.SoprHoz.Direct > 2 )
+       OR
+      ( pAppDogovor <> 0 ) AND ( pAppDogovor <> Add_log.SoprHoz.cAppDogovor )
+     )
+    Exit;
+
+  case Add_log.SoprHoz.TiDkGal of
+    // сопроводительные документы
+    201..203, 206, 211, 101..103, 106, 108, 110, 111:
+      {}
+  else
+    Exit;
+  end;
+
+  SumSH := if (Add_log.SoprHoz.KodValut = 0, Add_log.SoprHoz.Summa, Add_log.SoprHoz.SumValut);
+
+  if ( Add_log.SoprHoz.KodValut <> Add_log.Dogovor.cValRas )
+    if ( Add_log.Dogovor.dValCurse <> ZeroDate )
+      SumSH := oValFunc.GetAnyCurrency(Add_log.SoprHoz.KodValut,
+                                       SumSH,
+                                       Add_log.Dogovor.dValCurse,
+                                       Add_log.Dogovor.cValRas)
+    else
+      if ( Add_log.SoprHoz.dValCurse <> ZeroDate )
+        SumSH := oValFunc.GetAnyCurrency(Add_log.SoprHoz.KodValut,
+                                         SumSH,
+                                         Add_log.SoprHoz.dValCurse,
+                                         Add_log.Dogovor.cValRas)
+      else
+        if ( Add_log.SoprHoz.DatOb <> ZeroDate )
+          SumSH := oValFunc.GetAnyCurrency(Add_log.SoprHoz.KodValut,
+                                           SumSH,
+                                           Add_log.SoprHoz.DatOb,
+                                           Add_log.Dogovor.cValRas)
+        else
+          SumSH := oValFunc.GetAnyCurrency(Add_log.SoprHoz.KodValut,
+                                           SumSH,
+                                           dVCur,
+                                           Add_log.Dogovor.cValRas);
+
+  //расчет возврата
+  SumRekl := 0.0;
+
+  case Add_log.SoprHoz.TiDkGal of
+    101, 102, 108, 201, 202:
+      {
+        SumRekl := SumReklSopr(Add_log.SoprHoz.cSoprDoc);
+
+        if ( Add_log.Dogovor.cValRas <> 0 )
+          if ( Add_log.Dogovor.dValCurse <> ZeroDate )
+            SumRekl := oValFunc.GetAnyCurrency(comp(0), SumRekl, dVCur, Add_log.Dogovor.cValRas)
+          else
+            SumRekl := oValFunc.GetAnyCurrency(comp(0), SumRekl, Add_log.Dogovor.dInput, Add_log.Dogovor.cValRas);
+      }
+  end;
+
+  case Add_log.SoprHoz.TiDkGal of
+    // входящие сопроводительные документы (кредит) - знак "-"
+    101..103, 106, 108, 110, 111:
+      SGetDocs.TekDebts := SGetDocs.TekDebts - ( SumSH - SumRekl );
+    // исходящие сопроводительные документы (дебет) - знак "+"
+    201..203, 206, 211:
+      SGetDocs.TekDebts := SGetDocs.TekDebts + ( SumSH - SumRekl );
+  end;
+}
+
+Function InsertOneDogovor : boolean;
+{
+  InsertOneDogovor := true;
+
+  ClearBuffer(#SGetDocs);
+
+  SGetDocs.nRec       := Add_log.Dogovor.nRec;
+  SGetDocs.DogVal     := if (Add_log.Dogovor.cVal = 0, s_SimvRub, Add_log.KlVal.SimvolV);
+  SGetDocs.Summa      := Add_log.Dogovor.Summa;
+  SGetDocs.cOwner     := Add_log.Dogovor.cDogovor;
+  SGetDocs.cOwnerPlan := 0;
+  SGetDocs.isLeaf     := 0;
+  SGetDocs.wDocType   := if (SGetDocs.cOwner = 0, 1, 2);
+  SGetDocs.DopProc    := Add_log.Dogovor.SummaSpec;
+  SGetDocs.cCurPodr   := Add_log.Dogovor.cCurPodr;
+
+  if ( Add_log.GetFirst fastfirstrow AttrDog where (( Add_log.Dogovor.nRec == AttrDog.cDogovor )) = tsOk )
+    SGetDocs.cOtvPodr  := Add_log.AttrDog.cPodr;
+
+  if ( Add_log.Dogovor.cDogovor = 0 ) // договор
+    {
+      SGetDocs.cDogovor    := Add_log.Dogovor.nRec;
+      SGetDocs.cAppDogovor := 0;
+    }
+  else
+    {
+      SGetDocs.cDogovor    := Add_log.IerDog.cDogovor;
+      SGetDocs.cAppDogovor := Add_log.Dogovor.nRec;
+    }
+
+  SGetDocs.cCalPlan    := 0; // т.к. они дублируются с NRec Dogovor, а SGetDocs.nRec = Dogovor.nRec
+  SGetDocs.DesGr       := Add_log.Dogovor.DesGr;
+  SGetDocs.Descr       := Add_log.Dogovor.Descr;
+
+  SGetDocs.dBeg        := Add_log.Dogovor.dBeg;
+  SGetDocs.dDoc        := Add_log.Dogovor.dDoc;
+  SGetDocs.dEnd        := Add_log.Dogovor.dend;
+  SGetDocs.NoDoc       := Add_log.Dogovor.NoDoc;
+  SGetDocs.NoDoc_Ext   := Add_log.Dogovor.NoDoc_Ext;
+  SGetDocs.cOrg        := Add_log.Dogovor.cOrg;
+  SGetDocs.cNote       := Add_log.Dogovor.cNote;
+
+  SGetDocs.cPlat       := Add_log.Dogovor.cPlat;
+  SGetDocs.cPol        := Add_log.Dogovor.cPol;
+  SGetDocs.cVidDog     := Add_log.Dogovor.cVidDog;
+  SGetDocs.TipMoney    := Add_log.Dogovor.TipMoney;
+  SGetDocs.cNazna      := Add_log.Dogovor.cProg;
+  SGetDocs.Status      := Add_log.Dogovor.Status;
+  SGetDocs.Direct      := Add_log.Dogovor.Direct;
+  SGetDocs.scurDirect  := '';
+  SGetDocs.cShtrafPlat := Add_log.Dogovor.cShtrafPlat;
+  SGetDocs.cShtrafShip := Add_log.Dogovor.cShtrafShip;
+  SGetDocs.cPriceLs    := Add_log.Dogovor.cPriceLs;
+  SGetDocs.cVal        := Add_log.Dogovor.cVal;
+  SGetDocs.cValRas     := Add_log.Dogovor.cValRas;
+  SGetDocs.dValCurse   := Add_log.Dogovor.dValCurse;
+  SGetDocs.MethodPrice := Add_log.Dogovor.MethodPrice;
+  SGetDocs.VhodNal     := Add_log.Dogovor.VhodNal;
+  SGetDocs.MaxDebts    := Add_log.Dogovor.MaxDebts;
+  SGetDocs.TiDk        := Add_log.Dogovor.TiDk;
+
+  if ( (DskParams and vcGetDog_Zamena) <> 0 )
+    {
+      var SumSH       : double;
+
+      var pDogovor
+        , pAppDogovor : comp;
+
+      var dVCur       : date;
+
+      if ( longint(Add_log.Dogovor.dValCurse) = 0 )
+        dVCur := if(longint(Add_log.Dogovor.dBeg) = 0, Add_log.Dogovor.dDoc, Add_log.Dogovor.dBeg)
+      else
+        dVCur := Add_log.Dogovor.dValCurse;
+
+      pDogovor    := SGetDocs.cDogovor;
+      pAppDogovor := SGetDocs.cAppDogovor;
+
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 201 <<= SoprHoz.TiDkGal
+                                                                  and 203 >>= SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 101 <<= SoprHoz.TiDkGal
+                                                                  and 103 >>= SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 206 == SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 106 == SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 211 == SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 111 == SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+      Add_log._loop SoprHoz where (( pDogovor == SoprHoz.cDogovor and 110 == SoprHoz.TiDkGal ))
+        ProcessSopHoz(pAppDogovor, dVCur);
+
+      SumSH := 0;
+
+      Add_log._loop BaseFin where (( pDogovor == BaseFin.cDogovor ))
+        {
+          if (
+              ( Add_log.BaseFin.Direct < 1 )
+               OR
+              ( Add_log.BaseFin.Direct > 2 )
+               OR
+              ( Add_log.BaseFin.PrShtraf = 1 )
+               OR
+              ( pAppDogovor <> 0 ) AND ( pAppDogovor <> Add_log.BaseFin.cAppDogovor )
+             )
+            Continue;
+
+          if not boGetTune('Fin.DOSF.AccUnpaidPlatDoc')
+            if ( longint(Add_log.BaseFin.dDoc) = 0 )
+              Continue;
+
+          SumSH := if(Add_log.BaseFin.cVal = 0, Add_log.BaseFin.Summa, Add_log.BaseFin.SumVal);
+
+          if ( Add_log.BaseFin.cVal <> Add_log.Dogovor.cValRas )
+            if ( Add_log.Dogovor.dValCurse <> ZeroDate )
+              SumSH := oValFunc.GetAnyCurrency(Add_log.BaseFin.cVal,
+                                               SumSH,
+                                               Add_log.Dogovor.dValCurse,
+                                               Add_log.Dogovor.cValRas)
+            else
+              if ( Add_log.BaseFin.dDoc <> ZeroDate )
+                SumSH := oValFunc.GetAnyCurrency(Add_log.BaseFin.cVal,
+                                                 SumSH,
+                                                 Add_log.BaseFin.dDoc,
+                                                 Add_log.Dogovor.cValRas)
+              else
+                SumSH := oValFunc.GetAnyCurrency(Add_log.BaseFin.cVal,
+                                                 SumSH,
+                                                 dVCur,
+                                                 Add_log.Dogovor.cValRas);
+
+          // дебет - "+", кредит - "-"
+          if ( Add_log.BaseFin.Direct = 1 ) // продажа
+            SGetDocs.TekDebts := SGetDocs.TekDebts - SumSH
+          else
+            SGetDocs.TekDebts := SGetDocs.TekDebts + SumSH;
+        }
+    }
+
+  SGetDocs.cZamena := Add_log.Dogovor.cZamena;
+  SGetDocs.NeedDel := 1; // пока все записи помечаются как для удаления
+
+  if ( insert current SGetDocs <> tsOk )
+    {
+      message('Ошибка построения дерева 1', Error + CancelButton);
+      InsertOneDogovor := false;
+      Exit;
+    }
+
+#ifdef GetDocs2_VIP
+  if ( (DskParams and vcGetDog_Zamena) <> 0 )
+    {
+      var Ind  : longint;
+      var cZmn : comp;
+      var _str : string;
+
+      cZmn := Add_log.Dogovor.nRec;
+      Ind  := 0;
+      while ( Add_log.GetFirst fastfirstrow DogovorZam where (( cZmn == DogovorZam.nRec )) = tsOk ) do
+        {
+          cZmn := Add_log.DogovorZam.cZamena;
+          _str := Add_log.DogovorZam.Descr + '/' + '№ ' + Add_log.DogovorZam.NoDoc
+               +  DateToStr(Add_log.DogovorZam.dDoc, ' от DD/MM/YYYY');
+
+          insert SGetDocsZam
+            set SGetDocsZam.cDogovor := Add_log.Dogovor.nRec,
+                SGetDocsZam.Ind      := Ind,
+                SGetDocsZam.NameDog  := _str;
+
+          dec(Ind);
+        }
+
+      cZmn := Add_log.Dogovor.nRec;
+      Ind  := 0;
+
+      if ( Add_log.GetFirst fastfirstrow DogovorZam where (( cZmn == DogovorZam.nRec )) = tsOk )
+        while ( Add_log.GetFirst fastfirstrow DogovorZam where (( cZmn == DogovorZam.cZamena )) = tsOk ) do
+          {
+            inc(Ind);
+            cZmn := Add_log.DogovorZam.nRec;
+            _str := Add_log.DogovorZam.Descr + '/' + '№ ' + Add_log.DogovorZam.NoDoc
+                  + DateToStr(Add_log.DogovorZam.dDoc, ' от DD/MM/YYYY');
+
+            insert SGetDocsZam
+              set SGetDocsZam.cDogovor := Add_log.Dogovor.nRec,
+                  SGetDocsZam.Ind      := Ind,
+                  SGetDocsZam.NameDog  := _str;
+          }
+    }
+#end
+}
+
+Procedure SetCalPlanOwner;
+{
+  Add_log.update SCalPlan where (( SAppDog.cCalPlan == SCalPlan.cOwnerPlan ))
+    set SCalPlan.cOwner := SAppDog.nRec;
+}
+
+// !!! Перед вызовом функции нужно сделать ReSetBounds(#SGetDocs);
+Function MakeTree : boolean;
+var
+  Exit_loop : boolean;
+{
+  MakeTree  := false;
+  Exit_loop := false;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Формирование дерева иерархии...'#13, 50);
+
+  delete all SGetDocs;
+
+  Marker_Stat     := InitMarker('MGetDocs_Stat'   , 8, 100, 10);
+  Marker_StatPKP  := InitMarker('MGetDocs_StatPKP', 8, 100, 10);
+
+  if Add_log.BoundActive(Add_log.tbOnIerDog) Add_log.SubBounds(Add_log.tbOnIerDog);
+
+  if ( (DskParams and vcGetDog_Dogovor) <> 0 )
+    Add_log.AddBounds(Add_log.tbOnIerDog);
+
+  SetAppDogBounds;
+  SetPlanBounds;
+
+#ifdef GetDocs2_VIP
+  if ( (DskParams and vcGetDog_Zamena) <> 0 )
+    Add_log.delete all SGetDocsZam;
+#end
+
+  if ( (DskParams and vcGetDog_Dogovor) <> 0 )
+    {
+      Add_log._loop IerDog where (( MasPar1[16] == IerDog.cUpRec ))
+        {
+          if ( not NextVisual )
+            {
+              StopVisual('', 0);
+              Exit_loop := true;
+              Break;
+            }
+
+          if ( Add_log.GetFirst FastFirstRow Dogovor = tsOk )
+            if not InsertOneDogovor
+              Break;
+        }
+    }
+  else
+    {
+      Add_log._loop Dogovor
+        {
+          if ( not NextVisual )
+            {
+              StopVisual('', 0);
+              Exit_loop := true;
+              Break;
+            }
+
+#ifdef GetDocs2_VIP
+          if not (
+                  (
+                   ( (FilterInfo.Filter and 1) = 0 )
+                    OR
+                   ( Add_log.Dogovor.dDoc >= FilterInfo.dBeg )
+                    AND
+                   ( Add_log.Dogovor.dDoc <= FilterInfo.dEnd )
+                  )
+                   AND
+                  (
+                   ( (FilterInfo.Filter and 2) = 0 )
+                    OR
+                   ( Add_log.Dogovor.cOrg = FilterInfo.pOrg )
+                  )
+                   AND
+                  (
+                   ( (FilterInfo.Filter and 4) = 0 )
+                    OR
+                   ( Add_log.Dogovor.Status = FilterInfo.Status )
+                  )
+                   AND
+                  (
+                   ( (FilterInfo.Filter and 16) = 0 )
+                    OR
+                   ( Add_log.Dogovor.cProg = FilterInfo.pNazna )
+                  )
+                   AND
+                  (
+                   ( (FilterInfo.Filter and 128) = 0 )
+                    OR
+                   ( Add_log.Dogovor.Descr = FilterInfo.sDescr )
+                  )
+                   AND
+                  (
+                   ( (FilterInfo.Filter and 256) = 0 )
+                    OR
+                   ( Add_log.Dogovor.DesGr = FilterInfo.sDesGr )
+                  )
+                   AND
+                  (
+                   ( (FilterInfo.Filter and 512) = 0 )
+                    OR
+                   ( Add_log.Dogovor.cCurPodr = FilterInfo.pCurPodr )
+                  )
+                 )
+            Continue;
+
+          if ( (FilterInfo.Filter and 8) <> 0 )
+            {
+              var pGrDogs : comp; pGrDogs := FilterInfo.GrDogs;
+
+              if ( Add_log.GetFirst fastfirstrow SpGrSch
+                              where (( pGrDogs     == SpGrSch.cGroupSch and
+                                       word(1)     == SpGrSch.wList     and
+                              Add_log.Dogovor.nRec == SpGrSch.cBaseDoc )) <> tsOk )
+                Continue;
+            }
+
+          if ( (FilterInfo.Filter and 32) <> 0 )
+            if ( Add_log.GetFirst fastfirstrow AttrDog where (( Add_log.Dogovor.nRec == AttrDog.cDogovor )) <> tsOk )
+              Continue
+            else
+              if ( Add_log.AttrDog.cPodr <> FilterInfo.pOtvPodr )
+                Continue;
+
+          if ( (FilterInfo.Filter and 64) <> 0 )
+            if ( Add_log.Dogovor.cVidDog <> FilterInfo.pVidDog )
+              if ( not FilterInfo.UseIerVidDog )
+                Continue
+              else
+                {
+                  var pCurVD : comp   ; pCurVD := Add_log.Dogovor.cVidDog;
+                  var Flag   : boolean; Flag   := true;
+
+                  while ( Add_log.GetFirst fastfirstrow KatVidD where (( pCurVD == KatVidD.nRec )) = tsOk ) do
+                    {
+                      if ( Add_log.KatVidD.nRec = FilterInfo.pVidDog )
+                        {
+                          Flag := false;
+                          Break;
+                        }
+                       pCurVD := Add_log.KatVidD.cOwner;
+                    }
+
+                  if Flag
+                    Continue;
+                }
+#end
+          if ( Add_log.GetFirst fastfirstrow IerDog where (( Add_log.Dogovor.nRec == IerDog.cRec )) <> tsOk )
+            {
+            }
+
+          if not InsertOneDogovor
+            Break;
+        }
+    }
+
+  if Exit_loop
+    Exit;
+
+  Add_log._loop SGetDocs2
+    {
+      if Exit_loop
+        Break; //если not NextVisual в Add_log._loop CalPlan
+
+      if ( not NextVisual )
+        {
+          Exit_loop := true;
+          Break;
+        }
+
+      if ( Add_log.SGetDocs2.wDocType = 4 )
+        Continue;
+
+      Add_log._loop CalPlan
+        {
+          if (not NextVisual)
+            {
+              Exit_loop := true;
+              Break;
+            }
+
+          ClearBuffer(#SGetDocs);
+
+          SGetDocs.nRec        := 0;
+          SGetDocs.DogVal      := if (Add_log.CalPlan.cVal = 0, s_SimvRub, Add_log.KlVal2.SimvolV);
+          SGetDocs.cOwner      := Add_log.CalPlan.cDogovor;
+          SGetDocs.cOwnerPlan  := Add_log.CalPlan.cCalPlan;
+          SGetDocs.isLeaf      := 1; //  Лист
+          SGetDocs.wDocType    := 4;
+          SGetDocs.cDogovor    := Add_log.CalPlan.cDogovor;
+          SGetDocs.cAppDogovor := Add_log.CalPlan.cDogovor;
+          SGetDocs.cCalPlan    := Add_log.CalPlan.nRec;
+          SGetDocs.DesGr       := Add_log.CalPlan.DesGr;
+          SGetDocs.Descr       := Add_log.CalPlan.Descr;
+          SGetDocs.dDoc        := Add_log.CalPlan.dInput;
+          SGetDocs.dBeg        := Add_log.CalPlan.dFrom;
+          SGetDocs.dEnd        := Add_log.CalPlan.dTo;
+          SGetDocs.NoDoc       := Add_log.CalPlan.NoDoc;
+          SGetDocs.NoDoc_Ext   := Add_log.CalPlan.NoDoc_Ext;
+          SGetDocs.cOrg        := Add_log.CalPlan.cOrg;
+          SGetDocs.cNote       := Add_log.CalPlan.cNote;
+          SGetDocs.cPlat       := Add_log.CalPlan.cPlat;
+          SGetDocs.cPol        := Add_log.CalPlan.cPol;
+          SGetDocs.Status      := Add_log.CalPlan.Status;
+
+          if ( Add_log.CalPlan.DirectPlat = 0 )
+            {
+              SGetDocs.Direct    := Add_log.CalPlan.DirectMC;
+              SGetDocs.VidPlan   := 1; // "0-договор;1-товарный КП;2-финансовый КП",
+              SGetDocs.Summa     := Add_log.CalPlan.SummaSpec;
+              SGetDocs.IsFinPKP  := false;
+            }
+          else
+          if ( Add_log.CalPlan.DirectMC = 0 )
+            {
+              SGetDocs.Direct    := Add_log.CalPlan.DirectPlat;
+              SGetDocs.VidPlan   := 2; // "0-договор;1-товарный КП;2-финансовый КП",
+              SGetDocs.Summa     := Add_log.CalPlan.Summa;
+              SGetDocs.IsFinPKP  := true;
+            }
+          else
+            {
+              SGetDocs.DogVal    := '';
+              SGetDocs.VidPlan   := 100; // обобщенный КП",
+              SGetDocs.IsFinPKP  := false;
+            }
+
+          SGetDocs.scurDirect  := '';
+          SGetDocs.cShtrafPlat := Add_log.Dogovor2.cShtrafPlat;
+          SGetDocs.cShtrafShip := Add_log.Dogovor2.cShtrafShip;
+          SGetDocs.cPriceLs    := Add_log.Dogovor2.cPriceLs;
+          SGetDocs.cVal        := Add_log.Dogovor2.cVal;
+          SGetDocs.cValRas     := Add_log.Dogovor2.cValRas;
+          SGetDocs.dValCurse   := Add_log.Dogovor2.dValCurse;
+          SGetDocs.MethodPrice := Add_log.Dogovor2.MethodPrice;
+          SGetDocs.VhodNal     := Add_log.Dogovor2.VhodNal;
+          SGetDocs.MaxDebts    := Add_log.Dogovor2.MaxDebts;
+          SGetDocs.NeedDel     := if(SGetDocs.cCalPlan <> 0, 1, 0);
+
+          if ( insert current SGetDocs <> tsOk )
+            {
+              message('Ошибка построения дерева 2', Error + CancelButton);
+              Break;
+            }
+        }
+    }
+
+  StopVisual('', 0);
+
+  if Exit_loop
+    Exit;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Проверка сформированного дерева ...'#13, 50);
+  // Проверка оставшихся условий
+  Marker_Kontr    := InitMarker('MGetDocs_Kontr'     , 8, 100, 10);
+  Marker_Plat     := InitMarker('MGetDocs_Plat'      , 8, 100, 10);
+  Marker_Pol      := InitMarker('MGetDocs_Pol'       , 8, 100, 10);
+  Marker_Stat     := InitMarker('MGetDocs_Stat'      , 8, 100, 10);
+  Marker_StatPKP  := InitMarker('MGetDocs_StatPKP'   , 8, 100, 10);
+  Marker_StatSogl := InitMarker('MGetDocs_StatSogl'  , 8, 100, 10);
+  Marker_VidD     := InitMarker('MGetDocs_VidD'      , 8, 100, 10);
+  Marker_loop1    := InitMarker('MGetDocs_Tree_loop1', 8, 100, 10, false); // несортированный маркер
+  Marker_loop2    := InitMarker('MGetDocs_Tree_loop2', 8, 100, 10, false); // несортированный маркер
+
+  _loop NOCACHE SGetDocs where (( comp(0) == SGetDocs.cOwner )) // Договора
+    {
+      if ( not NextVisual )
+        {
+          Exit_loop := true;
+          Break;
+        }
+
+      if ( not Check_Params(1) )
+        Continue;
+
+      if ( (DskParams and vcGetDog_ExistKP) <> 0 ) // наличие к.плана
+        if ( not CheckDog_WithKP )
+          Continue;
+
+      SGetDocs.NeedDel := 0; // не нужно удалять
+
+      if ( update current SGetDocs <> tsOk )
+        {
+          message('Ошибка построения дерева 3', Error + CancelButton);
+          Exit_loop := true;
+          Break;
+        }
+
+      if ( not Check_DogApp(SGetDocs.nRec) )
+        {
+          Exit_loop := true;
+          Break;
+        }
+
+      if ( not Check_CalPlan(SGetDocs.nRec , true) )
+        {
+          Exit_loop := true;
+          Break;
+        }
+    }
+
+  DoneMarker(Marker_Kontr   , 'MGetDocs_Kontr');
+  DoneMarker(Marker_Plat    , 'MGetDocs_Plat');
+  DoneMarker(Marker_Pol     , 'MGetDocs_Pol');
+  DoneMarker(Marker_Stat    , 'MGetDocs_Stat');
+  DoneMarker(Marker_StatPKP , 'MGetDocs_StatPKP');
+  DoneMarker(Marker_StatSogl, 'MGetDocs_StatSogl');
+  DoneMarker(Marker_VidD    , 'MGetDocs_VidD');
+  DoneMarker(Marker_loop1   , 'MGetDocs_Tree_loop1');
+  DoneMarker(Marker_loop2   , 'MGetDocs_Tree_loop2');
+
+  if Exit_loop
+    {
+      StopVisual('', 0);
+      Exit;
+    }
+
+  RestartVisual('Проверка сформированного дерева ...'#13, 50);
+
+  delete visual SGetDocs where((word(1) == SGetDocs.NeedDel));
+
+  Add_log._loop SAppDog where (( comp(0) >> SAppDog.cCalPlan ))
+    SetCalPlanOwner;
+
+  Add_log._loop SAppDog where (( comp(0) << SAppDog.cCalPlan ))
+    SetCalPlanOwner;
+
+  StopVisual('', 0);
+
+  MakeTree := true;
+
+}
+
+procedure SetDisabledDogStatus;
+{
+  if ( wGetTune('Pick.DisableDogs') = 0 )
+    exit;
+
+  DskParams := DskParams OR vcGetDog_KatStatus OR vcGetDog_KatStatusSogl;
+
+  Marker_Stat     := InitMarker('MGetDocs_Stat'      , 8, 100, 10);
+  Marker_StatSogl := InitMarker('MGetDocs_StatSogl'  , 8, 100, 10);
+
+  ClearMarker(Marker_Stat);
+  ClearMarker(Marker_StatSogl);
+
+  var i, pStat : word;
+  var iNom     : integer;
+  var cNotes   : comp;
+
+  pStat := wGetTune('Pick.DisableDogs');
+
+  for(i := 0; i < 5; i++)
+    if ( (pStat AND (1 shl i)) = 0 )
+      {
+        _LOOP KatNotesDog where ((   word(400) == KatNotesDog.VidDoc
+                               AND i           == KatNotesDog.Status ))
+          InsertMarker(Marker_Stat, KatNotesDog.nRec);
+
+        _LOOP KatNotesDog where ((   word(401) == KatNotesDog.VidDoc
+                               AND i           == KatNotesDog.Status ))
+          InsertMarker(Marker_StatSogl, KatNotesDog.nRec);
+      }
+
+  DoneMarker(Marker_Stat    , 'MGetDocs_Stat');
+  DoneMarker(Marker_StatSogl, 'MGetDocs_StatSogl');
+}

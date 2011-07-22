@@ -1,0 +1,624 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 8.1 - логистика
+// Реестр документов, обосновывающих применение нулевой ставки РФ
+//
+//********************************************************************************
+
+#include xlReport.Vih  //Excel
+#include OperNakl.Vih
+#include ValFunc.vih
+
+#doc
+Назначение:
+  Реестр документов, обосновывающих применение нулевой ставки РФ
+#end
+
+//******************************************************************************
+
+Interface ReestrZeroSt 'Реестр документов, обосновывающих применение нулевой ставки РФ' EscClose;
+  Show at (2,2,63,8);
+
+table struct NaklRees
+(
+  Kontragent  : String
+, Znom        : String
+, Zdate       : String
+, Zval        : String
+, KatSoprnRec : Comp
+, SoprHoznRec : Comp
+)
+with index
+(
+  tmpRees01 = Kontragent + Znom + Zdate + Zval + KatSoprnRec + SoprHoznRec
+, tmpRees02 = Kontragent  
+, tmpRees03 = Znom
+);                                             
+
+
+
+table struct DogPlat
+(
+//Заявление
+  Kontragent  : String
+, Znom        : String
+, Zdate       : String
+, Zval        : String
+, KatSoprnRec : Comp
+, SoprHoznRec : Comp
+//Договор
+, DogDate     : String
+, DogNom      : String
+, DogVal      : String
+//Накладная
+, NaklVal     : String
+, NaklNom     : String
+, NaklDate    : String
+, NaklCMRNom  : String
+, NaklCMRDate : String
+, NaklSumm    : Double
+, NaklSumVal  : Double
+, NaklKol     : Double
+, NaklOtpEd   : String
+//Платежки
+, PlatNom     : String
+, PlatDate    : String
+, PlatVal     : String
+, PlatSumm    : Double
+, PlatSumVal  : Double
+)
+with index
+(
+  tmpDog01 = Kontragent + Znom + Zdate + Zval + KatSoprnRec + SoprHoznRec
+);
+
+Create View
+
+Var
+  pxlrepsetup  : xlrepsetup;
+
+  oExtAttr     : iExtAttr;
+
+  DateZ1 
+, DateZ2
+, DateN1
+, DateN2   
+, dCurDate 
+, startDate
+, tDate        : Date;
+
+
+  ID
+, sXLSFileName
+, sXLTFileName
+, StrKontr
+, StrZnom 
+, StrZdate    
+, StrZval
+, Cena_PrR           
+, Cena_PrV
+, Kol_pr 
+, s_SimvRub    : string;
+
+  pXL          : XLSRepBuilder;      // Excel
+
+  RecSoprHoz   : Comp;
+  
+  FlagPlat 
+, FlagKontr     
+, FlagZ        : Boolean;
+ 
+  sumNaklV  
+, sumNaklR  
+, sumPlatV  
+, sumPlatR  
+, sumZNaklV 
+, sumZNaklR 
+, sumZPlatV 
+, sumZPlatR 
+, sumNaklV_A
+, sumNaklR_A
+, sumPlatV_A
+, sumPlatR_A  : Double;
+
+  ii
+, nn          : Word;
+//------------------------------------------------------------------------------
+
+From
+
+  KatSopr
+, SpSopr
+, KatOrg
+, KlVal
+, NaklRees
+, DogPlat
+, SpSopHoz
+, SoprHoz
+, KatOtpEd
+//------------------------------------------------------------------------------
+
+Where
+((
+    KatSopr.nRec         == SpSopr.cSopr
+and KatSopr.cOrg         == KatOrg.NRec
+and KatSopr.cVal         == KlVal.NRec
+and KatSopr.cDogovor     == Dogovor.nRec
+and SpSopr.NRec          == SpSopHoz.cSpSopr
+and SpSopHoz.cSoprHoz    == SoprHoz.NRec
+and SpSopr.cOtpEd        == KatOtpEd.nRec
+and NaklRees.Zdate       == DogPlat.Zdate      
+and NaklRees.Znom        == DogPlat.Znom       
+and NaklRees.Zval        == DogPlat.Zval       
+and NaklRees.Kontragent  == DogPlat.Kontragent 
+and NaklRees.KatSoprnRec == DogPlat.KatSoprnRec
+and NaklRees.SoprHoznRec == DogPlat.SoprHoznRec
+))
+
+bounds BoundKatSopr = 
+        Word(201) == KatSopr.VidSopr and
+        DateN1    <<= KatSopr.dSopr and
+        DateN2    >>= KatSopr.dSopr
+        ordered by KatSopr.dSopr
+;
+
+Panel p1;
+  Show at (,,,);
+
+Screen ScrFilterEd ('', hcm_sell_Win_ReestrNull, );
+  Fields
+   DateZ1 ('Дата',,) : NoProtect;
+   DateZ2 ('Дата',,) : NoProtect;
+   DateN1 ('Дата',,) : NoProtect;
+   DateN2 ('Дата',,) : NoProtect;
+  Buttons
+   cmValue1, Default ,, 'Сформировать',, sci1Esc;
+
+<<
+
+  Отчетный период         `с`.@@@@@@@@@@@@ `по`.@@@@@@@@@@@@
+  Формировать по накладным`с`.@@@@@@@@@@@@ `по`.@@@@@@@@@@@@
+                  
+                 <.  Сформировать  .>
+>>
+End;
+End;
+
+Procedure PrintDocumentsXLT;
+var          
+  i      : word;
+  Otstup : string;
+{
+  ID := 'L_SoprDoc\ReestSt0';
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  if not pxlrepsetup.checkParam(0,ID,sXLTFileName)
+    runinterface('xlrepsetup',1,ID,sXLTFileName);
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+!  Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('bDate', DateToStr(DateZ1, 'DD/MM/YYYY'));                           
+  pXL.SetStringVar('eDate', DateToStr(DateZ2, 'DD/MM/YYYY'));                           
+  pXL.SetStringVar('Org'  , sGetTune('MyOrg'));                           
+  pXL.SetStringVar('Buh'  , sGetTune('MainBuh'));                           
+  pXL.SetStringVar('Boss' , sGetTune('Boss'));                           
+  pXL.PublishVar;  // Excel                      
+                                                           
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('XLTNaklRees');
+  pXL.CreateTblFld('Контрагент');
+  pXL.CreateTblFld('Заявление_номер');
+  pXL.CreateTblFld('Заявление_дата');
+  pXL.CreateTblFld('Заявление_вал');
+  pXL.CreateTblFld('Договор_номер');                      
+  pXL.CreateTblFld('Договор_дата');                       
+  pXL.CreateTblFld('Договор_вал');                 
+  pXL.CreateTblFld('Накл_номер');                  
+  pXL.CreateTblFld('Накл_дата');                  
+  pXL.CreateTblFld('Накл_вал');                   
+  pXL.CreateTblFld('СМР_номер');                  
+  pXL.CreateTblFld('СМР_дата');                   
+  pXL.CreateTblFld('Накл_сумма_вал');                  
+  pXL.CreateTblFld('Накл_сумма_руб');                   
+  pXL.CreateTblFld('Количество');                  
+  pXL.CreateTblFld('Отп_ед');                   
+  pXL.CreateTblFld('Платеж_номер');
+  pXL.CreateTblFld('Платеж_дата');
+  pXL.CreateTblFld('Платеж_вал');
+  pXL.CreateTblFld('Платеж_сумма_вал');
+  pXL.CreateTblFld('Платеж_сумма_руб');
+
+  FlagKontr := False;
+
+  If GetFirst NaklRees = tsOK
+  {
+    StrKontr := '';
+    StrZnom  := '';
+    StrZdate := '';
+    StrZval  := '';
+  }
+  sumNaklV   := 0;
+  sumNaklR   := 0;
+  sumPlatV   := 0;
+  sumPlatR   := 0;
+  sumZNaklV  := 0;
+  sumZNaklR  := 0;
+  sumZPlatV  := 0;
+  sumZPlatR  := 0;
+  sumNaklV_A := 0;
+  sumNaklR_A := 0;
+  sumPlatV_A := 0;
+  sumPlatR_A := 0;
+  FlagKontr  := False;
+  FlagZ      := False;
+
+  _Loop NaklRees Ordered By Znom
+  {
+    pXL.ClearTblBuffer;
+
+    If StrKontr <> NaklRees.Kontragent
+    {
+      If FlagKontr = True
+      {
+        pXL.ClearTblBuffer;       
+        pXL.SetTblStringFldValue('Заявление_номер', 'Итого по заявлению: ');
+        pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(sumZNaklV, Cena_PrV));
+        pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(sumZNaklR, Cena_PrR));
+        pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(sumZPlatV, Cena_PrV));
+        pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(sumZPlatR, Cena_PrR));
+        pXL.InsTblRow;
+
+        sumZNaklV  := 0;
+        sumZNaklR  := 0;
+        sumZPlatV  := 0;
+        sumZPlatR  := 0;
+
+        pXL.ClearTblBuffer;       
+        pXL.SetTblStringFldValue('Заявление_номер', 'Итого по организации ' + StrKontr + ':' );
+        pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(sumNaklV, Cena_PrV));
+        pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(sumNaklR, Cena_PrR));
+        pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(sumPlatV, Cena_PrV));
+        pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(sumPlatR, Cena_PrR));
+        pXL.InsTblRow;
+
+        sumNaklV   := 0;
+        sumNaklR   := 0;
+        sumPlatV   := 0;
+        sumPlatR   := 0;
+        FlagZ      := False;
+      }
+
+      pXL.ClearTblBuffer;
+      pXL.SetTblStringFldValue('Заявление_номер', NaklRees.Kontragent);
+      pXL.InsTblRow;
+      FlagKontr := True;
+    }
+
+    If (StrZnom <> NaklRees.Znom) and (StrZdate <> NaklRees.Zdate)
+    {
+      If FlagZ = True
+      {
+        pXL.ClearTblBuffer;       
+        pXL.SetTblStringFldValue('Заявление_номер', 'Итого по заявлению: ');
+        pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(sumZNaklV, Cena_PrV));
+        pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(sumZNaklR, Cena_PrR));
+        pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(sumZPlatV, Cena_PrV));
+        pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(sumZPlatR, Cena_PrR));
+        pXL.InsTblRow;
+
+        sumZNaklV  := 0;
+        sumZNaklR  := 0;
+        sumZPlatV  := 0;
+        sumZPlatR  := 0;
+      }
+      pXL.ClearTblBuffer;       
+      pXL.SetTblStringFldValue('Заявление_номер', NaklRees.Znom);
+      pXL.SetTblStringFldValue('Заявление_дата' , NaklRees.Zdate);
+      pXL.SetTblStringFldValue('Заявление_вал'  , NaklRees.Zval);
+      FlagZ := True;
+    }
+    StrKontr := NaklRees.Kontragent;
+    StrZnom  := NaklRees.Znom;
+    StrZdate := NaklRees.Zdate;
+    StrZval  := NaklRees.Zval;
+                             
+    If GetFirst DogPlat = tsOK
+    {
+      FlagPlat := False;
+      _Loop DogPlat
+      {
+        If FlagPlat = True
+          pXL.ClearTblBuffer;
+
+        sumNaklV   := sumNaklV   + DogPlat.NaklSumVal;
+        sumNaklR   := sumNaklR   + DogPlat.NaklSumm;
+        sumPlatV   := sumPlatV   + DogPlat.PlatSumVal;
+        sumPlatR   := sumPlatR   + DogPlat.PlatSumm;
+        sumZNaklV  := sumZNaklV  + DogPlat.NaklSumVal;
+        sumZNaklR  := sumZNaklR  + DogPlat.NaklSumm;
+        sumZPlatV  := sumZPlatV  + DogPlat.PlatSumVal;
+        sumZPlatR  := sumZPlatR  + DogPlat.PlatSumm;
+        sumNaklV_A := sumNaklV_A + DogPlat.NaklSumVal;
+        sumNaklR_A := sumNaklR_A + DogPlat.NaklSumm;  
+        sumPlatV_A := sumPlatV_A + DogPlat.PlatSumVal;
+        sumPlatR_A := sumPlatR_A + DogPlat.PlatSumm;  
+
+        pXL.SetTblStringFldValue('Договор_номер'   , DogPlat.DogNom);
+        pXL.SetTblStringFldValue('Договор_дата'    , DogPlat.DogDate);
+        pXL.SetTblStringFldValue('Договор_вал'     , DogPlat.DogVal);
+        pXL.SetTblStringFldValue('Накл_номер'      , DogPlat.NaklNom);
+        pXL.SetTblStringFldValue('Накл_дата'       , DogPlat.NaklDate);
+        pXL.SetTblStringFldValue('Накл_вал'        , DogPlat.NaklVal);
+        pXL.SetTblStringFldValue('СМР_номер'       , DogPlat.NaklCMRNom);
+        pXL.SetTblStringFldValue('СМР_дата'        , DogPlat.NaklCMRDate);
+        pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(DogPlat.NaklSumVal, Cena_PrV));
+        pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(DogPlat.NaklSumm  , Cena_PrR));
+        pXL.SetTblStringFldValue('Количество'      , DoubleToStr(DogPlat.NaklKol   , Kol_pr));
+        pXL.SetTblStringFldValue('Отп_ед'          , DogPlat.NaklOtpEd);
+        pXL.SetTblStringFldValue('Платеж_номер'    , DogPlat.PlatNom);
+        pXL.SetTblStringFldValue('Платеж_дата'     , DogPlat.PlatDate);
+        pXL.SetTblStringFldValue('Платеж_вал'      , DogPlat.PlatVal);
+        pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(DogPlat.PlatSumVal, Cena_PrV));
+        pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(DogPlat.PlatSumm  , Cena_PrR));
+        pXL.InsTblRow;
+        FlagPlat := True;
+      }
+    }
+  }
+
+  pXL.ClearTblBuffer;       
+  pXL.SetTblStringFldValue('Заявление_номер', 'Итого по заявлению: ');
+  pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(sumZNaklV, Cena_PrV));
+  pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(sumZNaklR, Cena_PrR));
+  pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(sumZPlatV, Cena_PrV));
+  pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(sumZPlatR, Cena_PrR));
+  pXL.InsTblRow;
+
+  pXL.ClearTblBuffer;       
+  pXL.SetTblStringFldValue('Заявление_номер', 'Итого по организации ' + StrKontr + ':' );
+  pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(sumNaklV, Cena_PrV));
+  pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(sumNaklR, Cena_PrR));
+  pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(sumPlatV, Cena_PrV));
+  pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(sumPlatR, Cena_PrR));
+  pXL.InsTblRow;
+
+  pXL.ClearTblBuffer;       
+  pXL.SetTblStringFldValue('Заявление_номер', 'Всего: ');
+  pXL.SetTblStringFldValue('Накл_сумма_вал'  , DoubleToStr(sumNaklV_A, Cena_PrV));
+  pXL.SetTblStringFldValue('Накл_сумма_руб'  , DoubleToStr(sumNaklR_A, Cena_PrR));
+  pXL.SetTblStringFldValue('Платеж_сумма_вал', DoubleToStr(sumPlatV_A, Cena_PrV));
+  pXL.SetTblStringFldValue('Платеж_сумма_руб', DoubleToStr(sumPlatR_A, Cena_PrR));
+  pXL.InsTblRow;
+
+  pXL.PublishTbl('XLTNaklRees');
+  pXL.LoadReport(sXLSFileName);
+  
+  StopVisual('', 0);
+  
+  pXL.DisConnectExcel;    
+}
+
+HandleEvent  //interface
+
+cmInit :
+{
+  Var dCurDate : date;
+
+  s_SimvRub := sGetTune('NDE.SimvRub');
+
+  oExtAttr.CreateAttr(coKatSopr, 'Номер CMR'        , word(0));
+  oExtAttr.CreateAttr(coKatSopr, 'Дата CMR'         , word(2));
+  oExtAttr.CreateAttr(coSpSopr , 'Номер заявления'  , word(0));
+  oExtAttr.CreateAttr(coSpSopr , 'Дата заявления'   , word(2));
+  oExtAttr.CreateAttr(coSpSopr , 'Валюта заявления' , word(0));
+
+  dCurDate  := Cur_Date;
+  startDate := Date(1, Month(dCurDate), Year(dCurDate));
+
+  If (Not ReadMyDSK(DateZ1, 'ReestrZeroSt_DateZ1', True))
+    DateZ1 := startDate;
+
+  If (Not ReadMyDSK(DateZ2, 'ReestrZeroSt_DateZ2', True))
+    DateZ2 := dCurDate;
+
+  If (Not ReadMyDSK(DateN1, 'ReestrZeroSt_DateN1', True))
+    DateN1 := startDate;
+
+  If (Not ReadMyDSK(DateN2, 'ReestrZeroSt_DateN2', True))
+    DateN2 := dCurDate;
+}
+
+cmValue1 :
+{
+  var  ZNomAttr 
+      ,ZDateAttr
+      ,ZValAttr
+      ,ZKontr 
+      ,CMRNom
+      ,OwnOrg
+      ,GlBuh
+      ,Director  : string;
+  
+  var  Dattr
+      ,CMRDate   : Date;
+
+  if (DateZ1 > DateZ2) or (DateN1 > DateN2)
+  {
+    Message('Неправильно задана дата!');
+    Exit;
+  }  
+  PushBounds(tbBoundKatSopr);
+
+  If GetFirst KatSopr <> tsOK
+  {
+    Message('Нет документов удовлетворяющих условию');
+    PopBounds(tbBoundKatSopr);
+    Exit;
+  }
+
+  #ifdef USE_SEP_SYMBOL
+  Cena_PrR := '[|-]3666`666`666`666`666';
+  #else
+  Cena_PrR := '[|-]3666666666666666';
+  #end
+  nn := GetPrecisionGroup('brForSopr_Price');
+
+  for (ii:=1; ii<=nn; ii:=ii+1)
+    Cena_PrR := Cena_PrR + if (ii = 1, '.8', '8');
+
+  Cena_PrR := '\'+string(nn)+'p' + Cena_PrR;
+
+  #ifdef USE_SEP_SYMBOL
+  Cena_PrV := '[|-]3666`666`666`666`666';
+  #else
+  Cena_PrV := '[|-]3666666666666666';
+  #end
+  nn := GetPrecisionGroup('brForSopr_VPrice');
+
+  for (ii:=1; ii<=nn; ii:=ii+1)
+    Cena_PrV := Cena_PrV + if (ii = 1, '.8', '8');
+
+  Cena_PrV := '\'+string(nn)+'p' + Cena_PrV;
+
+  #ifdef USE_SEP_SYMBOL
+  Kol_Pr   := '[|-]3666`666`666`666`666';
+  #else
+  Kol_Pr   := '[|-]3666666666666666';
+  #end
+  nn := GetDlinaDrob_forKol;
+
+  for (ii:=1; ii<=nn; ii:=ii+1)
+    Kol_Pr := Kol_Pr + if (ii = 1, '.8', '8');
+
+  Kol_Pr := '\'+string(nn)+'p' + Kol_Pr;
+
+  If GetFirst KatSopr = tsOK
+  _Loop KatSopr
+  {
+    If GetFirst SpSopr = tsOK
+      _Loop SpSopr
+      {
+        tDate     := oExtAttr.dGetAttr(coSpSopr, SpSopr.nRec, 'Дата заявления');
+        ZDateAttr := If (tDate <> Date(0,0,0), DateToStr(tDate, 'DD/MM/YYYY'), '')
+
+        If (tDate > DateZ1) and (tDate < DateZ2)
+        {
+          ZNomAttr := oExtAttr.sGetAttr(coSpSopr, SpSopr.nRec, 'Номер заявления');
+          ZValAttr := oExtAttr.sGetAttr(coSpSopr, SpSopr.nRec, 'Валюта заявления');
+
+          If GetFirst KatOrg = tsOK
+            ZKontr := KatOrg.Name
+          else
+            ZKontr := '';
+
+          If GetFirst SoprHoz = tsOK 
+            RecSoprHoz := SoprHoz.nRec
+          else 
+            RecSoprHoz := comp(0);
+
+          If GetFirst NaklRees Where (( ZDateAttr    == NaklRees.Zdate       and
+                                        ZNomAttr     == NaklRees.Znom        and
+                                        ZValAttr     == NaklRees.Zval        and
+                                        ZKontr       == NaklRees.Kontragent  and    
+                                        KatSopr.nRec == NaklRees.KatSoprnRec and
+                                        RecSoprHoz   == NaklRees.SoprHoznRec     )) <> tsOK
+          {
+            ClearBuffer(#NaklRees);
+            NaklRees.Kontragent  := ZKontr;
+            NaklRees.Znom        := ZNomAttr;
+            NaklRees.Zdate       := ZDateAttr;
+            NaklRees.Zval        := ZValAttr;
+            NaklRees.KatSoprnRec := KatSopr.nRec;
+            NaklRees.SoprHoznRec := SoprHoz.nRec;
+            Insert Current NaklRees;
+          }
+
+          If GetFirst DogPlat <> tsOK
+          {
+            ClearBuffer(#DogPlat);
+            DogPlat.Kontragent  := ZKontr;
+            DogPlat.Znom        := ZNomAttr;
+            DogPlat.Zdate       := ZDateAttr;
+            DogPlat.Zval        := ZValAttr;
+            DogPlat.KatSoprnRec := KatSopr.nRec;
+            DogPlat.SoprHoznRec := SoprHoz.nRec;
+            DogPlat.NaklVal     := If (KatSopr.cVal = 0, if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+            DogPlat.NaklNom     := KatSopr.NSopr;
+            DogPlat.NaklDate    := if(KatSopr.DSopr <> Date(0,0,0), DateToStr(KatSopr.DSopr, 'DD/MM/YYYY'), '');
+            CMRNom              := oExtAttr.sGetAttr(coKatSopr, KatSopr.nRec, 'Номер CMR');
+            DogPlat.NaklCMRNom  := If (CMRNom <> '', CMRNom, '');
+            CMRDate             := oExtAttr.dGetAttr(coKatSopr, KatSopr.nRec, 'Дата CMR');
+            DogPlat.NaklCMRDate := If (CMRDate <> Date(0,0,0), DateToStr(CMRDate, 'DD/MM/YYYY'), '');
+            DogPlat.NaklSumm    := SpSopr.KolOpl * SpSopr.Price;
+            DogPlat.NaklSumVal  := SpSopr.KolOpl * SpSopr.VPrice;
+            DogPlat.NaklKol     := SpSopr.KolOpl;
+
+            If GetFirst KatOtpEd = tsOk
+              DogPlat.NaklOtpEd := KatOtpEd.Name
+            else
+              DogPlat.NaklOtpEd := ''; 
+            
+            if GetFirst Dogovor = tsOK
+            {
+              DogPlat.DogDate := if(Dogovor.dDoc <> Date(0,0,0), DateToStr(Dogovor.dDoc, 'DD/MM/YYYY'), '');
+              DogPlat.DogNom  := Dogovor.NoDoc;
+              DogPlat.DogVal  := If (Dogovor.cVal = 0, if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+            }
+
+            If RecSoprHoz <> Comp(0)
+            {
+              DogPlat.PlatNom    := SoprHoz.NoDoc;
+              DogPlat.PlatDate   := if (SoprHoz.DatOb <> Date(0,0,0), DateToStr(SoprHoz.DatOb, 'DD/MM/YYYY'), '');
+              DogPlat.PlatVal    := If (SoprHoz.KodValut = 0, if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+              DogPlat.PlatSumm   := SoprHoz.Summa;
+              DogPlat.PlatSumVal := If (SoprHoz.KodValut = 0, SoprHoz.SumValut, oValFunc.GetAnyCurrency(0, SoprHoz.Summa, KatSopr.dSopr, SoprHoz.KodValut));
+            }
+            else
+            {
+              DogPlat.PlatNom    := '';
+              DogPlat.PlatDate   := '';
+              DogPlat.PlatVal    := '';
+              DogPlat.PlatSumm   := 0;
+              DogPlat.PlatSumVal := 0;
+            }
+            Insert Current DogPlat;
+          }
+          else
+          {
+            DogPlat.NaklSumm    := DogPlat.NaklSumm   + SpSopr.KolOpl * SpSopr.Price;
+            DogPlat.NaklSumVal  := DogPlat.NaklSumVal + SpSopr.KolOpl * SpSopr.VPrice;
+            DogPlat.NaklKol     := DogPlat.NaklKol    + SpSopr.KolOpl;
+            
+            If RecSoprHoz <> Comp(0)
+            {
+              DogPlat.PlatSumm   := DogPlat.PlatSumm   + SoprHoz.Summa;
+              DogPlat.PlatSumVal := DogPlat.PlatSumVal + SoprHoz.SumValut;
+            }
+            Update Current DogPlat;
+          }
+        }
+
+      }
+  }
+  PopBounds(tbBoundKatSopr);
+  PrintDocumentsXLT;
+  Delete all NaklRees;
+  Delete all DogPlat;
+}
+//------------------------------------------------------------------------------
+
+cmDone :
+{
+  SaveMyDsk(DateZ1, 'ReestrZeroSt_DateZ1');
+  SaveMyDsk(DateZ2, 'ReestrZeroSt_DateZ2');
+  SaveMyDsk(DateN1, 'ReestrZeroSt_DateN1');
+  SaveMyDsk(DateN2, 'ReestrZeroSt_DateN2');
+}
+end;  //interface
+End.

@@ -1,0 +1,121 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// HandleEvent из soprdoc.vip
+//******************************************************************************
+
+#include SOPRC13.VPP
+cmInit:
+  {
+    if (TypeSopr = 210 or TypeSopr = 229)
+      {
+        ShowButton(scrSpecifInfo, cmAttrib, false);
+        DisableCommand(cmAttrib);
+        DisableCommand(cmSetGrNal);
+      }
+    // инициализация встраивомого интерфейса внешней классификации
+    if NullvipRef (refExClassifier)
+      LoadVipInterface (refExClassifier);
+    BindEmbeddedInterface(brExClassifier, refExClassifier);
+    refExClassifier.reDraw(coSpSopr, SpSopr.nRec);
+    ClearAllEvents;
+    //--------------------
+  }
+
+cmDone:
+  {
+    if (TypeSopr = 210 or TypeSopr = 229)
+    {
+      ShowButton(scrSpecifInfo, cmAttrib, true);
+      EnableCommand(cmAttrib);
+    }
+    // выгрузка встраивомого интерфейса внешней классификации
+    FreeVipInterface (refExClassifier);
+  }
+
+cmHotKeys :
+  PutHotCommand(RunMenu('SoprDocSpecifInfo'));
+
+cmOpenSearch:
+{
+   QuickChoiceCalculate;
+}
+
+cmPick:
+  case curfield of
+    #SpSopr.LastDate,
+    #SpSopr.OilTemper,
+    #SpSopr.LastTime,
+    #SpSopr.OilPlot:
+      {
+        WorkWithCapcity(4);
+        Abort;//прервать вызов календаря
+      }
+  end;
+
+cmSetGrNal :
+  {
+    if not isValid (#SpSopr)
+      {
+        message(''#3'Не указана МЦ/услуга...',CancelButton);
+        abort;
+        Exit;
+      }
+    If (KatSopr.cStepDoc<>0 and SpSopr.cSpStep<>0 and  boGetTune('Doc.iNalogsFromSpStep'))
+      {
+        message('Для внесения несоответствия между налогами документа и ДО '#13#3'необходимо переключить настройку: Налоги сопроводительных документов рассчитывать по ДО=нет');
+        Exit;
+      }
+
+    if not OtkatToOldState(true,word(0))
+      Exit;
+    var tGrNal: comp;
+    if (RunInterface(GetGrNal,tGrNal, word(0)) <> cmCancel)
+      {
+        If KatSopr.cStepDoc <> 0
+          if (Message(''#3'Вы согласны внести несоответствие'#13#3+
+                        'между налогами накладной и ДО ?',YesNo) = cmNo)
+            Exit;
+
+        if not OtkatToOldState(true,word(0))
+          Exit;
+
+        Delete NoVisual SpDocNal
+                  where ((SpSopr.NRec == SpDocNal.cSpDoc and
+                             TypeSopr == SpDocNal.TipDoc));
+
+        SpSopr.ManualTax := 0;
+        RecalcNalogs(tGrNal,0)
+        IF GetFirst SpDocNal where ((SpSopr.NRec == SpDocNal.cSpDoc and
+                                        TypeSopr == SpDocNal.TipDoc)) <> tsOK
+           SpSopr.ManualTax := 1;//пир 101.30737
+        CheckSumma(false);
+      }
+  }
+
+cmRestoreDoc :
+  {
+    if not OtkatToOldState(true,word(0))
+      Exit;
+
+    Pick_F3_CtrlF3(cmRestoreDoc);
+  }
+
+cmAttrib :
+  RunWindowModal(EditNalogs);
+
+cmKauReff:
+  {
+    Update_Current_KatSopr;
+
+    SaveMyDSK(OtkatToOldState(false,word(0)),'_CanEditTTNDoc_');
+    RunInterface(SpTTNDoc,word(coSpSopr),SpSopr.NRec);
+  }
+
+#ifdef __MTR_TO_SPEC__
+cmIerarchy :
+{
+  if (IsValid(#SpSopr))
+    RunInterface('EditMtr2Spec', if(not OtkatToOldState(false, word(0)), 1, if(IsValid(#SmetaStroy), 2, 0)), 0, word(coSpSopr), SpSopr.nRec);
+}
+#end

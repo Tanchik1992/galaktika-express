@@ -1,0 +1,265 @@
+// команды меню
+// cmValue17 ;  взвесить
+// cmValue18 ;  mc  - прайс
+// cmValue19 ;  mc  - ДО
+// cmValue20 ;  usl - прайс
+// cmValue14 ;  usl - каталог
+Procedure SHT_CE_Menu_My_On ;
+{
+  SetCommandEnabled(cmValue14, sht_ce_tip <> 0);
+  SetCommandEnabled(cmValue17, sht_ce_vid <> 1); // для навальных нужно взвешивать
+  SetCommandEnabled(cmValue18, (sht_ce_vid = 1) AND (sht_ce_tip <> 0) AND boGetTune('Ves.AddMC_Price'));
+  SetCommandEnabled(cmValue19, (sht_ce_vid = 1) AND (sht_ce_tip <> 0) AND boGetTune('Ves.AddMC_DO'));
+  SetCommandEnabled(cmValue20, (sht_ce_tip <> 0) AND boGetTune('Ves.AddUsl'));
+} // Procedure SHT_CE_Menu_View ;
+
+Procedure SHT_CE_Menu_My_Off ;
+  {
+  EnableCommand (cmValue17);
+  EnableCommand (cmValue18);
+  EnableCommand (cmValue19);
+  EnableCommand (cmValue20);
+  EnableCommand (cmValue14);
+  }
+
+procedure SHT_CE_CheckSumma ;
+  {
+  // там аж 3 таких события в разных местах...(((
+!  PackFields ;
+  ProcessCommand(cmCheckSumma) ;
+!  if (not UpdateTable)
+!    Exit;
+!  PackFields ;
+!  if (SpSopr.ManualTax = 0)
+!    if (SpSopr.PrMC = 1)
+!      RecalcNalogs(KatMC.cGrNal ,0)
+!    else
+!      RecalcNalogs(KatUsl.cGrNal,0)
+!  else
+!    CalcSumNalogs;
+!  RecalcSumm(TRUE);
+!  set KatSopr.nRec := KatSopr.nRec ;
+  }
+
+var User_Weigth : word ;
+
+create view sht_ce
+var
+    _cPunktR
+//  , _cMarAvt
+  , _cPunktP
+  , _cMarAvt : comp ;
+from
+   MarRel
+  ,synonym MarRel MarRelP
+  ,TTNDOC
+where
+  ((
+        _cPunktR ==  MarRel.cMarPunkt  (NoIndex)
+    and _cMarAvt ==  MarRel.cMarAvt
+    and _cPunktP ==  MarRelP.cMarPunkt (NoIndex)
+    and _cMarAvt ==  MarRelP.cMarAvt
+  ))
+;
+
+
+// возращает дату время рассчитаную по нормативу
+procedure SHT_CE_GetPunktR ; // Nrec накладной
+  {
+  if (not isValid(#TTNDoc))
+    EXIT ;
+
+  sht_ce._cPunktR := TTNDoc.cPunktR ;
+  sht_ce._cMarAvt := TTNDoc.cMarAvt ;
+  sht_ce._cPunktP := TTNDoc.cPunktP ;
+  sht_ce._cMarAvt := TTNDoc.cMarAvt ;
+
+  if (sht_ce.GetFirst MarRel  = tsOk)
+    {
+    var dt : _datetime ;
+    var dd : double ;
+
+    // жуткий норматив Штерн-Цемента для города
+    // считаем растояние между пунктами в минутах
+    if  (sht_ce.MarRel.WayTime=0)
+      dd := (sht_ce.MarRel.Distantion -
+             if (sht_ce.GetFirst MarRelP = tsOk,sht_ce.MarRelP.Distantion,0.0))
+            * 60 / 24 + 10 ; // в минутах
+    else
+      dd := (sht_ce.MarRel.WayTime -
+             if (sht_ce.GetFirst MarRelP = tsOk,sht_ce.MarRelP.WayTime, 0.0))
+            * 60 ;  // в минутах
+
+    dt := _AddSec100(_DateTime1( if(sht_ce.TTNDoc.dPunPEnd = date(0,0,0),
+                                    Cur_Date, sht_ce.TTNDoc.dPunPEnd),
+                                sht_ce.TTNDoc.tPunPEnd),
+                     comp(dd * 6000) ) ;
+    TTNDoc.dPunRBeg := _GetDate(dt) ;
+    TTNDoc.tPunRBeg := _GetTime(dt) ;
+    }
+  }
+
+// проверять только при взвешивании
+procedure SHT_CE_CheckTTNDoc ;
+  {
+  if (not isValid(#KatSopr))
+    EXIT ;
+  if (GetFirst TTNDoc = tsOk)
+    {
+    TTNDoc.wTable   := coKatSopr    ;
+    TTNDoc.cDoc     := KatSopr.NRec ;
+    if (sht_ce_tip=0)
+      {
+      TTNDoc.dPunPBeg := cur_date ;
+      TTNDoc.tPunPBeg := cur_time ;
+      }
+    else
+      {
+      TTNDoc.dPunPEnd := cur_date ;
+      TTNDoc.tPunPEnd := cur_time ;
+      SHT_CE_GetPunktR ;
+      }
+    update current ttnDoc ;
+    }
+  else
+    {
+    ClearBuffer(#TTNDoc) ;
+    TTNDoc.wTable   := coKatSopr    ;
+    TTNDoc.cDoc     := KatSopr.NRec ;
+    TTNDoc.dPunPBeg := cur_date ;
+    TTNDoc.tPunPBeg := cur_time ;
+    if (sht_ce_tip=1)
+      {
+      TTNDoc.dPunPEnd := cur_date ;
+      TTNDoc.tPunPEnd := cur_time ;
+      SHT_CE_GetPunktR ;
+      }
+    insert current ttnDoc ;
+    }
+  }
+
+procedure SHT_CE_ImportWeigth (_wtm : word);
+var tWeight : double;
+    tCounter : word;
+    tMaxRead : word;
+  {
+  tMaxRead := 10;
+  tCounter := 0;
+  if (not UpDateTable)
+    EXIT ;
+  if (CurTable<>#SpSopr)
+    SelectPanel(#SpSopr) ;
+
+  if (SpSopr.PrMC<>1)
+    if (GetFirst SpSopr where ((    KatSopr.nRec == SpSopr.cSopr
+                                and 1            == SpSopr.PrMC ))<>tsOk)
+      {
+      Message(''#3'Не найдена спецификация содержащая МЦ',CancelButton) ;
+      EXIT ;
+      }
+  CASE _wtm OF
+    1 :
+      {
+        tCounter := 0;
+        tWeight  := 0.0;
+// это цикл для получения веса с весов. Похоже функция с первого
+// раза не всегда считывает и поэтому я делаю 10 повторов если считанный вес = 0
+        do
+         {
+          tCounter := tCounter + 1;
+          tWeight  := double(TB_GetWeight) ;
+         }
+        while ((tWeight = 0.0) and (tCounter < tMaxRead))
+      set SpSopr.Netto    := 0 ;
+      set SpSopr.mTara    := tWeight; //double(TB_GetWeight) ;
+      set SpSopr.KolFact  := 0 ;
+      }
+    2 :
+      {
+        tCounter := 0;
+        tWeight  := 0.0;
+        do
+         {
+          tCounter := tCounter + 1;
+          tWeight  := double(TB_GetWeight) ;
+         }
+        while ((tWeight = 0.0) and (tCounter < tMaxRead))
+
+      set SpSopr.Netto    := tWeight - SpSopr.mTara ;
+//      double(TB_GetWeight) - SpSopr.mTara ;
+      set SpSopr.KolFact  := SpSopr.Netto
+                             / if((KatMC.Massa+KatMC.mTara)=0,
+                                  1.0,(KatMC.Massa+KatMC.mTara))
+                             / if(KatOtpEd.koef=0,1.0,KatOtpEd.koef) ;
+      if ( fEdIzm.CheckKolDiskret(SpSopr.KolFact,SpSopr.cOtpEd,TRUE,TRUE) )
+        set SpSopr.KolFact := SpSopr.KolFact ;
+      }
+  END ;
+  CheckSpSoprKol2(#SpSopr.KolFact) ;
+  SHT_CE_CheckSumma ;
+  // при считывании веса устанавливаем время разгрузки
+//  SHT_CE_CheckTTNDoc  ;
+  ReScanPanel(#SpSopr) ;
+  }
+procedure SHT_CE_Init ;
+  {
+  if wGetTune('Ves.ComPort')=word(0) message('Не задан порт!')
+  else
+   if (message ('Вы подключили весы к COM'+string(wGetTune('Ves.ComPort'))+'?',
+                 YesNo + Confirmation)                                      = cmYes)
+    if (not TB_SetPort(byte(wGetTune('Ves.ComPort'))))
+      Message(''#3'COM'+string(wGetTune('Ves.ComPort'))+' не готов к работе.', CancelButton) ;
+    else
+    {
+      Message('Порт подготовлен к работе.',cmOk);
+      init_scales := true;
+    }
+  }
+procedure SHT_CE_Zero ;
+  {
+    if init_scales
+    {
+      TB_Zero;
+      Message(''#3'Весы установлены в 0.', cmOK);
+    }
+    else
+      Message(''#3'Весы не инициализированы!', cmOK);
+
+  }
+
+procedure SHT_CE_First ;
+{
+  SHT_CE_vid := 1 ;
+}
+
+ //Определяет входит-ли организация в группу организаций
+ function SHT_CE_IntoInKatOrgDescr (pNRec_Org      : comp; //организация
+                                    pNRec_OrgDescr : comp  //группа
+                                   ) : boolean;
+ var c1 : comp;
+ {
+  SHT_CE_IntoInKatOrgDescr := False;
+  _LOOP KatOrgDescr where ((pNRec_Org == KatOrgDescr.cRec))
+     {
+       c1:= KatOrgDescr.cGroup;
+       if (pNRec_OrgDescr = c1)
+         {
+           SHT_CE_IntoInKatOrgDescr := true;
+           exit;
+         }
+
+       do
+        if (GetFirst KatOrgDescr1
+           where ((c1 == KatOrgDescr1.nRec)) = tsOk)
+          {
+            c1:= KatOrgDescr1.cGroup;
+            if (pNRec_OrgDescr = c1)
+              {
+                SHT_CE_IntoInKatOrgDescr := true;
+                exit;
+              }
+          }
+       while (c1 > 0);
+
+     }
+ }

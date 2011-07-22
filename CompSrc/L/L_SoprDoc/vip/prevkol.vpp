@@ -1,0 +1,125 @@
+
+Create view vPrevKol
+var
+  _StepDoc, _MCUsl: comp;
+  _PrMC: word;
+
+From KatSopr, SpSopr
+where
+((
+  _StepDoc     == KatSopr.cStepDoc and
+  KatSopr.NRec == SpSopr.cSopr     and
+  _MCUsl       == SpSopr.cMCUsl    and
+  _PrMC        == SpSopr.PrMc
+));
+
+// Сервисная штука для определения количества в предыдущих накладных
+// по данному ДО
+Function PreviursKolSopr : double;
+var PrevKol : double;
+var TempKol : double;
+var FoundSopr, FoundZamena: boolean;
+var SPrice, DoPrice, CrosKoef: double; // Для анализа по ценам.
+var varUchetWasMCZamInLimit, varUchetIsMCZamInLimit : word;     // учитывать проведенные замены
+{
+  if ((SpStep.PrMC > 1) and not boGetTune('Doc.CtrUslAktDo'))  exit; //нет контроля кол.Услуги
+  if ((SpStep.PrMC = 1) and not boGetTune('Doc.MakeKol'))  exit; //нет контроля кол.МЦ
+
+  PrevKol := 0;
+  PreviursKolSopr := 0;
+
+  vPrevKol._StepDoc := StepDoc.nRec;
+  vPrevKol._MCUsl := SpStep.cMCUsl;
+  vPrevKol._PrMC := SpStep.PrMC;
+  varUchetWasMCZamInLimit := wGetTune('Manuf.UchetWasMCZamInLimit');
+  varUchetIsMCZamInLimit  := wGetTune('Manuf.UchetIsMCZamInLimit');
+
+  vPrevKol._loop KatSopr
+    if (vPrevKol.KatSopr.NRec <> KatSopr.NRec)
+      {
+#ifdef NAK501
+  #ifdef NAKMnf
+       if ( (vPrevKol.KatSopr.VidSopr = 501) and (vPrevKol.KatSopr.dOpr <> date(0,0,0)) )
+          {
+           SetTmpTabHistZam_from_KatSopr_Wrk(KatSopr.buffer, StepDoc.cBaseDoc);
+           if (varUchetWasMCZamInLimit = 0)      // учитывать проведенные замены
+              {
+               PrevKol := GetKoWaslZam_Nkl501(vPrevKol.KatSopr.nRec, SpStep.cOtpED, SpStep.cMCUsl, SpStep.cParty);
+               if (PrevKol < 0) PrevKol := 0;
+              }
+          }
+  #endif
+#endif
+       vPrevKol._loop SpSopr
+         {
+            TempKol := 0;
+            FoundSopr := vPrevKol.SpSopr.cSpStep = SpStep.NRec;
+            if (not FoundSopr) if (vPrevKol.SpSopr.cSpStep <> 0)
+              Continue;
+            if (not FoundSopr)
+              FoundSopr := (SpStep.cParty = vPrevKol.SpSopr.cParty) or (SpStep.cParty = 0);
+            FoundZamena := false;
+#ifdef NAK501
+  #ifdef NAKMnf
+            if ( (vPrevKol.KatSopr.VidSopr = 501) and (vPrevKol.KatSopr.dOpr <> date(0,0,0)) )
+                if (varUchetIsMCZamInLimit = 0)      // учитывать проведенные замены
+                   {
+                    TempKol := GetKoOnlZam_Nkl501(vPrevKol.SpSopr.nRec, SpStep.cOtpED, SpStep.cMCUsl, SpStep.cParty);
+                    if (TempKol > 0) FoundZamena := true;
+                    else TempKol := 0;
+                   }
+  #endif
+#endif
+            if (FoundSopr and (not FoundZamena) )
+              {
+                TempKol := vPrevKol.SpSopr.KolFact;
+                CrosKoef := 1;
+                if (vPrevKol.SpSopr.cOtpEd <> SpStep.cOtpEd)
+                  {
+                    CrosKoef := fEdIzm.GetKoefOtpEd(vPrevKol.SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+                    TempKol := TempKol * CrosKoef;
+                  }
+
+                if boGetTune('Oper.UchCenaSpDoSopr')
+                  {
+                    doPrice := SpStep.Summa / SpStep.Kol;
+                    sPrice := if (BaseDoc.TipMoney > 1,vPrevKol.SpSopr.VPrice,vPrevKol.SpSopr.Price);
+                    sPrice := sPrice * CrosKoef;
+                    if (BaseDoc.TipMoney > 1)
+                      {
+                        if (FSRoundVal(0.0000000001) <> 0.0000000001)
+                          FoundSopr := FSRoundVal(doPrice) = FSRoundVal(sPrice)
+                        else
+                          FoundSopr := Round(SPrice,2) = Round(doPrice,2);
+                      }
+                    else
+                      {
+                       if (FSRoundRub(0.000000001) <> 0.000000001)
+                         FoundSopr := FSRoundRub(doPrice) = FSRoundRub(sPrice)
+                       else
+                         FoundSopr := Round(sPrice,2) = Round(doPrice,2);
+                      }
+                  }
+                if (not FoundSopr)
+                  TempKol := 0
+                else
+                  Case KatSopr.VidSopr of
+                   106,206:
+                     TempKol := -TempKol;
+                   501,202,103,511,521, 551, 552:
+                     if (vPrevKol.KatSopr.VidSopr <> KatSopr.VidSopr)
+                       TempKol := 0;
+                   502,503,203,102,512,523:
+                     if ((vPrevKol.KatSopr.VidSopr = KatSopr.VidSopr) or (vPrevKol.KatSopr.VidSopr = 504) or (vPrevKol.KatSopr.VidSopr = 532)
+                            or (vPrevKol.KatSopr.VidSopr = 251))
+                       TempKol := -TempKol;
+                   504 :
+                     if ((vPrevKol.KatSopr.VidSopr = KatSopr.VidSopr) or (vPrevKol.KatSopr.VidSopr = 502) or (vPrevKol.KatSopr.VidSopr = 503) or (vPrevKol.KatSopr.VidSopr = 532))
+                       TempKol := -TempKol;
+                  end;
+              }
+            PrevKol := PrevKol + TempKol;
+         }
+      }
+  PreviursKolSopr := PrevKol;
+}

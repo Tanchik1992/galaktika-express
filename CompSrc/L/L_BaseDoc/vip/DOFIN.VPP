@@ -1,0 +1,330 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - _
+// Расчет отгрузок/оплат документов-оснований для окна, пересчет документов
+//******************************************************************************
+
+cmValue20:             // Пересчет сумм ДО
+  if IsValid (tnBaseDoc) // если запись невалидна - делать нечего
+    {
+      if (curvisib <> 0)
+        {
+          Message('Для выполнения данной функции должны быть все права на документы!', Warning);
+          Exit;
+        }
+
+      if (Message('Вы действительно желаете пересчитать суммы с учетом '+
+                  'текущей настройки налогов и округления?', YesNo) <> Yes)
+         Exit;
+
+      var Datechanged: boolean;
+      var needdoopl   : word;
+      var FirstOk: boolean;
+
+      UpdateTable;
+
+      PushPos(#BaseDoc);
+
+      if (not ReadMyDsk(NeedDoOpl, 'PickDoOpl', Datechanged))
+        NeedDoOpl := 1;
+
+      if (rundialog('PickDoOpl', NeedDoOpl) = cmCancel)
+        {
+          PopPos(#BaseDoc);
+          Abort;
+          Exit;
+        }
+
+      SaveMyDsk(NeedDoOpl, 'PickDoOpl');
+
+      if NeedDoOpl = 0  // по всем документам, иначе - с текущей позиции
+        if (GetFirst BaseDoc = tsOk)
+          { }
+
+      StartNewVisual(vtNumericVisual, vfTimer, 'Подсчет количества документов: ', 1);
+      PushPos(#BaseDoc);
+
+      var nn: longint; nn := 0;
+      do     // цикл на _LOOP менять нельзя, т.к. разные точки входа - иногда с текущей записи
+        {
+          if ((BaseDoc.VidDoc = 111) OR (BaseDoc.VidDoc = 211))
+            if (BaseDoc.SpecYes = 0)
+              if NeedDoOpl = 2
+                Break
+              else
+                continue;
+
+          NextVisual;
+
+          nn := nn + 1;
+
+          if (NeedDoOpl = 2)
+            Break;
+        }
+      While GetNext BaseDoc = tsOk;
+
+      PopPos(#BaseDoc);
+      StopVisual('', 0);
+
+      StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm, 'Пересчет сумм и налогов...', nn);
+
+      // цикл на _LOOP менять нельзя, т.к. разные точки входа - иногда с текущей записи
+      do
+        { // расчет таблицы для отгрузок/оплат
+          if (not NextVisual)
+            Break
+
+          if ((BaseDoc.VidDoc = 111) OR (BaseDoc.VidDoc = 211))
+            if (BaseDoc.SpecYes = 0)
+              if NeedDoOpl = 2
+                Break
+              else
+                continue;
+
+          GetTotal(FALSE);
+
+          update current BaseDoc;
+
+          if (NeedDoOpl = 2)
+            Break;
+        }
+      While GetNext BaseDoc = tsOk;
+
+      PopPos(#BaseDoc);
+      RereadRecord;
+
+      StopVisual('', 0);
+    }
+
+//******************************************************************************
+
+cmValue12:             // Расчет отгрузок/оплат
+  if IsValid (tnBaseDoc) // если запись невалидна - делать нечего
+    {
+      if (prFormat <> 0)
+        {
+          SetFormat(brVschet);
+          prFormat := 0;
+          Exit;
+        }
+
+      var Datechanged: boolean;
+      var needdoopl   : word;
+      var FirstOk: boolean;
+
+      PushPos(#BaseDoc);
+
+      ResetBounds(#tmpSaldo3);
+
+      _LOOP tmpSaldo3
+        if (GetFirst BaseDocC where ((tmpSaldo3.cMc == BaseDocC.NRec)) = tsOk)
+          if (word(tipDo) = BaseDocC.VidDoc)
+            delete current tmpSaldo3;
+
+      SetBounds(#tmpSaldo3);
+
+      if (not ReadMyDsk(NeedDoOpl, 'PickDoOpl', Datechanged))
+        NeedDoOpl := 1;
+
+      if (rundialog('PickDoOpl', NeedDoOpl) = cmCancel)
+        {
+          PopPos(#BaseDoc);
+          Abort;
+          Exit;
+        }
+
+      SaveMyDsk(NeedDoOpl, 'PickDoOpl');
+
+      if NeedDoOpl = 0  // по всем документам, иначе - с текущей позиции
+        if (GetFirst BaseDoc = tsOk)
+          { }
+
+      StartNewVisual(vtNumericVisual, vfTimer, 'Подсчет количества документов: ', 1);
+
+      PushPos(#BaseDoc);
+
+      var nn: longint; nn := 0;
+
+      // цикл на _LOOP менять нельзя, т.к. разные точки входа - иногда с текущей записи
+      do
+        {
+          NextVisual;
+          nn := nn + 1;
+          if (NeedDoOpl = 2)
+            Break;
+        }
+      While GetNext BaseDoc = tsOk;
+
+      PopPos(#BaseDoc);
+      StopVisual('', 0);
+      var SumDolgOnlyOtgrDO, DolgOtgrDOWihtRekl: double;
+
+      StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm, 'Расчет отгрузок/оплат...', nn);
+      do     // цикл на _LOOP менять нельзя, т.к. разные точки входа - иногда с текущей записи
+        if (not NextVisual)
+          Break
+        else
+          { // расчет таблицы для отгрузок/оплат
+            ClearBuffer(#tmpSaldo3);
+
+            myDirect := BaseDoc.Direct;
+            AllNakl := iDolgBD.GetAllSumOtgrDO( BaseDoc.NRec
+                                              , 0                        // дата начала интервала учета накладных
+                                              , 0                        // дата окончания и дата расчета
+                                              , if ( BaseDoc.Direct = 1  // сумма отгрузок по ДО
+                                                   , NaklRash
+                                                   , NaklPrih )
+                                              , if ( BaseDoc.Direct = 2  // сумма рекламаций по ДО
+                                                   , NaklRash
+                                                   , NaklPrih )
+                                              , SumDolgOnlyOtgrDO        // сумма задолженности отгрузок по ДО
+                                              , DolgOtgrDOWihtRekl       // сумма задолженности отгрузок с учетом рекламаций
+                                              );
+            iDolgBD.GetSumOpl_DO( BaseDoc.NRec
+                                , 0            // дата расчета
+                                , AllPlat      // сумма всех платежей по ДО
+                                , PlatPrih
+                                , PlatRash
+                                , DolgPlat);
+
+            if ( wGetTune('Country') = 2 ) // Украина
+              {
+                var SF_Sum: double;
+
+                tmpSaldo3.VPrice := 0;
+                tmpSaldo3.cParty := 0;
+
+                _LOOP SchFact where (( StepDoc.nRec == SchFact.cStepDoc AND
+                                       word(1)      == SchFact.Direct
+                                    ))
+                  {
+/*
+SchFact.TipUser = 7604; // Сводная налоговая накладная
+SchFact.TipUser = 7605; // Сводная налоговая накладная (без НДС)
+*/
+                    if ( ( SchFact.TipUser = 7604 ) OR ( SchFact.TipUser = 7605 ) )
+                      tmpSaldo3.cParty := 1;
+
+                    SF_Sum := SchFact.Sum[1]  + SchFact.Sum[2]
+                            + SchFact.Sum[4]  + SchFact.Sum[5]
+                            + SchFact.Sum[7]  + SchFact.Sum[8]
+                            + SchFact.Sum[10] + SchFact.Sum[11];  // Итого по НН
+
+                    tmpSaldo3.VPrice := tmpSaldo3.VPrice
+                                      + if(SchFact.Direct = BaseDoc.Direct, 1, -1)
+                                      * oValFunc.GetAnyCurrency(SchFact.cVal
+                                                              , SF_Sum
+                                                              , if(BaseDoc.dValCurse = ZeroDate, BaseDoc.dDoc, BaseDoc.dValCurse)
+                                                              , BaseDoc.cVal
+                                                               );
+                  }
+
+                _LOOP SchFact where (( StepDoc.nRec == SchFact.cStepDoc AND
+                                       word(2)      == SchFact.Direct
+                                    ))
+                  {
+/*
+SchFact.TipUser = 7604; // Сводная налоговая накладная
+SchFact.TipUser = 7605; // Сводная налоговая накладная (без НДС)
+*/
+                    if ( ( SchFact.TipUser = 7604 ) OR ( SchFact.TipUser = 7605 ) )
+                      tmpSaldo3.cParty := 1;
+
+                    SF_Sum := SchFact.Sum[1]  + SchFact.Sum[2]
+                            + SchFact.Sum[4]  + SchFact.Sum[5]
+                            + SchFact.Sum[7]  + SchFact.Sum[8]
+                            + SchFact.Sum[10] + SchFact.Sum[11];  // Итого по НН
+
+                    tmpSaldo3.VPrice := tmpSaldo3.VPrice
+                                      + if(SchFact.Direct = BaseDoc.Direct, 1, -1)
+                                      * oValFunc.GetAnyCurrency(SchFact.cVal
+                                                              , SF_Sum
+                                                              , if(BaseDoc.dValCurse = ZeroDate, BaseDoc.dDoc, BaseDoc.dValCurse)
+                                                              , BaseDoc.cVal
+                                                               );
+                  }
+              }
+
+            tmpSaldo3.Kol   := AllNakl;
+            tmpSaldo3.Price := AllPlat;
+            tmpSaldo3.cMC   := BaseDoc.NRec;
+
+            insert current tmpSaldo3;
+
+            if (NeedDoOpl = 2)
+              Break;
+          }
+      While GetNext BaseDoc = tsOk;
+
+      SetFieldVisible(#TmpSaldo3.VPrice, wGetTune('Country') = 2);
+      SetFormat(brVschet1);
+      prFormat := 1;
+      PopPos(#BaseDoc);
+      RescanPanel(#BaseDoc);
+      RereadRecord(#BaseDoc);
+      StopVisual('', 0);
+    }
+
+//******************************************************************************
+cmValue31:
+{
+  if NOT boGetTune('Doc.ModDo')
+    {
+      Message('Настройка ' + GetTuneName('Doc.ModDo')+ ''#13 +
+              'ограничивает Ваши права по использованию данной функции. Пересчет услуг выполняться не будет.', Information);
+      Delete all Pick3 where((Word(15) == Pick3.wList));
+      RescanPanel(#BaseDoc);
+      Exit;
+    }
+
+  if GetFirst Pick3 where ((word(15) == Pick3.wList)) <> tsOk
+  {
+      Pick3.wList := 15;
+      Pick3.PickNum := 100;
+      Pick3.pickkol := 0;
+      Pick3.cRec := BaseDoc.NRec;
+      insert current Pick3;
+      RescanPanel(#BaseDoc);
+    }
+
+  var ProverkaModifDO : boolean;
+  var IsOldProtect: boolean;
+
+  ProverkaModifDO := true;
+  IsOldProtect    := IsProtected(#BaseDoc);
+
+  ProtectRecord(#BaseDoc  , FALSE);
+  ProtectRecord(#StepDoc  , FALSE);
+  ProtectRecord(#SpStep   , FALSE);
+
+  PushPos(#BaseDoc);
+
+
+    StartNewVisual(vtRotateVisual, vfTimer, 'Расчет стоимости услуг...', 1);
+    _LOOP Pick3 where ((word(15) == Pick3.wList)) ordered by index pick02
+      if (GetFirst BaseDoc where (( Pick3.cRec == BaseDoc.nRec )) = tsOk)
+        {
+          NextVisual;
+
+          // ПИР 102.68945
+          if not NotEditPos2
+            AutoCalcUsl;
+          else
+            ProverkaModifDO := false;
+        }
+    StopVisual('', 0);
+    PopPos(#BaseDoc);
+    ProtectRecord(#BaseDoc  , IsOldProtect);
+    ProtectRecord(#StepDoc  , IsOldProtect);
+    ProtectRecord(#SpStep   , IsOldProtect);
+
+  if ProverkaModifDO
+    Message ('Пересчет стоимости услуг завершен.');
+  else
+    Message('Пересчет услуг произведен не по всем документам.'#13 +
+            'Возможно, установлены настройки запрещающие модификацию ДО,'#13 +
+            'либо установлены права доступа к документам.', Information);
+  Delete all Pick3 where((Word(15) == Pick3.wList));
+  RescanPanel(#BaseDoc);
+
+}

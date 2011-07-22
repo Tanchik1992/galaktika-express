@@ -1,0 +1,177 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 5.7 - логистика
+// Перенос цен в связанные накладные ПИР 8.374
+//
+//******************************************************************************
+
+#include soprdoc.vih
+#include soprdocb.vih
+
+#doc
+Интерфейс переноса цен в связанные накладные
+#end
+Interface DoSynchronization;
+
+Create view
+
+Var
+  NoBD
+           : comp;
+
+  P
+, VP
+, sPrice
+, Curse
+, Curse2
+           : double;
+
+  V
+           : word;
+
+from
+  BaseDoc
+, StepDoc
+, KatSopr
+, SpStep
+, SpSopr
+, KlVal
+, Pick
+
+where
+((
+     word(15)        ==  Pick.wList
+and  Pick.cRec       ==  BaseDoc.NRec
+and  BaseDoc.NRec    ==  StepDoc.cBaseDoc
+and  StepDoc.NRec    ==  KatSopr.cStepDoc
+and  StepDoc.NRec    ==  SpStep.cStepDoc
+and  KatSopr.NRec    ==  SpSopr.cSopr
+and  SpStep.NRec     ==  SpSopr.cSpStep
+and  KatSopr.cValut  ==  KlVal.NRec
+))
+;
+
+parameters
+  V;
+
+var s  : SoprDocObj1;
+var sb : SoprDocBObj1;
+
+//******************************************************************************
+
+Function GetCursPrice(_Val : comp) : double;
+{
+  var res: double;   res := 1;
+
+  if ( _Val <> 0 )
+    {
+      if ( LongInt(KatSopr.dPrice) = 0 )
+        if ( RunInterface(GetDCurse, Date(0, 0, 0), _Val, KatSopr.dPrice) = cmCancel )
+          set KatSopr.dPrice := KatSopr.dSopr;
+
+      if not oValFunc.GetCurse(_Val, KatSopr.dPrice, res)
+        Message('Невозможно найти курс для ' +
+                oValFunc.GetValSimv(_Val) +
+                ' на '+ string(KatSopr.dPrice), InFormation);
+    }
+
+  GetCursPrice := res;
+}
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit :
+{
+  if ( Message('Произвести перенос цен в накладные?', YesNo) = cmYes )
+    if ( RecordExists Pick <> tsOk )
+      Message('Пометьте ДО!', OkButton);
+    else
+      {
+        _loop Pick
+          {
+            if ( not IsValid(#KatSopr) )
+              Continue;
+
+            Curse := GetCursPrice(KatSopr.cValut);
+
+            if ( KatSopr.cValut <> BaseDoc.cVal )
+              Curse2 := GetCursPrice(BaseDoc.cVal);
+            else
+              Curse2 := Curse;
+
+            _loop KatSopr
+              {
+                if ( (KatSopr.VidSopr <> 101) and (KatSopr.VidSopr <> 108) and (KatSopr.VidSopr <> 201) and
+                     (KatSopr.VidSopr <> 1411) and (KatSopr.VidSopr <> 1421))
+                  Continue;
+
+                var Flag : boolean;
+
+                Flag := false;
+
+               _loop SpStep
+
+                 _loop SpSopr
+                   {
+                     if ( SpSopr.prMC <> 1 )
+                       Continue;
+
+                     sPrice := SpStep.Summa / SpStep.KolSkl;
+
+                     case BaseDoc.TipMoney of
+
+                       1: {
+                            if ( Curse <> 0 )
+                              VP := sPrice / Curse;
+                            else
+                              VP := 0;
+
+                            P := sPrice;
+                          }
+
+                       2: {
+                            P := sPrice * Curse2 * (1 + (BaseDoc.DopProc / 100));
+
+                            if ( KatSopr.cValut <> 0 )
+                              VP := sPrice * Curse2/Curse;
+                          }
+
+                       3: {
+                            P := sPrice * Curse;
+
+                            if ( KatSopr.cValut <> 0 )
+                              VP := sPrice * Curse2 / Curse;
+                          }
+                     end;
+
+                     if ( KatSopr.cValut = 0 )
+                       VP := 0;
+
+                     update current SpSopr set SpSopr.rPrice  := P
+                                             , SpSopr.rVPrice := VP
+                                             , SpSopr.Price   := P
+                                             , SpSopr.VPrice  := VP;
+
+                     Flag := true;
+                   }
+
+                if ( Flag )
+                  {
+                    if ( V = 0 )
+                      RunInterface(iChkSum , KatSopr.NRec, 0   , FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+                    else
+                      RunInterface(iChkSumB, KatSopr.NRec, 0, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+
+                    Message('Операция переноса цен завершена !', OkButton);
+                  }
+              }
+          }
+      }
+
+  Abort;
+}
+
+end;
+End.

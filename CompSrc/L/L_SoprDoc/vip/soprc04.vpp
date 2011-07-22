@@ -1,0 +1,102 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// процедуры/функции для работы в сопроводительных документах
+
+#ifNdef _soprc04_VPP
+#define _soprc04_VPP
+
+#include soprc07.vpp
+
+#include SDfuns.var
+
+//******************************************************************************
+
+Procedure DoDeleteCurrentSpSopr;
+{
+  if (SpSopr.NRec =comp(0))
+    Exit;
+
+  if (SpSopr.cSopr <> KatSopr.NRec)
+    Exit;
+
+  var pGetDocSpecInfo: GetDocSpecInfo;
+  var MassaTov, MassaTara: double;
+
+  #ifdef _SMETA_IN_SOPR_
+  if ( GetFirst SpDocSmeta = tsOk )
+    {
+      if ( GetFirst FastFirstRow SpSoprSmet where (( SpDocSmeta.cSpec == SpSoprSmet.nRec )) <> tsOk )
+        {
+          Message('Procedure DoDeleteCurrentSpSopr: Ошибка в таблице SpDocSmeta !', Error);
+          Exit;
+        }
+
+      if ( boGetTune('Oper.Netto&Tara_AutoCalc') AND (SpSoprSmet.PrMC = 1) )
+        {
+          pGetDocSpecInfo.GetOneSpecInfo(coKatSopr, SpSoprSmet.nRec, MassaTov, MassaTara);
+          set KatSopr.Netto := KatSopr.Netto - MassaTov;
+          set KatSopr.mTara := KatSopr.mTara - MassaTara;
+        }
+
+      set KatSopr.Summa    := KatSopr.Summa - SpSoprSmet.Price * SpSoprSmet.KolOpl - if (KatSopr.VhodNal <> 1, SpSoprSmet.SumNDS, 0);
+      set KatSopr.SumVal   := KatSopr.SumVal - SpSoprSmet.VPrice * SpSoprSmet.KolOpl - if (KatSopr.VhodNal <> 1, SpSoprSmet.SumVNDS, 0);
+      set KatSopr.sNalogs  := KatSopr.sNalogs - SpSoprSmet.SumNDS;
+      set KatSopr.svNalogs := KatSopr.svNalogs - SpSoprSmet.SumVNDS;
+
+      OnBeforeClearSpSopr;
+      oSDfuns.SpSopr_Delete(SpSoprSmet.nRec);
+
+      Update_Current_KatSopr;
+    }
+  else
+    {
+  #end
+    //пересчет общих сумм по документу
+      if (boGetTune('Oper.Netto&Tara_AutoCalc') AND (SpSopr.PrMC = 1))
+        {
+          pGetDocSpecInfo.GetOneSpecInfo(coKatSopr, SpSopr.nRec, MassaTov, MassaTara);
+          set KatSopr.Netto := KatSopr.Netto - MassaTov;
+          set KatSopr.mTara := KatSopr.mTara - MassaTara;
+        }
+      KatSopr.Summa := KatSopr.Summa - SpSopr.Price * SpSopr.KolOpl -
+                           if (KatSopr.VhodNal <> 1, SpSopr.SumNDS, 0);
+      KatSopr.SumVal := KatSopr.SumVal - SpSopr.VPrice * SpSopr.KolOpl -
+                            if (KatSopr.VhodNal <> 1, SpSopr.SumVNDS, 0);
+      KatSopr.sNalogs := KatSopr.sNalogs - SpSopr.SumNDS;
+      set KatSopr.svNalogs := KatSopr.svNalogs - SpSopr.SumVNDS;
+
+      Update_Current_KatSopr;
+
+      //предварительные проверки
+      OnBeforeClearSpSopr;
+
+      //поиск следующей записи
+      var pNextRec: comp;
+      PushPos(#SpSopr);
+      if (GetNext SpSopr <> tsOk)
+        if (GetPrev SpSopr = tsOk) {}
+      pNextRec := SpSopr.NRec;
+      PopPos(#SpSopr);
+
+    #ifdef _SOPRDOC_VIP
+      // для производственного планирования
+      if (KatSopr.VidSopr = 210) OR (KatSopr.VidSopr = 229)
+        insTbl.DeleteSpEnviroment(toSpSopr, SpSopr.NRec);
+    #end
+
+      //удаление записи
+      oSDfuns.SpSopr_Delete (SpSopr.nRec);
+
+      //установка позиции на сл. запись
+      if pNextRec <> SpSopr.NRec
+        if GetLast SpSopr where ((pNextRec == SpSopr.NRec)) <> tsOk {}
+
+    #ifdef _SMETA_IN_SOPR_
+    }
+    #end
+    //надо редактировать счет-фактуру
+  SchFactFlag := TRUE;
+} // Procedure DoDeleteCurrentSpSopr
+
+#end //_04_vpp

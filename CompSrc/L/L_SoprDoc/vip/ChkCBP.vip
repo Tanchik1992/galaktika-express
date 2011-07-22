@@ -1,0 +1,95 @@
+//╔═════════════════════════════════════════════════════════════════════════╗
+//║ Проверить на попадание в закрытый период и выдать стандартное сообщение ║
+//╚═════════════════════════════════════════════════════════════════════════╝
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Интерфейс для проверки попадания сопр.документа в закрытый период
+
+Параметры:
+  DateOper - проверяемая дата
+  pRec     - ссылка на сопроводительный документ
+  CanEdit  - результат проверки
+#end
+
+//******************************************************************************
+
+Interface iCheckCloseBuhPeriod alwaysReturn,cacheable;
+
+create view
+var
+  DateOper : date;
+  CanEdit  : boolean;
+  pRec     : comp;//nRec проверяемого док-та
+from
+  KatSopr
+where
+((
+  pRec == KatSopr.nRec
+));
+
+Parameters
+  DateOper,
+  pRec,
+  CanEdit;
+
+function CheckCloseBuhPeriod(_dat:date) : boolean;
+{
+  CheckCloseBuhPeriod := true;
+
+  var tmpStr : string;
+  var tmpDat : date;   TmpDat := dGetTune('Oper.DateClosePeriod');
+  var tmpNN  : word;   tmpNN  := wGetTune('Oper.ModifyInClosePeriod');
+
+  if (longint(_dat) = 0)    // дата документа не определена
+  or (tmpNN = 0)            // разрешать модификацию данных в закр.периоде
+  or (longint(TmpDat) = 0)  // закрытый период не определен
+    Exit;
+
+  if (longint(_dat) > longint(TmpDat))  //дата документа не попадает в закр.период
+    Exit;
+
+  var _nRec : comp;
+  if ReadMyDSK(_nRec,'_KatSoprnRecCloseBuhPeriod_',false)
+    if pRec=_nRec and pRec<>0 and _nRec<>0
+      if ReadMyDSK(CheckCloseBuhPeriod,'_KatSoprnRecCheckMassageCloseBuhPeriod_',false)
+         Exit;
+
+  tmpStr := ''#3'Вводить новые данные или редактировать' +
+         ''#13#3'ранее введенные можно только с датой' +
+         ''#13#3'обработки, большей чем, ' + DateToStr(TmpDat,'DD/MM/YYYYг.') +
+         ''#13#3'Текущая запись относится к закрытому' +
+         ''#13#3'для обработки периоду!';
+
+  if (tmpNN = 2)
+    {
+      CheckCloseBuhPeriod := false;
+      tmpStr := tmpStr + ''#13#3'Запрещено модифицировать данные' +
+                         ''#13#3'в закрытом периоде!';
+      message(tmpStr,okButton);
+    }
+  else
+    {
+      tmpStr := tmpStr + ''#13#3'Изменить текущую запись?';
+      CheckCloseBuhPeriod := (message(tmpStr,YesNo) = Yes);
+    }
+
+  SaveMyDSK(pRec,'_KatSoprnRecCloseBuhPeriod_');
+  SaveMyDSK(CheckCloseBuhPeriod,'_KatSoprnRecCheckMassageCloseBuhPeriod_');
+}
+
+
+Handleevent
+cmInit:
+  {
+    CanEdit := true;
+    If IsValid(#KatSopr)
+      CanEdit := CheckCloseBuhPeriod(KatSopr.dSopr); //сначала проверяю дату в KatSopr
+    If CanEdit
+      CanEdit := CheckCloseBuhPeriod(DateOper); //проверяю дату введенную руками
+    abort;
+  }
+end;
+End.

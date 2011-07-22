@@ -1,0 +1,574 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+
+#include CopySopr.vih
+#include UKSfuns.vih
+#include SDfuns.vih
+#include KontrBal.vih
+#include oDEI.vih
+#include GetDocSpecInfo.vih
+#include LinkGrPL.vih
+#include RecChecker.vih
+#include ExtAttr.vih
+#include ExtClass.vih
+#include SHManager.vih
+#include Dolg_DG.vih
+#include SpNext.vih
+#include oEdIzm.vih
+#include CalcFuns.vih
+#include MTRFuncs.vih
+#include RaschActKoeff.vih
+#include SoprTara.vih
+#include aStatUser.vih // права доступа
+#include Notes.vih
+#include WoodFuns.Vih
+//******************************************************************************
+
+#doc
+Назначение:
+  Копирование сопроводительного документа
+
+Параметры:
+  SavedDoc    - исходный сопр.документ
+  KVidSoprOut - вид создаваемого сопр.документа
+  NewDoc      - результат - созданный сопр.документ
+#end
+
+//******************************************************************************
+
+Interface iCopySopr,alwaysreturn;
+  Show at (,,,);
+
+#include Dolg_DG.var
+#include UKSfuns.var
+#include SDfuns.var
+#include KontrBal.var
+#include SpNext.var
+#include oEdIzm.var
+#include CalcFuns.var
+#include MTRFuncs.var
+#include RaschActKoeff.var
+#include SoprTara.var
+#include WoodFuns.Var
+
+create view
+var
+  //параметры
+  SavedDoc,NewDoc        : comp;
+  KVidSoprIn,KVidSoprOut : word;
+  iGrPl                  : LinkToGrPl;
+  iSHoz                  : ObjSHmanager;
+
+from
+  KatSopr
+ ,SpSopr
+ ,SpDocNal
+ ,DocInfo
+ ,BASEDOC
+ ,DSNASTR
+ ,SoprOrdB
+ ,SoprHoz
+ ,ActSaldo
+ ,Oborot
+ ,SpecZatr
+ ,SpStepRem
+ ,SpDocSmeta
+;
+
+Parameters
+  SavedDoc,
+  KVidSoprOut,
+  NewDoc;
+
+#include SoprAll.vpp  // общие функции сопроводительных документов
+
+function CheckCopyRaspredSKL:boolean;
+{
+ CheckCopyRaspredSKL:=false;
+  case KatSopr.VidSopr of
+  101, 108, 111, 552:
+  {
+//TR.AddTuneU('Oper.Buy.Nakl.CopyRaspredSKL ', 'Копирование распределения по складским разрезам при копировании документов', ftBoolean, '0', '', hcNoContext);
+  if (boGetTune('Oper.Buy.Nakl.CopyRaspredSKL'))
+   {
+    CheckCopyRaspredSKL:=true;
+    exit;
+   }
+  }
+  1411:
+  {
+    if (boGetTune('Doc.Wood.Journ.CopyRaspredSKL'))
+    {
+      CheckCopyRaspredSKL:=true;
+      exit;
+    }
+  }
+  502, 505, 508:
+  {
+   CheckCopyRaspredSKL:=true;
+   exit;
+  }
+  end;
+}//function CheckCopyRaspredSKL:boolean;
+
+function CopyDocument: comp;
+var SpSoprNRec,pNrec : Comp;
+    NDD         : string[20];
+    cZatr       : comp;
+    isInsSoprHoz: boolean;
+    bufSoprHoz  : #TSoprHozX;
+    oExtAtr     : iExtAttr;
+    oExtCls     : iExtClass;
+    NeedRecalc  : boolean;
+    isReCalcNalog: boolean;
+{
+  CopyDocument := 0;
+
+ if (GetFirst KatSopr where ((SavedDoc == KatSopr.NRec)) <> tsOk)
+   Exit;
+
+  KVidSoprIn    := KatSopr.VidSopr;
+  isInsSoprHoz  := boGetTune('Oper.CopyTXO');
+  isRecalcNalog := boGetTune('Doc.SD.ReCalcNalogByCopy');
+  NeedRecalc    := KVidSoprIn <> KVidSoprOut;
+
+  if DemoMode
+    {
+      var pRecChecker : RecChecker;
+      if not pRecChecker.CheckKatSoprRecords(KVidSoprIn)
+        {
+          Abort;
+          Exit;
+        }
+    }
+
+  case KatSopr.VidSopr of
+    201, 211, 1421: // сопроводительные документы на сбыт
+      {
+        var sDoc : double; sDoc := 0;
+
+        if  ( ( wGetTune('Oper.SoprInBalans') = 1 ) AND ( KatSopr.dOpr = ZeroDate ) )
+          sDoc := if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal);
+
+        if not iDolg_DG.ControlDolg_DG_4KatSopr(KatSopr.cOrgBase,
+                                                if(KatSopr.cAppDogovor = 0, KatSopr.cDogovor,
+                                                                            KatSopr.cAppDogovor),
+                                                sDoc,
+                                                KatSopr.cVal,
+                                                word(1))
+          Exit;
+      }
+  end;
+
+  StartNewVisual(vtNumericVisual,vfTimer,'Копирование документа №'+KatSopr.Nsopr+ ':',1);
+  pNrec := KatSopr.NRec;
+  KatSopr.NRec     := 0;
+  KatSopr.VidSopr  := KVidSoprOUT;
+
+  if (KVidSoprIn <> KVidSoprOut)
+  {
+    KatSopr.dOpr:= 0;
+    isInsSoprHoz    := FALSE;
+
+    case KatSopr.VidSopr of
+      101, 102, 103, 106, 108, 111, 1411:KatSopr.TipSopr:=1;
+
+      201, 202, 203, 206, 211, 1421,
+      513, 553, 554, 557, 700:KatSopr.TipSopr:=2
+
+      501, 502, 504, 505, 506, 511, 512, 521, 522, 523, 551, 552,
+      600, 601, 602, 603, 604, 605, 611, 612, 620, 621, 622:KatSopr.TipSopr:=0;
+    end;
+  }
+
+ KatSopr.cStepDoc := 0;
+ KatSopr.reserved := 0;
+ KatSopr.dSopr    := Cur_Date;
+
+ case KatSopr.VidSopr of
+  110,
+  114,
+  111,
+  211,                                 //пир 180.1443
+  513:  KatSopr.dOpr := KatSopr.dSopr; //акты KatSopr.dOpr-дата оказания услуги
+
+  600 :  // для внутреннего перемещения
+    {
+      if KVidSoprIn <> 600
+        {
+          KatSopr.cPodrFrom := KatSopr.cPodrTo;
+          KatSopr.cPodrTo   := 0;
+          KatSopr.cMolFrom  := KatSopr.cMolTo;
+          KatSopr.cMolTo    := 0;
+          KatSopr.dOpr      := 0;
+        }
+    }
+  else  KatSopr.dOpr := 0;
+ end;
+
+ KatSopr.cKatSopr := 0;
+ KatSopr.YearSopr := Year(Cur_Date);
+ KatSopr.cSchFact := 0;
+ KatSopr.wADoc    := 0;
+ KatSopr.cADoc    := 0;
+
+ if (not boGetTune('Doc.ChangeDescr'))
+ {
+   KatSopr.Descr := sGetTune('User.Descr');
+   KatSopr.DesGr := sGetTune('User.DesGr');
+ }
+  if (wGetTune('FN.AvtoNum') <> 1)
+    Case KatSopr.VidSopr of
+      106,
+      201..206,211,210, 229, 1421,
+      551..553,554,557,
+      611,612,601,602,603,604,605,613, 621, 622, 629, 610, 1610  :
+             KatSopr.NSopr := GetLastNumD(KatSopr.VidSopr);
+      501  : KatSopr.NSopr := GetLastNumD(207);
+      502  : KatSopr.NSopr := GetLastNumD(208);
+      503 :  KatSopr.NSopr := GetLastNumD(220);
+      504  : KatSopr.NSopr := GetLastNumD(217);
+      505  : KatSopr.NSopr := GetLastNumD(218);
+      506  : KatSopr.NSopr := GetLastNumD(219);
+      507  : KatSopr.NSopr := GetLastNumD(507);
+      508  : KatSopr.NSopr := GetLastNumD(508);
+      511  : KatSopr.NSopr := GetLastNumD(212);
+      512  : KatSopr.NSopr := GetLastNumD(213);
+      513  : KatSopr.NSopr := GetLastNumD(214);
+      521  : KatSopr.NSopr := GetLastNumD(216);
+      522  : KatSopr.NSopr := GetLastNumD(522);
+      523  : KatSopr.NSopr := GetLastNumD(523);
+      600  : KatSopr.NSopr := GetLastNumD(209);
+      606  : KatSopr.NSopr := GetLastNumD(209);
+      1111 : KatSopr.NSopr := GetLastNumD(210);
+      else KatSopr.NSopr := '000000';
+    end;
+  else
+    {
+      if (KatSopr.VidSopr > 199) or
+//пир 102.53959         (KatSopr.VidSopr = 111) or
+         (KatSopr.VidSopr = 106) or
+         (KatSopr.VidSopr = 110) or
+         (KatSopr.VidSopr = 629) or
+         (KatSopr.VidSopr = 610) or
+         (KatSopr.VidSopr = 1610)
+
+        {
+          PushPos(#KatSopr);
+          ResetBounds(#KatSopr);
+          if (GetLast KatSopr where ((KVidSoprOUT   == KatSopr.VidSopr and
+                                     Year(Cur_Date) == KatSopr.YearSopr)) = tsOk)
+            NDD := NextNumStr(KatSopr.NSopr) else NDD := '000001';
+          SetBounds(#KatSopr);
+          PopPos(#KatSopr);
+          KatSopr.NSopr := NDD;
+        }
+      else
+        KatSopr.NSopr := '000000';
+    }
+
+  var bKolToZero: boolean;
+  bKolToZero := false; // Default
+
+  if wGetTune('Oper.KolToZero') = 1 // Yes
+    bKolToZero := true;
+
+  if wGetTune('Oper.KolToZero') = 2 // Aks question
+    {
+      if ( Message('Обнулять количество при копировании позиций?', YesNo+Confirmation) = cmYes )
+        bKolToZero := true;
+    }
+
+ NeedRecalc := NeedRecalc OR BeforeKatSoprInsert(KatSopr.Buffer);
+
+ if (Insert current KatSopr <> tsOk)
+   Message(''#3'Операция копирования была неудачной...',CancelButton);
+ else
+   {
+     NewDoc := KatSopr.NRec;//для позиционирования на созданный документ
+
+     // копирование SoprHoz-а
+     if (isInsSoprHoz)
+     {
+       if GetFirst SoprHoz where (( KVidSoprIn  ==  SoprHoz.TipDoc    AND
+                                    pNrec       ==  SoprHoz.cSoprDoc )) = tsOk
+       {
+         bufSoprHoz          := SoprHoz.BufferP;
+         bufSoprHoz.NRec     := 0;
+         bufSoprHoz.cSoprDoc := NewDoc;
+
+         if NullVipRef(iSHoz)
+           GetVipRef(iSHoz, 'SHmanager');
+
+         iSHoz.InsByHan(bufSoprHoz);
+       }
+     }
+     else
+       KatSopr.cHozOper := 0; //101.13575,101.17360
+
+     if (GetFirst DocInfo where ((pNrec ==  DocInfo.cDoc
+                         and word(1109) ==  DocInfo.DocType)) = tsOk)
+      {
+       DocInfo.nRec:= 0;
+       DocInfo.cDoc:= KatSopr.nRec;
+       insert current DocInfo;
+      }
+
+     if (KatSopr.VidSopr = word(522))
+      {var varRefNormDS : comp;
+       var varKolNorm : double;
+
+       varRefNormDS := 0;
+       if (GetFirst DsNastr where((SavedDoc      == DSNASTR.cSopr     and
+                                   comp(0)       == DSNASTR.cSpSopr   and
+                                   word(2)       == DSNASTR.wVid)) = tsOK)
+          {
+           varRefNormDS := DSNASTR.cTabl;
+           varKolNorm   := DSNASTR.dValue1;
+          }
+        ClearBuffer(#DSNASTR);
+        DSNASTR.Nrec      := 0;
+        DSNASTR.cBaseDoc  := 0;
+        DSNASTR.cSopr     := KatSopr.Nrec;
+        DSNASTR.wVid      := 2;
+        DSNASTR.dValue1   := varKolNorm;
+        DSNASTR.cTabl     := varRefNormDS;
+        Insert current DSNASTR;
+      }
+     iGrPl.InsSpGrPlD_Default(KatSopr.VidSopr,  // тип документа системный
+                              KatSopr.nRec,     //ссылка на документ
+                              KatSopr.cOrg      //ссылка на контрагента
+                             );
+     oSDfuns.TTNDoc_Copy(coKatSopr,pNRec,coKatSopr,KatSopr.NRec);
+
+     oExtAtr.CopyAllAttr    (word(coKatSopr), SavedDoc, KatSopr.nRec);
+     oExtCls.CopyAllClassVal(word(coKatSopr), SavedDoc, KatSopr.nRec);
+
+     ResetBounds(#spSopr);
+     var KolSrc, kolFactSrc, KolOplSrc : double;
+     var varRefNormDS : comp;
+     _LOOP SpSopr where ((pNrec == SpSopr.cSopr))
+     {
+       // не копировать с типом ресурса 7
+       if (KatSopr.VidSopr = 110)
+         if GetFirst SpDocSmeta where (( coSpSopr    == SpDocSmeta.coTable  AND
+                                         SpSopr.NRec == SpDocSmeta.cSpec )) = tsOk
+           if (SpDocSmeta.TipRes = 7)
+             Continue;
+
+  //сопутствующие услуги прих.накладной
+       if (KVidSoprIn = 101) and (KVidSoprOUT <> 101) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 108) and (KVidSoprOUT <> 108) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 1411) and (KVidSoprOUT <> 1411) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 201) and (KVidSoprOUT <> 201) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 1421) and (KVidSoprOUT <> 1421) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 553) and (KVidSoprOUT <> 553) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 554) and (KVidSoprOUT <> 554) and (SpSopr.PrMC <> word(1)) continue;
+       if (KVidSoprIn = 557) and (KVidSoprOUT <> 557) and (SpSopr.PrMC <> word(1)) continue;
+
+       NextVisual;
+
+       if (bKolToZero) {
+         SpSopr.Kol     := 0;
+         SpSopr.KolFact := 0;
+         SpSopr.KolOpl  := 0;
+       }
+
+       KolSrc     := SpSopr.Kol;
+       KolFactSrc := SpSopr.KolFact;
+       KolOplSrc  := SpSopr.KolOpl;
+
+       varRefNormDS := SpSopr.cZakVol;
+
+       PushPos(#SpSopr);
+       cZatr := 0;
+
+#ifndef __MTR_TO_SPEC__
+       if (GetFirst SpecZatr where ((coSpSopr == SpecZatr.coTable and SpSopr.nRec == SpecZatr.cSpec)) = tsOk)
+         cZatr := SpecZatr.cAddSumTune;
+#end
+
+       SpSoprNRec := SpSopr.NRec;
+       SpSopr.NRec := 0;
+       SpSopr.cSopr := KatSopr.NRec;
+       SpSopr.dSopr := KatSopr.dSopr;
+       SpSopr.dOprTTN := 0;
+       SpSopr.cSpOrder := 0;
+       SpSopr.cSpStep := 0;
+       SpSopr.cSpSopr := 0;
+       SpSopr.cSpSchf :=0;//пир 103.1227
+
+       if KatSopr.VidSopr = 600
+         {
+           SpSopr.SumNDS := 0;
+           SpSopr.SumVNDS:= 0;
+           SpSopr.cGrNal := 0;
+           KatSopr.dOpr   := 0;
+         }
+
+       if (SpSopr.PrMc = 1)
+         SpSopr.vPriceN:= 0;//для резервироания.
+
+       SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+
+       if KVidSoprIn<>KVidSoprOut //разные документы
+       {
+         SpSopr.dSopr := KatSopr.dSopr;
+         SpSopr.VidSopr := KatSopr.VidSopr;
+         SpSopr.dOprTTN := KatSopr.dOpr;
+         SpSopr.cVal  := KatSopr.cValut;
+       }
+
+       NeedRecalc := NeedRecalc OR BeforeSpSoprInsert(SpSopr.Buffer);
+
+       if (isRecalcNalog)
+         SpSopr.ManualTax := 0;
+
+       if (KatSopr.VidSopr = 522) SpSopr.cZakVol := varRefNormDS;
+
+       Insert Current SpSopr;
+
+       oWoodFuns.CopyWoodSpView (coKatSopr, SpSoprNRec, SpSopr.NRec, SpSopr.cSopr);
+
+       if (GetFirst SpStepRem where ((SpSoprNRec == SpStepRem.cSpStep AND
+                                      word(1)    == SpStepRem.TipDoc )) = tsOk)
+          {
+            SpStepRem.NRec    := 0;
+            SpStepRem.cSpStep := SpSopr.Nrec;
+            insert current SpStepRem;
+          }
+
+#ifndef __MTR_TO_SPEC__
+       // копирование ссылок на статьи затрат в УКСе
+       if (cZatr <> 0)
+       {
+         ClearBuffer(#SpecZatr);
+         SpecZatr.coTable := coSpSopr;
+         SpecZatr.cAddSumTune := cZatr;
+         SpecZatr.cSpec := SpSopr.nRec;
+         SpecZatr.cUKS := SpSopr.cUKS;
+         insert current SpecZatr;
+       }
+#else
+       oMTRFun.CopySpecMTR(coSpSopr, SpSoprNRec, coSpSopr, SpSopr.NRec);
+#end
+  #ifdef __SMETA__
+       RunInterface('CopySpDocSmeta', word(coSpSopr), SpSoprNRec, word(coSpSopr), SpSopr.nRec);
+  #end
+       if (KatSopr.VidSopr = 110)
+       {
+         // копирование сметных коэффициентов
+         RunInterface('CopyKoeffToAct', SpSopr.NRec, word(0));
+       }
+
+       oExtAtr.CopyAllAttr    (word(coSpSopr), SpSoprNRec, SpSopr.nRec);
+       oExtCls.CopyAllClassVal(word(coSpSopr), SpSoprNRec, SpSopr.nRec);
+       //-- Копирование ДЕИ
+       var piKatDopEd_ : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+       if (SpSopr.PrMC = 1)
+        {
+          piKatDopEd_.CopyDopEd(word(coSpSopr),SpSoprNRec,word(1),KolFactSrc,
+                                word(coSpSopr),SpSopr.NRec,word(1),SpSopr.KolFact,SpSopr.VidSopr);
+          piKatDopEd_.CopyDopEd(word(coSpSopr),SpSoprNRec,word(2),KolSrc,
+                                word(coSpSopr),SpSopr.NRec,word(2),SpSopr.Kol,SpSopr.VidSopr);
+          piKatDopEd_.CopyDopEd(word(coSpSopr),SpSoprNRec,word(3),KolOplSrc,
+                                word(coSpSopr),SpSopr.NRec,word(3),SpSopr.KolOpl,SpSopr.VidSopr);
+        }
+       //-- Копирование налогов по позиции
+     if KatSopr.VidSopr <> 600
+       _LOOP SpDocNal where ((Comp(SpSoprNRec) == SpDocNal.cSpDoc and
+                                           KatSopr.VidSopr == SpDocNal.TipDoc))
+         {
+           NextVisual;
+           PushPos(#SpDocNal);
+           SpDocNal.NRec   := 0;
+           SpDocNal.cSpDoc := SpSopr.NRec;
+           SpDocNal.cDoc   := KatSopr.NRec;
+           Insert current SpDocNal;
+           PopPos(#SpDocNal);
+         }
+  //-- Конец копирования налогов по позиции
+  //-- Копирование распределения по подразделениям
+       if CheckCopyRaspredSKL
+        _LOOP SoprOrdB where ((Comp(SpSoprNRec) == SoprOrdB.cSpSopr))
+           {
+             NextVisual;
+             PushPos(#SoprOrdB);
+             SoprOrdB.NRec   := 0;
+             SoprOrdB.cSpSopr  := SpSopr.NRec;
+             SoprOrdB.cSoprDoc := KatSopr.NRec;
+             Insert current SoprOrdB;
+             PopPos(#SoprOrdB);
+           }
+
+       oSDfuns.TTNDoc_Copy(coSpSopr,SpSoprNRec,coSpSopr,SpSopr.NRec);
+       oCalcFuns.ClcUsl_CopyFactPar(SpSoprNRec,coSpSopr,SpSopr.NRec,coSpSopr);
+       PopPos(#SpSopr);
+     }
+     SetBounds(#SpSopr);
+   }
+
+  if (bKolToZero)
+  {
+    set KatSopr.Summa  := 0;
+    set KatSopr.SumVal := 0;
+  }
+
+  if (KatSopr.VidSopr = 600)
+    set KatSopr.cOrgBase := 0;
+
+  Update_Current_KatSopr;
+
+  // перерасчет цен позиций с учетом коэффициентов
+  if (KatSopr.VidSopr = 110)
+    oRaschAct.SchetPrice(KatSopr.NRec);
+
+  if (KVidSoprIn <> KVidSoprOut) OR   // разные документы, надо пересчитать
+     (isRecalcNalog)                  // нужно пересчитать налоги
+    case KVidSoprOut of
+      101..103, 108, 1411:
+      {
+        RunInterface(iChkSumB, KatSopr.NRec, 0, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+      }
+      else
+        RunInterface(iChkSum, KatSopr.NRec, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+    end;
+
+  StopVisual('',0);
+
+  case KatSopr.VidSopr of
+    201, 101, 106, 108, 206, 600, 606, 601, 1411, 1421:
+      oUKSfuns.JoinNakl(KatSopr.nRec);
+    111, 211, 110, 210, 611, 612, 629, 504, 204, 610, 1610:
+      oUKSfuns.JoinAkt(KatSopr.nRec, KatSopr.VidSopr);
+  end;
+
+  AfterKatSoprInsert(KatSopr.Buffer);
+  CopyDocument := KatSopr.nRec;
+}
+
+function DoCopyDocument(_SavedDoc: comp; _KVidSoprOut: word): comp;
+{
+  if ( _KVidSoprOut <> 0 )
+    {
+      SavedDoc    := _SavedDoc;
+      KVidSoprOut := _KVidSoprOut;
+
+      DoCopyDocument := CopyDocument;
+    }
+}
+
+Handleevent
+cmInit:
+{
+  if (KVidSoprOut <> 0)
+    CopyDocument;
+
+  Abort;
+}
+end;
+End.

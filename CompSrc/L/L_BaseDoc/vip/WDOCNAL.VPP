@@ -1,0 +1,225 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Налоги по позиции ДО и по документу в целом. Процедура вызова их просмотра
+//******************************************************************************
+
+//******************************************************************************
+
+#doc
+Окно просмотра налогов по документу
+#end
+Window  wDoNal 'Налоги по документу' escClose, cyan;
+  Show at (20, 8, 60, 16);
+
+//******************************************************************************
+
+Panel p1;
+  Show at (, , , );
+  Table tempNo;
+
+Browse scwDoNal (, , sci1Esc);
+
+Fields
+  tempNo.OtpEd  #3'Налог' ('Налог по документу', hcSellM1DocNal, sci1Esc): [14], protect;
+  tempNo.Price1 #3'Сумма': [14], [brForSumma, '\2p[|-]36`666`666`666`666.88'], Skip, {font = {bold = TRUE}};
+  SimVolB       #3'Вал.': [4], Skip, NoAutoSize;
+end;
+end;
+end;
+
+var
+  oldNalog: double;
+
+//******************************************************************************
+
+#doc
+Окно просмотра налогов к позиции
+#end
+Window wSpDocNal 'Налоги по позиции' escClose;
+  Show at (, 10, , 18);
+
+//******************************************************************************
+
+Panel p1;
+  Show at (, , , );
+  Table SpDocNal;
+
+Browse scwSpDocNal (, hcKouDocFSpNal, sci1Esc);
+
+Fields
+  KatNalog.Name   #3'Налог'
+                  : [10], Skip;
+
+  SpDocnal.Nalog  #3'%'
+                  : [5, 2];
+
+  NalOrg.Name     #3'Контрагент'('Контрагент- получатель суммы данного налога', hcKouDocFSpNal, sci13Esc)
+                  : [25], protect;
+
+  SpDocNal.SumVal #3'Сумма налога'('При необходимости уточните сумму налогов для позиции', hcKouDocFSpNal)
+                  : [14], [brForSumma, '\2p[|-]36`666`666`666`666.88'];
+
+  SimVolB         #3'Вал.'
+                  : [4], Skip, NoAutoSize;
+
+  SpDocNal.SumNal #3'Сумма налога'('Сумма налога в валюте налога', , sci1Esc)
+                  : [14], [brForSumma, '\2p[|-]36`666`666`666`666.88'], protect;
+
+  SimvNal         #3'Вал.'
+                  : [4], skip, NoAutoSize;
+end;// Browse
+
+HandleEvent
+
+cmPositionChanged:
+  {
+    oldNalog := SpDocNal.Nalog;
+
+    if ( not EditDOPosEnabled(false, false) )
+      ProtectRecord(#SpDocNal, TRUE);
+    else
+      if ((tipDO = 101) AND boGetTune('Doc.Buy.NotEditDO')
+          or
+          (tipDO = 201 ) AND boGetTune('Doc.Sell.NotEditDO')
+          or
+          (tipDO = 1410) AND boGetTune('Doc.Wood.NarAkt.NotEditDO')
+          or
+          (tipDO = 1420) AND boGetTune('Doc.Wood.Schet.NotEditDO'))
+        if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+              ProtectRecord(#SpDocNal, TRUE);
+  }
+
+cmPick:
+  case CurField of
+  //--------------
+    #NalOrg.Name:
+      {
+        if (SpStep.prMC <> 1) AND (SpStep.prMC <> 2)
+          {
+            Message('Для сопутствующей услуги'+
+                 ''#13#3'изменение получателя суммы налога недоступно!');
+            Exit;
+          }
+        if (BaseDoc.VhodNal = 1) //налоги входят
+          Message('Налог входит в цену товара.'+
+                  ''#3#13'Изменение получателя суммы налога недоступно!', Information)
+        else
+          RunInterface(GetKatOr, SpDocNal.cOrg, comp(0), FALSE, comp(0), comp(0));
+      }
+  //--------------
+  end; //case
+
+cmCheckField:
+  case CurField of
+  //--------------
+    #SpDocNal.SumVal:
+      {
+        set SpStep.ManualTax := 1;
+        SpDocNal.SumNal := oValFunc.GetAnyCurrency(BaseDoc.cVal,
+                                                   SpDocNal.SumVal,
+                                                   BaseDoc.dDoc,
+                                                   SpDocNal.cVal);
+        SpDocNal.Summa := oValFunc.GetNatCurrency (BaseDoc.cVal,
+                                                   SpDocNal.SumVal,
+                                                   BaseDoc.dDoc);
+      }
+  //--------------
+    #SpDocNal.Nalog:
+     {
+       set SpStep.ManualTax := 1;
+       SpDocNal.Summa  := SpDocNal.Summa  / oldNalog *  SpDocNal.Nalog;
+       SpDocNal.SumVal := SpDocNal.SumVal / oldNalog *  SpDocNal.Nalog;
+       SpDocNal.SumNal := SpDocNal.SumNal / oldNalog *  SpDocNal.Nalog;
+       UpdateTable;
+       oldNalog := SpDocNal.Nalog;
+     }
+  //--------------
+  end; //case
+
+cmUpdateRecord:
+  {
+    update current SpDocNal;
+
+    PushPos(#SpDocNal);
+
+    var SumNds: double;  SumNds := 0;
+
+    _LOOP spdocnal
+      if (BaseDoc.cOrg = SpDocNal.cOrg)
+        SumNds := SumNds + SpDocNal.SumVal;
+
+    PopPos(#SpDocNal);
+
+    if (SpStep.Nds<>SumNds)
+      {
+        SpStep.Nds := SumNds;
+        update current SpStep;
+        ModifDo;
+      }
+  }
+
+end; //handle
+end;// Panel
+
+HandleEvent
+cmDone:
+  if (IsModified)
+    if (not UpdateTable)
+      Abort;
+
+end; //handle
+end;// Window
+
+//******************************************************************************
+
+Procedure ShowNalogsDO;
+{
+  var naltype0: word;    naltype0 := naltype;
+  var SumNalDo: double;  SumNalDo := 0;
+  var NRecNal: comp;     NRecNal  := 0;
+
+  delete all novisual tempno;
+
+  if ((BaseDoc.VidDoc = 111) OR (BaseDoc.VidDoc = 211))
+    if (BaseDoc.SpecYes = 0)
+      naltype0 := 2000 + BaseDoc.VidDoc;
+
+  // For Zrem
+  if (BaseDoc.VidDoc = 550)
+    naltype0 := 1000 + BaseDoc.VidDoc;
+
+  if GetFirst SpDocNal where ((BaseDoc.Nrec == SpDocNal.cDoc   AND
+                                naltype0     == SpDocNal.TipDoc))
+                        ordered by SpDocNal.cNalog <> tsOk
+    Message('Налоги по документу отсутствуют!', Information);
+  else
+    {
+
+      _LOOP SpDocNal where ((BaseDoc.Nrec == SpDocNal.cDoc   AND
+                             naltype0     == SpDocNal.TipDoc))
+                     ordered by SpDocNal.cNalog
+        if (SpDocNal.cNalog <> 0)
+          if (SpDocNal.cNalog <> NRecNal)
+           // налог еще не обрабатывался
+             {
+               NRecNal := SpDocNal.cNalog; // запоминаем код обработанного налога
+               ClearBuffer(#tempno);
+               tempNo.OtpEd := KatNalog.Name;
+               tempNo.Price1 := SpDocNal.SumVal;
+               insert current tempNo;
+             }
+          else
+           // если дважды один и тот же налог - просто суммируем и обновляем временную таблицу
+             {
+               tempNo.Price1 := tempNo.Price1 + SpDocNal.SumVal;
+               update current tempNo;
+             }
+
+      RunWindowModal(wDoNal);
+
+      delete all novisual tempno;
+   }
+}
+
+//******************************************************************************

@@ -1,0 +1,152 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Групповой выбор бартерных договоров для отчетов
+//********************************************************************************
+
+/// Параметры возвращает через Pick  (WLIST = 1)
+
+#doc
+Интерфейс группового выбора бартерных договоров для отчетов
+#end
+Interface GetSomeBarter '' DoAccept,EscClose,cyan;
+  show at (4,2,75,20);
+Create View
+Var
+(
+  picked,
+  PickColor
+)
+As select
+  if (isvalid(tnPick), '√', ''),
+  if (isvalid(tnPick), ColorMark, 0 )
+From
+  Barter (readonly),
+  Pick
+Where
+((
+  word(1) == Pick.wList and
+  Barter.NRec == Pick.cRec
+))
+Order by Name
+Order BYN by nDoc;
+;
+
+Procedure SetMyHeader;
+{
+  SetTitle('Выбор бартерных договоров (всего: ' + string(RecordsInTable(#Barter)) + ')');
+}
+
+Procedure KillPick;
+{
+  ResetBounds(#Pick);
+  delete Pick
+    where ((word(1) == Pick.wList));
+  SetBounds(#Pick);
+}
+
+Browse brBarter ('Выберите бартерный договор и нажмите ВВОД',hcAllVPick,sci1EnIns);
+Fields
+  Picked '√': [1], Skip,
+  { font = { color = PickColor }};
+  Barter.Name 'Наименование бартерного договора' : [44],protect,
+  { font = { color = PickColor }};
+  Barter.nDoc 'Номер барт. договора': [20],protect,
+  { font = { color = PickColor }};
+End;
+
+Panel pp1;
+HandleEvent
+cmSetCurfield :
+  case target of
+    #Barter.name : {setorder(tiStandard);rereadrecord;}
+    #Barter.ndoc : {setorder(tiBYN);rereadrecord;}
+  end;
+End; // HandleEvent
+End; // panel
+
+HandleEvent
+
+cmInit :
+ { if ( GetFirst Barter <> tsOK )
+    { message(''#3'Каталог бартерных договоров пуст.', CancelButton)
+      Abort; }
+   else
+    {
+      SetMyHeader;
+      KillPick;
+    }
+
+   //восстановление позиции:
+   var nRc:comp;
+   ReadMyDsk(nRc,'Barter_nRec',true);
+   if GetFirst Barter where ((nRc == Barter.nRec)) <>tsOk {};
+
+ }
+cmMarkUnMark :
+  { if (isvalid(#Pick))
+      delete current Pick
+    else
+      { Pick.wList := 1;
+        Pick.PickKol := 0;
+        Pick.cRec := Barter.NRec;
+        insert current Pick;
+      }
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat,true);
+#else
+    if (GetNext Barter = tsOK)
+      CallToNeighBours(cmPosDown,#Barter);
+    RescanPanel(#Barter);
+#endif
+  }
+
+cmSelectAll :
+  {
+    PushPos(#Barter);
+    KillPick;
+    StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak,
+               ''#3'Помечаю все бартерные договора...'#13#3, RecordsInTable(#Barter));
+    if (GetFirst Barter = tsOK)
+    do
+      if (not NextVisual)
+         break
+      else
+        {
+          Pick.wList := 1;
+          Pick.cRec := Barter.NRec;
+          Pick.PickKol := 0;
+          insert current Pick;
+        }
+    while (GetNext Barter = tsOK);
+    PopPos(#Barter);
+    ReReadRecord;
+    RescanPanel(#Barter);
+    StopVisual('',0);
+  }
+
+cmUnselectAll :
+  {
+    KillPick;
+    RescanPanel(#Barter);
+    ReReadRecord;
+  }
+
+cmDefault :
+  {
+    ResetBounds(#Pick);
+    if (GetFirst Pick
+      where ((word(1) == Pick.wList)) <> tsOK)
+        {
+          ClearBuffer(#Pick);
+          Pick.wList := 1;
+          Pick.cRec := Barter.NRec;
+          insert current Pick;
+        }
+    SaveMyDsk(Barter.nRec,'Barter_nRec');
+  }
+cmCancel:
+  KillPick;
+
+end; // HandleEvent
+end. // interface

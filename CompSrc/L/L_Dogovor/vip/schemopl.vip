@@ -1,0 +1,709 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Формирование схемы расчетов по платежам в кал. плане
+//******************************************************************************
+
+#include aStatUser.vih // права доступа
+#include SpDocs.vih
+
+#doc
+Схема расчетов по платежам в календарном плане
+#end
+Interface SchemeOpl 'Схема платежей' (, hcDogPaymentScheme,) EscClose;
+show at (,2,,);
+
+#include SpDocs.var
+
+Create view vSchemeOpl
+var
+  FormFinPlan : boolean;
+  prmPlanPays : comp;
+  prmMode     : word;
+  oStatUser   : VipStatUser;
+
+As select
+  if(PaySchem.cVal = 0, sGetTune('NDE.SimvRub'), KlVal.SimvolV)
+    ( FieldName = ValutName )
+
+, *
+
+From
+  PaySchem
+, PlanPays
+, CalPlan
+, KatNotes
+, KatBank
+, GrPlat
+, PaySchem PaySchem_s
+, KatOrg   OrgPlat
+, KatOrg   OrgPol
+, KatBank  BankPlat
+, KatBank  BankPol
+, KatState StatePlat
+, KatState StatePol
+, KatCity  CityPlat
+, KatCity  CityPol
+, PlanPays SpecPos
+, PlatDog
+, SpDocs
+, KlVal
+, KlVal    KlVal3
+, CalPlan  MCCalPlan
+, Dogovor
+
+Where ((
+    prmPlanPays        == PaySchem.cPlanPays
+and prmMode            == PaySchem.PayType
+and prmPlanPays        == PaySchem_s.cPlanPays
+and prmMode            == PaySchem_s.PayType
+and prmPlanPays        == PlanPays.nRec
+and PlanPays.cVal      == KlVal3.nRec
+and PlanPays.cCalPlan  == CalPlan.nRec
+and CalPlan.cNote      == KatNotes.nRec
+and PaySchem.cVal      == KlVal.nRec
+and PaySchem.cPlat     == OrgPlat.nRec
+and PaySchem.cPol      == OrgPol.nRec
+and PaySchem.cPlatBank == BankPlat.nRec
+and PaySchem.cPolBank  == BankPol.nRec
+and OrgPlat.cState     == StatePlat.nRec
+and OrgPol.cState      == StatePol.nRec
+and OrgPlat.cCity      == CityPlat.nRec
+and OrgPol.cCity       == CityPol.nRec
+and PaySchem.cMCPlan   == MCCalPlan.nRec
+and PaySchem.PayForm   == GrPlat.nRec
+and PaySchem.nRec      == SpecPos.cCalPlan
+and word(99)           == SpecPos.VidPlat
+));
+
+Parameters
+  prmPlanPays
+, prmMode;
+
+#include ROUNDDOG.VPP
+#include GetCurTunes.vpp
+#include EditPos.vpp
+
+Function NextSchemeCode : string;
+var tmpS : string;
+{
+  tmpS := '';
+
+  if ( GetLast FastFirstRow PaySchem_s
+          where (( prmPlanPays == PaySchem_s.cPlanPays and
+                   prmMode     == PaySchem_s.PayType ))
+          ordered by index payschem03 <> tsOK )
+    NextSchemeCode := '0001'
+  else
+    {
+      tmpS := PaySchem_s.Code;
+
+      if ( trim(tmpS) = '' )
+        tmpS := '0000';
+
+      NextSchemeCode := NextNumStr(tmpS);
+    }
+}
+
+Function AccountPercent(c : comp) : double;
+var tmpPercent, tmpPercent1 : double;
+{
+  tmpPercent := 0;
+
+  _LOOP PaySchem_s
+    {
+      if ( PaySchem_s.nRec = c )
+        Continue;
+
+      tmpPercent1 := PaySchem_s.Percent;
+
+      if ( PaySchem_s.Direct = CalPlan.DirectPlat )
+        tmpPercent := tmpPercent + tmpPercent1;
+
+      else
+        tmpPercent := tmpPercent - tmpPercent1;
+    }
+
+  AccountPercent := tmpPercent;
+}
+
+Function CheckSchemeOplPercent(c : comp) : boolean;
+var s : double;
+{
+  s := if(PaySchem.Direct = CalPlan.DirectPlat, 1.0, -1.0) * PaySchem.Percent + AccountPercent(c);
+
+  if ( (s < 0.0) OR (s > 100.001) )
+    {
+      Message('Общий процент по схеме составил ' + DoubleToStr(s, '\2p[|-]36`666.88%')
+       + ''#13'Должен быть в интервале 0..100!', Warning);
+
+      CheckSchemeOplPercent := FALSE;
+    }
+  else
+    CheckSchemeOplPercent := TRUE;
+}
+
+Function GetSchemSum(c : comp) : double;
+var tmpSumma, tmpSumma1 : double;
+{
+  tmpSumma := 0;
+
+  _LOOP PaySchem_s
+    {
+      if ( PaySchem_s.nRec = c )
+        Continue;
+
+      tmpSumma1 := oValFunc.GetAnyCurrency(PaySchem_s.cVal,
+                                           PaySchem_s.Summa,
+                                           oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse, CalPlan.dFrom, CalPlan.dInput),
+                                           CalPlan.cVal);
+
+      if ( PaySchem_s.Direct = CalPlan.DirectPlat )
+        tmpSumma := tmpSumma + tmpSumma1
+      else
+        tmpSumma := tmpSumma - tmpSumma1;
+    }
+
+  GetSchemSum := tmpSumma;
+}
+
+Procedure RecalcPercent;
+{
+  UpdateTable;
+
+  _LOOP PaySchem_s
+    update PaySchem_s set
+      PaySchem_s.Percent := oValFunc.GetAnyCurrency(PaySchem_s.cVal,
+                                                    PaySchem_s.Summa,
+                                                    oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse
+                                                                              , CalPlan.dFrom
+                                                                              , CalPlan.dInput),
+                                                    CalPlan.cVal) / PlanPays.Summa * 100;
+
+  ReReadRecord(#PaySchem)
+}
+
+Function GetSumOnSelectedMCPlanPos : double;
+var _Res : double;
+{
+  _Res := 0.0;
+
+  _LOOP SpecPos where (( SpecPos.cPlanMC == SpDocs.nRec ))
+    _Res := _Res + (SpDocs.Summa + if(MCCalPlan.VhodNal = 1, 0.0, SpDocs.SumNDS)) * SpecPos.Percent / 100;
+
+  GetSumOnSelectedMCPlanPos := _Res;
+}
+
+Function GetAllNDSSumOnSelectedMCPlanPos : double;
+var _Res : double;
+{
+  _Res := 0.0;
+
+  _LOOP PaySchem
+    _LOOP SpecPos where (( SpecPos.cPlanMC == SpDocs.nRec ))
+      _Res := _Res + SpDocs.SumNDS * SpecPos.Percent / 100;
+
+  GetAllNDSSumOnSelectedMCPlanPos := _Res;
+}
+
+Procedure RecalcSums;
+var tmpSumma : double;
+{
+  UpdateTable;
+
+  tmpSumma := oValFunc.GetAnyCurrency(PaySchem.cVal,
+                                      PaySchem.Summa,
+                                      oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse, CalPlan.dFrom, CalPlan.dInput),
+                                      CalPlan.cVal);
+
+  if ( PaySchem.Direct <> CalPlan.DirectPlat )
+    tmpSumma := - tmpSumma;
+
+  update current PlanPays set PlanPays.Summa := DogRound(PlanPays.cVal <> 0, GetSchemSum(PaySchem.nRec) + tmpSumma);
+
+  update current CalPlan set
+    CalPlan.Summa  := PlanPays.Summa,
+    CalPlan.SumNDS := oValFunc.GetAnyCurrency(MCCalPlan.cVal,
+                                              GetAllNDSSumOnSelectedMCPlanPos,
+                                              oSpDocs.GetTrueDateValCurse(MCCalPlan.dValCurse
+                                                                        , MCCalPlan.dFrom
+                                                                        , MCCalPlan.dInput),
+                                              PaySchem.cVal);
+
+  RecalcPercent;
+}
+
+Function AccountOstatok(c : comp) : double;
+{
+  AccountOstatok := PlanPays.Summa - GetSchemSum(c);
+}
+
+Function CheckSchemeOplSumma(c : comp; OnSumma : boolean) : boolean;
+var s, s1 : double;
+{
+  s1 := if(PaySchem.Direct = CalPlan.DirectPlat, 1.0, -1.0);
+
+  if OnSumma
+    s := s1*oValFunc.GetAnyCurrency(PaySchem.cVal,
+                                    PaySchem.Summa,
+                                    oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse, CalPlan.dFrom, CalPlan.dInput),
+                                    CalPlan.cVal)
+  else
+    s := s1 * PlanPays.Summa * PaySchem.Percent / 100;
+
+  s1 := s - AccountOstatok(c);
+
+  if ( s1 < 0.000001 )
+    CheckSchemeOplSumma := TRUE
+  else
+    {
+      CheckSchemeOplSumma := FALSE;
+
+      Message('Общая сумма по схеме платежей '
+            + DoubleToStr(s1 + PlanPays.Summa, '\2p[|-]3666`666`666`666.88)')
+       + ''#13'будет превосходить сумму основных платежей '
+           +  DoubleToStr(PlanPays.Summa, '\2p[|-]3666`666`666`666.88)!'), Warning);
+    }
+}
+
+Procedure PaySchemDefault;
+{
+  ClearBuffer(#PaySchem);
+
+  PaySchem.cPlanPays := prmPlanPays;
+  PaySchem.PayType   := prmMode;
+  PaySchem.cCalPlan  := PlanPays.cCalPlan;
+  PaySchem.cPlat     := CalPlan.cPlat;
+  PaySchem.cPlatBank := CalPlan.cPlatBank;
+  PaySchem.cPol      := CalPlan.cPol;
+  PaySchem.cPolBank  := CalPlan.cPolBank;
+  PaySchem.Code      := NextSchemeCode;
+}
+
+Function OnCheckSchemSummaField : boolean;
+{
+  OnCheckSchemSummaField := FALSE;
+
+  if not CheckSchemeOplSumma(PaySchem.nRec, TRUE)
+    Exit;
+
+  OnCheckSchemSummaField := TRUE;
+
+  set PaySchem.Percent := oValFunc.GetAnyCurrency(PaySchem.cVal,
+                                                  PaySchem.Summa,
+                                                  oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse
+                                                                            , CalPlan.dFrom
+                                                                            , CalPlan.dInput),
+                                                  CalPlan.cVal) / PlanPays.Summa * 100;
+}
+
+Panel panPaySchem;
+  Table payschem;
+
+Browse brPaySchem (,, sci1378Esc);
+  Show at (,,,5);
+Fields
+//******************************************************************************
+  PaySchem.Code    #3'№' ('Номер по порядку',, sci178Esc) : [4], Centered, NoAutoSize;
+//******************************************************************************
+  PaySchem.Direct  #3'Направл.' ('Направление платежа по отношению к контрагентам договора',,) :
+    [LIST 1 '2 -> 1', '1 -> 2'], [8], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  OrgPlat.Name     #3'Плательщик' ('Наименование организации-плательщика',,) : [15], Protect;
+//******************************************************************************
+  OrgPol.Name      #3'Получатель' ('Наименование организации-получателя',,) : [15], Protect;
+//******************************************************************************
+  [MCCalPlanName '']
+  '№' + MCCalPlan.NoDoc + DateToStr(MCCalPlan.dInput, ' от DD/MM/YYYY г.')
+                   #3'Товарный ПКП' ('Ссылка на товарный ПКП,,') : [15], Protect;
+//******************************************************************************
+  PaySchem.Control  '' ('Характер ограничений (=, <=, >=)',,):
+    [LIST 0 '=', '<=', '>='], [3], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  PaySchem.Percent #3'Процент' ('Процент от суммы общего платежа',, sci178Esc) : [6,2];
+//******************************************************************************
+  PaySchem.Summa   #3'Сумма'   ('Сумма платежа',,) : [17.2, '\2p[|-]3666`666`666`666.88'], NoProtect;
+//******************************************************************************
+  ValutName        #3'Вал'      ('Денежная единица',,) : [4], Protect, { Font = { Italic = TRUE } }, NoAutoSize, Centered;
+//******************************************************************************
+end;
+
+Screen scrPaySchem (,, sci13Esc);
+  Show at (, 6,,);
+
+Fields
+  GrPlat.Name ('Средство платежа') : Protect;
+  PaySchem.AddTerms ('Дополнительные требования по платежу',,sci1Esc);
+  OrgPlat.Name ('Наименование плательщика') : Protect;
+  sGetTune('KatOrg.FldView.UNN') : Skip;
+  OrgPlat.UNN     : Skip;
+  sGetTune('KatOrg.FldView.OKPO')   : Skip;
+  OrgPlat.OKPO    : Skip;
+  sGetTune('KatOrg.FldView.OKONH')   : Skip;
+  OrgPlat.OKONH   : Skip;
+  StatePlat.Name  : Skip;
+  CityPlat.Name   : Skip;
+  OrgPlat.Addr    : Skip;
+  BankPlat.Name ('Наименование банка плательщика',,) : Protect;
+  BankPlat.Addr   : Skip;
+  BankPlat.MFO1   : Skip;
+  BankPlat.Schet1 : Skip;
+  OrgPol.Name ('Наименование получателя',,) : Protect;
+  sGetTune('KatOrg.FldView.UNN') : Skip;
+  OrgPol.UNN     : Skip;
+  sGetTune('KatOrg.FldView.OKPO')   : Skip;
+  OrgPol.OKPO    : Skip;
+  sGetTune('KatOrg.FldView.OKONH')  : Skip;
+  OrgPol.OKONH   : Skip;
+  StatePol.Name  : Skip;
+  CityPol.Name   : Skip;
+  OrgPol.Addr    : Skip;
+  BankPol.Name ('Наименование банка получателя',,) : Protect;
+  BankPol.Addr   : Skip;
+  BankPol.MFO1   : Skip;
+  BankPol.Schet1 : Skip;
+<<
+ Средство платежа.@@@@@@@@@@@@@@@@@@@@  Дополнительно.@@@@@@@@@@@@@@@@@@@@@@@@
+
+ Плательщик .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@.@@@@@@@@@@@@@@@@@ .@@@@@ .@@@@@@@@@@@@@@@@@     .@@@@@.@@@@@@@@@@@@@@@@@
+ Страна .@@@@@@@@@@@@@ Город .@@@@@@@@@@@@@@ Адрес .@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Банк .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ Адрес .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ МФО .@@@@@@@@@@@@@@ Расчетный счет .@@@@@@@@@@@@@@@@@@@@@@
+
+ Получатель .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@.@@@@@@@@@@@@@@@@@ .@@@@@ .@@@@@@@@@@@@@@@@@     .@@@@@.@@@@@@@@@@@@@@@@@
+ Страна .@@@@@@@@@@@@@ Город .@@@@@@@@@@@@@@ Адрес .@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Банк .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ Адрес .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ МФО .@@@@@@@@@@@@@@ Расчетный счет .@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+HandleEvent
+
+cmSetDefault:
+{
+  PaySchemDefault;
+
+  PaySchem.cVal    := CalPlan.cVal;
+  PaySchem.Direct  := CalPlan.DirectPlat;
+  PaySchem.Summa   := DogRound(PaySchem.cVal <> 0, AccountOstatok(0));
+  PaySchem.Percent := PaySchem.Summa / PlanPays.Summa * 100;
+
+  if ( ( RecordExists PaySchem_s = tsOK ) AND ( PaySchem.Summa > 0.01 ) )
+    SetModified(TRUE);
+ }
+
+cmCheckField:
+{
+  case CurField of
+  //******************************************************************************
+    #PaySchem.Direct:
+      {
+        if ( word(OldFieldValue) <> PaySchem.Direct )
+          {
+            var tmpC : comp; tmpC := PaySchem.cPlat;
+
+            set PaySchem.cPlat := PaySchem.cPol;
+            set PaySchem.cPol  := tmpC;
+
+            tmpC := PaySchem.cPlatBank;
+
+            set PaySchem.cPlatBank := PaySchem.cPolBank;
+            set PaySchem.cPolBank  := tmpC;
+          }
+      }
+  //******************************************************************************
+    #PaySchem.Summa:
+      {
+        if FormFinPlan
+          RecalcSums
+        else
+          if not OnCheckSchemSummaField Abort;
+      }
+  //******************************************************************************
+    #PaySchem.Percent:
+      if ( ( PaySchem.Percent < 0.0 ) OR ( PaySchem.Percent > 100.001 ) )
+        {
+          Message('Величина % должна быть в интервале 0..100!', Warning);
+          Abort;
+        }
+      else
+        if not CheckSchemeOplPercent(PaySchem.nRec)
+          Abort
+        else
+          set PaySchem.Summa := DogRound(PaySchem.cVal<> 0,
+                                         oValFunc.GetAnyCurrency(CalPlan.cVal,
+                                                                 PlanPays.Summa,
+                                                                 oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse
+                                                                                           , CalPlan.dFrom
+                                                                                           , CalPlan.dInput),
+                                                                 PaySchem.cVal) * PaySchem.Percent / 100);
+  //******************************************************************************
+  end;
+}
+
+cmCheckRecord:
+{
+  if not FormFinPlan
+    if not CheckSchemeOplSumma(PaySchem.nRec, TRUE)
+      Abort
+    else
+      if not CheckSchemeOplPercent(PaySchem.nRec)
+        Abort;
+ }
+
+cmDelOnProtect:
+  if ( CurField = #ValutName )
+    set PaySchem.cVal := 0;
+
+cmOpenSearch:
+  if NOT EditPlanPosEnabled(TRUE)
+    {
+      Abort;
+      Exit;
+    }
+
+cmPick:
+{
+  if not EditPlanPosEnabled(TRUE)
+    {
+      Abort;
+      Exit;
+    }
+
+  case CurField of
+  //******************************************************************************
+    #MCCalPlanName:
+      {
+        RunInterface('GetCalPlan', word(-1), word(1), CalPlan.cDogovor, PaySchem.cMCPlan);
+        UpdateTable;
+      }
+  //******************************************************************************
+    #PaySchem.Summa:
+      {
+        if ( RecordExists MCCalPlan <> tsOK )
+          {
+            Message('Не указан товарный ПКП !', Information);
+            SelectField(#MCCalPlanName);
+            Exit;
+          }
+
+        var OldSum : double; OldSum := PaySchem.Summa;
+
+        if ( RunInterface('BuildSumOnSpec', PaySchem.nRec, AccountOstatok(PaySchem.nRec), not FormFinPlan) <> cmCancel )
+          {
+            set PaySchem.Summa := DogRound(PaySchem.cVal <> 0,
+                                           oValFunc.GetAnyCurrency(MCCalPlan.cVal,
+                                                                   GetSumOnSelectedMCPlanPos,
+                                                                   oSpDocs.GetTrueDateValCurse(MCCalPlan.dValCurse
+                                                                                             , MCCalPlan.dFrom
+                                                                                             , MCCalPlan.dInput),
+                                                                   PaySchem.cVal));
+            if FormFinPlan
+              RecalcSums
+            else
+              if not OnCheckSchemSummaField
+                set PaySchem.Summa := OldSum;
+          }
+      }
+  //******************************************************************************
+    #OrgPlat.Name:
+      RunInterface('GetKatOr', PaySchem.cPlat, comp(0), FALSE, comp(0), comp(0));
+  //******************************************************************************
+    #OrgPol.Name:
+      RunInterface('GetKatOr', PaySchem.cPol, comp(0), FALSE, comp(0), comp(0));
+  //******************************************************************************
+    #BankPlat.Name:
+      if ( PaySchem.cPlat = 0 )
+        {
+          Message('Выберите сначала плательщика', OkButton);
+          SelectField(#OrgPlat.Name);
+        }
+      else
+        RunInterface('GetBank', PaySchem.cPlat, PaySchem.cPlatBank);
+  //******************************************************************************
+    #BankPol.Name:
+      if ( PaySchem.cPol = 0 )
+        {
+          Message('Выберите сначала получателя', OkButton);
+          SelectField(#OrgPol.Name);
+        }
+      else
+        RunInterface('GetBank', PaySchem.cPol, PaySchem.cPolBank);
+  //******************************************************************************
+    #ValutName:
+      RunInterface('GetValOt', PaySchem.cVal);
+  //******************************************************************************
+    #GrPlat.Name:
+       RunInterface('GroupPlat', word(1), PaySchem.PayForm);
+  //******************************************************************************
+  end; // case
+
+  RescanPanel(#PaySchem);
+}
+
+cmInsertRecord:
+  insert current payschem;
+
+cmUpdateRecord:
+  update current payschem;
+
+cmDeleteRecord:
+{
+  var d: double; d := AccountOstatok(PaySchem.nRec);
+
+  if ( ( -d > 0.000001 ) and not FormFinPlan )
+    {
+      Message('Нельзя удалить запись. Общая сумма по схеме платежей '
+            + DoubleToStr(PlanPays.Summa - d, '\2p[|-]3666`666`666`666.88)')
+       + ''#13'будет превосходить сумму основных платежей '
+            + DoubleToStr(PlanPays.Summa, '\2p[|-]3666`666`666`666.88)!'), Warning);
+      Abort;
+    }
+  else
+    {
+      var AP: double; AP := AccountPercent(PaySchem.nRec);
+
+      if not ( ( AP >= 0.0 ) AND ( AP <= 100.001 ) ) AND not FormFinPlan
+        {
+          Message('Нельзя удалить запись.'#13'Общий процент по схеме составит '
+                + DoubleToStr(AP, '\2p[|-]36`666.88%')
+          + ''#13'Должен быть в интервале 0..100!', Warning);
+          Abort;
+        }
+      else
+        if ( Message('Удалить запись из схемы оплат?', YesNo + Confirmation) = cmYes )
+          {
+            delete current payschem;
+
+            if FormFinPlan
+              {
+                RereadRecord;
+                if ( GetFirst PaySchem_s = tsOK )
+                  RecalcSums;
+              }
+          }
+    }
+}
+
+end;
+
+end; // panel
+
+Function CheckScheme : boolean;
+var AO : double;
+{
+  CheckScheme := TRUE;
+
+  AO := if(PaySchem.Direct = CalPlan.DirectPlat, 1.0, -1.0)
+         *
+        oValFunc.GetAnyCurrency(PaySchem.cVal,
+                                PaySchem.Summa,
+                                oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse, CalPlan.dFrom, CalPlan.dInput),
+                                CalPlan.cVal) - AccountOstatok(PaySchem.nRec);
+
+  if ( abs(AO) > 0.000001 )
+    Message('Сумма распределения не соответствует сумме платежа на '
+          + DoubleToStr(AO, '\2p[|-]3666`666`666`666.88')
+          +  ' ' + if(PlanPays.cVal = 0, sGetTune('NDE.SimvRub'), KlVal3.SimvolV) + ' !', OkButton);
+}
+
+Function FindDogWithSchemOpl: comp;
+var pDogovor : comp;
+{
+  pDogovor := CalPlan.cDogovor;
+
+  FindDogWithSchemOpl := pDogovor;
+
+  while TRUE do
+    {
+      if ( RecordExists PlatDog where (( pDogovor == PlatDog.cDogovor )) = tsOK )
+        {
+          FindDogWithSchemOpl := pDogovor;
+          Exit;
+        }
+
+      if ( GetFirst FastFirstRow Dogovor where (( pDogovor == Dogovor.nRec )) = tsOK )
+        pDogovor := Dogovor.cDogovor
+      else
+        Exit;
+    }
+}
+
+HandleEvent
+
+cmInit:
+{
+
+  FormFinPlan := (PlanPays.Summa < 0.000001);
+
+  if not EditPlanPosEnabled(FALSE)
+    {
+      SetHelpAndStatusContext(brPaySchem,                -1, sci1Esc, 0);
+      SetHelpAndStatusContext(brPaySchem, #PaySchem.Code   , sci1Esc, 0);
+      SetHelpAndStatusContext(brPaySchem, #PaySchem.Percent, sci1Esc, 0);
+      SetHelpAndStatusContext(brPaySchem, #ValutName       , sci1Esc, 0);
+
+      SetFieldProtected(#PaySchem.Code   , TRUE);
+      SetFieldProtected(#PaySchem.Percent, TRUE);
+      SetFieldProtected(#PaySchem.Summa  , TRUE);
+
+      SetFieldSelectable(#GrPlat.Name      , FALSE);
+      SetFieldSelectable(#PaySchem.AddTerms, FALSE);
+      SetFieldSelectable(#OrgPlat.Name     , FALSE);
+      SetFieldSelectable(#BankPlat.Name    , FALSE);
+      SetFieldSelectable(#OrgPol.Name      , FALSE);
+      SetFieldSelectable(#BankPol.Name     , FALSE);
+
+      Exit;
+    }
+
+  if FormFinPlan
+    {
+      SetFieldSelectable(#PaySchem.Percent, FALSE);
+      Message('Включен режим формирования суммы финансового ПКП по схеме платежей', Information);
+      RecalcSums;
+    }
+
+  SetWindowHelpCtx(hcDogPayment_1, wnMainWindow);
+
+  if ( not IsValid(#PaySchem) AND ( prmMode = 2 ) )
+    {
+      var pDogovor: comp; pDogovor := FindDogWithSchemOpl;
+
+      _LOOP PlatDog where (( pDogovor == PlatDog.cDogovor ))
+        {
+          PaySchemDefault;
+
+          PaySchem.cVal    := PlatDog.cVal;
+          PaySchem.Direct  := PlatDog.Direct;
+          PaySchem.PayForm := PlatDog.cPayForm;
+          PaySchem.Percent := PlatDog.Procent;
+          PaySchem.Summa   := DogRound(PaySchem.cVal <> 0,
+                                       oValFunc.GetAnyCurrency(CalPlan.cVal,
+                                                               PlanPays.Summa,
+                                                               oSpDocs.GetTrueDateValCurse(CalPlan.dValCurse
+                                                                                         , CalPlan.dFrom
+                                                                                         , CalPlan.dInput),
+                                                               PaySchem.cVal) * PaySchem.Percent / 100);
+          PaySchem.PayForm := PlatDog.cPayForm;
+          PaySchem.Control := PlatDog.Control;
+
+          if ( insert current PaySchem = tsOK )
+            {};
+        }
+    }
+}
+
+cmCancel:
+  if not CheckScheme
+    Abort;
+
+cmClose:
+  if not CheckScheme
+    Abort;
+
+end; // handleevent interface
+
+end. // interface

@@ -1,0 +1,148 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.70 - логистика
+// Печать документа-основания
+//
+//********************************************************************************
+
+Type
+  _tOrg_Attr = record
+                 KONRec       : comp;
+                 KOName       : string;
+                 KOAddr       : string[120];
+                 KOTel        : string[80];
+                 KOUNN        : string[20];
+                 KOKODPLATNDS : string[20];
+                 KOTipOrg     : string[50];
+                 KOOKPO       : string[20];
+                 KOOKONH      : string[20];
+                 KOCity       : string;
+                 KBName       : string[80];
+                 KBAddr       : string[120];
+                 KBSchet1     : string[40];
+                 KBMFO1       : string[20];
+                 KBSchet2     : string[40];
+                 KBMFO2       : string[20];
+                 KBCity       : string[80];
+               end;
+
+Var
+  InfoKO
+            : _tOrg_Attr;
+
+Create view loPrnKO_BD
+
+Var
+  _cRecOrg
+, _cRecBank
+            : comp;
+
+As select
+  KO.nRec
+, KB.nRec
+
+From
+  Synonym KatOrg  KO
+, Synonym KatBank KB
+, Synonym KatB    KatBMain // головной банк плательщика
+, KatB
+, KatCity
+
+Where
+((
+    _cRecOrg     == KO.nRec
+and _cRecBank    == KB.nRec
+and KB.cBank     == KatB.nRec
+and KatB.cHigher == KatBMain.nRec // И его головной банк
+))
+;
+
+Procedure GetInfoKatOrg(_cOrg       : comp;
+                        _cBank      : comp;
+                        Var _InfoKO : _tOrg_Attr);
+{
+  _InfoKO.KONRec       :=comp(0);
+  _InfoKO.KOName       :='';
+  _InfoKO.KOAddr       :='';
+  _InfoKO.KOTel        :='';
+  _InfoKO.KOUNN        :='';
+  _InfoKO.KOKODPLATNDS :='';
+  _InfoKO.KOTipOrg     :='';
+  _InfoKO.KOOKPO       :='';
+  _InfoKO.KOOKONH      :='';
+  _InfoKO.KOCity       :='';
+  _InfoKO.KBName       :='';
+  _InfoKO.KBAddr       :='';
+  _InfoKO.KBSchet1     :='';
+  _InfoKO.KBMFO1       :='';
+  _InfoKO.KBSchet2     :='';
+  _InfoKO.KBMFO2       :='';
+
+  if ( _cOrg = comp(0) )
+    Exit;
+
+  loPrnKO_BD._cRecOrg  := _cOrg;
+
+  if ( loPrnKO_BD.GetFirst FastFirstRow KO <> tsOk )
+    Exit;
+
+  _InfoKO.KONRec       := loPrnKO_BD.KO.nRec;
+  _InfoKO.KOName       := LL.GetKatOrgName(loPrnKO_BD.KO.nRec, koOnTune) //loPrnKO_BD.KO.Name;
+
+  if ( boGetTune('Rep.FullOrgAddr') )
+    _InfoKO.KOAddr     := LL.FullOrgAddr(loPrnKO_BD.KO.nRec)
+  else
+    _InfoKO.KOAddr     := loPrnKO_BD.KO.Addr;
+
+  _InfoKO.KOTel        := loPrnKO_BD.KO.Tel;
+  _InfoKO.KOUNN        := loPrnKO_BD.KO.UNN;
+  _InfoKO.KOKODPLATNDS := loPrnKO_BD.KO.KODPLATNDS;
+  _InfoKO.KOTipOrg     := loPrnKO_BD.KO.TipOrg;
+  _InfoKO.KOOKPO       := loPrnKO_BD.KO.OKPO;
+  _InfoKO.KOOKONH      := loPrnKO_BD.KO.OKONH;
+
+  if ( loPrnKO_BD.GetFirst KatCity where (( KO.cCity == KatCity.nRec )) = tsOk )
+    _InfoKO.KOCity     := loPrnKO_BD.KatCity.Name;
+
+  if ( _cBank = comp(0) )
+    Exit;
+
+  Set loPrnKO_BD._cRecBank := _cBank;
+
+  if ( loPrnKO_BD.GetFirst FastFirstRow KB <> tsOk )
+    Exit;
+
+  _InfoKO.KBName       := loPrnKO_BD.KB.Name;
+  _InfoKO.KBAddr       := loPrnKO_BD.KB.Addr;
+  _InfoKO.KBSchet1     := loPrnKO_BD.KB.Schet1;
+  _InfoKO.KBMFO1       := loPrnKO_BD.KB.MFO1;
+  _InfoKO.KBSchet2     := loPrnKO_BD.KB.Schet2;
+  _InfoKO.KBMFO2       := loPrnKO_BD.KB.MFO2;
+
+  // IsValid не всегда срабатывает. Переделала на GetFirst. (Tanni)
+  if ( loPrnKO_BD.GetFirst FastFirstRow KatB <> tsOk )
+    Exit;
+
+  if (loPrnKO_BD.GetFirst KatCity where (( KatB.cCity == KatCity.nRec )) = tsOk )
+    _InfoKO.KBCity := loPrnKO_BD.KatCity.Name;
+
+  if ( loPrnKO_BD.GetFirst FastFirstRow KatBMain <> tsOk )
+    Exit;
+
+  if ( boGetTune('Fin.Doc.Filial') and (loPrnKO_BD.KatB.KorSchet = '') )
+    {
+      // наименование контрагента + наименование филиала
+      _InfoKO.KOName   := _InfoKO.KOName + ' ' + loPrnKO_BD.KB.Name;
+
+      // наименование головного банка
+      _InfoKO.KBName   := loPrnKO_BD.KatBMain.Name;
+
+      // счет филиала в головном банке и БИК
+      _InfoKO.KBSchet1 := loPrnKO_BD.KatB.Schet1;
+      _InfoKO.KBMFO1   := loPrnKO_BD.KatB.MFO1;
+
+      // корр.счет головного банка и БИК
+      _InfoKO.KBSchet2 := loPrnKO_BD.KatBMain.KorSchet;
+      _InfoKO.KBMFO2   := loPrnKO_BD.KatBMain.MFO1;
+    }
+}

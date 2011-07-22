@@ -1,0 +1,1017 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Расширенная информация по договору/соглашению
+//********************************************************************************
+
+#include D_A_WE_1.vpp
+
+var OldNazna: comp;
+var wParams1, wParams2: word;
+var sParams1, sParams2: string;
+
+#doc
+Окно параметров модификации
+#end
+Window winParams 'Параметры модификации' (, hci_dogovor_Param_Modifik,) EscClose, DoAccept;
+  Show at (, , 51, 11);
+
+Screen scParams(, , sci1EnEsc);
+  Bevel b1 { 0, 2, 0, 3, bsLowered, bsHorizontal };
+Fields
+  sParams1: Skip, { Font = { Bold = TRUE } };
+  sParams2: Skip, { Font = { Bold = TRUE } };
+  wParams1 ('Задайте документы для модификации назначения', , sci13EnEsc): NoProtect;
+  wParams2: NoProtect;
+Buttons
+  cmOK, Default, , 'Ввод - формирование соглашений', , sci1Esc;
+  cmCancel , , , 'Отмена', , sci1Esc;
+<<
+ Предыдущее значение:.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Новое значение:     .@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  `Модификация`
+   [.] подчиненные соглашения`
+   [.] пункты календарного плана`
+
+   [.] только при совпадении предыдущего значения`
+
+  <. Продолжить .> <. Отмена     .>
+>>
+end; // Screen
+
+Create view vNaz
+From KatNazna, IerDog, Dogovor, CalPlan;
+
+Function GetNaznaName(pNazna: comp): string;
+{
+  if ( vNaz.GetFirst KatNazna where (( pNazna == KatNazna.nRec )) = tsOK )
+    GetNaznaName := vNaz.KatNazna.Name
+  else
+    GetNaznaName := '-= НЕ ЗАДАНО =-';
+}
+
+Procedure SetNaznaInCalPlan(pDoc, pNewNazna: comp);
+{
+  // изменить в ПКП
+  if ( (wParams1 and 2) <> 0 )
+    vNaz._LOOP CalPlan where (( pDoc == CalPlan.cDogovor ))
+      if ( ( wParams2 = 0 ) OR ( vNaz.CalPlan.cNazna = OldNazna ) )
+        vNaz.update current CalPlan set CalPlan.cNazna := pNewNazna;
+}
+
+HandleEvent
+
+  cmInit:
+    {
+      wParams1 := 0;
+      wParams2 := 0;
+
+    }
+
+  cmOk:
+    {
+      if ( wParams1 <> 0 )
+        PutCommand(cmDefault)
+      else
+        Message('Задайте документы для модификации назначения', Information);
+    }
+
+end;
+
+end; // Window
+
+#doc
+Окно просмотра расширенной информации по документу
+#end
+Window wiDogovorAttrib 'Расширенная информация по документу'
+  ('Расширенная информация по документу', hcDogInfo, sci13Esc)
+  EscClose
+;
+  Show at (, , 87, 25);
+
+Panel pSpGrSch;
+  Show at (, 15, , );
+  Table SpGrSch;
+
+Browse br10 ('Группа договоров', hcKouDocFGroup);
+Fields
+  GroupSch.Kod  #3'Код' ('Код группы договоров', , sci1378Esc): [8], protect;
+  GroupSch.Name #3'Документ входит в группы:'
+      ('Наименование группы договоров', , sci1378Esc): [62], protect;
+End;
+
+Function GetNewGroupSch: boolean;
+var NewGroupSch: comp;
+{
+  GetNewGroupSch := FALSE;
+
+  if ( RunInterface('GetGroupSch', 3, 3, 0, FALSE, NewGroupSch, FALSE) <> cmDefault )
+    Exit;
+
+  if ( NewGroupSch = SpGrSch.cGroupSch )
+    Exit; // перевыбор
+
+  if ( GetFirst FastFirstRow fltGroupSch where (( NewGroupSch == fltGroupSch.nRec )) <> tsOk )
+    Exit;
+
+  if ( ( NewGroupSch <> 0 ) AND ( fltGroupSch.cOrg <> 0 ) AND ( Dogovor.cOrg <> fltGroupSch.cOrg ) )
+    Message('Выбранная группа договоров относится к другому контрагенту!', Warning)
+  else
+    if ( GetFirst FastFirstRow SpGrSch2
+            where (( NewGroupSch  == SpGrSch2.cGroupSch AND
+                     word(1)      == SpGrSch2.wList     AND
+                     Dogovor.nRec == SpGrSch2.cBaseDoc )) = tsOk )
+      Message('Договор уже входит в выбранную группу!', Warning)
+    else
+      {
+        GetNewGroupSch := TRUE;
+        set SpGrSch.cGroupSch := NewGroupSch;
+      }
+}
+
+HandleEvent
+
+cmDelOnProtect:
+  Abort;
+
+cmSetDefault:
+  {
+    if Not EditDogPosEnabled(false, false)
+      Abort
+    else
+      {
+        ClearBuffer(#SpGrSch);
+        PutCommand(cmPick);
+      }
+  }
+
+cmPick:
+  {
+    if NOT EditDogPosEnabled(false, true)
+      {
+        Abort;
+        Exit;
+      }
+
+    case CurField of
+      #GroupSch.Name, #GroupSch.Kod:
+        if GetNewGroupSch
+          RescanPanel(#SpGrSch);
+    end;
+  }
+
+cmInsertRecord:
+  insert current SpGrSch;
+
+cmUpdateRecord:
+  update current SpGrSch;
+
+cmDeleteRecord:
+  if NOT EditDogPosEnabled(false, true)
+    Abort
+  else {
+      if (message(''#3'Удалить входимость документа в группу ?', yesno) = yes)
+        delete current SpGrSch;
+      else Abort;
+    }
+
+end; // HandleEvent
+end; // panel pSpGrSch
+
+Panel pAttrDog;
+
+TabbedSheet TOP tshArrtDog
+  Show at (, , , 14);
+
+Screen scDogDebts1 'Взаиморасчеты' (, , sci13Esc);
+  Table Dogovor;
+Fields
+  ValDogovor              ('Валюта договора'): protect;
+  ValRasDogovor           ('Валюта взаиморасчетов документа'): protect;
+  Dogovor.dValCurse       ('Дата курса цен'): ['DD/MM/YYYY'], noprotect;
+  [ProcTxt '']
+  'Процент к курсу на день платежа': skip;
+  Dogovor.SummaSpec       ('Процент к курсу на момент оплаты', , sci1Esc): [6.2];
+
+  [KursOplTxt '']
+  'Учет платежей по курсу': skip;
+  Dogovor.ShemaSum        ('Методика определения курса для учета платежей')
+    : [LIST 'на дату получения платежа',
+            'на дату перечисления платежа',
+            'документа',
+            'на дату сопроводительного документа'
+      ], protect;
+
+  Calendar.Name           ('Календарь, используемый при расчетах по договору '): PickButton, protect;
+
+  Dogovor.MethodPrice     ('Методика определения цен по договору')
+    : [LIST 'счету',
+            'прайс-листу',
+            'спецификации'], protect;
+  DogKlPrice.Name ('Прайс-лист для определения цены по договору', , ): protect;
+//******************************************************************************
+  Dogovor.VhodNal ('Входимость налогов в цену МЦ/услуги')
+    : [LIST 1 'входят', 'не входят'], protect;
+//******************************************************************************
+  Dogovor.IsExtra ('Скидка или надбавка к договору')
+    : [LIST 'Скидка', 'Надбавка'], protect;
+//******************************************************************************
+  Dogovor.Discount ('Величина скидки/надбавки к договору', , sci1Esc): [19.2, '\2p[|-]3666`666`666`666.88'], NoProtect;
+//******************************************************************************
+  Dogovor.isSum ('Тип скидки/надбавки к договору')
+    : [LIST '%', 'Сумма'], protect;
+//******************************************************************************
+<<
+
+`Денежная единица договора`          .@@@@@@@@     `Курс на дату`
+`Денежная единица взаиморасчетов`    .@@@@@@@@     .@@@@@@@@@@@@
+
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     .@@@@@@@@
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`При расчетах использовать календарь`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Цены согласно`.@@@@@@@@@@@@@@@      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Налоги`.@@@@@@@@@@ в цену позиций   .@@@@@@@@@.@@@@@@@@@@@@@@.@@@@@@
+>>
+end; // scDogDebts1;
+
+Screen scDogDebts2_0 'Исполнение';
+  Table Dogovor;
+Fields
+  PlanDog.PeriodOtgr ('Периодичность исполнения условий поставок/оплат'):
+      [LIST 'в один этап',
+            'поквартально',
+            'помесячно',
+            'подекадно',
+            'еженедельно'], protect;
+  wAvans              ('Наличие авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.dBegAvans   ('Начало авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndAvans   ('Окончание авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumAvans    ('Сумма авансовых платежей за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidAvans    ('Условия авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.DayAvans    ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+
+  wOtgr               ('Наличие поставок МЦ/услуг', , sci1Esc): noprotect;
+  PlanDog.dBegOtgr    ('Начало поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndOtgr    ('Окончание поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumOtgr     ('Сумма поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidOtgr     ('Условия поставок', , sci1Esc): noprotect;
+  DayOtgr1            ('Поставить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayOtgr2            ('Поставить в течение заданного числа дней после оплаты каждого аванса', , sci1Esc): noprotect;
+
+  wPlat               ('Наличие платежей по факту поставок', , sci1Esc): noprotect;
+  PlanDog.dBegPlat    ('Начало платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndPlat    ('Окончание платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumPlat     ('Сумма платежей по факту поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidPlat     ('Условия платежей по факту поставок', , sci1Esc): noprotect;
+  DayPlat1            ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayPlat2            ('Оплатить в течение заданного числа дней после каждой отгрузки', , sci1Esc): noprotect;
+  DayPlat3            ('Оплатить в течение заданного числа дней после выставления счета', , sci1Esc): noprotect;
+<<
+  Периодичность исполнения условий.@@@@@@@@@@@@@
+ [.] Авансовые платежи``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@ дней с начала планового периода
+ [.] Поставка МЦ/услуг``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@дней с начала планового периода
+  (.) `в течение.@@@@дней после оплаты каждого аванса
+ [.] Оплата по факту  ``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@дней с начала планового периода
+  (.) `в течение.@@@@дней после каждой отгрузки
+  (.) `в течение.@@@@дней после выставления счета
+>>
+end; // scDogDebts2_0
+
+Screen scDogDebts2_1 'Исполнение';
+  Table Dogovor;
+Fields
+  PlanDog.PeriodOtgr ('Периодичность исполнения условий поставок/оплат'):
+      [LIST 'в один этап',
+            'поквартально',
+            'помесячно',
+            'подекадно',
+            'еженедельно'], protect;
+  wAvans              ('Наличие авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.dBegAvans   ('Начало авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndAvans   ('Окончание авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumAvans    ('Сумма авансовых платежей за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidAvans    ('Условия авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.DayAvans    ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+
+  wOtgr               ('Наличие поставок МЦ/услуг', , sci1Esc): noprotect;
+  PlanDog.dBegOtgr    ('Начало поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndOtgr    ('Окончание поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumOtgr     ('Сумма поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidOtgr     ('Условия поставок', , sci1Esc): noprotect;
+  DayOtgr1            ('Поставить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayOtgr2            ('Поставить в течение заданного числа дней после оплаты каждого аванса', , sci1Esc): noprotect;
+
+  wPlat               ('Наличие платежей по факту поставок', , sci1Esc): noprotect;
+  PlanDog.dBegPlat    ('Начало платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndPlat    ('Окончание платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumPlat     ('Сумма платежей по факту поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidPlat     ('Условия платежей по факту поставок', , sci1Esc): noprotect;
+  DayPlat1            ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayPlat2            ('Оплатить в течение заданного числа дней после каждой отгрузки', , sci1Esc): noprotect;
+  DayPlat3            ('Оплатить в течение заданного числа дней после выставления счета', , sci1Esc): noprotect;
+<<
+  Периодичность исполнения условий.@@@@@@@@@@@@@
+ [.] Авансовые платежи``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@ дней с начала планового периода
+ [.] Поставка МЦ/услуг``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода, следующего за периодом перечисления аванса
+  (.) `в течение.@@@@ дней с начала планового периода, следующего за периодом перечисления аванса
+  (.) `в течение.@@@@ дней после оплаты каждого аванса
+ [.] Оплата по факту  ``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@ дней с начала планового периода
+  (.) `в течение.@@@@ дней после каждой отгрузки
+  (.) `в течение.@@@@ дней после выставления счета
+>>
+end; // scDogDebts2_1
+
+Screen scDogDebts2_2 'Исполнение';
+  Table Dogovor;
+Fields
+  PlanDog.PeriodOtgr ('Периодичность исполнения условий поставок/оплат'):
+      [LIST 'в один этап',
+            'поквартально',
+            'помесячно',
+            'подекадно',
+            'еженедельно'], protect;
+  wAvans              ('Наличие авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.dBegAvans   ('Начало авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndAvans   ('Окончание авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumAvans    ('Сумма авансовых платежей за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidAvans    ('Условия авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.DayAvans    ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+
+  wOtgr               ('Наличие поставок МЦ/услуг', , sci1Esc): noprotect;
+  PlanDog.dBegOtgr    ('Начало поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndOtgr    ('Окончание поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumOtgr     ('Сумма поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidOtgr     ('Условия поставок', , sci1Esc): noprotect;
+  DayOtgr1            ('Поставить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayOtgr2            ('Поставить в течение заданного числа дней после оплаты каждого аванса', , sci1Esc): noprotect;
+
+  wPlat               ('Наличие платежей по факту поставок', , sci1Esc): noprotect;
+  PlanDog.dBegPlat    ('Начало платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndPlat    ('Окончание платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumPlat     ('Сумма платежей по факту поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidPlat     ('Условия платежей по факту поставок', , sci1Esc): noprotect;
+  DayPlat1            ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayPlat2            ('Оплатить в течение заданного числа дней после каждой отгрузки', , sci1Esc): noprotect;
+  DayPlat3            ('Оплатить в течение заданного числа дней после выставления счета', , sci1Esc): noprotect;
+<<
+  Периодичность исполнения условий.@@@@@@@@@@@@@
+ [.] Авансовые платежи``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@ дней с начала планового периода
+ [.] Поставка МЦ/услуг``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@ дней с начала планового периода
+  (.) `в течение.@@@@ дней после оплаты каждого аванса
+ [.] Оплата по факту  ``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода, следующего за периодом поставки
+  (.) `в течение.@@@@ дней с начала планового периода, следующего за периодом поставки
+  (.) `в течение.@@@@ дней после каждой отгрузки
+  (.) `в течение.@@@@ дней после выставления счета
+>>
+end; // scDogDebts2_2
+
+Screen scDogDebts2_3 'Исполнение';
+  Table Dogovor;
+Fields
+  PlanDog.PeriodOtgr ('Периодичность исполнения условий поставок/оплат'):
+      [LIST 'в один этап',
+            'поквартально',
+            'помесячно',
+            'подекадно',
+            'еженедельно'], protect;
+  wAvans              ('Наличие авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.dBegAvans   ('Начало авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndAvans   ('Окончание авансовых платежей'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumAvans    ('Сумма авансовых платежей за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidAvans    ('Условия авансовых платежей', , sci1Esc): noprotect;
+  PlanDog.DayAvans    ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+
+  wOtgr               ('Наличие поставок МЦ/услуг', , sci1Esc): noprotect;
+  PlanDog.dBegOtgr    ('Начало поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndOtgr    ('Окончание поставок МЦ/услуг'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumOtgr     ('Сумма поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidOtgr     ('Условия поставок', , sci1Esc): noprotect;
+  DayOtgr1            ('Поставить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayOtgr2            ('Поставить в течение заданного числа дней после оплаты каждого аванса', , sci1Esc): noprotect;
+
+  wPlat               ('Наличие платежей по факту поставок', , sci1Esc): noprotect;
+  PlanDog.dBegPlat    ('Начало платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.dEndPlat    ('Окончание платежей по факту поставок'): ['DD/MM/YYYY'], noprotect;
+  PlanDog.SumPlat     ('Сумма платежей по факту поставок за один плановый период', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  ValDogovor          ('Валюта договора'): skip;
+  PlanDog.VidPlat     ('Условия платежей по факту поставок', , sci1Esc): noprotect;
+  DayPlat1            ('Оплатить в течение заданного числа дней с начала планового периода', , sci1Esc): noprotect;
+  DayPlat2            ('Оплатить в течение заданного числа дней после каждой отгрузки', , sci1Esc): noprotect;
+  DayPlat3            ('Оплатить в течение заданного числа дней после выставления счета', , sci1Esc): noprotect;
+<<
+  Периодичность исполнения условий.@@@@@@@@@@@@@
+ [.] Авансовые платежи``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода
+  (.) `в течение.@@@@ дней с начала планового периода
+ [.] Поставка МЦ/услуг``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода, следующего за периодом перечисления аванса
+  (.) `в течение.@@@@ дней с начала планового периода, следующего за периодом перечисления аванса
+  (.) `в течение.@@@@ дней после оплаты каждого аванса
+ [.] Оплата по факту  ``с`.@@@@@@@@@@`по`.@@@@@@@@@@`на сумму`.@@@@@@@@@@@@@@@@.@@@@
+  (.) `в течение всего планового периода, следующего за периодом поставки
+  (.) `в течение.@@@@ дней с начала планового периода, следующего за периодом поставки
+  (.) `в течение.@@@@ дней после каждой отгрузки
+  (.) `в течение.@@@@ дней после выставления счета
+>>
+end; // scDogDebts2_3
+
+Screen scDogDebts3 'Задолженность';
+  Table Dogovor;
+
+  Bevel b1 {  2, 4, 38, 8, bsLowered, bsFrame };
+  Bevel b2 { 39, 4, 71, 8, bsLowered, bsFrame };
+
+Fields
+  Dogovor.MaxDebtsControl ('Контроль максимальной задолженности по договору (по проведенным накладным)', , sci1Esc): noprotect;
+  Dogovor.MinDebts        ('Минимальная задолженность по договору', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  Dogovor.MinDebtsAge     ('Минимальный возраст задолженности по договору в днях', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  Dogovor.MaxDebts        ('Максимальная задолженность по договору', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+  Dogovor.MaxDebtsAge     ('Максимальный возраст задолженности по договору в днях', , sci1Esc): [, '\2p[|-]3666`666`666`666.88'], noprotect;
+Buttons
+  cmValue12, , , 'Ввод и корректировка штрафных санкций';
+<<
+  `Контролировать`
+  [.] задолженность        `   <.Санкции        .>
+  [.] возраст задолженности`
+
+   Задолженность                        Возраст задолженности (в днях)
+   `Минимальная` .@@@@@@@@@@@@@@@@@@    `Минимальный` .@@@@@
+   `Максимальная`.@@@@@@@@@@@@@@@@@@    `Максимальный`.@@@@@
+>>
+end; // scDogDebts3;
+
+Screen scDogDebts4 'Условия отгрузки';
+  Table Dogovor;
+Fields
+  Shipment.Name           ('Способ отгрузки/поставки/оказания услуг по договору', , sci13Esc): protect, PickButton, QuickChoice;
+  TipOtg.Name             ('Базис поставки', , sci13Esc): protect, PickButton, QuickChoice;
+  WayMove.Name            ('Способ транспортировки', , sci13Esc): protect, PickButton, QuickChoice;
+  Dogovor.ShipAddTerms    ('Дополнительные условия', , sci1Esc): noprotect;
+<<
+
+ `Способ отгрузки:`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Базис поставки:`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Способ транспортировки:`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Дополнительные условия:`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen scDogDebts4
+
+Screen scDogDebts 'Назначение';
+  Table Dogovor;
+Fields
+  KatNazna.Name    ('Назначение документа', , sci13Esc), PickButton, protect;
+  KatNazna.NazCode ('Назначение документа', , sci1Esc),  skip,
+                   {Font = {BackColor = ColorSkip}};
+  myField1         ('Наименование ТХО'): skip;
+  HozOperViewName  ('Наименование ТХО', , sci13Esc), PickButton, Protect;
+  KatKau.Name      ('Наименование дополнительной классификации договоров'): skip;
+  [DopKlName] #ShowKau(wGetTune('Dog.DopKlas'), Dogovor.cDopKlas)
+                   ('Дополнительная классификация договоров', , sci13Esc): Protect;
+<<
+
+ `Назначение`     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Код`.@@@@@@@@@@@@
+
+ .@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  Дополнительная классификация
+ .@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // scDogDebts;
+
+HandleEvent
+
+cmUpdateRecord:
+  if (not NotEditDogPos(false))
+    {
+      SetModified(true);
+      if (UpDateInsertDogovor <> tsOk)  { }
+    }
+
+cmInsertRecord:
+  if (not NotEditDogPos(false))
+    if (UpDateInsertDogovor <> tsOk)  { }
+
+end; // HandleEvent
+end; // TabbedSheet tshArrtDog
+end; // panel pAttrDog
+
+HandleEvent // window wiDogovorAttrib
+
+cmInit:
+  {
+    OldNazna := Dogovor.cProg;
+
+    bChangeRec := FALSE;
+
+    if NOT EditDogPosEnabled(false, false)
+#ifdef Atl52
+      SetHelpAndStatusContext(br10, -1, sci1Esc   , 'KouDocFGroup')
+#else
+      SetHelpAndStatusContext(br10, -1, sci1Esc   , hcKouDocFGroup)
+#end
+    else
+#ifdef Atl52
+      SetHelpAndStatusContext(br10, -1, sci1378Esc, 'KouDocFGroup');
+#else
+      SetHelpAndStatusContext(br10, -1, sci1378Esc, hcKouDocFGroup);
+#end
+
+    SetFieldVisible(#DogKlPrice.Name, Dogovor.MethodPrice = 1);
+    SetFieldVisible(#Dogovor.IsExtra  , Dogovor.VidDog <> 14);
+    SetFieldVisible(#Dogovor.Discount , Dogovor.VidDog <> 14);
+    SetFieldVisible(#Dogovor.isSum    , Dogovor.VidDog <> 14);
+    SetFieldVisible(#Dogovor.SummaSpec, Dogovor.TipMoney = 2);
+    SetFieldVisible(#ProcTxt          , Dogovor.TipMoney = 2);
+    SetFieldVisible(#KursOplTxt       , Dogovor.TipMoney = 2);
+    SetFieldVisible(#Dogovor.ShemaSum , Dogovor.TipMoney = 2);
+
+    if (not IsValid(tnPlanDog))
+      {
+        ClearBuffer(tnPlanDog);
+
+        var KolPeriod: word;
+        var Date0  : date;
+
+        if (Dogovor.VidOpl > 0)
+          {
+            Date0  := Date(1, Month(Dogovor.dBeg), Year(Dogovor.dBeg));
+
+            KolPeriod := Months_Between(Dogovor.dBeg, Dogovor.dEnd);
+            if (KolPeriod = 0)
+              KolPeriod := 1;
+
+            // переносим условия оплаты в схему исполнения договора
+            case Dogovor.VidOpl of
+            1: { // ежемесячно авансом
+                  PlanDog.UslPlan     := 3; // аванс + отгрузка
+
+                  PlanDog.PeriodAvans := 2; // месяц
+                  PlanDog.VidAvans    := 1;
+                  PlanDog.dBegAvans   := Dogovor.dBeg;
+                  PlanDog.dEndAvans   := Sub_Day(Add_Months(Date0, KolPeriod), 1);
+                  PlanDog.DayAvans    := Dogovor.DayOpl - 1;
+                  PlanDog.SumAvans    := Dogovor.Summa/KolPeriod; // KolPeriod - число периодов
+
+                  PlanDog.PeriodOtgr  := 2; // месяц
+                  PlanDog.VidOtgr     := 0;
+                  PlanDog.dBegOtgr    := Add_Months(Date0, 1);
+                  PlanDog.dEndOtgr    := Dogovor.dEnd;
+                  PlanDog.DayOtgr     := 0;
+                  PlanDog.SumOtgr     := Dogovor.Summa/KolPeriod; // KolPeriod - число периодов
+                }
+            2, 4:
+                { // ежемесячно по факту отгрузки
+                  PlanDog.UslPlan     := 5; // отгрузки + оплата по факту
+
+                  PlanDog.PeriodOtgr  := 2; // месяц
+                  PlanDog.VidOtgr     := 0;
+                  PlanDog.dBegOtgr    := Dogovor.dBeg;
+                  PlanDog.dEndOtgr    := Sub_Day(Add_Months(Date0, KolPeriod), 1);
+                  PlanDog.DayOtgr     := 0;
+                  PlanDog.SumOtgr     := Dogovor.Summa/KolPeriod; // KolPeriod - число периодов
+
+                  PlanDog.PeriodPlat  := 2; // месяц
+                  PlanDog.VidPlat     := 1;
+                  PlanDog.dBegPlat    := Add_Months(Date0, 1);
+                  PlanDog.dEndPlat    := Dogovor.dEnd;
+                  PlanDog.DayPlat     := Dogovor.DayOpl - 1;
+                  PlanDog.SumPlat     := Dogovor.Summa/KolPeriod;
+                }
+            3: { // по факту каждой отгрузки
+                  PlanDog.UslPlan     := 5; // отгрузки + оплата по факту
+
+                  PlanDog.PeriodOtgr  := 0; // в один этап
+                  PlanDog.VidOtgr     := 0;
+                  PlanDog.dBegOtgr    := Dogovor.dBeg;
+                  PlanDog.dEndOtgr    := Sub_Day(Dogovor.dEnd, Dogovor.DayOpl);
+                  PlanDog.DayOtgr     := 0;
+                  PlanDog.SumOtgr     := Dogovor.Summa/KolPeriod; // KolPeriod - число периодов
+
+                  PlanDog.PeriodPlat  := 0; // в один этап
+                  PlanDog.VidPlat     := 2;
+                  PlanDog.dBegPlat    := Add_Day(Dogovor.dBeg, Dogovor.DayOpl);
+                  PlanDog.dEndPlat    := Dogovor.dEnd;
+                  PlanDog.DayPlat     := Dogovor.DayOpl;
+                  PlanDog.SumPlat     := Dogovor.Summa;
+                }
+            5: { // по факту выставления счета
+                  PlanDog.UslPlan     := 5; // отгрузки + оплата по факту
+
+                  PlanDog.PeriodOtgr  := 0; // в один этап
+                  PlanDog.VidOtgr     := 0;
+                  PlanDog.dBegOtgr    := Dogovor.dBeg;
+                  PlanDog.dEndOtgr    := Sub_Day(Dogovor.dEnd, Dogovor.DayOpl);
+                  PlanDog.DayOtgr     := 0;
+                  PlanDog.SumOtgr     := Dogovor.Summa/KolPeriod; // KolPeriod - число периодов
+
+                  PlanDog.PeriodPlat  := 0; // в один этап
+                  PlanDog.VidPlat     := 3;
+                  PlanDog.dBegPlat    := Sub_Day(Dogovor.dBeg, Dogovor.DayOpl);
+                  PlanDog.dEndPlat    := Dogovor.dEnd;
+                  PlanDog.DayPlat     := Dogovor.DayOpl;
+                  PlanDog.SumPlat     := Dogovor.Summa;
+                }
+            end; // case
+          }
+
+        PlanDog.cDogovor := Dogovor.nRec;
+
+        if (insert current PlanDog <> tsOk) {}
+      }
+
+    wOtgr    := if (((PlanDog.UslPlan AND 1) = 1), 1, 0);
+    wAvans   := if (((PlanDog.UslPlan AND 2) = 2), 1, 0);
+    wPlat    := if (((PlanDog.UslPlan AND 4) = 4), 1, 0);
+    DayOtgr1 := 0;
+    DayOtgr2 := 0;
+    DayPlat1 := 0;
+    DayPlat2 := 0;
+    DayPlat3 := 0;
+
+    case PlanDog.VidOtgr of
+    1: DayOtgr1 := PlanDog.DayOtgr;
+    2: DayOtgr2 := PlanDog.DayOtgr;
+    end; //case
+
+    case PlanDog.VidPlat of
+    1: DayPlat1 := PlanDog.DayPlat;
+    2: DayPlat2 := PlanDog.DayPlat;
+    3: DayPlat3 := PlanDog.DayPlat;
+    end;
+
+    if (wAvans = 0)
+      {
+        if (wPlat = 0)
+          {
+            SetTabbedSheetVisible(scDogDebts2_0, TRUE);
+            SetTabbedSheetVisible(scDogDebts2_1, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_2, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_3, FALSE);
+
+            SetFormat(scDogDebts2_0);
+          }
+        else
+          {
+            SetTabbedSheetVisible(scDogDebts2_0, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_1, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_2, TRUE);
+            SetTabbedSheetVisible(scDogDebts2_3, FALSE);
+
+            SetFormat(scDogDebts2_2);
+          }
+      }
+    else
+      {
+        if (wPlat = 0)
+          {
+            SetTabbedSheetVisible(scDogDebts2_0, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_1, TRUE);
+            SetTabbedSheetVisible(scDogDebts2_2, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_3, FALSE);
+
+            SetFormat(scDogDebts2_1);
+          }
+        else
+          {
+            SetTabbedSheetVisible(scDogDebts2_0, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_1, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_2, FALSE);
+            SetTabbedSheetVisible(scDogDebts2_3, TRUE);
+
+            SetFormat(scDogDebts2_3);
+          }
+      }
+
+    SetFormat(scDogDebts1);
+
+    if ( Dogovor.VidDog = 14 )
+      {
+        SetTabbedSheetVisible(scDogDebts2_0, FALSE);
+        SetTabbedSheetVisible(scDogDebts2_1, FALSE);
+        SetTabbedSheetVisible(scDogDebts2_2, FALSE);
+        SetTabbedSheetVisible(scDogDebts2_3, FALSE);
+        SetTabbedSheetVisible(scDogDebts3  , FALSE);
+        SetTabbedSheetVisible(scDogDebts4  , FALSE);
+      }
+    else
+      {
+        SetTabbedSheetVisible(scDogDebts3  , TRUE);
+        SetTabbedSheetVisible(scDogDebts4  , TRUE);
+      }
+
+    SetFieldVisible(#PlanDog.dBegAvans, wAvans <> 0);
+    SetFieldVisible(#PlanDog.dEndAvans, wAvans <> 0);
+    SetFieldVisible(#PlanDog.SumAvans , wAvans <> 0);
+    SetFieldVisible(#PlanDog.VidAvans , wAvans <> 0);
+    SetFieldVisible(#PlanDog.DayAvans , (wAvans <> 0) AND (PlanDog.VidAvans = 1));
+
+    SetFieldVisible(#PlanDog.dBegOtgr , wOtgr <> 0);
+    SetFieldVisible(#PlanDog.dEndOtgr , wOtgr <> 0);
+    SetFieldVisible(#PlanDog.SumOtgr  , wOtgr <> 0);
+    SetFieldVisible(#PlanDog.VidOtgr  , wOtgr <> 0);
+    SetFieldVisible(#DayOtgr1         , (wOtgr <> 0) AND ( PlanDog.VidOtgr = 1));
+    SetFieldVisible(#DayOtgr2         , (wOtgr <> 0) AND ( PlanDog.VidOtgr = 2));
+
+    SetFieldVisible(#PlanDog.dBegPlat , wPlat <> 0);
+    SetFieldVisible(#PlanDog.dEndPlat , wPlat <> 0);
+    SetFieldVisible(#PlanDog.SumPlat  , wPlat <> 0);
+    SetFieldVisible(#PlanDog.VidPlat  , wPlat <> 0);
+    SetFieldVisible(#DayPlat1         , (wPlat <> 0) AND (PlanDog.VidPlat = 1));
+    SetFieldVisible(#DayPlat2         , (wPlat <> 0) AND (PlanDog.VidPlat = 2));
+    SetFieldVisible(#DayPlat3         , (wPlat <> 0) AND (PlanDog.VidPlat = 3));
+  }
+
+cmValue12: // штрафы
+  {
+    RunWindow(wiShtraf);
+  }
+
+cmChangeTabbedSheetFormat: // + GetCurrentFormat
+  {
+    if (not UpdateTable)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (update current PlanDog <> tsOk) {}
+    if (update current AttrDog <> tsOk) {}
+  }
+
+cmDone:
+  {
+    if (not UpdateTable)
+      {
+        Abort;
+        Exit;
+      }
+
+    if (UpDateInsertDogovor <> tsOk)  { }
+
+    if ( OldNazna <> Dogovor.cProg )
+      if ( Message('Изменилось назначение ' + if(Dogovor.cDogovor = 0, 'договора', 'соглашения') + '.'#13#13
+                 + 'Изменить назначение в подчиненных документах?', Confirmation + YesNo ) = cmYes )
+        {
+          sParams1 := GetNaznaName(OldNazna);
+          sParams2 := GetNaznaName(Dogovor.cProg);
+
+          ClusterDisabledField(#wParams1, 0);
+
+          var pCurDog, NewNazna: comp;
+
+          pCurDog  := Dogovor.nRec;
+          NewNazna := Dogovor.cProg;
+
+          if ( vNaz.RecordExists IerDog where (( pCurDog == IerDog.cUpRec AND
+                                                (vNaz.IerDog.cUpRec <> vNaz.IerDog.cRec) )) <> tsOK )
+            if ( vNaz.RecordExists CalPlan where (( pCurDog == CalPlan.cDogovor )) <> tsOK )
+              ClusterDisabledField(#wParams1, 1 + 2)
+            else
+              ClusterDisabledField(#wParams1, 1);
+
+          if ( RunWindowModal(winParams) <> cmCancel )
+            {
+              // изменить в ПКП текущего договора/соглашения
+              SetNaznaInCalPlan(pCurDog, NewNazna);
+
+              // изменить в подчиненных соглашениях
+              if ( (wParams1 and 2) <> 0 )
+                vNaz._LOOP IerDog where (( pCurDog == IerDog.cUpRec ))
+                  {
+                    // текущий договор/соглашение не рассматриваем
+                    if ( vNaz.IerDog.cRec = pCurDog )
+                      Continue;
+
+                    if ( vNaz.GetFirst FastFirstRow Dogovor where (( vNaz.IerDog.cRec == Dogovor.nRec )) = tsOk )
+                      if ( ( wParams2 = 0 ) OR ( vNaz.Dogovor.cProg = OldNazna ) )
+                        vNaz.update current Dogovor set Dogovor.cProg := NewNazna;
+
+                    // изменить в ПКП договора/соглашения
+                    SetNaznaInCalPlan(vNaz.IerDog.cRec, NewNazna);
+                  }
+            }
+        }
+
+    OldNazna := Dogovor.cProg;
+
+    if ((Dogovor.ShemaSum = 2) AND (Dogovor.dValCurse = ZeroDate) AND (Dogovor.TipMoney = 2))
+      {
+
+        if (not NotEditDogPosStatus(false))
+          {
+            Message('Не задан курс валюты документа для расчетов!');
+            SelectField(#Dogovor.dValCurse);
+
+            Abort;
+            Exit;
+          }
+      }
+
+    PlanDog.UslPlan := wOtgr + wAvans*2 + wPlat*4;
+
+    PlanDog.PeriodAvans := PlanDog.PeriodOtgr;
+    PlanDog.PeriodPlat  := PlanDog.PeriodOtgr;
+
+    case PlanDog.VidOtgr of
+    0: PlanDog.DayOtgr := 0;
+    1: PlanDog.DayOtgr := DayOtgr1;
+    2: PlanDog.DayOtgr := DayOtgr2;
+    end; //case
+
+    case PlanDog.VidPlat of
+    0: PlanDog.DayPlat := 0;
+    1: PlanDog.DayPlat := DayPlat1;
+    2: PlanDog.DayPlat := DayPlat2;
+    3: PlanDog.DayPlat := DayPlat3;
+    end;
+
+    if (PlanDog.UslPlan > 0) // проверка корректности заполнения схемы
+      {                      // исполнения договора
+        if (wOtgr = 0)
+          {
+            Message('Ошибка при заполнении схемы исполнения '+
+                    if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                    'Не заданы условия поставок!', Error);
+
+            if (not NotEditDogPosStatus(false))
+              {
+                Abort;
+                Exit;
+              }
+          }
+        else
+          {
+            if ((wAvans = 0) AND (wPlat = 0))
+              {
+                Message('Ошибка при заполнении схемы исполнения '+
+                        if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                        'Не заданы условия оплат!', Error);
+
+                if (not NotEditDogPosStatus(false))
+                  {
+                    Abort;
+                    Exit;
+                  }
+              }
+          }
+
+        nAvans := 0;
+        nOtgr  := 0;
+        nPlat  := 0;
+
+        nOtgr := oDolgOld.PlanDogNumPeriod(PlanDog.dBegOtgr, PlanDog.dEndOtgr, PlanDog.PeriodOtgr);
+
+        if (wAvans > 0)
+          {
+            nAvans := oDolgOld.PlanDogNumPeriod(PlanDog.dBegAvans, PlanDog.dEndAvans, PlanDog.PeriodAvans);
+
+            if (nAvans <> nOtgr)
+              {
+                Message('Ошибка при заполнении схемы исполнения '+
+                        if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                        'В схеме исполнения задано разное число '+
+                        'этапов авансовых платежей ('+string(nAvans)+
+                        ') и этапов поставок ('+string(nOtgr)+')!', Error);
+
+                if (not NotEditDogPosStatus(false))
+                  {
+                    Abort;
+                    Exit;
+                  }
+              }
+
+            if ((PlanDog.dBegAvans >= PlanDog.dBegOtgr) or
+                (PlanDog.dEndAvans >= PlanDog.dEndOtgr))
+              {
+                Message('Ошибка при заполнении схемы исполнения '+
+                        if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                        'Неверно заданы сроки поставок. '+
+                        'Этап поставок должен следовать '+
+                        'за этапом авансовых платежей!', Error);
+
+                if (not NotEditDogPosStatus(false))
+                  {
+                    Abort;
+                    Exit;
+                  }
+              }
+          }
+
+        if (wPlat > 0)
+          {
+            nPlat := oDolgOld.PlanDogNumPeriod(PlanDog.dBegPlat, PlanDog.dEndPlat, PlanDog.PeriodPlat);
+
+            if (nOtgr <> nPlat)
+              {
+                Message('Ошибка при заполнении схемы исполнения '+
+                        if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                        'В схеме исполнения задано разное число '+
+                        'этапов поставок ('+string(nOtgr)+
+                        ') и этапов оплат по факту поставок ('+string(nPlat)+')!', Error);
+
+                if (not NotEditDogPosStatus(false))
+                  {
+                    Abort;
+                    Exit;
+                  }
+              }
+
+            if ((PlanDog.dBegOtgr >= PlanDog.dBegPlat) or
+                (PlanDog.dEndOtgr >= PlanDog.dEndPlat))
+              {
+                Message('Ошибка при заполнении схемы исполнения '+
+                        if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                        'Неверно заданы сроки оплат по факту поставок. '+
+                        'Этап поставок должен предшествовать '+
+                        'этапу оплат по факту поставок!', Error);
+
+                if (not NotEditDogPosStatus(false))
+                  {
+                    Abort;
+                    Exit;
+                  }
+              }
+          }
+
+        if (ABS(PlanDog.SumOtgr - (if(wAvans = 0, 0.0, PlanDog.SumAvans) + if(wPlat = 0, 0.0, PlanDog.SumPlat))) > 0.01)
+          {
+            Message('Ошибка при заполнении схемы исполнения '+
+                    if(Dogovor.cDogovor = 0, 'договора! ', 'соглашения! ')+
+                    'Общая сумма платежей (авансовых и по факту отгрузок) '+
+                    'должна быть равна сумме поставок!', Error);
+
+            if (not NotEditDogPosStatus(false))
+              {
+                Abort;
+                Exit;
+              }
+          }
+      }
+
+    if (update current PlanDog <> tsOk) {}
+    if (update current AttrDog <> tsOk) {}
+
+    if ((not NotEditDogPosStatus(false)) AND (bChangeRec = TRUE))
+      if ( Dogovor1.VidDog <> 14 )
+        ReCalcSummaDogovor;
+  }
+
+cmOpenSearch:
+{
+  case CurField of
+   #Shipment.Name:
+     {
+      QuickChoiceName := 'qcShipmentName';
+      ProcessCommand(cmPick);
+     }
+   #TipOtg.Name:
+     {
+      QuickChoiceName := 'qcTipOtgName';
+      ProcessCommand(cmPick);
+     }
+   #WayMove.Name:
+     {
+      QuickChoiceName := 'qcWayMoveName';
+      ProcessCommand(cmPick);
+     }
+   else Abort;
+
+  end; // case CurField
+}//cmOpenSearch
+
+end; // HandleEvent window wiDogovorAttrib
+end; // Window wiDogovorAttrib

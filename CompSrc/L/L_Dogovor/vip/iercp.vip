@@ -1,0 +1,868 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// public - функции копирования пунктов календарного плана
+//********************************************************************************
+
+#include iercp.vih
+#include calplan.vih
+#include notes.vih
+#include spdocs.vih
+#include ClndrDog.vih // функции для работы с календарем
+
+#doc
+Интерфейс содержит реализацию методов для работы с таблицей иерархии календарного плана
+#end
+Interface IerCP;
+
+Table STRUCT TmpIerCP ""
+  (
+    No   : integer "",
+    nRec : comp    "",
+    flag : boolean ""
+  )
+With Index
+  (
+    TmpIerCP01 = No,
+    TmpIerCP02 = flag,
+    TmpIerCP03 = nRec
+  )
+;
+
+Table STRUCT TmpCalPlKOD ""
+  (
+    nRec          : comp "",
+    New_nRec      : comp "",
+    cCalPlan      : comp "",
+    New_cCalPlan  : comp "",
+    cPredPlan     : comp "",
+    New_cPredPlan : comp "",
+    Status        : word
+  )
+With Index
+  (
+    TmpCalPlKOD01 = nRec,
+    TmpCalPlKOD02 = New_cCalPlan,
+    TmpCalPlKOD03 = New_cPredPlan,
+    TmpCalPlKOD04 = cCalPlan,
+    TmpCalPlKOD05 = cPredPlan
+  )
+;
+
+#include SpDocs.var
+
+Create view vIer
+
+Var
+  CurCP
+, CurDog  : comp;
+
+  oNotes  : iNotes;
+
+  oCF: ClndrDog;
+
+Select *
+
+From
+  CalPlan
+, Dogovor
+, SpDocs
+, SpDocNal
+, StatLog
+, SoprHoz
+, IerCalPl
+, PlanPays    PlanPaysAvan
+, PlanPays    PlanPaysMain
+, PlanPays    PlanPaysAdd
+, PaySchem    AvanScheme
+, PaySchem    PayScheme
+, PaySchem    AddScheme
+, CalPlan     OwnerCP
+, CalPlan     AppCP
+, CalPlan     CalPlan_s
+, CalPlan     PredPlan
+, CalPlan     PredPlan2
+, TmpCalPlKOD TmpCalPlKOD2
+, TmpCalPlKOD
+, TmpIerCP
+, PlanPays
+
+Where
+((
+
+    CalPlan.nRec      == AppCP.cCalPlan
+and CalPlan.cDogovor  == AppCP.cDogovor
+and CurCP             == PlanPaysMain.cCalPlan
+and word(0)           == PlanPaysMain.VidPlat
+and CurCP             == PlanPaysAvan.cCalPlan
+and word(1)           == PlanPaysAvan.VidPlat
+and CurCP             == PlanPaysAdd.cCalPlan
+and word(2)           == PlanPaysAdd.VidPlat
+and PlanPaysMain.nRec == PayScheme.cPlanPays
+and word(2)           == PayScheme.PayType
+and PlanPaysAvan.nRec == AvanScheme.cPlanPays
+and word(1)           == AvanScheme.PayType
+and PlanPaysAdd.nRec  == AddScheme.cPlanPays
+and word(3)           == AddScheme.PayType
+and CurCP             == OwnerCP.nRec
+
+))
+
+Bounds PKP_On_Dogovor CurDog == CalPlan.cDogovor
+;
+
+Function DuplicateCalPlan(PD : word; Sm : double) : comp;
+{
+
+  var tmpNumber : string;
+
+  if (coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP') = 0)
+    if ( GetLast fastfirstrow CalPlan_s
+            where (( CalPlan.cDogovor == CalPlan_s.cDogovor ))
+            ordered by index CalPlan02 = tsOK )
+      {
+        var tmpS : string; tmpS := CalPlan_s.NoDoc;
+
+        if ( trim(tmpS) = '' )
+          tmpS := '0001';
+
+        tmpNumber := NextNumStr(tmpS);
+      }
+    else
+      tmpNumber := '0001';
+
+  CalPlan.nRec       := 0;
+  CalPlan.DirectMC   := 0;
+  CalPlan.DirectPlat := PD;
+  CalPlan.SummaSpec  := 0.0;
+  CalPlan.Summa      := Sm;
+
+  if (insert current CalPlan = tsOk)
+    if (coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP') <> 0)
+      RunInterface('SimpleWayToRunAlgorithm'
+                 , coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP')
+                 , word(0)
+                 , CalPlan.nRec
+                 , comp(0));
+
+  DuplicateCalPlan := CalPlan.nRec;
+
+  insert IerCalPl
+    set IerCalPl.cDogovor := CalPlan.cDogovor,
+        IerCalPl.cUpRec   := CalPlan.nRec,
+        IerCalPl.cRec     := CalPlan.nRec,
+        IerCalPl.isLeaf   := 1;
+}
+
+Procedure DuplicateSoprHoz(CurNRec, NewNRec : comp);
+{
+  _loop SoprHoz where (( word(403) == SoprHoz.TipDoc and
+                         CurNRec   == SoprHoz.cSoprDoc ))
+    {
+      SoprHoz.nRec     := 0;
+      SoprHoz.cSoprDoc := NewNRec;
+
+      insert current SoprHoz;
+    }
+}
+
+//********************************************************************************
+// Конвертирует старые календарные планы (до иерархии договоров)
+//********************************************************************************
+Function CalPlanConverter : longint;
+var i : longint;
+{
+  i := 0;
+
+  delete all TmpIerCP;
+
+  insert
+  into
+    TmpIerCP
+  (
+    NRec
+  )
+  select
+    CalPlan.nRec
+  from
+    CalPlan;
+
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Конвертация ПКП...', RecordsInTable(tnTmpIerCP));
+
+  _loop TmpIerCP where (( TmpIerCP.nRec == CalPlan.nRec ))
+    {
+      NextVisual;
+
+      if ( ( CalPlan.DirectMC*CalPlan.DirectPlat = 0 ) OR ( CalPlan.DirectMC = 100 ) )
+        Continue;
+
+      inc(i);
+
+      CurCP := CalPlan.nRec;
+
+      var DMC
+        , DP
+        , TBD     : word;
+
+      var dCP1
+        , dCP2    : date;
+
+      var CPSumma : double;
+
+      DMC     := CalPlan.DirectMC;
+      DP      := CalPlan.DirectPlat;
+      TBD     := CalPlan.TermDefBy;
+      dCP1    := CalPlan.dFrom;
+      dCP2    := CalPlan.dTo;
+      CPSumma := CalPlan.Summa;
+
+      if ( CalPlan.DirectMC * CalPlan.DirectPlat <> 0 )
+        update current CalPlan
+          set CalPlan.DirectPlat := 0,
+              CalPlan.Summa      := 0.0;
+
+      if ( CalPlan.TermDefBy = 1 )
+        {
+          if ( GetFirst fastfirstrow Dogovor where (( CalPlan.cDogovor == Dogovor.nRec )) = tsOK )
+            {
+              CalPlan.dFrom := Dogovor.dBeg;
+              CalPlan.dTo   := Dogovor.dEnd;
+            }
+          CalPlan.TermDefBy := 0;
+
+          update current CalPlan;
+        }
+      if ( DP = 0 )
+        {
+          delete safe PayScheme;
+          delete safe AvanScheme;
+          delete safe AddScheme;
+          delete safe PlanPaysMain;
+          delete safe PlanPaysAvan;
+          delete safe PlanPaysAdd;
+        }
+      else
+        {
+          var NeedNewCP : boolean;
+          var NewNRec   : comp;
+          var d1, d2    : date;
+
+          NeedNewCP := (DMC <> 0);
+
+          if ( GetFirst fastfirstrow PlanPaysMain = tsOK )
+            {
+              d1 := dCP1; d2 := dCP2;
+
+              if ( PlanPaysMain.TermDefBy = 0 )
+                {
+                  d1 := PlanPaysMain.dFrom;
+                  d2 := PlanPaysMain.dTo;
+                }
+
+              if ( NeedNewCP )
+                {
+                  NewNRec := DuplicateCalPlan(DP, PlanPaysMain.Summa);
+                  DuplicateSoprHoz(CurCP, NewNRec);
+                }
+              else
+                {
+                  NewNRec := CurCP;
+                  update current CalPlan set CalPlan.Summa := PlanPaysMain.Summa;
+                }
+
+              NeedNewCP := true;
+
+              update PayScheme
+                set PayScheme.cCalPlan := NewNRec,
+                    PayScheme.PayType  := 1;
+
+              update current PlanPaysMain
+                set PlanPaysMain.cCalPlan  := NewNRec,
+                    PlanPaysMain.TermDefBy := 0,
+                    PlanPaysMain.VidPlat   := 1,
+                    PlanPaysMain.dFrom     := d1,
+                    PlanPaysMain.dTo       := d2;
+            }
+
+          if ( GetFirst fastfirstrow CalPlan = tsOK )
+            {
+            }
+
+          if ( GetFirst fastfirstrow PlanPaysAvan = tsOK )
+            if ( PlanPaysAvan.DefBy = 0 )
+              {
+                delete safe AvanScheme;
+                delete safe PlanPaysAvan;
+              }
+            else
+              {
+                d1 := dCP1; d2 := dCP2;
+
+                if ( PlanPaysAvan.TermDefBy = 0 )
+                  {
+                    d1 := PlanPaysAvan.dFrom;
+                    d2 := PlanPaysAvan.dTo;
+                  }
+
+                var Sm : double;
+
+                case PlanPaysAvan.DefBy of
+                  1: Sm := PlanPaysAvan.Summa;
+                  2: Sm := CPSumma*PlanPaysAvan.Percent/100;
+                end;
+
+                if ( NeedNewCP )
+                  {
+                    NewNRec := DuplicateCalPlan(DP, Sm);
+                    DuplicateSoprHoz(CurCP, NewNRec);
+                  }
+                else
+                  {
+                    NewNRec := CurCP;
+                    update current CalPlan set CalPlan.Summa := Sm;
+                  }
+
+                NeedNewCP := true;
+
+                update AvanScheme
+                  set AvanScheme.cCalPlan := NewNRec,
+                      AvanScheme.PayType  := 1;
+
+                update current PlanPaysAvan
+                  set PlanPaysAvan.cCalPlan  := NewNRec,
+                      PlanPaysAvan.TermDefBy := 0,
+                      PlanPaysAvan.VidPlat   := 1,
+                      PlanPaysAvan.dFrom     := d1,
+                      PlanPaysAvan.dTo       := d2,
+                      PlanPaysAvan.Summa     := Sm;
+              }
+
+          if ( GetFirst fastfirstrow CalPlan = tsOK )
+            {
+            }
+
+          if ( GetFirst fastfirstrow PlanPaysAdd = tsOK )
+            if ( PlanPaysAdd.DefBy = 0 )
+              {
+                delete safe AddScheme;
+                delete safe PlanPaysAdd;
+              }
+            else
+              {
+                d1 := dCP1; d2 := dCP2;
+
+                if ( PlanPaysAdd.TermDefBy = 0 )
+                  {
+                    d1 := PlanPaysAdd.dFrom;
+                    d2 := PlanPaysAdd.dTo;
+                  }
+
+                var Sm : double;
+
+                case PlanPaysAdd.DefBy of
+                  1: Sm := PlanPaysAdd.Summa;
+                  2: Sm := CPSumma*PlanPaysAdd.Percent/100;
+                end;
+
+                if ( NeedNewCP )
+                  {
+                    NewNRec := DuplicateCalPlan(DP, Sm);
+                    DuplicateSoprHoz(CurCP, NewNRec);
+                  }
+                else
+                  {
+                    NewNRec := CurCP;
+                    update current CalPlan set CalPlan.Summa := Sm;
+                  }
+
+                update AddScheme
+                  set AddScheme.cCalPlan := NewNRec,
+                      AddScheme.PayType  := 1;
+
+                update current CalPlan set CalPlan.Summa := Sm;
+
+                update current PlanPaysAdd
+                  set PlanPaysAdd.cCalPlan  := NewNRec,
+                      PlanPaysAdd.TermDefBy := 0,
+                      PlanPaysAdd.VidPlat   := 1,
+                      PlanPaysAdd.dFrom     := d1,
+                      PlanPaysAdd.dTo       := d2,
+                      PlanPaysAdd.Summa     := Sm;
+              }
+        }
+    }
+
+  StopVisual('', 0);
+
+  CalPlanConverter := i;
+}
+
+//********************************************************************************
+// Формирование описателя иерархии КП по договору
+//********************************************************************************
+Procedure CreateIerCalPlan(pDogovor : comp);
+{
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Формирование описателя иерархии ПКП...', RecordsInTable(tnCalPlan));
+
+  if ( pDogovor <> 0 )
+    {
+      CurDog := pDogovor;
+      PushBounds(tbPKP_On_Dogovor);
+    }
+
+  _loop CalPlan
+    {
+      NextVisual;
+
+      var Res : word;
+      if ( GetFirst fastfirstrow AppCP = tsOK )
+        Res := 0
+      else
+        Res := 1;
+
+      CurCP := CalPlan.nRec;
+      while ( GetFirst fastfirstrow OwnerCP = tsOK ) do
+        {
+          if ( GetFirst fastfirstrow IerCalPl
+                  where (( CalPlan.cDogovor == IerCalPl.cDogovor and
+                           OwnerCP.nRec     == IerCalPl.cUpRec   and
+                           CalPlan.nRec     == IerCalPl.cRec )) = tsOK )
+            {
+              if ( IerCalPl.IsLeaf <> Res )
+                update current IerCalPl set IsLeaf := Res;
+            }
+          else
+            insert IerCalPl
+              set IerCalPl.cDogovor := CalPlan.cDogovor,
+                  IerCalPl.cRec     := CalPlan.nRec,
+                  IerCalPl.cUpRec   := OwnerCP.nRec,
+                  IerCalPl.IsLeaf   := Res;
+
+          CurCP := OwnerCP.cCalPlan;
+        }
+    }
+
+  if ( pDogovor <> 0 )
+    {
+      CurDog := 0;
+      PopBounds(tbPKP_On_Dogovor);
+    }
+
+  StopVisual('', 0);
+}
+
+//********************************************************************************
+// Клонирование описателя иерархии
+//********************************************************************************
+Procedure CreateIerCalPlanOnDoc(_cDogovor, _UpDoc, _Doc : comp);
+{
+  if ( _UpDoc <> 0 )
+    insert
+    into IerCalPl
+    (
+      cDogovor
+     ,cRec
+     ,cUpRec
+     ,IsLeaf
+    )
+    select
+      IerCalPl1.cDogovor
+     ,_Doc
+     ,IerCalPl1.cUpRec
+     ,word(1)
+    from
+      IerCalPl IerCalPl1
+    where
+    ((
+        _cDogovor == IerCalPl1.cDogovor
+    and _UpDoc    == IerCalPl1.cRec
+    ));
+
+  insert IerCalPl
+    set IerCalPl.cDogovor := _cDogovor,
+        IerCalPl.cRec     := _Doc,
+        IerCalPl.cUpRec   := _Doc,
+        IerCalPl.IsLeaf   := 1;
+
+  update IerCalPl where (( _cDogovor == IerCalPl.cDogovor and
+                           _UpDoc    == IerCalPl.cRec ))
+    set IerCalPl.IsLeaf := 0;
+}
+
+//********************************************************************************
+// Удаление описателя иерархии
+//********************************************************************************
+Procedure DeleteIerCalPlanOnDoc(_cDogovor, _UpDoc, _Doc : comp);
+{
+  delete IerCalPl where (( _cDogovor == IerCalPl.cDogovor and _Doc == IerCalPl.cRec ));
+
+  delete IerCalPl where (( _cDogovor == IerCalPl.cDogovor and _Doc == IerCalPl.cUpRec ));
+
+  if ( GetFirst fastfirstrow IerCalPl
+          where (( _cDogovor == IerCalPl.cDogovor and
+                   _UpDoc    == IerCalPl.cUpRec   and
+                  (_UpDoc <> IerCalPl.cRec) )) <> tsOK )
+    update IerCalPl where (( _cDogovor == IerCalPl.cDogovor and
+                             _UpDoc    == IerCalPl.cRec ))
+      set IerCalPl.IsLeaf := 1;
+}
+
+//********************************************************************************
+// Определяет доступность для выбора ПКП с2 как вышестоящего для с1
+//********************************************************************************
+Function CheckF3(c1, c2 : comp) : boolean;
+{
+  CheckF3 := false;
+
+  while ( GetFirst fastfirstrow CalPlan where (( c2 == CalPlan.nRec )) = tsOK ) do
+    {
+      if ( c1 = CalPlan.nRec )
+        Exit;
+
+      c2 := CalPlan.cPredPlan;
+    }
+
+  CheckF3 := true;
+}
+
+//********************************************************************************
+// Возвращает период действия ПКП
+//********************************************************************************
+Procedure GetCalPlanDateRange(c1 : comp; var d1, d2: Date);
+{
+  d1 := Date(0,0,0);
+  d2 := Date(0,0,0);
+
+  if ( GetFirst fastfirstrow CalPlan where (( c1 == CalPlan.nRec )) = tsOK )
+    if ( GetFirst fastfirstrow PlanPays where (( CalPlan.nRec == PlanPays.cCalPlan )) = tsOK )
+      {
+        d1 := PlanPays.dFrom;
+        d2 := PlanPays.dTo;
+      }
+}
+
+//********************************************************************************
+// Синхронизация статусов у подчиненных ПКП
+//********************************************************************************
+Procedure DoSynchr_PKP_Status(_cDog, _Doc: comp; _Stat: word);
+{
+  _loop IerCalPl where (( _cDog         == IerCalPl.cDogovor and
+                          _Doc          == IerCalPl.cUpRec   and
+                          IerCalPl.cRec == CalPlan.nRec ))
+    if ( ( IerCalPl.cRec <> _Doc ) AND ( CalPlan.Status <> _Stat ) )
+      update current CalPlan
+        set CalPlan.cNote  := oNotes.GetFirstNote(word(403), _Stat),
+            CalPlan.Status := _Stat;
+}
+
+//********************************************************************************
+// Модификация периода действия у ПКП по цепочке подчиненности по факту
+//********************************************************************************
+Procedure UpdateDates(_Doc : comp);
+var RecNo : integer;
+{
+  delete all TmpIerCP;
+
+  RecNo := 0;
+
+  do
+    {
+      _loop PredPlan where (( _Doc == PredPlan.cPredPlan ))
+        {
+          inc(RecNo);
+          insert TmpIerCP
+            set TmpIerCP.nRec := PredPlan.nRec,
+                TmpIerCP.flag := false,
+                TmpIerCP.No   := RecNo;
+        }
+
+      update TmpIerCP where (( _Doc == TmpIerCP.nRec ))
+        set TmpIerCP.flag := true;
+
+      if ( GetFirst TmpIerCP where (( false == TmpIerCP.flag )) = tsOK )
+        _Doc := TmpIerCP.nRec
+      else
+        Break;
+    }
+  while true;
+
+  _loop TmpIerCP where (( TmpIerCP.nRec      == PredPlan.nRec and
+                          PredPlan.cPredPlan == PredPlan2.nRec ))
+                 ordered by TmpIerCP.No
+    {
+      if ( PredPlan.TermDefBy = 0 )
+        {
+          PredPlan.dFrom := PredPlan2.dFrom;
+          PredPlan.dTo   := PredPlan2.dTo;
+        }
+      else
+        {
+          PredPlan.dFrom := Add_Day(PredPlan2.dTo, 1);
+          PredPlan.dTo   := oCF.AddWorkDay(PredPlan.cDogovor
+                                         , PredPlan.dFrom
+                                         , if(PredPlan.nDays = 0, 0, PredPlan.nDays - 1));
+        }
+
+      update current PredPlan;
+
+      if ( PredPlan.DirectMC = 0 )
+        update PlanPays where (( PredPlan.nRec == PlanPays.cCalPlan ))
+          set PlanPays.dFrom := PredPlan.dFrom,
+              PlanPays.dTo   := PredPlan.dTo;
+    }
+}
+
+//********************************************************************************
+// Переподчинение ПКП с перестроением описателя иерархии
+//********************************************************************************
+Procedure SetCalPlanOwner(_cDogovor, _cCalPlan, _cOwner : comp);
+{
+  if ( GetFirst fastfirstrow CalPlan
+          where (( _cCalPlan == CalPlan.nRec )) <> tsOK )
+    Exit;
+
+  while (GetFirst fastfirstrow IerCalPl
+            where (( _cDogovor    == IerCalPl.cDogovor and
+                     CalPlan.nRec == IerCalPl.cUpRec )) = tsOK) do
+    {
+      var c: comp;
+      c := IerCalPl.cRec;
+      delete IerCalPl where (( _cDogovor == IerCalPl.cDogovor and c == IerCalPl.cRec ));
+    }
+
+  update CalPlan where (( _cCalPlan == CalPlan.nRec ))
+    set CalPlan.cCalPlan := _cOwner;
+
+  CreateIerCalPlan(_cDogovor);
+}
+
+Procedure CreateTmpTableStep(cCurDog, cCurCP: comp);
+{
+  insert visual 'Заполнение временной таблицы'
+  into TmpCalPlKOD
+  (
+    nRec
+   ,New_nRec
+   ,cCalPlan
+   ,New_cCalPlan
+   ,cPredPlan
+   ,New_cPredPlan
+   ,Status
+  )
+  select
+    IerCalPl.cRec
+   ,GetNextNRec(tnCalPlan, 0)
+   ,CalPlan.cCalPlan
+   ,comp(0)
+   ,CalPlan.cPredPlan
+   ,comp(0)
+   ,CalPlan.Status
+  from
+   IerCalPl
+  ,CalPlan
+  where
+  ((
+      cCurDog       == IerCalPl.cDogovor
+  and cCurCP        == IerCalPl.cUpRec
+  and IerCalPl.cRec == CalPlan.nRec
+  ));
+}
+
+//********************************************************************************
+// Создание копии КП договора
+//********************************************************************************
+Function MakeCopyIerarhyOfCalPlan(cCurDog
+                                , cNewDog
+                                , cSource
+                                , cDest       : comp;
+
+                                  IsCancel
+                                , FullIerCopy : boolean;
+
+                                  _Stat       : word
+                                 ) : comp;
+var LL : tCalPlanObjInterface;
+{
+  MakeCopyIerarhyOfCalPlan := 0;
+
+  GetVipRef(LL, 'CalPlan');
+
+  delete all TmpCalPlKOD;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Инициализация временной таблицы ...'#13, 1);
+
+  if ( FullIerCopy )
+    _loop CalPlan where (( cCurDog == CalPlan.cDogovor and cSource == CalPlan.cCalPlan ))
+      CreateTmpTableStep(cCurDog, CalPlan.nRec)
+  else
+    CreateTmpTableStep(cCurDog, cSource);
+
+  update TmpCalPlKOD2 where (( TmpCalPlKOD2.cCalPlan /== TmpCalPlKOD.nRec ))
+    set TmpCalPlKOD2.New_cCalPlan := TmpCalPlKOD.New_nRec;
+
+  if ( not FullIerCopy )
+    update TmpCalPlKOD where (( cSource == TmpCalPlKOD.nRec ))
+      set TmpCalPlKOD.New_cCalPlan := cDest;
+
+  update TmpCalPlKOD2 where (( TmpCalPlKOD2.cPredPlan /== TmpCalPlKOD.nRec ))
+    set TmpCalPlKOD2.New_cPredPlan := TmpCalPlKOD.New_nRec;
+
+  update TmpCalPlKOD2 where (( comp(0) == TmpCalPlKOD2.New_cPredPlan ))
+    set TmpCalPlKOD2.New_cPredPlan := TmpCalPlKOD2.cPredPlan;
+
+/*
+  _loop TmpCalPlKOD
+  {
+  message(
+'nRec         :'+(TmpCalPlKOD.nRec         )+''#13+
+'New_nRec     :'+(TmpCalPlKOD.New_nRec     )+''#13+
+'cCalPlan     :'+(TmpCalPlKOD.cCalPlan     )+''#13+
+'New_cCalPlan :'+(TmpCalPlKOD.New_cCalPlan )+''#13+
+'cPredPlan    :'+(TmpCalPlKOD.cPredPlan    )+''#13+
+'New_cPredPlan:'+(TmpCalPlKOD.New_cPredPlan)+''#13+
+'Status       :'+(TmpCalPlKOD.Status       )
+  );
+  }
+*/
+
+  StopVisual('', 0);
+
+  if ( GetFirst TmpCalPlKOD <> tsOK )
+    Exit;
+
+  StartNewVisual(vtIndicatorVisual, vfTimer, if(IsCancel,'Отмена','Копирование')+'  ПКП...'#13, RecordsInTable(tnTmpCalPlKOD));
+
+  _loop TmpCalPlKOD where (( TmpCalPlKOD.nRec == CalPlan.nRec ))
+    {
+      if ( cSource = TmpCalPlKOD.nRec )
+        MakeCopyIerarhyOfCalPlan := TmpCalPlKOD.New_nRec;
+
+      NextVisual;
+
+      update StatLog where (( CalPlan.nRec == StatLog.cDoc and word(403) == StatLog.DocType ))
+        set StatLog.cDoc := TmpCalPlKOD.New_nRec;
+
+      if ( IsCancel )
+        update current CalPlan
+          set CalPlan.Status := 0,
+              CalPlan.cNote  := oNotes.GetFirstNote(word(403), word(0));
+
+      LL.MakeCopyCalPlan(TmpCalPlKOD.nRec,
+                         true,
+                         TmpCalPlKOD.New_nRec,
+                         TmpCalPlKOD.New_cCalPlan,
+                         TmpCalPlKOD.New_cPredPlan,
+                         cNewDog,
+                         if(IsCancel, word(3), if(_Stat = 0, 0, TmpCalPlKOD.Status)));
+
+      var pOrg : comp; pOrg := 0;
+
+      if ( GetFirst fastfirstrow Dogovor where (( cCurDog == Dogovor.nRec )) = tsOK )
+        pOrg := Dogovor.cOrg;
+
+      if ( GetFirst fastfirstrow Dogovor where (( cNewDog == Dogovor.nRec )) = tsOK )
+        if ( pOrg <> Dogovor.cOrg )
+          _loop CalPlan where (( Dogovor.nRec == CalPlan.cDogovor ))
+            {
+              CalPlan.cOrg := Dogovor.cOrg;
+              if ( ( CalPlan.DirectMC = (2 - (Dogovor.Direct and 1)) ) OR ( CalPlan.DirectMC = 0 ) )
+                {
+                  CalPlan.cPol      := Dogovor.cPol;
+                  CalPlan.cPolBank  := Dogovor.cBankPol;
+                  CalPlan.cPlat     := Dogovor.cPlat;
+                  CalPlan.cPlatBank := Dogovor.cBankPlat;
+                  CalPlan.cGrOtp    := Dogovor.cGrOtp;
+                  CalPlan.cGrPol    := Dogovor.cGrPol;
+                }
+              else
+                {
+                  CalPlan.cPol      := Dogovor.cPlat;
+                  CalPlan.cPolBank  := Dogovor.cBankPlat;
+                  CalPlan.cPlat     := Dogovor.cPol;
+                  CalPlan.cPlatBank := Dogovor.cBankPol;
+                  CalPlan.cGrOtp    := Dogovor.cGrPol;
+                  CalPlan.cGrPol    := Dogovor.cGrOtp;
+                }
+
+              update current CalPlan;
+
+              delete SpDocNal where (( CalPlan.nRec == SpDocNal.cDoc and word(403) == SpDocNal.TipDoc ));
+
+              oSpDocs.ReCalcSpec(403, CalPlan.nRec);
+            }
+
+      delete IerCalPl where (( cNewDog == IerCalPl.cDogovor and TmpCalPlKOD.New_nRec == IerCalPl.cRec ));
+
+      delete IerCalPl where (( cNewDog == IerCalPl.cDogovor and TmpCalPlKOD.New_nRec == IerCalPl.cUpRec ));
+
+      _loop PaySchem where (( TmpCalPlKOD.New_nRec == PaySchem.cCalPlan ))
+        if ( GetFirst TmpCalPlKOD2 where (( PaySchem.cMcPlan == TmpCalPlKOD2.nRec )) = tsOK )
+          {
+            _loop PlanPays where (( PaySchem.nRec == PlanPays.cCalPlan and
+                                    word(99)      == PlanPays.VidPlat ))
+              if ( GetFirst fastfirstrow SpDocs where (( PlanPays.cPlanMC == SpDocs.nRec )) = tsOK )
+                {
+                  var _Code : string[20]; _Code := SpDocs.Code;
+                  if (GetFirst fastfirstrow SpDocs
+                         where (( word(403)             == SpDocs.TiDk and
+                                  TmpCalPlKOD2.New_nRec == SpDocs.cDoc and
+                                  _Code                 == SpDocs.Code )) = tsOK)
+                    update current PlanPays set PlanPays.cPlanMC := SpDocs.nRec;
+                }
+            update current PaySchem set PaySchem.cMcPlan := TmpCalPlKOD2.New_nRec;
+          }
+    }
+
+  StopVisual('', 0);
+
+  CreateIerCalPlan(cNewDog);
+}
+
+//********************************************************************************
+// Изменение даты в зависимости от периода и типа периода
+//********************************************************************************
+Function GetMyNewDate(D : date; cpPeriodType, cpPeriodValue : word) : date;
+var tmpD : date;
+{
+  case cpPeriodType of
+    // Год
+    0 : tmpD := Add_Months(D, 12 * cpPeriodValue);
+    // Квартал
+    1 : tmpD := Add_Months(D,  3 * cpPeriodValue);
+    // Месяц
+    2 : tmpD := Add_Months(D,  1 * cpPeriodValue);
+    // Неделя
+    3 : tmpD :=    Add_Day(D,  7 * cpPeriodValue);
+    // День
+    4 : tmpD :=    Add_Day(D,  1 * cpPeriodValue);
+  else
+        tmpD := D;
+  end;
+
+  GetMyNewDate := tmpD;
+}
+
+//********************************************************************************
+// Изменение периода ПКП в зависимости от периода и типа периода
+//********************************************************************************
+Procedure ChangeCalPlanPeriod(cPlan : comp; cpPeriodType, cpPeriodValue : word);
+var pDogovor : comp;
+{
+  if ( GetFirst fastfirstrow CalPlan where (( cPlan == CalPlan.nRec )) <> tsOK )
+    Exit;
+
+  pDogovor := CalPlan.cDogovor;
+
+  _loop IerCalPl where(( pDogovor == IerCalPl.cDogovor and cPlan == IerCalPl.cUpRec ))
+    {
+       update CalPlan where (( IerCalPl.cRec == CalPlan.nRec ))
+         set CalPlan.dFrom := GetMyNewDate(CalPlan.dFrom, cpPeriodType, cpPeriodValue),
+             CalPlan.dTo   := GetMyNewDate(CalPlan.dTo  , cpPeriodType, cpPeriodValue);
+
+       update PlanPays where (( IerCalPl.cRec == PlanPays.cCalPlan ))
+         set PlanPays.dFrom := GetMyNewDate(PlanPays.dFrom, cpPeriodType, cpPeriodValue),
+             PlanPays.dTo   := GetMyNewDate(PlanPays.dTo  , cpPeriodType, cpPeriodValue);
+    }
+}
+
+end.

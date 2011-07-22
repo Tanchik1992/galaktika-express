@@ -1,0 +1,131 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// HandleEvent из soprdocb.vip
+//******************************************************************************
+
+#include SOPRC13.VPP
+
+cmOpenSearch:
+  {
+     QuickChoiceCalculate;
+
+  }
+
+#ifdef _RETTARA_
+  #include soprc21.vpp
+#end
+
+cmPick:
+ case curfield of
+   #SpSopr.LastDate,
+   #SpSopr.OilTemper,
+   #SpSopr.LastTime,
+   #SpSopr.OilPlot:
+     {
+       WorkWithCapcity(4);
+       Abort;//прервать вызов календаря
+     }
+ end;
+
+cmCheckField:
+  case curfield of
+    #SpSopr.LastDate,
+    #SpSopr.LastTime:
+      WorkWithCapcity(5);
+  end;
+
+
+cmDocBas :
+  if curtable=#SpSopr
+    RunInterface('GetSaldoMC',SkPr, KatSopr.dSopr, SpSopr.cMCUSL, 0,0,0)
+  else
+    RunInterface('GetSaldoMC',SkPr, KatSopr.dSopr, 0, KatSopr.cPodrFrom,0,0);
+
+cmInit :
+  {
+    #ifdef _RETTARA_
+    if (KatMC.kGroupMC = sGetTune('Tara.KodGrMcTara'))
+      SetFieldOption(#KolFull, ofSelectable);
+    else
+      ClearFieldOption(#KolFull, ofSelectable);
+    #end
+  }
+
+cmSetGrNal :
+  {
+    if not isValid (#SpSopr)
+      {
+        message(''#3'Не указана МЦ/услуга...',CancelButton);
+        abort;
+        Exit;
+      }
+    If (KatSopr.cStepDoc<>0 and SpSopr.cSpStep<>0 and  boGetTune('Doc.iNalogsFromSpStep'))
+      {
+        message('Для внесения несоответствия между налогами документа и ДО '#13#3'необходимо переключить настройку: Налоги сопроводительных документов рассчитывать по ДО=нет');
+        Exit;
+      }
+
+    if not OtkatToOldState(true,word(0))
+      Exit;
+    var tGrNal: comp;
+    if (RunInterface(GetGrNal,tGrNal, word(0)) <> cmCancel)
+      {
+        If KatSopr.cStepDoc <> 0
+         if (Message(''#3'Вы согласны внести несоответствие'#13#3'между налогами накладной и ДО ?',YesNo) = cmNo)
+               Exit;
+
+         if not OtkatToOldState(true,word(0)) Exit;
+
+          Delete NoVisual SpDocNal
+           where ((SpSopr.NRec == SpDocNal.cSpDoc and
+                      TypeSopr == SpDocNal.TipDoc));
+
+          SpSopr.ManualTax := 0;
+          RecalcNalogs(tGrNal,0)
+          IF GetFirst SpDocNal where ((SpSopr.NRec == SpDocNal.cSpDoc and
+                                          TypeSopr == SpDocNal.TipDoc)) <> tsOK
+             SpSopr.ManualTax := 1;//пир 101.30737
+          CheckSumma(false);
+      }
+  }
+
+#ifdef __MTR_TO_SPEC__
+cmIerarchy :
+{
+  if (IsValid(#SpSopr))
+    RunInterface('EditMtr2Spec', if(not OtkatToOldState(false, word(0)), 1, if(IsValid(#SmetaStroy), 2, 0)), 0, word(coSpSopr), SpSopr.nRec);
+}
+#end
+
+cmAttrib :
+  RunWindowModal(EditNalogs);
+
+cmValue3:
+  { //-- интерфейс с товарно-транспортной информацией по позиции
+    Update_Current_KatSopr;
+    SaveMyDSK(OtkatToOldState(false,word(0)),'_CanEditTTNDoc_');
+    RunInterface(SpTTNDoc,word(coSpSopr),SpSopr.NRec);
+  }
+
+cmRestoreDoc :
+  {
+    if not OtkatToOldState(true,word(0))
+      Exit;
+
+    case curfield of
+      #capacity:
+        {
+          WorkWithCapcity(3);
+          stop;
+          Exit;
+        };
+    end;
+
+    IF curtable=#SpSopr
+      {
+        GetMCUSLPrl;
+        if SpSopr.cMcUsl<>0
+          CheckSumma(true);
+      }
+  }

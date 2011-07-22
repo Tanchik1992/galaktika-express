@@ -1,0 +1,239 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// Базисные цены из УКС-а в сопроводительных ценах
+//********************************************************************************
+
+#include AdrFunc.vih
+#include SaldTune.vih  // Настройка объектов учета целевого назначения запасов МТР
+#include MTRFuncs.vih  // функции целевого учета
+#include KPC_Func.vih  // Функции для пересчета цен по коэффициентам пересчета цен (КПЦ)
+
+//********************************************************************************
+
+#doc
+Назначение:
+  Базисные цены из УКС-а в сопроводительных ценах
+
+Параметры:
+  pNRec  - ссылка на сопроводительный документ
+#end
+
+//********************************************************************************
+
+Interface ShowUksSoprPrice 'Просмотр базисных цен' (,hci_sopprh_ProsmBaz_Cen,) , EscClose, Cyan, cacheable;
+  Show at (, 7, 120, 27)
+
+#include MTRFuncs.var   // oMTRFun          функции целевого учета
+#include KPC_Func.var   // Функции для пересчета цен по коэффициентам пересчета цен (КПЦ) (oKPC)
+var oTune: VipSaldTune; // Настройка объектов учета целевого назначения запасов МТР
+
+Function GetValueUKS(aiNum : integer) : string; Forward;
+
+Create view
+var
+  pNRec,
+  vcSald:   comp;  // ссылка на сопроводительный документ
+  vwKauKol: word;
+
+As select
+  if(SpSopr.PrMC = 1, 'Т', 'У')
+        ( FieldName = PrMCUsl )
+//--------------------------------------------------------------------------------
+, if(SpSopr.PrMC = 1, KatMC.Name, KatUsl.Name)
+        ( FieldName = NameMCUsl )
+//--------------------------------------------------------------------------------
+, if(SpSopr.PrMC = 1, KatMC.BarKod, KatUsl.Kod)
+        ( FieldName = KodMCUsl )
+//--------------------------------------------------------------------------------
+, if(SpSopr.cOtpEd = 0, KatEd.Name, if (wGetTune('Doc.BrAbbrEd')=0, KatOtpEd.ABBR, KatOtpEd.Name))
+        ( FieldName = OtpEd )
+//--------------------------------------------------------------------------------
+, if(KatSopr.cVal = 0, SpSopr.rPrice, SpSopr.rVPrice)
+        ( FieldName = Prv )
+//--------------------------------------------------------------------------------
+, SpSopr.KolFact * if(KatSopr.cVal = 0, SpSopr.price, SpSopr.VPrice)
+        ( FieldName = SumPrice )
+//--------------------------------------------------------------------------------
+, Prv/ if((UKS_USED AND oMTRFun.GetObjUKS(coSpSopr, SpSopr.nRec) <> 0), oKPC.GetKPCStr(oMTRFun.GetObjUKS(coSpSopr, SpSopr.nRec), 0, KatSopr.dSopr), 1)
+        ( FieldName = PrvUKS )
+//--------------------------------------------------------------------------------
+, SumPrice/ if((UKS_USED AND oMTRFun.GetObjUKS(coSpSopr, SpSopr.nRec) <> 0), oKPC.GetKPCStr(oMTRFun.GetObjUKS(coSpSopr, SpSopr.nRec), 0, KatSopr.dSopr), 1)
+        ( FieldName = SumPriceUKS )
+//--------------------------------------------------------------------------------
+, SpSopr.rPrice / if((UKS_USED AND oMTRFun.GetObjUKS(coSpSopr, SpSopr.nRec) <> 0), oKPC.GetKPCStr(oMTRFun.GetObjUKS(coSpSopr, SpSopr.nRec), 0, KatSopr.dSopr), 1)
+        ( FieldName = rPriceUKS )
+//--------------------------------------------------------------------------------
+, if (KatSopr.cVal = 0, SpSopr.SumNDS, SpSopr.SumVNDS)
+        ( FieldName = SumSpNalog )
+//--------------------------------------------------------------------------------
+, if(IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ': ' + SmetaStroy.Name, '')
+        ( FieldName = SmetaMy )
+//--------------------------------------------------------------------------------
+, if(IsValid(tnSmetaSpec), string(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') '
+                        + SmetaSpec.Name, '')
+        ( FieldName = SmetaSpMy )
+//--------------------------------------------------------------------------------
+, GetValueUKS(01)
+        (FieldName = vfVal01)
+//------------------------------------------------------------------------------
+, GetValueUKS(02)
+        (FieldName = vfVal02)
+//------------------------------------------------------------------------------
+, GetValueUKS(03)
+        (FieldName = vfVal03)
+//------------------------------------------------------------------------------
+, GetValueUKS(04)
+        (FieldName = vfVal04)
+//------------------------------------------------------------------------------
+, GetValueUKS(05)
+        (FieldName = vfVal05)
+//------------------------------------------------------------------------------
+, GetValueUKS(06)
+        (FieldName = vfVal06)
+//------------------------------------------------------------------------------
+, GetValueUKS(07)
+        (FieldName = vfVal07)
+//------------------------------------------------------------------------------
+, GetValueUKS(08)
+        (FieldName = vfVal08)
+//------------------------------------------------------------------------------
+, GetValueUKS(09)
+        (FieldName = vfVal09)
+//------------------------------------------------------------------------------
+, GetValueUKS(10)
+        (FieldName = vfVal10)
+//------------------------------------------------------------------------------
+, *
+
+From
+  KatSopr
+, SpSopr
+, KlVal
+, KatMc
+, KatUsl
+, KatOtpEd
+, SpecMTR
+, SpDocSmeta
+, SmetaStroy
+, SmetaSpec
+, KatEd
+
+where
+((
+       pNRec                 ==  KatSopr.NRec
+  AND  KatSopr.NRec          ==  SpSopr.cSopr
+  AND  KatSopr.cValut        ==  KlVal.NRec
+
+  AND  SpSopr.cOtpEd         ==  KatOtpEd.NRec
+  AND  SpSopr.cMCUSL         ==  KatMC.NRec
+  AND  SpSopr.cMCUsl         ==  KatUsl.NRec
+  AND  SpSopr.cParty         ==  KatParty.NRec
+
+  AND  if(SpSopr.PrMc = 1,
+          KatMc.cEd,
+          KatUsl.cEd)        ==  KatEd.NRec
+
+  AND  SpSopr.NRec           ==  SpecMTR.cSpec
+  AND  coSpSopr              ==  SpecMTR.coTable
+  AND  coSpSopr              ==  SpDocSmeta.coTable
+  AND  SpSopr.NRec           ==  SpDocSmeta.cSpec
+  AND  SpDocSmeta.cSmeta     ==  SmetaStroy.NRec
+  AND  SpDocSmeta.cPosition  ==  SmetaSpec.NRec
+
+))
+;
+
+Parameters
+  pNRec
+;
+
+#include ShowKau.vpp  // Макроопределения для высветки КАУ, выбора КАУ
+
+Function GetRoleName(aiNum : integer) : string;
+{
+  GetRoleName := chr(3) + oTune.GetRoleName(aiNum);
+}
+
+Function GetValueUKS(aiNum : integer) : string;
+{
+  GetValueUKS := #ShowKau(oTune.GetGrKau(aiNum), if(vcSald = SpecMTR.cSaldTune, if(aiNum = 1, SpecMTR.cObj, SpecMTR.cKau[aiNum - 1]), 0));
+}
+
+Panel pnSpecif
+Table SpSopr;
+
+Browse brSpecif ('',, sci1Esc)
+Fields
+  SpSopr.Npp      #3'№'#13#3'п/п'                                                 : [3] , Skip;
+  PrMCUsl         #3'Т'#13#3'У'                   ('Товар/услуга')                : [1] , Protect;
+  NameMCUsl       #3'Наименование'                ('Наименование МЦ/Услуги')      : [20], Protect;
+  KodMCUsl        #3'Код'                         ('Номенклатурный номер/бар-код'): [10], Protect;
+  OtpEd           #3'ЕдИзм'                       ('Отпускная единица измерения') : [5] , Protect;
+  SpSopr.KolFact  #3'Количество'#13#3'фактическое'('Фактическое количество')      : [10], [prSignsInKol]     , Protect;
+  SpSopr.KolFact  #3'Количество'#13#3'к оплате'   ('Количество к оплате')         : [10], [prSignsInKol]     , Protect;
+  Prv             #3'Цена'#13#3'текущая'          ('Цена отпускной единицы')      : [12], [brForSopr_RVPrice], Protect;
+  SumPrice        #3'Стоимость'#13#3'текущая'     ('Стоимость позиции')           : [12], [brForSopr_RVPrice], Protect;
+  PrvUKS          #3'Цена'#13#3'базисная'         ('Цена базисная')               : [12], [brForSopr_RVPrice], Protect;
+  SumPriceUKS     #3'Стоимость'#13#3'базисная'    ('Стоимость базисная')          : [12], [brForSopr_RVPrice], Protect;
+  vfVal01 '01' : [20], Protect;
+  vfVal02 '02' : [20], Protect;
+  vfVal03 '03' : [20], Protect;
+  vfVal04 '04' : [20], Protect;
+  vfVal05 '05' : [20], Protect;
+  vfVal06 '06' : [20], Protect;
+  vfVal07 '07' : [20], Protect;
+  vfVal08 '08' : [20], Protect;
+  vfVal09 '09' : [20], Protect;
+  vfVal10 '10' : [20], Protect;
+  KatParty.Name   #3'Партия'#13#3'матценности'    ('Партия матценности')          : [13], Protect;
+  SumSpNalog      #3'Налоги'                      ('Сумма налогов к позиции')     : [10], [brForSopr_Price]  , Protect;
+  SpSopr.rPrice   #3'Цена (НДЕ)'#13#3'текущая'    ('Цена отпускной единицы в НДЕ'): [12], [brForSopr_Price]  , Protect;
+  rPriceUKS       #3'Цена (НДЕ)'#13#3'базисная'   ('Цена базисная в НДЕ')         : [12], [brForSopr_Price]  , Protect;
+  SpSopr.rVPrice  #3'Цена (вал)'                  ('Цена в валюте')               : [12], [brForSopr_VPrice] , Protect;
+  KlVal.Simvolv   #3'Вал.'                        ('Символ валюты')               : [5] , Protect;
+  SmetaMy         #3'Смета'                       ('Локальная смета: "Номер": "Наименование"')          : [10], Protect;
+  SmetaSpMy       #3'Спецификация'#13#3'сметы'    ('Спецификация сметы: "№ п/п" ("Код") "Наименование"'): [10], Protect;
+end;
+end;
+
+Handleevent
+
+cmInit :
+{
+  var i : word;
+  var vaField : array [1..10] of integer;
+
+  vaField[1] := #vfVal01;
+  vaField[2] := #vfVal02;
+  vaField[3] := #vfVal03;
+  vaField[4] := #vfVal04;
+  vaField[5] := #vfVal05;
+  vaField[6] := #vfVal06;
+  vaField[7] := #vfVal07;
+  vaField[8] := #vfVal08;
+  vaField[9] := #vfVal09;
+  vaField[10] := #vfVal10;
+  vcSald := oTune.GetTune(1);
+  if (vcSald <> 0)
+  {
+    vwKauKol := oTune.KauQnt;
+    for(i := 1; i <= vwKauKol; inc(i))
+      SetColumnTitle(brSpecif, vaField[i], GetRoleName(i));
+
+    for(i := vwKauKol + 1; i <= 10; inc(i))
+      ClearFieldState(vaField[i], sfVisible);
+  }
+  else
+    for(i := 1; i <= 10; inc(i))
+      ClearFieldState(vaField[i], sfVisible);
+
+  if ( not Lic_ItemExists('SmetaDocs') )
+    {
+      ClearFieldState(#SmetaMy,   sfVisible);
+      ClearFieldState(#SmetaSpMy, sfVisible);
+    }
+}
+
+end;
+end.

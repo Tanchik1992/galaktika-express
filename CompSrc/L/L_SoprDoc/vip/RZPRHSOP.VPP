@@ -1,0 +1,132 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Функции формирования прихода в в рознице по накладной
+//******************************************************************************
+
+//******************************************************************************
+
+#include RoznFuns.var
+
+//******************************************************************************
+
+Create view v_rzKUTPrih from rzKUTPrih;
+Create view v_rzKUTRash from rzKUTRash;
+
+//******************************************************************************
+// получение типа прихода по типу формирующей накладной
+
+Function GetTypePrih: word;
+{
+  case KatSopr.VidSopr of
+    600..603: GetTypePrih := 902;
+    else      GetTypePrih := 901;
+  end;
+}
+
+//******************************************************************************
+// Проверка наличия карточек учета МЦ по накладной
+
+Function CheckRZKUT: boolean;
+{
+  var w: word;    w := GetTypePrih;
+  var c: comp;    c := KatSopr.NRec;
+
+  CheckRZKUT := v_rzKUTPrih.GetFirst rzKUTPRIH
+                        where ((w == rzKutPrih.TypePrih AND
+                                c == rzKUTPrih.cSopr)) = tsOk;
+}
+
+//******************************************************************************
+// Проверка возможности удаления КУТ привязанных к накладной.
+
+Function CanDelKUT(warn: boolean): boolean;
+{
+  CanDelKUT := TRUE;
+
+  if NOT CheckRZKUT
+    Exit;
+
+  var w: word;  w := GetTypePrih;
+  var c: comp;  c := KatSopr.NRec;
+  
+  v_rzKUTPrih.GetFirst rzKUTPRIH
+                        where ((w == rzKutPrih.TypePrih AND
+                                c == rzKUTPrih.cSopr)) 
+    {
+      var c1: comp;  c1 := v_rzKUTPrih.rzKUTPrih.NRec;
+
+      if v_rzKUTRash.GetFirst rzKUTrash where ((c1 == rzKUTRash.cRzPrih)) = tsOk
+        {
+          if warn
+            Message('Нельзя выполнить операцию по приходной накладной ' + f_sNumDate(KatSopr.NSopr, KatSopr.dSopr) +
+                    ' т.к. в модуле "Розничная торговля" сформированы расходы по КУТ', Information);
+
+          CanDelKUT := FALSE;
+          Exit;
+        }
+    }
+
+  if Warn
+   CanDelKUT := Message('Накладной '+f_sNumDate(KatSopr.NSopr, KatSopr.dSopr) +
+                        ' соответствуют приходы в розничной торговле.'#13'Удалить их?', YesNo+Confirmation+mfSwapButtons) = cmYes;
+}
+
+//******************************************************************************
+// Удаление КУТ по накладной
+
+Function DeleteKUTS(Warn: boolean): boolean;
+var kNRec  : comp;
+var ktNRec: comp;
+var tPrih  : word;
+{
+  if NOT CheckRZKUT  //если нет КУТ
+    {
+      DeleteKUTS := TRUE;
+      Exit;
+    }
+
+  DeleteKUTS := FALSE;
+  tPrih      := GetTypePrih;
+
+  if NOT CanDelKUT(Warn)
+    Exit;
+
+  kNRec := KatSopr.NRec;
+
+  // *** Dig 25.09.98 - проверка на наличие актов на списание
+  // по нормам потерь МЦ
+  if oRoznFuns.DelStorSpis(word(1), kNRec, TRUE)
+    {
+      v_rzKUTPrih._LOOP rzKUTPrih
+            where ((kNRec == rzKUTPRih.cSopr AND
+                    tPrih == rzKutPrih.TypePrih))
+        {
+          ktNRec := v_rzKUTPrih.rzKUTPrih.NRec;
+
+          if Delete NoVisual SpDocNal
+               where ((ktNRec == SpDocNal.cSpDoc AND
+                       word(900) == SpDocNal.Tipdoc)) <> tsOk
+           Message('Ошибка удаления записи из таблицы SpDocNal (900).', Error);
+
+          if Delete NoVisual SpDocNal
+               where ((ktNRec == SpDocNal.cSpDoc AND
+                       word(920) == SpDocNal.Tipdoc)) <> tsOk
+           Message('Ошибка  удаления записи из таблицы SpDocNal (920).', Error);
+        }
+
+       DeleteKUTS := v_rzKUTPrih.Delete NoVisual rzKUTPrih
+                        where ((kNRec == rzKUTPrih.cSopr AND
+                                tPrih == rzKutPrih.TypePrih)) = tsOk;
+    }
+
+  if GetFirst SoprHoz = tsOk
+    {
+      SoprHoz.SummaSp  := 0;
+      SoprHoz.SumValSp := 0;
+      SoprHoz.cFilKor  := if (KatSopr.cOrg <> 0, Filial.NRec, 0);
+
+      if Update current SoprHoz <> tsOk
+        Message('Ошибка обновления записи в таблице SoprHoz.', Error);
+    }
+} // Function DeleteKUTS

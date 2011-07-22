@@ -1,0 +1,1127 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.70 - логистика
+// Формирование ДО на предоплату по выбранным позициям
+//
+//********************************************************************************
+
+#include Dog2DOPr.vih
+
+#include SHManager.vih
+#include GetDocSpecInfo.vih
+#include notes.vih
+#include aStatUser.vih // права доступа
+#include oEdIzm.vih
+#include SpNext.vih
+#include RecChecker.vih
+#include ClndrDog.vih // функции для работы с календарем из договора
+#include DOfuns.vih
+#include CalcFuns.vih
+#include MTRFuncs.vih           // функции целевого учета
+#include PrnDocs.vih
+
+//********************************************************************************
+// Функции для работы в внейшними атрибутами и внешней классификацией
+//********************************************************************************
+
+#include ExtAttr.vih
+#include ExtClass.vih
+#include aOfpOut.vih // iOfpOut (Платежный календарь) :: F_OFP
+
+//********************************************************************************
+
+#doc
+Интерфейс формирования документов-оснований на предоплату по договорам
+#end
+Interface dog2DO_PredOpl doAccept, EscClose;
+
+#include oEdIzm.Var
+#include SpNext.var
+#include DOfuns.var
+#include aOfpOut.var   // piOFPOut <- iOfpOut   :: F_OFP
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+
+Create view
+
+Var
+  IndexDocs          : longint;
+
+  First_SpStep       : boolean;
+
+  v_ProcOpl          : double;
+
+  pickrec
+, Genegal_Dogovor
+, Genegal_AppDogovor
+, Genegal_CalPlan    : comp;
+
+  TipDO              : word;
+
+  oNotes             : iNotes;
+  oStatUser          : VipStatUser;
+
+  oExtAtr            : iExtAttr;
+  oExtCls            : iExtClass;
+
+As select
+
+  if (SGetDocs2.cAppDogovor <> 0, SGetDocs2.cAppDogovor,SGetDocs2.cDogovor)
+                                                   ( FieldName = tek_Dog )
+
+, if (SGetDocs2.wDocType = 4, SGetDocs2.cCalPlan, SGetDocs2.nRec)
+                                                   ( FieldName = NRec4SpDocs2 )
+
+From
+  SGetDocs                (SMemTab02)
+, SGetDocs SGetDocs2
+, BaseDoc
+, StepDoc
+, SpStep
+, SpDocs
+, SpDocs SpDocs2
+, KlVal
+, SoprHoz
+, KatSopr
+, Filial
+, dogovor
+, dogovor dogApp
+, CalPlan
+, Pick Pick4SpStep
+, KatMC
+, KatUsl
+, KatOtpEd
+, TTNDoc
+, SpGrSch
+, SpGrSch SpGrSch2
+, Pick
+, AttrDog   dogApp_AttrDog
+, Skidka
+, KatNotes
+, klskidka
+, SSpDocs3
+, WayMove
+
+Where
+((
+    BaseDoc.nRec                     ==  StepDoc.cBaseDoc
+and BaseDoc.cVal                     ==  KlVal.nRec
+and StepDoc.nRec                     ==  SpStep.cStepDoc
+and SpStep.cSpDocs                   ==  SpDocs.nRec
+and SpStep.cMCUsl                    ==  KatMC.nRec  // спецом для GetTotal
+and SpStep.cMCUsl                    ==  KatUsl.nRec // спецом для GetTotal
+
+and pickrec                          ==  SGetDocs2.nRec
+and SGetDocs2.cDogovor               ==  dogovor.nRec
+and tek_Dog                          ==  dogApp.nRec
+and SGetDocs2.cCalPlan               ==  CalPlan.nRec
+
+and word(399+SGetDocs2.wDocType)     ==  SpDocs2.TiDk
+and NRec4SpDocs2                     ==  SpDocs2.cDoc
+and word(2-(SGetDocs2.Direct mod 2)) ==  SpDocs2.Direct
+and word(3)                          >>  SpDocs2.prMC
+and word(800)                        ==  Pick4SpStep.wList
+
+and oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc)
+                                     == SoprHoz.TipDoc
+and BaseDoc.nRec                     == SoprHoz.cSoprDoc
+
+))
+
+;
+
+//Parameters
+//  DskParams
+//  ;
+
+Form prot('dog_do.out', 'errr') with novisual;
+
+#include doSoprH.vpp
+
+//-------создание счетов -----------------
+#include gettot.vpp
+#include skidtot.vpp
+#include modifdo.vpp
+
+//------------------------------------------------------------------------------
+
+Procedure Del_true_SpMarker(_marker   : longint;
+                            _NRec     : comp;
+                            _PrMC     : word;
+                            _cGrMCUsl : comp;
+                            _cMCUsl   : comp;
+                            _cOtpEd   : comp;
+                            _cVal     : comp;
+                            _Price    : double;
+                            _KOL      : double;
+                            _Summa    : double);
+{
+  if ( _KOL <= 0 )
+    Exit;
+
+  DeleteMarker(_marker, _NRec);
+
+  if ( GetFirst SSpDocs3 Where((  _PrMC     == SSpDocs3.prMC
+                              and _cGrMCUsl == SSpDocs3.cGrMCUsl
+                              and _cMCUsl   == SSpDocs3.cMCUsl
+                              and _cOtpEd   == SSpDocs3.cOtpEd
+                              and _cVal     == SSpDocs3.cVal
+                              and _Price    == SSpDocs3.Price)) = tsOk )
+    {
+      if ( SSpDocs3.Kol <= _KOL )
+        delete current SSpDocs3;
+      else
+        {
+          SSpDocs3.Kol   := SSpDocs3.Kol   - _KOL;
+          SSpDocs3.Summa := SSpDocs3.Summa - _Summa;
+          Update current SSpDocs3;
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+// Функции формирования ДО на предоплату
+
+Function GetKontrag4DO (Var cKontragBank:comp; Var cMyBank:comp) : comp;
+{
+  GetKontrag4DO := 0;
+  cKontragBank  := 0;
+  cMyBank       := 0;
+
+//  if (SGetDocs2.Direct = 0) Exit;
+
+  if ( SGetDocs2.wDocType = 4 )
+    {
+      if ( (SGetDocs2.Direct and 1) = 0 ) // закупка
+        {
+        //  GetKontrag4DO := CalPlan.cPol;
+          GetKontrag4DO := CalPlan.cOrg;
+          cKontragBank  := CalPlan.cPolBank;
+          cMyBank       := CalPlan.cPlatBank;
+        }
+      else // продажа,
+        {
+          GetKontrag4DO := CalPlan.cPlat;
+          cKontragBank  := CalPlan.cPlatBank;
+          cMyBank       := CalPlan.cPolBank;
+        }
+    }
+  else
+    {
+      if ( (SGetDocs2.Direct and 1) = 0 ) // закупка
+        {
+        //  GetKontrag4DO := dogApp.cPol;
+          GetKontrag4DO := dogApp.cOrg;
+          cKontragBank  := dogApp.cBankPol;
+          cMyBank       := dogApp.cBankPlat;
+        }
+      else // продажа,
+        {
+          GetKontrag4DO := dogApp.cPlat;
+          cKontragBank  := dogApp.cBankPlat;
+          cMyBank       := dogApp.cBankPol;
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+Function GetSkidka(ProcSum : word) : double; //1- %, 2- sum
+{
+  GetSkidka := 0;
+//  if dogovor.discount=0 Exit;
+
+//  if ProcSum=1 // %
+//   { GetSkidka:=if (Dogovor.isExtra=0, dogovor.discount, -Dogovor.discount);
+//      Exit; }
+
+//  if (SGetDocs2.wDocType = 4)
+//   { GetSkidka:=if (Dogovor.isExtra=0, dogovor.discount, -Dogovor.discount);
+//     Exit; }
+
+  //сумма по кал.плану:
+//  if (GetFirst SpDocs2 = tsOk)
+//    do { GetSkidka:=GetSkidka + SpDocs2.summa; }
+//    while GetNext SpDocs2 = tsOk;
+//  GetSkidka:= GetSkidka - CalPlan.summaSpec;
+}
+
+//------------------------------------------------------------------------------
+
+Function MakeBaseDocByCurrentDogApp : boolean;
+Var direct_ : word;
+{
+  MakeBaseDocByCurrentDogApp := false;
+
+  direct_ := 2 - (SGetDocs2.Direct mod 2);
+
+  if ( direct_ = 0 )
+    Exit;
+
+  if ( GetKontrag4DO(BaseDoc.cBank,BaseDoc.cMyBank) = 0 )
+    Exit;
+
+  ClearBuffer(#BaseDoc);
+
+  BaseDoc.Name := 'Сформировано выборочно по дог. № '
+                + if(wGetTune('Dog.DogNameInComment') = 0, Dogovor.NoDoc, Dogovor.NoDoc_Ext)
+                + ' от ' + DateToStr(if(wGetTune('Dog.DateDogInComment') = 0, Dogovor.dDoc, Dogovor.dInput)
+                                   , 'DD/MM/YYYY');
+
+  if ( SGetDocs2.IsFinPKP )
+    {
+      BaseDoc.cDogovor    := SGetDocs2.cDogovor;
+      BaseDoc.cAppDogovor := SGetDocs2.cAppDogovor;
+      BaseDoc.cCalPlan    := SGetDocs2.cCalPlan;
+    }
+
+  BaseDoc.vidDoc  := if (direct_ = 1, 211, 111);
+
+  BaseDoc.ProcOpl := v_ProcOpl; // процент предоплаты у ДО на предоплату
+  BaseDoc.SpecYes := if(SGetDocs2.IsFinPKP, word(0), word(1));   // наличие спецификации у ДО на предоплату
+  BaseDoc.noDoc   := oSpNext.CreateSchetNumber(Dogovor.NoDoc_Ext); // s20 "номер документа",
+
+  BaseDoc.descr   := sGetTune('User.Descr');  // tDescr  "дескриптор к номеру документа",
+  BaseDoc.desGr   := sGetTune('User.DesGr');  // tDesGr  "код группы пользователей",
+  BaseDoc.dForm   := Cur_Date;                // date    "дата формирования",,
+  BaseDoc.dDoc    := Cur_Date;                // date    "дата вступления в силу",
+  BaseDoc.yearDoc := Year(BaseDoc.dDoc);      // word  "отдельно: год от dDoc",
+  BaseDoc.kolDn   := wGetTune('Oper.SrokSch');  // word  "количество дней действия счета",
+
+  BaseDoc.dEnd    := Add_Day(BaseDoc.dDoc, BaseDoc.kolDn); // date  "дата окончания договора",
+
+  BaseDoc.cOrg    := GetKontrag4DO(BaseDoc.cBANK, BaseDoc.cMyBANK);
+  BaseDoc.summa   := 0;               // double  "сумма по договору",
+  BaseDoc.skidka  := 0;               // double  "скидка от суммы счета",
+  BaseDoc.NDS     := 0;               // double  "сумма НДС",
+
+  if ( (SGetDocs2.wDocType <> 4) and (DogApp.TipMoney = 2) )
+    BaseDoc.dopProc := dogApp.SummaSpec; // double  "доп.процент к курсу для вал-руб док-осн",
+
+  BaseDoc.total   := 0;               // double  "итого",
+
+  BaseDoc.cGrPol  := if(SGetDocs2.wDocType=4, CalPlan.cGrPol, dogApp.cGrPol);
+  BaseDoc.cGrOtpr := if(SGetDocs2.wDocType=4, CalPlan.cGrOtp, dogApp.cGrOtp);
+
+  BaseDoc.status  := if(BaseDoc.vidDoc>200, // продажи
+                       if(wGetTune('Doc.Sell.StatusPO') <>0,word(1),word(2)),
+                         if(wGetTune('Doc.Buy.StatusPO') <>0,word(1),word(2)) );
+
+  if ( oStatUser.Descr_Stat_U(true,
+                              if(BaseDoc.vidDoc=211, word(53), word(43)),
+                              BaseDoc.descr,
+                              BaseDoc.cNote) )
+    {
+      if ( GetFirst KatNotes where ((BaseDoc.cNote == KatNotes.nRec)) = tsOk )
+        BaseDoc.Status := KatNotes.Status;
+    }
+  else
+    {
+      BaseDoc.cNote := oNotes.GetFirstNote(word(40), BaseDoc.Status);
+    }
+
+  BaseDoc.cStatDoc := 0;               // tNrec  "состояние документа",
+  BaseDoc.direct   := direct_;         // word   "0-внут операция,1 - продажа,2 - закупка",
+  BaseDoc.cVal     := if (SGetDocs2.wDocType=4,CalPlan.cVal,DogApp.cVal);// tNrec   "код валюты",
+  BaseDoc.sumVal   := 0;              // double  "сумма в валюте",
+  BaseDoc.TipMoney := dogApp.TipMoney;// word    "тип документа по отношению к валюте",
+  BaseDoc.Prior    := '99';           // s2      "приоритет оплаты",
+  BaseDoc.cNalog   := 0;              // tNrec   "код налога",
+                                    // word    "вход в цену налогов: 1-входит",
+  BaseDoc.vhodNal  := if (SGetDocs2.wDocType=4,CalPlan.vhodNal,DogApp.vhodNal);
+  BaseDoc.cParty   := 0;              // tNrec   "партия для учета консигнации",
+  BaseDoc.kolKompl := 0;              // double  "кол-во комплектов",
+  BaseDoc.cCompl   := 0;              // tNRec   "комплект ссылка",
+  BaseDoc.cPodrTo  := 0;              // tNrec   "в подразделение ссылка",
+  BaseDoc.cNazna   := if (SGetDocs2.wDocType=4,CalPlan.cNazna,DogApp.cProg); // tNRec   "назначение ссылка",
+  BaseDoc.dOtsroch := 0;              // date    "дата отсрочки оплаты по закупке",
+  BaseDoc.vhSkid   := if (DogApp.isSum=0, 1, 2);// word "вариант скидки:1-%,2-сумма",
+  BaseDoc.Skidka   := GetSkidka(BaseDoc.vhSkid);
+  BaseDoc.dPrice   := dogApp.dValCurse;// date    "дата цен",
+                                      // date    "дата курса вал. по вал-руб ДО",
+  BaseDoc.dValCurse := if (SGetDocs2.wDocType=4,CalPlan.dValCurse,DogApp.dValCurse);
+
+  if ( BaseDoc.dValCurse = date(0, 0, 0) )
+    BaseDoc.dValCurse := if (SGetDocs2.wDocType=4,CalPlan.dFrom,DogApp.dBeg);
+  if ( BaseDoc.dValCurse = date(0, 0, 0) )
+    BaseDoc.dValCurse := if (SGetDocs2.wDocType=4,CalPlan.dInput,DogApp.dInput);
+                                   // double  "курс валюты для вал-руб ДО",
+  oValFunc.GetCurse(BaseDoc.cVal, BaseDoc.dValCurse, BaseDoc.ValCurse);
+
+  if ( DogApp.TipMoney = 2 )
+    BaseDoc.wCursForPlPor := dogApp.ShemaSum;
+
+  if ( SGetDocs2.IsFinPKP )
+    {
+      BaseDoc.vhodNal  := 2;
+      BaseDoc.total    := CalPlan.Summa * BaseDoc.ProcOpl / 100.0;
+      BaseDoc.TotalNDE := oDOfuns.doRoundNDE(BaseDoc.VidDoc, BaseDoc.total * _kurs);
+      BaseDoc.NDS      := CalPlan.SumNDS;
+    }
+
+  BaseDoc.cSklad  := 0;             // tNRec   "склад отгрузки",
+  BaseDoc.RndR    := 0;             // double  "округление РУБ документа до...",
+  BaseDoc.RndV    := 0;             // double  "округление ВАЛ документа до...",
+  BaseDoc.cDover  := 0;             // tNRec   "ссылка на доверенность",
+  BaseDoc.cZakaz  := 0;             // tNRec   "Ссылка на производственный заказ"
+
+  BaseDoc.cOtvPodr := DefaultBaseCO;
+
+  if ( BaseDoc.cOtvPodr = 0 )
+    {
+      if ( SGetDocs2.wDocType = 4 )
+        {
+          BaseDoc.cOtvPodr := CalPlan.cOtvPodr;
+        }
+      else
+        {
+          if ( GetFirst FastFirstRow dogApp_AttrDog where (( dogApp.nRec == dogApp_AttrDog.cDogovor )) = tsOk )
+            BaseDoc.cOtvPodr := dogApp_AttrDog.cPodr;
+        }
+    }
+
+  Insert current BaseDoc;
+
+  ClearBuffer(#StepDoc);
+
+  StepDoc.cBaseDoc := BaseDoc.nRec;       //tNrec  "код док-основания из BaseDOc",
+  StepDoc.Name     := '';                 //tName  "наименование",
+  StepDoc.NStep    := '1';                //s20    "номер этапа",
+  StepDoc.dStart   := BaseDoc.dDoc;       //date   "дата начала этапа",
+  StepDoc.dEnd     := BaseDoc.dend;       //date   "дата завершения этапа",
+
+  if ( BaseDoc.cVal = 0 )
+    {
+      StepDoc.Summa  := BaseDoc.Total;
+      StepDoc.SumVal := 0;
+    }
+  else
+    {
+      StepDoc.Summa  := 0;
+      StepDoc.SumVal := BaseDoc.Total;
+    }
+
+  StepDoc.cVal     := BaseDoc.cVal;       //tNrec  "код валюты",
+  StepDoc.cStatDoc := BaseDoc.cStatDoc;   //tNrec  "состояние этапа (код STATDOC)",
+  StepDoc.Status   := BaseDoc.status;     //word   "системный статус документа",
+  StepDoc.dIzvMax  := 0;                  //date   "дата,до кот необх известить об оплате",
+  StepDoc.dIzvFact := 0;                  //date   "дата фактич извещ о переч денег",
+  StepDoc.dOplMax  := 0;                  //date   "дата, до кот должны поступ деньги",
+  StepDoc.dOplFact := 0;                  //date   "дата выписки из банка(факт)",
+  StepDoc.dOtgr    := 0;                  //date   "дата отгр(макс)- в случае несамовывоза",
+  StepDoc.dZabor   := 0;                  //date   "дата самов(забора товара) макс",
+  StepDoc.cShtrafP := dogApp.cShtrafPlat; //tNrec  "штрафы за просрочку оплаты",
+  StepDoc.cShtrafG := dogApp.cShtrafShip; //tNrec  "штрафы за просрочку отгрузки",
+  StepDoc.NSert    := '';                 //s20    "Номер сертификата",
+  StepDoc.NKont    := '';                 //s20    "Номер контракта",
+  StepDoc.KontPri  := '';                 //tName  "Приложение к контракту"
+
+  Insert current StepDoc;
+
+  piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocInsert); // (Платежный календарь) :: F_OFP
+
+  if ( (StepDoc.cShtrafG <> 0) or (StepDoc.cShtrafP <> 0) )
+    {
+      BaseDoc.Shtraf := 1;                //word   "1-предусмотрены или 0-нет штрафы",
+      Update current BaseDoc;
+
+      piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocUpdate); // (Платежный календарь) :: F_OFP
+    }
+
+  MakeBaseDocByCurrentDogApp := true;
+}
+
+//------------------------------------------------------------------------------
+
+Function MakeSpStepByCurrentDogApp : boolean;
+Var saveKol : double;
+    simple  : boolean;
+{
+  MakeSpStepByCurrentDogApp := false;
+
+//  ostatok_ := sp_ostatok_ / fEdIzm.GetKoefOtpEd(SpDocs2.cOtpEd);
+  if ( (SpDocs2.cGrMCUsl = 0) and (SpDocs2.cMCUsl = 0) )
+    Exit; //МЦ не указана
+
+  delete safe Pick4SpStep;
+
+  simple := false;
+
+  if ( (SpDocs2.cGrMCUsl <> 0) and (SpDocs2.cMCUsl = 0) )
+    {
+      if ( RunInterface('PickByGrMCUsl', SpDocs2.cGrMCUsl
+                                       , SpDocs2.prMC
+                                       , SpDocs2.Kol * fEdIzm.GetKoefOtpEd(SpDocs2.cOtpEd)
+                                       , SpDocs2.cOtpEd) = cmCancel )
+        Exit;
+    }
+  else
+    {
+      simple := true;
+
+      ClearBuffer(#Pick4SpStep);
+
+      Pick4SpStep.wList   := 800;
+      Pick4SpStep.cRec    := SpDocs2.cMCUsl;
+      Pick4SpStep.PickKol := SpDocs2.Kol;
+//    Pick4SpStep.PickKol := SpDocs2.ostatok;
+
+      Insert current Pick4SpStep;
+    }
+
+  _loop Pick4SpStep
+    {
+      if ( Pick4SpStep.PickKol <= 0 )
+        continue;
+
+      ClearBuffer(#SpStep);
+
+      SpStep.dDoc     :=BaseDoc.dDoc;         //date   "копия из документа"
+      SpStep.cStepDoc :=StepDoc.nRec;
+      SpStep.Price    :=SpDocs2.price;        //double "цена за единицу"
+      SpStep.prMC     :=SpDocs2.prMC;         //word   "признак товара или услуги",
+      SpStep.cOtpED   :=SpDocs2.cOtpEd;       //tNrec  "код отпускной ед.измерения"
+      SpStep.cMCUSL   :=Pick4SpStep.cRec;     //tNrec  "код товара(услуги)"
+      SpStep.Kol      :=Pick4SpStep.PickKol;  //double "количество"
+
+      if ( not simple )
+        if ( GetFirst KatOtpEd where ((  SpStep.prMC   == KatOtpEd.prMC
+                                     and SpStep.cMCUsl == KatOtpEd.cMCUsl
+                                     and word(1)       == KatOtpEd.akt )) = tsOk )
+          {
+            SpStep.Price  := fEdIzm.ConvSellSumToSecondEd(SpStep.Price, SpStep.cOtpEd, KatOtpEd.nRec);
+            SpStep.cOtpEd := KatOtpEd.nRec;
+          }
+
+//      if (SpStep.kol > ostatok_) SpStep.kol := ostatok_;
+      saveKol        := SpStep.Kol;           //в отп.единице группы
+      SpStep.kolSkl  := SpStep.Kol;
+      SpStep.kolOpl  := 0;                  //double "количество оплаченного"
+      SpStep.ProcUb  := 0;                  //double "% естественной убыли"
+      SpStep.cParty  := 0;                  //tNrec  "код партии"
+      SpStep.cVAL    := SpDocs2.cVal;       //tNrec  "код валюты"
+                                           //double "цена за единицу"
+      SpStep.SUMMA   := 0;                  //double "стоимость по товару"
+      SpStep.Reserv  := 0;                  //double "количество товара в резерве"
+      SpStep.SumVal  := 0;                  //double "сумма в валюте по товару"
+      SpStep.Garant  := 0;                  //double "срок гарантии в месяцах"
+      SpStep.SrokRes := 0;                  //date   "последний день действия резерва"
+      SpStep.SopUsl  := 0;                  //word   "1- %, 2- сумма к товару"
+      SpStep.StoTov  := 0;                  //double "стоимость или % к товару"
+      SpStep.PrSkid  := 1;                  //word   "1- скидка в %, 2- в сумме"
+      SpStep.VlSkid  := 0;                  //double "стоимость или % к товару"
+      SpStep.NDS     := 0;                  //double "величина налогов к позиции"
+                                           //tNRec "Ссылка на прайс-лист"
+      SpStep.cPriceList := SpDocs2.cPriceLS;
+      SpStep.NVagon  := '';                 //s20 "Номер ж/д вагона"
+      SpStep.NKvit   := '';                 //s20 "Номер ж/д квитанции"
+
+      if ( (BaseDoc.vidDoc = 211) and (SpStep.prMC = 2) ) //word "Вх. усл. в накладную"
+        SpStep.PrUsNkl := wGetTune('Doc.UslDoSell');
+
+      SpStep.ManualTax := 0;                //word "Ручные налоги"
+      SpStep.cAltEd    := 0;                //tNrec "Альт.единица измерения"
+      SpStep.cPersons  := 0;                //tNRec "Сотрудник, выполняющий услугу"
+      SpStep.cSpDocs   := SpDocs2.nRec;
+
+      //if SpStep.kol > ostatok_ then SpStep.kol:= ostatok_;
+      //if SpStep.kol<=0 then continue;
+
+      SpStep.Npp         := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+      SpStep.cResOtgr    := SpDocs2.cResOtgr;
+      SpStep.cCellVal    := SpDocs2.cMoveCell;
+
+      SpStep.cDogovor    := SGetDocs2.cDogovor;
+      SpStep.cAppDogovor := SGetDocs2.cAppDogovor;
+      SpStep.cCalPlan    := SGetDocs2.cCalPlan;
+
+//      Var pickrec : comp;
+//      PushPos(#SGetDocs2);
+//      while true
+//        {
+//        if (SGetDocs2.wDocType = 1) {SpStep.cDogovor    := SGetDocs2.cDogovor; Break;}
+//        if (SGetDocs2.wDocType = 2)  SpStep.cAppDogovor := SGetDocs2.cAppDogovor;
+//        if (SGetDocs2.wDocType = 4)  SpStep.cCalPlan    := SGetDocs2.cCalPlan;
+//        pickrec := SGetDocs2.cOwner;
+//        if (GetFirst SGetDocs2 Where((pickrec == SGetDocs2.nRec)) <> tsOk) Break;
+//        if (SGetDocs2.wDocType = 1) {SpStep.cDogovor    := SGetDocs2.cDogovor; Break;}
+//        if (SGetDocs2.wDocType = 2)  SpStep.cAppDogovor := SGetDocs2.cAppDogovor;
+//        pickrec := SGetDocs2.cOwner;
+//        if (GetFirst SGetDocs2 Where((pickrec == SGetDocs2.nRec)) <> tsOk) Break;
+//        if (SGetDocs2.wDocType = 1)  SpStep.cDogovor    := SGetDocs2.cDogovor;
+//        Break;
+//        }
+//      PopPos(#SGetDocs2);
+
+      if ( First_SpStep )
+        {
+          First_SpStep := false;
+          Genegal_Dogovor    := SpStep.cDogovor;
+          Genegal_AppDogovor := SpStep.cAppDogovor;
+          Genegal_CalPlan    := SpStep.cCalPlan;
+        }
+      else
+        {
+          if ( Genegal_Dogovor <> SpStep.cDogovor )
+            Genegal_Dogovor    := 0;
+
+          if ( Genegal_AppDogovor <> SpStep.cAppDogovor )
+            Genegal_AppDogovor := 0;
+
+          if ( Genegal_CalPlan <> SpStep.cCalPlan )
+            Genegal_CalPlan    := 0;
+        }
+
+      SpStep.cGrNal := SpDocs2.cGrNal;
+      SpStep.cUKS   := SpDocs2.cUKS;
+
+      Insert current SpStep;
+
+      oMTRFun.CopySpecMTR(coSpDocs, SpDocs2.nRec, coSpStep, SpStep.nRec);
+
+      RunInterface('CopySpDocSmeta', word(coSpDocs), SpDocs2.nRec, word(coSpStep), SpStep.nRec);
+
+      if ( (SpStep.prMC <> 1) and (GetFirst KatUsl = tsOk) )
+        if ( KatUsl.TYPEUSL = 1 )
+          oCalcFuns.ClcUsl_CopyFactPar(SpDocs2.nRec, coSpDocs, SpStep.nRec, coSpStep);
+
+//      if (kontrolOstat=1)
+//        ostatok_ := if( ostatok_ > saveKol, ostatok_ - saveKol, 0);
+
+      MakeSpStepByCurrentDogApp := true;
+
+    }
+
+//  MakeSpStepByCurrentDogApp:=true;
+}
+
+Procedure UpdateSpStepUslReference; // Обновляет в SpStep ссылки на услуг на МЦ
+Var
+  p_NRec1
+, p_NRec2
+, p_NRec3
+           : comp;
+{
+  _loop SpDocs2
+    {
+      if ( SpDocs2.cSpMC = 0 )
+        continue;
+
+      NextVisual;
+
+      p_NRec1 := SpDocs2.nRec;
+      p_NRec2 := SpDocs2.cSpMC;
+
+      PushPos(#SpDocs2);
+
+      if ( GetFirst SpDocs2 Where((p_NRec2 == SpDocs2.nRec)) = tsOk )
+        if ( SpDocs2.cMCUsl <> 0 )
+          if ( GetFirst SpStep where ((  StepDoc.nRec == SpStep.cStepDoc
+                                     and SpDocs2.nRec == SpStep.cSpDocs)) = tsOk )
+            {
+              p_NRec3 := SpStep.nRec;
+
+              if ( GetFirst SpStep where ((  StepDoc.nRec == SpStep.cStepDoc
+                                         and p_NRec1      == SpStep.cSpDocs)) = tsOk )
+                {
+                  SpStep.cSpMC := p_NRec3;
+                  Update current SpStep;
+                }
+            }
+
+      PopPos (#SpDocs2);
+    }
+}
+
+Procedure InsertTTNDoc;
+{
+  ClearBuffer(#TTNDoc);
+
+  TTNDoc.wTable    := coBaseDoc;
+  TTNDoc.cDoc      := BaseDoc.nRec;
+  TTNDoc.cShipment := if (SGetDocs2.wDocType=4, CalPlan.cShipment, dogApp.cShipment);
+  TTNDoc.cTipOtg   := if (SGetDocs2.wDocType=4, CalPlan.cTipOtg  , dogApp.cTipOtg);
+  TTNDoc.cPunktP   := if (SGetDocs2.wDocType=4, CalPlan.cPunktP, 0);
+  TTNDoc.cPunktR   := if (SGetDocs2.wDocType=4, CalPlan.cPunktR, 0);
+
+  if ( Insert current TTNDoc <> tsOk )
+    Message(''#3'Не вставилась запись в таблице TTNDoc', Information + OkButton);
+  else
+    {
+      Var pWayMove : comp;
+
+      pWayMove := if (SGetDocs2.wDocType=4, CalPlan.cWayMove, dogApp.cWayMove);
+
+      if ( pWayMove <> comp(0) )
+        {
+          if ( GetFirst FastFirstRow WayMove where ((pWayMove == WayMove.nRec)) = tsOk )
+            oExtAtr.sSetAttr (coTTNDoc,TTNDoc.nRec, 'СПОСОБ ТРАНСПОРТИРОВКИ', WayMove.Name);
+        }
+    }
+}
+
+Procedure InsertSpGrSch;
+Var
+ pDoc    : comp;
+ VidList : word;
+{
+  if ( SGetDocs2.wDocType <> 4 )
+    {
+      pDoc    := SGetDocs2.nRec;
+      VidList := 1;
+    }
+  else
+    {
+      pDoc    := SGetDocs2.cCalPlan;
+      VidList := 2;
+
+      if ( GetFirst SpGrSch where ((  pDoc    == SpGrSch.cBaseDoc
+                                  and VidList == SpGrSch.wList )) <> tsOk )
+        {
+          pDoc    := SGetDocs2.nRec;
+          VidList := 1;
+        }
+    }
+
+  _loop SpGrSch where ((  pDoc    == SpGrSch.cBaseDoc
+                      and VidList == SpGrSch.wList ))
+    {
+      SpGrSch2.nRec      := 0;
+      SpGrSch2.wList     := 0; // ДО
+      SpGrSch2.cGroupSch := SpGrSch.cGroupSch;
+      SpGrSch2.cBaseDoc  := BaseDoc.nRec;
+
+      if ( Insert current SpGrSch2 <> tsOk )
+        Message(''#3'Не вставилась запись в таблице SpGrSch', Information + OkButton);
+    }
+}
+
+//------------------------------------------------------------------------------
+//--- public-функции объектного интерфейса
+
+Procedure SetBrowseOptions ( Var sTitle         : string; // '' - стандартный заголовок
+                             // иначе установит указанный
+                             Var sColumnSelect  : string; // название колонки
+                             // с сформированными/помеченными документами
+                             Var Show_brSp      : word; // Browse со спецификацией
+                             // 0 - скрыть (Show_brSpItogo скрывает автоматом)
+                             // 1 - показать для просмотра
+                             // 2 - показать для пометки
+                             Var Show_brSpItogo : word; // Browse с итоговой спецификацией
+                             // 0 - скрыть
+                             // 1 - показать для просмотра
+                             Var whc_User       : word; // Хелп для интерфейса выбора
+                             Var sHelpLine      : string; // Строка подсказки для интерфейса выбора
+                             Var CheckOnMark    : word; // Пометка только с одинаковыми:
+                             // Бит 1 ( 1) : Пометка только из одного договора
+                             //     2 ( 2) : Контрагент
+                             //     3 ( 4) : Валюта
+                             //     4 ( 8) : Входимость налогов
+                             //     5 (16) : Направление договора
+                             //     6 (32) : Плательщик
+                             //     7 (64) : Получатель платежа
+                             //     8 (128) : Не с нулевым остатком (SpDocs.Ostatok)
+                             Var Number_Screen  : word; // настройка предфильтра
+                             // по умолчанию установлено Number_Screen := FunctionID;
+                             // Number_Screen = 0 - не вызывать никаких фильтров
+                             Var DskParams      : longint; // можно самому настроить
+                             // фильтры, не вызывая 'BegFil' (Number_Screen = 0)
+                             Var wOtherParams   : word // Побитные параметры:
+                             // Бит 1 ( 1) : =1 - интерфейс закрывается по Enter
+                            );
+{
+  sTitle         := '';
+  sColumnSelect  := 'ДО';
+  Show_brSp      := 2; // показать для пометки
+  Show_brSpItogo := 1; // показать для просмотра
+  whc_User       := hcDogovorM1BatchFormDOPredOne;
+  sHelpLine      := 'V - пометка для формирования ДО; иначе есть ДО: 1->2-продажа, 2->1-закупка';
+
+  // Пометка только с одинаковыми:
+  CheckOnMark    :=  2 + //     2 ( 2) : Контрагент
+                     4 + //     3 ( 4) : Валюта
+                     8 + //     4 ( 8) : Входимость налогов
+                    16 + //     5 (16) : Направление договора
+                    32 + //     6 (32) : Плательщик
+                    64 ; //     7 (64) : Получатель платежа
+
+//  Number_Screen  := 1; - уже установлен в GETDOCS5.VIP через FunctionID
+//  DskParams      := DskParams or vcGetDog_NoFinKP; // не показывать финансовые КП
+}
+
+
+//------------------------------------------------------------------------------
+// для апдейта структуры в памяти (SGetDocs.scurDirect) на предмет
+// уже сформированных документов по договорам и занесения SpDocs.nRec
+// в маркер MMadeSpDog
+
+Function FillExistDocs (Var MMadeSpDog : longint;
+                            FunctionID : word // номер функции
+                       ) : word;
+Var
+  i
+           : word;
+
+Var
+  M_CalPl
+, M_AppDog
+, M_Dog
+           : longint;
+
+{
+  FillExistDocs := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+                 ''#3'Проверка сформированных ДО на предоплату...'#13#3,1);
+
+  M_CalPl  := InitMarker('MGetDocs_M_CalPl' ,8,100,10);
+  M_AppDog := InitMarker('MGetDocs_M_AppDog',8,100,10);
+  M_Dog    := InitMarker('MGetDocs_M_Dog'   ,8,100,10);
+
+  ClearMarker(M_CalPl );
+  ClearMarker(M_AppDog);
+  ClearMarker(M_Dog   );
+//  ResetBounds(#SGetDocs);
+
+  for ( i := 111; i <= 211; i := i + 100 )
+    _loop BaseDoc Where((i == BaseDoc.VidDoc))
+      if ( IsValid(#StepDoc) )
+        {
+          NextVisual;
+
+          _loop SpStep
+            if (   (SpStep.cSpDocs <> 0)
+               and (SpStep.cDogovor + SpStep.cAppDogovor + SpStep.cCalPlan <> 0) )
+              {
+                if ( GetFirst SpDocs = tsOk )
+                  InsertMarker(MMadeSpDog,SpDocs.nRec);
+
+                if ( SpStep.cCalPlan <> 0 )
+                  if ( not SearchMarker(M_CalPl, SpStep.cCalPlan, IndexDocs) )
+                    {
+                      if ( GetFirst SGetDocs Where((SpStep.cCalPlan == SGetDocs.cCalPlan)) = tsOk )
+                        {
+                          SGetDocs.scurDirect := if (i=111, '2->1', '1->2');
+
+                          Update current SGetDocs;
+                          InsertMarker(M_CalPl, SpStep.cCalPlan);
+
+                          continue;
+                        }
+                    }         // если убрать эти строки,
+                  else        // то пометится вся ветка вверх план/соглашение/договор
+                    continue; // если были формирования только по плану
+
+                if ( SpStep.cAppDogovor <> 0 )
+                  if ( not SearchMarker(M_AppDog, SpStep.cAppDogovor, IndexDocs) )
+                    {
+                      if ( GetFirst SGetDocs Where((SpStep.cAppDogovor == SGetDocs.nRec)) = tsOk )
+                        {
+                          SGetDocs.scurDirect := if (i=111, '2->1', '1->2');
+
+                          Update current SGetDocs;
+                          InsertMarker(M_AppDog, SpStep.cAppDogovor);
+
+                          continue;
+                        }
+                    }         // если убрать эти строки,
+                  else        // то пометится вся ветка вверх план/соглашение/договор
+                    continue; // если были формирования только по пнану
+
+                if ( SpStep.cDogovor <> 0 )
+                  if ( not SearchMarker(M_Dog, SpStep.cDogovor, IndexDocs) )
+                    {
+                      if ( GetFirst SGetDocs Where((SpStep.cDogovor == SGetDocs.nRec)) = tsOk )
+                        {
+                          SGetDocs.scurDirect := if (i=111, '2->1', '1->2');
+
+                          Update current SGetDocs;
+                          InsertMarker(M_Dog, SpStep.cDogovor);
+
+                          continue;
+                        }
+                    }         // если убрать эти строки,
+                  else        // то пометится вся ветка вверх план/соглашение/договор
+                    continue; // если были формирования только по пнану
+              }
+        }
+
+//  SetBounds(#SGetDocs);
+
+  DoneMarker(M_CalPl,  'MGetDocs_M_CalPl');
+  DoneMarker(M_AppDog, 'MGetDocs_M_AppDog');
+  DoneMarker(M_Dog,    'MGetDocs_M_Dog');
+
+  StopVisual('', 0);
+}
+
+//------------------------------------------------------------------------------
+// формирование документов по выбранным
+
+Function MakeDocBySelection ( Var MDog       : longint; // SGetDocs.nRec
+                              // если SGetDocs.wDocType=1..2, то  SGetDocs.nRec = dogovor.nRec
+                              // если SGetDocs.wDocType=4, то SGetDocs.cCalPlan = CalPlan.nRec
+                              Var MSpDog     : longint; // SpDocs.nRec
+                              Var MMadeSpDog : longint; // функция должна дополнить
+                              // этот маркер SpDocs.nRec, по которым были
+                              // сформированы документы и апдейтнуть
+                              // шапку договора SGetDocs.scurDirect
+                                  FunctionID : word; // номер функции
+                                  wParams    : word // параметры для формирования
+                             ) : word; //  (0 - сформировали успешно)
+{
+  MakeDocBySelection := 1; // пока статус ошибки
+
+  if ( Message(''#3+'Формировать ДО на предоплату ?', YesNo) <> cmYes )
+    Exit;
+
+  if DemoMode
+    {
+      Var pRecChecker : RecChecker;
+
+      if ( not pRecChecker.CheckBaseDocRecords(211) )
+        {
+          Abort;
+          Exit;
+        }
+
+      if ( not pRecChecker.CheckBaseDocRecords(111) )
+        {
+          Abort;
+          Exit;
+        }
+    }
+
+  if ( (MDog = 0) or (MSpDog = 0) or (MMadeSpDog = 0) )
+    {
+      Message( ''#3'Прикладная ошибка. Не инициализирован маркер'#13''
+             + ''#3'выбранных документов !', Error + CancelButton);
+      Exit;
+    }
+
+  if ( not GetMarker(MDog, 0, pickrec) )
+    {
+      Message( ''#3'Прикладная ошибка. В маркере нет документов !'
+             , Error + CancelButton);
+      Exit;
+    }
+
+  Var sErr : string;
+
+  sErr := '';
+
+  if ( GetFirst SGetDocs2 <> tsOk )
+    sErr := 'SGetDocs2';
+
+  if ( SGetDocs2.wDocType = 4 )
+    if ( GetFirst CalPlan <> tsOk )
+      sErr := 'CalPlan';
+
+  if ( GetFirst dogApp <> tsOk )
+    sErr := 'DogApp';
+
+  if ( GetFirst dogovor <> tsOk )
+    sErr := 'Dogovor';
+
+  if ( sErr <> '' )
+    {
+      if ( sErr <> 'SGetDocs2' )
+        sErr := sErr + '.'#13#3'Проведите проверку КОУ - Иерархии договоров и КП';
+
+      Message( ''#3'Прикладная ошибка. Не найдена запись из таблицы ' + sErr + ' !'
+             , Error + CancelButton);
+      Exit;
+    }
+
+  //---------------------------------------------------------------
+  // Пакетное формирование формирование ДО на предоплату по договорам/соглашениям/планам
+
+  InitNalServ;
+  StartNewVisual(vtRotateVisual, 0, ''#3 + 'Создание ДО на предоплату по договорам', 1);
+
+  if ( not ReadMyDsk(v_ProcOpl, 'Dog2DO_v_ProcOpl', true) )
+    v_ProcOpl := 100;
+
+  Var
+    i
+             : word;
+
+  Var
+    ferr
+  , SomeMade
+             : boolean;
+
+  ferr := true;
+
+  if ( MakeBaseDocByCurrentDogApp )
+    {
+      prot.write(' ДО на предоплату № ' + BaseDoc.NoDoc +
+                 ' от ' + DateToStr(BaseDoc.dDoc,'DD/MM/YYYY') +
+                 if (BaseDoc.vidDoc=211, ' (продажа)', ' (закупка)') +
+                 if (SGetDocs2.IsFinPKP, '', ' сформировано по спецификациям из:'));
+
+      First_SpStep := true;
+
+      for ( i := 1; i <= GetMarkerCount(MDog); inc(i) )
+        {
+          if ( not GetMarker(MDog, i - 1, pickrec) )
+            continue;
+
+          if ( GetFirst SGetDocs2 <> tsOk )
+            continue;
+
+          if ( SGetDocs2.wDocType = 4 )
+            if ( GetFirst CalPlan <> tsOk )
+              continue;
+
+          if ( GetFirst dogApp  <> tsOk )
+            continue;
+
+          if ( GetFirst dogovor <> tsOk )
+            continue;
+
+          SomeMade := SGetDocs2.IsFinPKP;
+
+          _loop SpDocs2
+            {
+              if ( not SearchMarker(MSpDog, SpDocs2.nRec, IndexDocs) )
+                continue;
+
+              NextVisual;
+
+              if ( not MakeSpStepByCurrentDogApp )
+                continue;
+
+              InsertMarker(MMadeSpDog,SpDocs2.nRec);
+
+              Del_true_SpMarker( MSpDog
+                               , SpDocs2.nRec
+                               , SpDocs2.prMC
+                               , SpDocs2.cGrMCUsl
+                               , SpDocs2.cMCUsl
+                               , SpDocs2.cOtpEd
+                               , SpDocs2.cVal
+                               , SpDocs2.Price
+                               , SpDocs2.Kol
+                               , SpDocs2.Summa);
+
+              SomeMade := true;
+
+              Update current SpDocs2;
+            }
+
+          UpdateSpStepUslReference;
+
+          if ( SomeMade )
+            {
+              SGetDocs2.scurDirect := if (BaseDoc.vidDoc=111, '1<-2', '1->2');
+
+              Update current SGetDocs2;
+              DeleteMarker(MDog,SGetDocs2.nRec);
+
+              dec(i);
+              prot.write(' - договор № '+Dogovor.NoDoc+' от ' +
+                         DateToStr(Dogovor.dDoc,'DD/MM/YYYY') +
+                         if (SGetDocs2.cAppDogovor<>0,
+                             ' - соглашение № '+DogApp.NoDoc+' от ' +
+                               DateToStr(DogApp.dDoc,'DD/MM/YYYY')
+                             ,'') +
+                         if (SGetDocs2.cCalPlan<>0,
+                             ' - пункт календарного плана № '+CalPlan.NoDoc,'') );
+            }
+        }
+
+      if ( (GetFirst SpStep <> tsOk) and (not SGetDocs2.IsFinPKP) )
+        {
+          delete current StepDoc;
+          delete current BaseDoc;
+
+          piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocDelete); // (Платежный календарь) :: F_OFP
+        }
+      else //расчет сумм по ДО
+        {
+          Var SavedNDS : double;
+
+          if ( SGetDocs2.IsFinPKP )
+            SavedNDS := BaseDoc.NDS;
+          else
+            {
+              TipDO               := BaseDoc.vidDoc;
+              Zapret              := 0;
+              NeedTotalCount      := true;
+              BaseDoc.cDogovor    := Genegal_Dogovor;
+              BaseDoc.cAppDogovor := Genegal_AppDogovor;
+              BaseDoc.cCalPlan    := Genegal_CalPlan;
+
+              if ( Genegal_Dogovor = 0 )
+                BaseDoc.Name := 'Сформировано выборочно по нескольким документам';
+            }
+
+          ModifDO;  // пар-ры не играют роли
+
+          if ( SGetDocs2.IsFinPKP )
+            {
+              BaseDoc.NDS := SavedNDS;
+              Update current BaseDoc;
+
+              piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocUpdate); // (Платежный календарь) :: F_OFP
+            }
+
+          InsertTTNDoc;
+
+          if ( RecordExists SoprHoz = tsOk )
+            UpDateDoSoprHoz
+          else
+            InsertDoSoprHoz;
+
+          InsertSpGrSch;
+
+          ferr := false;
+        }
+
+      StopVisual('', 0);
+
+      if ( prot.Error or ferr )
+        prot.AbortForm;
+      else
+        {
+          prot.putEvent(feBreak);
+          prot.ShowFile('Протокол пакетного формирования ДО на предоплату');
+
+          if ( Message(''#3'Распечатать сформированные документы ?', Confirmation+YesNo) = Yes )
+            {
+              delete Pick Where((word(15) == Pick.wList));
+
+              Pick.wList   := 15;
+              Pick.PickNum := 100;
+              Pick.PickKol := 0;
+              Pick.cRec    := BaseDoc.nRec;
+
+              Insert current Pick;
+
+              RunInterface('PrnDocs', word(0));
+
+              delete Pick Where((word(15) == Pick.wList));
+            }
+        }
+    }
+  else
+    StopVisual('', 0);
+
+  doneNalServ;
+
+  if ( ferr )
+    Message(''#3'ДО на предоплату не сформировано !', Information);
+
+  MakeDocBySelection := 0;
+} // MakeDocBySelection
+
+//------------------------------------------------------------------------------
+
+HandleEvent
+
+cmInit :
+  Abort;
+
+end;
+
+End. // Interface

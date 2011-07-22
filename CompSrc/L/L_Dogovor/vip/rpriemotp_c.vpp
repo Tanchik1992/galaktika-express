@@ -1,0 +1,312 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Общие функщии для Распоряжений на прием-отпуск
+//******************************************************************************
+
+Create View LoOtgOrder
+From
+  KatSopr
+, SpSopr
+;
+
+//******************************************************************************
+
+Procedure RPriemOtp_Sh_NoDoc_Del(_NoDoc, _Descr: string; _dSopr: date);
+{
+  DelLastNumD_(word(442), _Descr + string(Year(_dSopr)), _NoDoc);
+}
+
+//******************************************************************************
+
+Procedure RPriemOtp_Sh_NoDoc( _Descr         : string
+                            ; _dSopr         : date
+                            ; var _NoDoc     : string
+                            );
+{
+  RPriemOtp_Sh_NoDoc_Del(_NoDoc, _Descr, _dSopr);
+  _NoDoc := GetLastNumD__(word(442), _Descr + string(Year(_dSopr)), 6);
+}
+
+//******************************************************************************
+// удаление SpOtgOrd
+Function Delete_SpOtgOrd(varcSpOtgOrd : comp) : boolean;
+{
+  Delete_SpOtgOrd := FALSE;
+
+  if (LoOtgOrder.GetFirst SpSopr where (( varcSpOtgOrd == SpSopr.nRec )) = tsOk)
+    {
+      //-- удаление привязанных ДЕИ
+      piKatDopEd.SpDopEd_Delete(coSpSopr, LoOtgOrder.SpSopr.nRec, LoOtgOrder.SpSopr.VidSopr);
+      Delete_SpOtgOrd := LoOtgOrder.delete current SpSopr = tsOk;
+    }
+
+}
+
+//******************************************************************************
+// удаление OtgOrder
+Function Delete_OtgOrder(varcOtgOrder : comp) : boolean; // удаление OtgOrder
+Var
+  varcOwner
+     : comp;
+{
+  Delete_OtgOrder := False;
+
+  if ( LoOtgOrder.GetFirst KatSopr where (( varcOtgOrder == KatSopr.nRec )) = tsOk)
+    {
+      LoOtgOrder.external _loop SpSopr where (( varcOtgOrder == SpSopr.cSopr ))
+        Delete_SpOtgOrd(LoOtgOrder.SpSopr.nRec);
+
+      oStatlog.StatLog_Delete(word(442), LoOtgOrder.KatSopr.nRec);
+      RPriemOtp_Sh_NoDoc_Del(LoOtgOrder.KatSopr.NSopr, LoOtgOrder.KatSopr.Descr, LoOtgOrder.KatSopr.dSopr);
+      LoOtgOrder.delete current KatSopr;
+
+      Delete_OtgOrder := True;
+    }
+}
+
+//******************************************************************************
+
+Function ReCountSpec(pcKatRec: comp): word;
+Var
+  i: word;
+{
+  i := 1;
+
+  LoOtgOrder.external _loop SpSopr where (( pcKatRec == SpSopr.cSopr ))
+    {
+      LoOtgOrder.update current SpSopr set SpSopr.Npp := i;
+      i := i + 1;
+    }
+
+  ReCountSpec := i;
+}
+
+//******************************************************************************
+
+Function SelectDog: boolean;
+{
+  SelectDog := false;
+
+  if ( NullVipRef(pRunDSel) )
+    if ( not (LoadVipRef(pRunDSel, 'RunDocSelections')) )
+      {
+        Message('Не удалось загрузить библиотеку RunDocSelObj', Error);
+        Exit;
+      }
+
+  if ( pRunDSel.F3( KatSopr.cDogovor
+                  , KatSopr.cAppDogovor
+                  , comp(0)
+                  , 1                // откуда вызвали: 1 - договор, 2 - соглашение
+                  , 2                // фильтр только по исполняемым
+                  , 2                // только на закупку
+                  ) <> cmCancel )
+    {
+      set KatSopr.cDogovor := KatSopr.cDogovor;
+
+      SelectDog := true;
+
+      if (GetFirst Dogovor where ((KatSopr.cDogovor == Dogovor.NRec)) = tsOk )
+        {
+          set KatSopr.cGruzFrom := Dogovor.cGrOtp;
+          set KatSopr.cGruzTo   := Dogovor.cGrPol;
+          set KatSopr.cOrgBase  := Dogovor.cOrg;
+          set KatSopr.VhodNal   := Dogovor.VhodNal
+        }
+
+      update current KatSopr;
+    }
+
+  FreeVipInterface(pRunDSel);
+}
+
+//******************************************************************************
+
+Function SelectSogl: boolean;
+{
+  SelectSogl := false;
+
+  if ( NullVipRef(pRunDSel) )
+    if ( not (LoadVipRef(pRunDSel, 'RunDocSelections')) )
+      {
+        Message('Не удалось загрузить библиотеку RunDocSelObj', Error);
+        Exit;
+      }
+
+  if ( pRunDSel.F3( KatSopr.cDogovor
+                  , KatSopr.cAppDogovor
+                  , comp(0)
+                  , 2                // откуда вызвали: 1 - договор, 2 - соглашение
+                  , 2                // фильтр только по исполняемым
+                  , 2                // только на закупку
+                  ) <> cmCancel )
+    {
+      set KatSopr.cDogovor    := KatSopr.cDogovor;
+      set KatSopr.cAppDogovor := KatSopr.cAppDogovor;
+
+      SelectSogl := true;
+
+      if (GetFirst Dogovor where ((KatSopr.cAppDogovor == Dogovor.NRec)) = tsOk)
+        {
+          set KatSopr.cOrgBase  := Dogovor.cOrg;
+          set KatSopr.cGruzFrom := Dogovor.cGrOtp;
+          set KatSopr.cGruzTo   := Dogovor.cGrPol;
+          set KatSopr.VhodNal   := Dogovor.VhodNal
+        }
+
+      update current KatSopr;
+    }
+
+  FreeVipInterface(pRunDSel);
+}
+
+//******************************************************************************
+
+Procedure PickMCKat;
+Var i  : word;
+Var cmc: comp;
+{
+  cmc := SpSopr.cMCUsl;
+
+  if (RunInterface(GetSomeMC, cmc) = cmCancel)
+    Exit;
+
+  if ( GetFirst Pick where (( word(7) == Pick.wList)) ordered by index Pick02 = tsOk )
+    {
+      if ( not isNew )
+        Delete_SpOtgOrd(SpSopr.nRec);
+
+      i := ReCountSpec(KatSopr.nRec);
+
+      StartNewVisual(vtNumericVisual, vfTimer, 'Добавление помеченных позиций', 1);
+
+      _loop Pick where (( word(7) == Pick.wList )) ordered by index Pick02
+        {
+          NextVisual;
+
+          ClearBuffer(#SpSopr);
+
+          SpSopr.NRec    := comp(0);
+          SpSopr.Npp     := i;
+          SpSopr.cMcUsl  := Pick.cRec;
+          SpSopr.cOtpEd  := fEdIzm.GetUchOtpEdNRec(Pick.cRec, 1);
+          SpSopr.cSopr   := KatSopr.NRec;
+          SpSopr.VidSopr := KatSopr.VidSopr;
+          SpSopr.KolFact := CheckKolSpSopr(KatSopr.nRec, Pick.cRec, SpSopr.cOtpEd, Pick.PickKol, comp(0), FALSE);
+          SpSopr.PrMC    := word(1);
+
+          if insert current SpSopr <> tsOk
+            { }
+
+          if ( SpSopr.PrMC = 1 )
+            {
+              oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 1, 0, SpSopr.Kolfact, 0);
+              oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 2, 0, SpSopr.Kol,     0);
+              oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 3, 0, SpSopr.KolOpl,  0);
+            }
+
+          CheckSumma(FALSE);
+          i := i + 1;
+        }
+
+      StopVisual('', 0);
+    }
+
+  RereadRecord(#SpSopr);
+}
+
+//******************************************************************************
+
+Procedure PickMCSogl;
+Var i  : word;
+{
+  if (RunInterface('GetSpDog',if (KatSopr.cAppDogovor <> comp(0), KatSopr.cAppDogovor, KatSopr.cDogovor), word(1), word(1), word(3333)) = cmCancel)
+    Exit;
+
+  if ( GetFirst Pick where (( word(3333) == Pick.wList)) ordered by index Pick02 = tsOk )
+    {
+      if ( not isNew )
+        if (IsValid(#SpSopr))
+          Delete_SpOtgOrd(SpSopr.nRec);
+
+      i := ReCountSpec(KatSopr.nRec);
+
+      StartNewVisual(vtNumericVisual, vfTimer, 'Добавление помеченных позиций', 1);
+
+      _LOOP Pick where ((word(3333) == Pick.wList))
+        {
+          if ( GetFirst SpDocs where (( Pick.cRec == SpDocs.nRec )) <> tsOk )
+            continue;
+
+          if ( SpDocs.PrMC <> 1 )
+            continue;
+
+          ClearBuffer(#SpSopr);
+
+          SpSopr.Npp     := ReCountSpec(KatSopr.NRec);
+          SpSopr.cMcUsl  := SpDocs.cMCUsl;
+          SpSopr.cOtpEd  := SpDocs.cOtpEd;
+          SpSopr.cSopr   := KatSopr.NRec;
+          SpSopr.VidSopr := KatSopr.VidSopr;
+
+          SpSopr.KolFact := CheckKolSpSopr(KatSopr.nRec, SpDocs.cMCUsl, SpSopr.cOtpEd, Pick.PickKol, comp(0), FALSE);
+          SpSopr.Price   := SpDocs.Price;
+          SpSopr.PrMC    := word(1);
+          SpSopr.cSpDocs := SpDocs.NRec;
+          SpSopr.cUks    := oMTRFun.GetObjUKS(coSpDocs, SpDocs.NRec);
+
+          insert current SpSopr;
+
+          if ( SpSopr.PrMC = 1 )
+            {
+              oDEIfuns.CopyDEISpDocsToSpSopr(SpDocs.NRec, SpSopr.NRec, SpSopr.VidSopr, word(2), SpDocs.Kol, word(1), SpSopr.KolFact);
+              oDEIfuns.CopyDEISpDocsToSpSopr(SpDocs.NRec, SpSopr.NRec, SpSopr.VidSopr, word(2), SpDocs.Kol, word(2), SpSopr.Kol);
+              oDEIfuns.CopyDEISpDocsToSpSopr(SpDocs.NRec, SpSopr.NRec, SpSopr.VidSopr, word(2), SpDocs.Kol, word(3), SpSopr.KolOpl);
+            }
+
+          if (SpDocs.TiDk = 438)
+            oMTRFun.CopySpecMTR(coSpDocs, SpDocs.cDoc, coSpSopr, SpSopr.nRec)
+          else
+            oMTRFun.CopySpecMTR(coSpDocs, SpDocs.nRec, coSpSopr, SpSopr.NRec);
+
+          CheckSumma(FALSE);
+        }
+
+      StopVisual('', 0);
+    }
+
+  RereadRecord(#SpSopr);
+}
+
+//******************************************************************************
+
+Procedure CopyVagonSpec;
+{
+  PushPos(#SpSopr);
+
+  StartNewVisual(vtNumericVisual, vfTimer, 'Редактирование спецификации:'#13#3,1);
+  
+  _LOOP SpSopr where (( KatSopr.nRec == SpSopr.cSopr))
+    {
+      NextVisual;
+
+      SpSopr.cNMoveCell := KatSopr.cNMoveCell;
+      SpSopr.cCellVal   := KatSopr.cCellVal;
+      SpSopr.nVagon     := KatSopr.nVagon;
+      SpSopr.cTransp    := KatSopr.cTransp;
+
+      update current SpSopr;
+    }
+           
+  StopVisual('',0);
+  
+  PopPos(#SpSopr);
+
+  if (isValid(#Vagon)) 
+    ClearFieldOption(#SpSopr.nVagon, ofSelectable)
+  else
+    SetFieldOption(#SpSopr.nVagon, ofSelectable);
+
+  ReDrawPanel(#SpSopr);
+}

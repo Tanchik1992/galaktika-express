@@ -1,0 +1,1095 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Формирование спецификации ДО из складских разрезов
+//
+//******************************************************************************
+
+#define __DORES_VIP__
+
+#define _RETTARA_
+
+#include notes.vih
+#include spdocs.vih
+#include TekRun.vih
+#include oEdIzm.vih
+#include SpNext.vih
+#include DOfuns.vih
+#include DOTara.vih
+
+#doc
+Интерфейс формирования позиций спецификации ДО с резервированием по складским остаткам
+#end
+
+Interface DoResCreator 'Пополнение спецификации ДО' ('', hcm_sell_Popolnen_Sp_DO) EscClose, Cyan, AlwaysReturn;
+  Show at (,, 120, 25);
+
+//******************************************************************************
+#include tekrun.var
+#include oEdIzm.var
+#include SpNext.var
+#include DOfuns.var
+#include DOTara.var
+//******************************************************************************
+
+Table STRUCT NewSpSteps ""
+(
+  NPP    : word
+, nRec   : comp
+, cPodr  : comp
+, cMOL   : comp
+, cParty : comp
+, cSpStep: comp
+, cMC    : comp
+, Kol    : double
+, Price  : double
+)
+With Index
+(
+  NewSpSteps01 = nRec
+, NewSpSteps02 = cPodr + cMOL + cParty + cMC
+, NewSpSteps03 = NPP
+)
+;
+
+//******************************************************************************
+Function GetSrPrice(pMC, pPodr, pMOL, pParty : comp) : double; forward;
+//******************************************************************************
+
+Function GetKolFromMarker(Marker, MarkerKol : longint; pTekSaldo : comp) : double;
+var
+  Ind : longint;
+  k   : double;
+{
+  GetKolFromMarker := 0.0;
+
+  if SearchMarker(Marker, pTekSaldo, Ind)
+    if GetMarker(MarkerKol, Ind, k)
+      GetKolFromMarker := k;
+}
+
+//******************************************************************************
+
+Create view vDoRes
+
+Var
+  nRecDO
+, NewNrec
+, fltSklad
+, fltMOL
+, fltParty
+, ppPodr
+, ppMOL
+
+   : comp;
+
+  Marker
+, MarkerKol
+, MarkerZ
+, Ind
+   : longint;
+
+  SemaphoreName
+   : string;
+
+  PickKol
+, PickSum
+, OE_Koef
+   : double;
+
+  OnBaseDocSklad
+   : boolean;
+
+As select
+//******************************************************************************
+  GetKolFromMarker(Marker, MarkerKol, TekSaldo2.nRec)
+    ( FieldName = SelKol )
+//******************************************************************************
+, TekSaldo2.Kol / OE_Koef
+    ( FieldName = vKolAktSkl )
+//******************************************************************************
+, TekSaldo2.Res / OE_Koef
+    ( FieldName = vReservSkl )
+//******************************************************************************
+, vKolAktSkl - vReservSkl
+    ( FieldName = vFreeSkl )
+//******************************************************************************
+, GetSrPrice(KatMC.nRec, TekSaldo2.cPodr, TekSaldo2.cMOL, TekSaldo2.cParty)
+    ( FieldName = SaldoPrice )
+//******************************************************************************
+, *
+//******************************************************************************
+
+From
+  NewSpSteps (NewSpSteps03)
+, DoRes
+, TekSaldo TekSaldo2 (TekSaldo03)
+, TekSaldo TekSaldo3
+, KatPodr
+, KatPodr  KatPodr2
+, KatPodr  KatPodr3
+, KatMOL
+, KatMOL   KatMOL2
+, KatMOL   KatMOL3
+, KatParty
+, KatParty KatParty2
+, KatParty KatParty3
+, KatParty KatParty4
+, SpStep
+, KatMC
+, KatMC KatMC2
+, KatPodr fltKatPodr
+, KatMOL  fltKatMOL
+
+Where
+((
+
+    nRecDO            == StepDoc.nRec
+and StepDoc.cBaseDoc  == BaseDoc.nRec
+
+and NewSpSteps.nRec   == DoRes.nRec
+and NewSpSteps.cMC    == KatMC2.nRec
+
+and NewSpSteps.cPodr  == KatPodr.nRec
+and NewSpSteps.cMOL   == KatMol.nRec
+and NewSpSteps.cParty == KatParty.nRec
+
+and KatMC.nRec        == TekSaldo2.cMC
+
+and TekSaldo2.cPodr   == KatPodr2.nRec
+and TekSaldo2.cMOL    == KatMOL2.nRec
+and TekSaldo2.cParty  == KatParty2.nRec
+
+and ppPodr            == fltKatPodr.nRec
+and ppMOL             == fltKatMOL.nRec
+
+))
+
+//******************************************************************************
+
+Bounds byName ordered by KatMC.Name  , KatMC.BarKod
+Bounds byKod  ordered by KatMC.BarKod, KatMC.Name
+
+//******************************************************************************
+Bounds OnSklad = fltSklad == TekSaldo2.cPodr
+Bounds OnMOL   = fltMOL   == TekSaldo2.cMol
+Bounds OnParty = fltParty == TekSaldo2.cParty
+//******************************************************************************
+
+;
+
+Parameters
+  nRecDO   // ссылка на документ-основание (StepDoc.nRec)
+;
+
+ToolBar
+#ifdef ComponentVersion
+  F_Common::tbBuhFilter
+#else
+  tbBuhFilter
+#end
+;
+
+Procedure SetMyTitle;
+var
+  tmpS: string;
+{
+  if BoundActive(tbOnSklad)
+    tmpS := 'складу'
+  else
+    tmpS := '';
+
+  if BoundActive(tbOnMOL)
+    tmpS := tmpS + if(tmpS = '', '', ', ') + 'МОЛ';
+
+  if BoundActive(tbOnParty)
+    tmpS := tmpS + if(tmpS = '', '', ', ') + 'партии';
+
+  SetTitle('Пополнение спецификации ДО' + if(tmpS = '', '', '. (Фильтр по ' + tmpS + ')'));
+}
+
+//******************************************************************************
+//******************************************************************************
+//******************************************************************************
+//******************************************************************************
+#doc
+Окно установки фильтра по складу и МОЛ
+#end
+Window winFilter 'Фильтр по складу и МОЛ' Gray, doAccept, EscClose;
+  Show at (, , 52, 7);
+
+Panel pFilter;
+
+Screen scFilter (, , sci13EnEsc);
+Fields
+  fltKatPodr.Name: Protect;
+  fltKatMOL.Name : Protect;
+Buttons
+  cmYes , Default, , 'Установить фильтр', hcNoContext, sci1Esc;
+  cmCancel , , , 'Снять фильтр', hcNoContext, sci1Esc;
+<<
+
+ `Склад`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `МОЛ`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  <.Продолжить.>        <. Отмена   .>
+>>
+end; // Screen
+
+HandleEvent
+
+cmDelOnProtect:
+{
+  case CurField of
+    #fltKatPodr.Name: set ppPodr := 0;
+    #fltKatMOL.Name : set ppMOL  := 0;
+  end; //case
+}
+
+cmPick:
+{
+  case CurField of
+    #fltKatPodr.Name:
+      RunInterface('GetAnyPodr', ppPodr, 1);
+
+    #fltKatMOL.Name:
+      RunInterface('GetMol', ppMOL, ppPodr);
+  end; //case
+
+}
+end; // HandleEvent
+end; // pFilter
+
+HandleEvent
+
+cmInit:
+  {
+    if ( BaseDoc.cParty <> 0 ) AND OnBaseDocSklad
+      {
+        ClearFieldOption(#fltKatPodr.Name, ofSelectable);
+
+        if boGetTune('Pick.AvtoMol')
+          ClearFieldOption(#fltKatMOL.Name, ofSelectable);
+      }
+    else
+      {
+        if ExistTune('ResRestrict.cSklad')
+          if ( coGetTune('ResRestrict.cSklad') <> 0 )
+            ClearFieldOption(#fltKatPodr.Name, ofSelectable);
+
+        if ExistTune('ResRestrict.cMOL')
+          if ( coGetTune('ResRestrict.cMOL') <> 0 )
+            ClearFieldOption(#fltKatMOL.Name, ofSelectable);
+      }
+
+    ppPodr := fltSklad;
+    ppMOL  := fltMOL;
+  }
+
+cmYes:
+  {
+    fltSklad := ppPodr;
+    fltMOL   := ppMOL;
+
+    if ( ( fltSklad = 0 ) AND BoundActive(tbOnSklad) )
+      SubBounds(tbOnSklad);
+
+    if ( ( fltSklad <> 0 ) AND Not BoundActive(tbOnSklad) )
+      AddBounds(tbOnSklad);
+
+    if ( ( fltMOL = 0 ) AND BoundActive(tbOnMOL) )
+      SubBounds(tbOnMOL);
+
+    if ( ( fltMOL <> 0 ) AND Not BoundActive(tbOnMOL) )
+      AddBounds(tbOnMOL);
+
+    SetMyTitle;
+
+    RereadRecord(#TekSaldo2);
+
+    PutCommand(cmDefault);
+  }
+end; // HandleEvent
+
+end; // winFilter
+
+//******************************************************************************
+
+var oNotes : iNotes;
+
+//********************************************************************************
+// Расчет средней цены по разрезу
+//********************************************************************************
+Function GetSrPrice(pMC, pPodr, pMOL, pParty : comp) : double;
+{
+  var cPosVal : comp;
+
+  cPosVal := StepDoc.cVal;
+
+  //если многовалютный учет и указана партия
+  if ( boGetTune('Oper.MultiCurrReg') AND ( pParty <> 0 ) )
+    if ( GetFirst FastFirstRow KatParty4 where (( pParty == KatParty4.nRec )) = tsOk )
+      cPosVal := KatParty4.cValPar; //валюта партии
+
+  StepMCInfo(pMC
+           , cPosVal
+           , if(pPodr  = 0, -1, pPodr)
+           , if(pMOL   = 0, -1, pMOL)
+           , if(pParty = 0, -1, pParty));
+
+  GetSrPrice := AveragePrice;
+
+  if ( StepDoc.cVal <> 0 )
+    if ( cPosVal = StepDoc.cVal )
+      GetSrPrice := AverageVPrice
+    else
+      GetSrPrice := oValFunc.GetAnyCurrency(cPosVal, AverageVPrice, BaseDoc.dDoc, StepDoc.cVal);
+
+  GetSrPrice := GetSrPrice * fEdIzm.GetAktOtpEdKoef(pMC, 1);
+}
+
+//********************************************************************************
+// Добавление новой позиции в спецификацию ДО
+//********************************************************************************
+Function AddNewSpStep : comp;
+{
+  AddNewSpStep := -1;
+
+//******************************************************************************
+  ClearBuffer(#SpStep);
+
+  SpStep.dDoc     := BaseDoc.dDoc;
+  SpStep.cMcUsl   := KatMC.nRec;
+  SpStep.PrMC     := 1;
+  SpStep.cMasEd   := KatMC.cMasEd;
+  SpStep.Netto    := KatMC.Massa;
+  SpStep.mTara    := KatMC.mTara;
+  SpStep.cGrNal   := KatMC.cGrNal;
+  SpStep.cStepDoc := StepDoc.nRec;
+  SpStep.cVal     := StepDoc.cVal;
+  SpStep.cParty   := TekSaldo3.cParty;
+  SpStep.PrSkid   := 1;
+
+  SpStep.cOtpEd := fEdIzm.GetAktOtpEdNrec(KatMC.nRec, 1);
+
+  if ( SpStep.cOtpEd = 0 )
+    Message('Не задана активная отпускная единица измерения для ' + KatMC.Name + '!',Warning);
+
+  SpStep.Npp     := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+  SpStep.SrokRes := Add_Day(if(wGetTune('Reserv.CalcSrokReserv') = 0, Cur_Date, BaseDoc.dDoc), wGetTune('Reserv.SrokReserv'));
+  SpStep.Price   := GetSrPrice(SpStep.cMcUsl, TekSaldo3.cPodr, TekSaldo3.cMOL, TekSaldo3.cParty);
+
+  if ( insert current SpStep <> tsOK )
+    {
+      message('Ошибка добавления записи в спецификацию!', Warning);
+      AbortTransaction;
+      fTekRun.SwitchSemaphore(false, KatMC.nRec);
+      Exit;
+    }
+
+  InsertMarker(MarkerZ, SpStep.nRec);
+
+  AddNewSpStep := SpStep.nRec;
+
+  if ((BaseDoc.Direct = 1) AND boGetTune('Tara.AutoPaste')) OR
+     ((BaseDoc.Direct = 2) AND boGetTune('Tara.AutoPaste_Buy'))
+  {
+    oDOTara.InsertTara(SpStep.cOtpEd, SpStep.NRec, SpStep.cStepDoc, SpStep.KolSkl, SpStep.cParty);
+    oDOTara.ChangeNppStepDoc(SpStep.cStepDoc);
+    ReReadRecord(#SpStep);
+  }
+}
+
+//********************************************************************************
+// bParam = true  - установить семафор
+// bParam = false -      снять семафор
+//********************************************************************************
+Function SwitchDoResSemaphore(bParam : boolean) : boolean;
+{
+  SwitchDoResSemaphore := if ( bParam, SetSemaphore(SemaphoreName, 0), ClearSemaphore(SemaphoreName)) = tsOk;
+}
+
+//********************************************************************************
+// Ожидание освобождения семафора
+//********************************************************************************
+Function WaitDoResSemaphore : boolean;
+var
+  res_   : boolean;
+  sMode_ : byte
+{
+  res_ := true;
+
+  if ( isSemaphore(SemaphoreName, sMode_) )
+    {
+      StartNewVisual(vtRotateVisual, vfTimer + vfBreak + vfConfirm,
+                     'Ожидание завершения процесса инициированного другим пользователем.', 1);
+
+      While isSemaphore(SemaphoreName, sMode_) do
+        if ( not NextVisual )
+          {
+            res_ := false;
+            Break;
+          }
+
+      StopVisual('', 0);
+    }
+
+  WaitDoResSemaphore := res_;
+}
+
+//******************************************************************************
+Procedure ClearPick;
+{
+  set PickKol := 0.0;
+  set PickSum := 0.0;
+
+  ClearMarker(Marker);
+  ClearMarker(MarkerKol);
+
+  RereadRecord(#TekSaldo2);
+}
+//******************************************************************************
+
+Panel pKatMC
+  Table KatMC;
+
+Browse br1 (,,sci1EnEsc);
+  Show at (,, 40, 15);
+
+Fields
+  KatMC.Name   #3'МЦ'           : [20], Protect;
+  KatMC.BarKod #3'Номенк.номер' : [12], Protect;
+  fEdIzm.GetAktOtpEdAbbr(KatMC.nRec, 1)
+               #3'ЕдИзм'        :  [5], Skip, Centered, NoAutoSize, {Font = {Italic = TRUE}};
+end;
+
+HandleEvent
+
+cmPositionChanged:
+  {
+    OE_Koef := fEdIzm.GetAktOtpEdKoef(KatMC.nRec, 1)
+
+    ClearPick;
+  }
+
+end;
+
+end; //Panel
+
+Procedure ChangePickKol(kk : double);
+{
+  set PickKol := PickKol + kk;
+
+  if f_KolIsPositive(PickKol)
+    set PickSum := PickSum + kk * GetSrPrice(TekSaldo2.cMC, TekSaldo2.cPodr, TekSaldo2.cMOL, TekSaldo2.cParty)
+  else
+    {
+      set PickKol := 0.0;
+      set PickSum := 0.0;
+    }
+}
+
+Panel pTekSaldo2
+  Table TekSaldo2;
+
+Browse br2 (,,sci1EnIns);
+  Show at (41,,, 13);
+
+Fields  { Font = { Bold = f_KolIsPositive(SelKol); Color = if(f_KolIsPositive(SelKol), ColorMark, 0) }};
+  SelKol         #3'Количество' : [10], [prsignsinkol], NoProtect, NoAutoSize, LessNull,
+    { Font = { Color = if(f_KolIsPositive(SelKol), if(f_FirstKolIsGreater(SelKol, vFreeSkl), ColorError, ColorMark), 0) } };
+  SaldoPrice     #3'Ср.цена'    : [10], [brForSumma], Protect, NoAutoSize;
+  KatPodr2.Name  #3'Склад'      : [12], Skip;
+  KatMOL2.Name   #3'МОЛ'        : [12], Skip, NoAutoSize;
+  KatParty2.Name #3'Партия'     : [12], Skip;
+  vKolAktSkl     #3'Наличие'    : [8], [prsignsinkol], Skip   , NoAutoSize;
+  vReservSkl     #3'Резерв'     : [8], [prsignsinkol], Skip   , NoAutoSize, LessNull;
+  vFreeSkl       #3'Свободно'   : [8], [prsignsinkol], Protect, NoAutoSize, { Font = { Bold = true } };
+end;
+
+Screen scr1 (,,sci1EnEsc)
+  Show at (41, 14,, 15);
+
+Fields
+  PickKol : [prsignsinkol], Skip, Right, { Font = { Bold = true } };
+  PickSum : [brForSumma]  , Skip, Right, { Font = { Bold = true } };
+Buttons
+  cmValue1,Default,,'Добавить в спецификацию ДО',,sci1Esc;
+<<
+   Общее количество .@@@@@@@@@@@@@@@@@    <. Добавить в спецификацию ДО .>
+   Общая сумма      .@@@@@@@@@@@@@@@@@
+>>
+end;
+
+//******************************************************************************
+
+HandleEvent
+
+cmExprFieldChanged:                         // меняем вычисляемое поле
+  if ( CurField = #SelKol )
+    {
+      // запоминаем значение SelKol
+      var kk, OldKol : double;
+
+      kk     := double(ExprFieldValue);
+      OldKol := double(OldFieldValue);
+
+      var IsEdit : boolean; IsEdit := SearchMarker(Marker, TekSaldo2.nRec, Ind);
+
+      // перечитываем запись из базы
+      RereadRecord(#TekSaldo2);
+
+      if (
+          ( fEdIzm.GetDiskrOtpEd(fEdIzm.GetAktOtpEdNrec(KatMC.nRec, 1)) = 1 )
+           AND
+          f_FirstKolIsGreater(kk, Trunc(kk))
+         )
+        {
+          Message('Количество не может быть дробным!'#13'Отпускная единица измерения является неделимой.', Information);
+          Exit;
+        }
+
+      // ввели больше чем свободный остаток
+      if ( (( kk - OldKol) > vFreeSkl ) AND f_FirstKolIsGreater(kk - OldKol, vFreeSkl) )
+        case wGetTune('Reserv.OverOstatok') of
+          0:    // запрещать
+            {
+              message('Количество не может быть больше, чем '
+                    + DoubleToStr(OldKol + vFreeSkl, '\3p[|-]36`666`666.888') + '!', Warning);
+              Exit;
+            }
+          1:
+            {
+              if ( message('Количество больше остатка по МЦ.'#13
+                         + if(IsEdit, 'Оставить', 'Пометить') + ' ?', YesNo + Confirmation) <> cmYes )
+                Exit;
+            }
+        end;
+
+      if ( IsEdit )
+        {
+          ChangePickKol(kk - GetKolFromMarker(Marker, MarkerKol, TekSaldo2.nRec));
+
+          if f_KolIsPositive(kk)
+            UpdateMarker(MarkerKol, Ind, kk)
+          else
+            {
+              AtDeleteMarker(Marker, Ind);
+              AtDeleteMarker(MarkerKol, Ind);
+            }
+        }
+      else
+        if f_KolIsPositive(kk)
+          {
+            InsertMarker(Marker, TekSaldo2.nRec);
+            InsertMarker(MarkerKol, kk);
+
+            ChangePickKol(kk);
+          }
+
+      RescanPanel(#TekSaldo2);
+    }
+
+end; // HandleEvent
+end; // Panel
+
+//******************************************************************************
+
+Panel pNewSpSteps
+  Table NewSpSteps;
+
+Browse br3 (, , sci18EnEsc);
+  Show at (, 16,,);
+
+Fields
+  KatMC2.Name      #3'МЦ'           : [20], Protect;
+  KatMC2.BarKod    #3'Номенк.номер' : [12], Protect;
+  fEdIzm.GetAktOtpEdAbbr(KatMC2.nRec, 1)
+                   #3'ЕдИзм'        :  [5], Skip, Centered, NoAutoSize, {Font = {Italic = TRUE}};
+  NewSpSteps.Kol   #3'Количество'   : [10], [prsignsinkol], NoProtect, NoAutoSize;
+  NewSpSteps.Price #3'Цена'         : [12], [brForSumma], Protect, NoAutoSize;
+  KatPodr.Name     #3'Склад'        : [12], Skip;
+  KatMol.Name      #3'МОЛ'          : [18], Skip;
+  KatParty.Name    #3'Партия'       : [12], Skip;
+end;
+
+HandleEvent
+
+cmUpdateRecord:
+  {
+    var OldKol, kk, kf: double;
+
+    kk := NewSpSteps.Kol;
+
+//******************************************************************************
+    PushPos(#NewSpSteps);
+
+    RereadRecord(#NewSpSteps);
+
+    kk := kk - NewSpSteps.Kol;
+    OldKol := NewSpSteps.Kol;
+
+    PopPos(#NewSpSteps);
+//******************************************************************************
+
+    if ( GetFirst FastFirstRow TekSaldo3 where (( NewSpSteps.cMC    == TekSaldo3.cMC
+                                              AND NewSpSteps.cPodr  == TekSaldo3.cPodr
+                                              AND NewSpSteps.cMOL   == TekSaldo3.cMOL
+                                              AND NewSpSteps.cParty == TekSaldo3.cParty
+                                               )) = tsOK )
+      kf := ( TekSaldo3.Kol - TekSaldo3.Res )/ fEdIzm.GetAktOtpEdKoef(NewSpSteps.cMC, 1);
+    else
+      kf := 0;
+
+    // ввели больше чем свободный остаток
+    if ( ( kk > kf ) AND f_FirstKolIsGreater(kk, kf) )
+      case wGetTune('Reserv.OverOstatok') of
+        0:    // запрещать
+          {
+            message('Количество не может быть больше, чем '
+                  + DoubleToStr(OldKol + kf, '\3p[|-]36`666`666.888') + '!', Warning);
+            Abort;
+            Exit;
+          }
+        1:
+          {
+            if ( message('Количество больше остатка по МЦ.'#13
+                       + 'Оставить ?', YesNo + Confirmation) <> cmYes )
+              {
+                Abort;
+                Exit;
+              }
+          }
+      end;
+
+    if fTekRun.ModifyDoRes(NewSpSteps.cSpStep, NewSpSteps.cPodr, NewSpSteps.cMOL, NewSpSteps.cParty, kk)
+      {
+        update current NewSpSteps;
+        fTekRun.ModifyAllTek(NewSpSteps.cMC, NewSpSteps.cPodr, NewSpSteps.cMOL, NewSpSteps.cParty, 0.0, kk * fEdIzm.GetAktOtpEdKoef(NewSpSteps.cMC, 1));
+        RereadRecord(#TekSaldo2);
+      }
+  }
+
+cmDeleteRecord:
+  {
+    if fTekRun.ModifyDoRes(NewSpSteps.cSpStep, NewSpSteps.cPodr, NewSpSteps.cMOL, NewSpSteps.cParty, -NewSpSteps.Kol)
+      {
+        fTekRun.ModifyAllTek(NewSpSteps.cMC, NewSpSteps.cPodr, NewSpSteps.cMOL, NewSpSteps.cParty, 0.0, -NewSpSteps.Kol * fEdIzm.GetAktOtpEdKoef(NewSpSteps.cMC, 1));
+        delete current NewSpSteps;
+        RereadRecord(#TekSaldo2);
+      }
+  }
+
+end;
+
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    InitMCInfo(BaseDoc.dDoc);
+
+    if ( wGetTune('PICK.SORTMC') = 0 )
+      {
+        AddBounds(tbByName);
+        SetColumnSorting(br1, #KatMC.Name, -1);
+      }
+    else
+      {
+        AddBounds(tbByKod);
+        SetColumnSorting(br1, #KatMC.BarKod, -1);
+      }
+
+    if ( GetFirst KatMC <> tsOK )
+      {}
+
+    // семафор устанавливается для исключения одновременного резервирования по одной и той же МЦ
+    SemaphoreName := 'DoResEditor' + string(KatMC.nRec);
+
+    Marker    := InitMarker('__DoRes_nRec__', 8, 20, 5, false);
+    MarkerKol := InitMarker('__DoRes_Kol__' , 8, 20, 5, false);
+    MarkerZ   := InitMarker('__DoRes2_Chng__', 8, 20, 5, false);
+
+    delete all NewSpSteps;
+
+    ppPodr := 0;
+    ppMOL  := 0;
+
+    OnBaseDocSklad := FALSE;
+
+    if ExistTune('Reserv.DO_Sklad_Enabled')
+      OnBaseDocSklad := wGetTune('Reserv.DO_Sklad_Enabled') > 0;
+
+    if ( BaseDoc.cParty <> 0 ) AND OnBaseDocSklad
+      {
+        ClearFieldOption(#fltKatPodr.Name, ofSelectable);
+        fltSklad := BaseDoc.cParty;
+
+        if boGetTune('Pick.AvtoMol')
+          if ( GetFirst KatMOL3 where (( fltSklad == KatMOL3.cSkl )) = tsOk )
+            {
+              fltMOL := KatMOL3.nRec;
+
+              if ( GetNext KatMOL3 where (( fltSklad == KatMOL3.cSkl )) = tsOk )
+                {
+                  fltMOL := 0;
+
+                  if ( RunInterface('GetMol', fltMOL, fltSklad) = cmCancel )
+                    fltMOL := 0;
+                }
+            }
+      }
+    else
+      {
+        if ExistTune('ResRestrict.cSklad')
+          if ( coGetTune('ResRestrict.cSklad') <> 0 )
+            fltSklad := coGetTune('ResRestrict.cSklad');
+
+        if ExistTune('ResRestrict.cMol')
+          if ( coGetTune('ResRestrict.cMol') <> 0 )
+            fltMOL := coGetTune('ResRestrict.cMol');
+      }
+
+    ppPodr := fltSklad;
+    ppMOL  := fltMOL;
+
+    if ( ppPodr <> 0 )
+      AddBounds(tbOnSklad);
+
+    if ( ppMOL <> 0 )
+      AddBounds(tbOnMOL);
+
+    if ExistTune('ResRestrict.cParty')
+      if ( coGetTune('ResRestrict.cParty') <> 0 )
+        {
+          fltParty := coGetTune('ResRestrict.cParty');
+          AddBounds(tbOnParty);
+        }
+
+    SetMyTitle;
+  }
+
+cmDone:
+  {
+    DoneMCInfo;
+
+    DoneMarker(Marker   , '');
+    DoneMarker(MarkerKol, '');
+    DoneMarker(MarkerZ  , '__DoRes2_Chng__');
+
+    if ( ( CurTable = #TekSaldo2 ) AND IsValid(#KatMC) )
+      fTekRun.SwitchSemaphore(FALSE, KatMC.nRec);
+  }
+
+cmSelectAll:
+  {
+    ClearMarker(Marker);
+    ClearMarker(MarkerKol);
+
+    PushPos(#TekSaldo2);
+
+    var kk: double;
+
+    _loop TekSaldo2
+      {
+        kk := Round(vFreeSkl, -integer(lg(GetPresision_forKol)));
+
+        if ( fEdIzm.GetDiskrOtpEd(fEdIzm.GetAktOtpEdNrec(KatMC.nRec, 1)) = 1 )
+          kk := Trunc(kk);
+
+        if f_KolIsPositive(kk)
+          {
+            InsertMarker(Marker   , TekSaldo2.nRec);
+            InsertMarker(MarkerKol, kk);
+
+            ChangePickKol(kk);
+          }
+      }
+
+    PopPos(#TekSaldo2);
+
+    RescanPanel(#TekSaldo2);
+  }
+
+cmUnSelectAll:
+  {
+    ClearPick;
+  }
+
+cmMarkUnMark:
+  {
+    if SearchMarker(Marker, TekSaldo2.nRec, Ind)
+      {
+        ChangePickKol(-SelKol);
+
+        AtDeleteMarker(Marker   , Ind);
+        AtDeleteMarker(MarkerKol, Ind);
+      }
+    else
+      {
+        RereadRecord(#TekSaldo2);
+
+        var kk: double;
+
+        kk := Round(vFreeSkl, -integer(lg(GetPresision_forKol)));
+
+        if ( fEdIzm.GetDiskrOtpEd(fEdIzm.GetAktOtpEdNrec(KatMC.nRec, 1)) = 1 )
+          kk := Trunc(kk);
+
+        if f_KolIsPositive(kk)
+          {
+            InsertMarker(Marker   , TekSaldo2.nRec);
+            InsertMarker(MarkerKol, kk);
+
+            ChangePickKol(kk);
+          }
+        else
+          if f_KolIsPositive(vFreeSkl)
+            message('Нет свободного остатка по разрезу с учетом делимости отпускной единицы!', Information)
+          else
+            message('Нет свободного остатка по разрезу!', Information);
+      }
+
+    RedrawCurrentAndGo(GetCurrentFormat, true);
+  }
+
+cmSetCurTable:
+  {
+    if ( CurTable = #TekSaldo2 )
+      {
+        if  ( GetMarkerCount(Marker) > 0 )
+          if ( Message('При смене позиции МЦ пометка будет снята. Продолжить?', Confirmation + YesNo ) = cmNo )
+            {
+              Abort;
+              Exit;
+            }
+
+        ClearPick;
+
+        fTekRun.SwitchSemaphore(FALSE, KatMC.nRec);
+      }
+
+    if ( Target = #TekSaldo2 )
+      // запрещаем одновременное резервирование по одной и той же МЦ нескольким пользователям
+      if fTekRun.WaitSemaphore(KatMC.nRec)
+        fTekRun.SwitchSemaphore(TRUE, KatMC.nRec);
+  }
+
+cmColumnClicked:
+  if ( GetColumnSorting(br1, Target) <> 0 ) // кликаем по той же колонке, где и находились
+    case Target of
+    //------------------------------------------------------------------------------
+      #KatMC.Name, #KatMC.BarKod:
+        {
+          // меняем направление сортировки
+          SetTableBackOrderIn(tnKatMC, NOT GetTableBackOrder(tnKatMC));
+
+          // меняем направление птички в заголовке колонки
+          SetColumnSorting(br1, Target, GetColumnSorting(br1, Target)*(-1));
+
+          RereadRecord(#KatMC);
+        }
+    //------------------------------------------------------------------------------
+    end;
+  else
+    case Target of
+    //------------------------------------------------------------------------------
+      #KatMC.Name, #KatMC.BarKod:
+        {
+          // устанавливаем прямой порядок сортировки для колонки, на которую кликнули
+          SetTableBackOrderIn(tnKatMC, FALSE);
+
+          // .. и соответствующую птичку для этой колонки
+          SetColumnSorting(br1, Target, -1);
+
+          SubBounds(if(Target = #KatMC.Name, tbByKod , tbByName));
+          AddBounds(if(Target = #KatMC.Name, tbByName, tbByKod));
+
+          RereadRecord(#KatMC);
+        }
+    //------------------------------------------------------------------------------
+    end;
+
+cmValue1:
+  {
+    if Not PackFields
+      Exit;
+
+    if ( GetMarkerCount(Marker) = 0 )
+      Exit;
+
+    if ( not WaitDoResSemaphore )
+      Exit;
+
+    if ( not SwitchDoResSemaphore(true) )
+      {
+        message('Ошибка выставления семафора!', Warning);
+        Exit;
+      }
+
+    var MarkerCount : longint; MarkerCount := GetMarkerCount(Marker);
+//********************************************************************************
+// проверка возможности произвести резервирование (возможно изменились остатки)
+//********************************************************************************
+    var PickRec : comp;
+
+    var bCanDoRes : boolean; bCanDoRes := true;
+
+    if ( wGetTune('Reserv.OverOstatok') < 2 )
+      {
+        var k: double;
+
+        for(Ind := 0; Ind < MarkerCount; inc(Ind))
+          if ( GetMarker(MarkerKol, Ind, k) AND GetMarker(Marker, Ind, PickRec) )
+            if ( GetFirst fastfirstrow TekSaldo3 where (( PickRec          == TekSaldo3.nRec and
+                                                          TekSaldo3.cPodr  == KatPodr3.nRec  and
+                                                          TekSaldo3.cMOL   == KatMOL3.nRec   and
+                                                          TekSaldo3.cParty == KatParty3.nRec
+                                                       )) = tsOK )
+              if ( (TekSaldo3.Kol - TekSaldo3.Res) < (k * fEdIzm.GetAktOtpEdKoef(TekSaldo3.cMC, 1)) )
+                // Резервирование сверх остатка
+                if ( wGetTune('Reserv.OverOstatok') = 0 )
+                // запрещать
+                  {
+                    bCanDoRes := false;
+                    message('Выбранное количество ('
+                           + DoubleToStr(k, '\3p[|-]36`666`666.888')
+                           + ') по разрезу'#13
+                           + ' Склад:  ' + if(IsValid(#KatPodr3) , KatPodr3.Name , '') + ''#13
+                           + ' МОЛ:    ' + if(IsValid(#KatMOL3)  , KatMOL3.Name  , '') + ''#13
+                           + ' Партия: ' + if(IsValid(#KatParty3), KatParty3.Name, '') + ''#13
+                           + 'превышает остаток: '
+                           + DoubleToStr((TekSaldo3.Kol - TekSaldo3.Res) / fEdIzm.GetAktOtpEdKoef(TekSaldo3.cMC, 1)
+                                       , '\3p[|-]36`666`666.888') + '!'
+                           , Information);
+                  }
+                else
+                // разрешать после подтверждения
+                  bCanDoRes := ( message('Выбранное количество ('
+                                       + DoubleToStr(k, '\3p[|-]36`666`666.888')
+                                       + ') по разрезу'#13
+                                       + ' Склад:  ' + if(IsValid(#KatPodr3) , KatPodr3.Name , '') + ''#13
+                                       + ' МОЛ:    ' + if(IsValid(#KatMOL3)  , KatMOL3.Name  , '') + ''#13
+                                       + ' Партия: ' + if(IsValid(#KatParty3), KatParty3.Name, '') + ''#13
+                                       + 'превышает остаток: '
+                                       + DoubleToStr((TekSaldo3.Kol - TekSaldo3.Res) / fEdIzm.GetAktOtpEdKoef(TekSaldo3.cMC, 1)
+                                                   , '\3p[|-]36`666`666.888') + '!'#13
+                                       + 'Оставить ?', YesNo + Confirmation) = cmYes );
+      }
+
+    if ( not bCanDoRes )
+      {
+        Stop;
+        SwitchDoResSemaphore(false);
+        Exit;
+      }
+//********************************************************************************
+    if ( BeginConcurrentTransaction(trNoLock) <> 0 )
+      {
+        message('Не могу начать транзакцию!', Warning);
+        Stop;
+        SwitchDoResSemaphore(false);
+        Exit;
+      }
+
+    var k, kk : double; kk := 0.0;
+
+    var f : boolean;
+
+    for(Ind := 0; Ind < MarkerCount; inc(Ind))
+      {
+        if ( GetMarker(MarkerKol, Ind, k) AND GetMarker(Marker, Ind, PickRec) )
+          if ( GetFirst fastfirstrow TekSaldo3 where (( PickRec == TekSaldo3.nRec )) = tsOK )
+            {
+              kk := kk + k;
+
+              if ( GetFirst NewSpSteps where (( TekSaldo3.cPodr  == NewSpSteps.cPodr  and
+                                                TekSaldo3.cMOL   == NewSpSteps.cMOL   and
+                                                TekSaldo3.cParty == NewSpSteps.cParty and
+                                                TekSaldo3.cMC    == NewSpSteps.cMC
+                                             )) = tsOK )
+                {
+                  f := fTekRun.ModifyDoRes(NewSpSteps.cSpStep, NewSpSteps.cPodr, NewSpSteps.cMOL, NewSpSteps.cParty, k);
+
+                  if f
+                    update current NewSpSteps set NewSpSteps.Kol := NewSpSteps.Kol + k;
+                }
+              else
+                {
+                  NewNrec := AddNewSpStep;
+
+                  if ( NewNrec = -1 )
+                    {
+                      Stop;
+                      Exit;
+                    }
+
+                  if fTekRun.ModifyDoRes(NewNrec, TekSaldo3.cPodr, TekSaldo3.cMOL, TekSaldo3.cParty, k)
+                    {
+                      var kkk: double;
+                      kkk := fTekRun.GetSumDoRes(NewNrec);
+
+                      if ( GetFirst fastfirstrow SpStep where (( NewNrec == SpStep.nRec )) = tsOK )
+                        update current SpStep set SpStep.Reserv := kkk, SpStep.KolSkl := kkk, SpStep.Kol := kkk;
+
+                      if ( GetFirst fastfirstrow DoRes
+                              where (( NewNrec          == DoRes.cSpStep and
+                                       TekSaldo3.cPodr  == DoRes.cPodr   and
+                                       TekSaldo3.cMOL   == DoRes.cMOL    and
+                                       TekSaldo3.cParty == DoRes.cParty )) = tsOK )
+                        f := (insert NewSpSteps
+                                         set NewSpSteps.nRec    := DoRes.nRec
+                                           , NewSpSteps.cPodr   := TekSaldo3.cPodr
+                                           , NewSpSteps.cMOL    := TekSaldo3.cMOL
+                                           , NewSpSteps.cParty  := TekSaldo3.cParty
+                                           , NewSpSteps.cMC     := TekSaldo3.cMC
+                                           , NewSpSteps.cSpStep := NewNrec
+                                           , NewSpSteps.Kol     := SpStep.Kol
+                                           , NewSpSteps.Price   := SpStep.Price
+                             ) = tsOK;
+                    }
+                }
+
+              if ( f )
+                f := fTekRun.ModifyAllTek(KatMC.nRec, NewSpSteps.cPodr, NewSpSteps.cMOL, NewSpSteps.cParty, 0.0, k * fEdIzm.GetAktOtpEdKoef(KatMC.nRec, 1));
+
+              if ( not f )
+                {
+                  message('Ошибка модификации остатков!', Warning);
+                  AbortTransaction;
+                  Stop;
+                  SwitchDoResSemaphore(false);
+                  Exit;
+                }
+            }
+      }
+
+    if ( EndTransaction <> 0 )
+      {
+        message('Не могу закончить транзакцию!', Warning);
+        Stop;
+        SwitchDoResSemaphore(false);
+        Exit;
+      }
+
+    SwitchDoResSemaphore(false);
+
+    ClearPick;
+
+    ReReadRecord(#NewSpSteps);
+
+    Stop;
+  }
+
+cmFilterSave:
+  RunWindowModal(winFilter);
+
+cmHotKeys:
+  PutHotCommand(RunMenu('PrDoc_HotKeys'));
+
+end; // HandleEvent
+
+end.

@@ -1,0 +1,292 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Параметры пакетного формирования
+//******************************************************************************
+
+#include notes.vih
+
+#doc
+Интерфейс параметров пакетного формирования соглашений
+#end
+interface GetBatAppDogMakerParams 'Параметры пакетного формирования' DoAccept, EscClose, Gray;
+show at(,,50,16)
+create view
+var
+  wParam : word;
+  dDate, dFrom : date;
+  dD1, dD2 : date;
+  wExtra, wVidExtra, wOrgs1, wOrgs2 : word;
+  doDiscount : double;
+  CopySpec : word;
+  pDogovor : comp;
+  pKatVidD : comp;
+  pNote : comp;
+  Marker, MarkerDescr : longint;
+  fltKatOrgs : string;
+  wNote : word;
+  oNotes : iNotes;
+
+from Dogovor, KatVidD, KatVidD KatVidD1, KatNotes, KatOrg, KatOrgDescr
+where
+((
+  pDogovor == Dogovor.nRec and
+  pKatVidD == KatVidD.nRec and
+  pNote    == KatNotes.nRec
+));
+
+parameters
+  wParam,
+  pDogovor,   // ссылка на договор
+  dDate,      // дата создания соглашений
+  dFrom,      // дата соглашений
+  dD1,        // дата начала периода действия соглашения
+  dD2,        // дата конца периода действия соглашения
+  pKatVidD,   // вид формируемых соглашений
+  pNote,      // статус соглашений
+  wExtra,     // скидка или надбавка
+  doDiscount, // Величина скидки/надбавки к соглашению
+  wVidExtra,  // тип скидки/надбавки к соглашению
+  CopySpec,   // необходимость копирования спецификации из договора
+  wOrgs1,     // откуда брать Исполнителя/получателя за контрагента 1
+  wOrgs2;     // откуда брать Плательщика/получателя платежей за контрагента 1
+
+function GetTopOwner : comp;
+var pVid : comp;
+{
+  if (GetFirst fastfirstrow KatVidD1 where (( pKatVidD == KatVidD1.nRec )) <> tsOK) Exit;
+  do {
+    GetTopOwner := KatVidD1.nRec;
+    pVid := KatVidD1.cOwner;
+    if (GetFirst fastfirstrow KatVidD1 where (( pVid == KatVidD1.nRec )) <> tsOK) Exit;
+  } while true;
+}
+
+procedure InitFltKatOrgs;
+var PickRec : comp;
+{
+  if (GetMarkerCount(Marker) > 1)
+    set fltKatOrgs := 'Множественный выбор ('+string(GetMarkerCount(Marker))+')'
+  else
+  {
+    GetMarker(Marker, 0, PickRec);
+    if (GetFirst fastfirstrow KatOrg where (( PickRec == KatOrg.nRec )) = tsOK)
+      set fltKatOrgs := KatOrg.Name
+    else
+      set fltKatOrgs := '';
+  }
+}
+
+Screen scParamsBatAppDogMaker (,hcm_dogov_PaketYtochSogl,sci13EnEsc);
+Bevel b11 { 1, 0, 31,  4, bsLowered, bsFrame};
+Bevel b12 {33, 0, 51,  4, bsLowered, bsFrame};
+Bevel b13 { 1, 3, 51, 16, bsLowered, bsFrame};
+Fields
+  dDate        ('Дата создания соглашения') : noprotect;
+  dD1          ('Дата начала соглашения') : noprotect;
+  dFrom        ('Дата соглашения') : noprotect;
+  dD2          ('Дата окончания соглашения') : noprotect;
+  KatVidD.Name ('Вид соглашений') : protect;
+  KatNotes.Name('Статус соглашения') : protect;
+  fltKatOrgs   ('Контрагенты') : protect;
+  wOrgs1       ('Исполнитель/получатель за Контрагента 1') : [LIST 'Контрагент 1', 'Из договора'], protect;
+  wOrgs2       ('Плательщик/получатель платежей за Контрагента 1') : [LIST 'Контрагент 1', 'Из договора'], protect;
+  wExtra       ('Скидка или надбавка к соглашению') : [LIST 'Скидка', 'Надбавка'], protect;
+  doDiscount   ('Величина скидки/надбавки к соглашению',,sci1EnEsc) : [19.2,'\2p[|-]3666`666`666`666.88'], noprotect ;
+  wVidExtra    ('Тип скидки/надбавки к соглашению') : [LIST '%', 'Сумма'], protect ;
+  CopySpec     ('Необходимость копирования спецификации из договора',,sci1EnEsc) : noprotect;
+Buttons
+  cmOK,Default,,'Ввод - формирование соглашений',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+                                    На период
+   `Дата создания:`.@@@@@@@@@@     `с:`.@@@@@@@@@@
+ `Дата соглашения:`.@@@@@@@@@@    `по:`.@@@@@@@@@@
+
+ `Вид соглашения:` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Статус согл.:`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Контрагенты:`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Исполнитель/получатель за Контрагента 1:`
+                             .@@@@@@@@@@@@@@@@@@@@
+ `Плательщик/получатель платежей за Контрагента 1:`
+                             .@@@@@@@@@@@@@@@@@@@@
+  <.Формировать.>  .@@@@@@@@@@@@@@@@@@@@@@
+                   .@@@@@@@@@@@@@.@@@@@@@@
+  <.  Отмена   .>   [.] копировать спецификацию`
+>>
+end;
+
+Screen scParamsBatDogCopyer (,hcm_dogov_TirDog,sci13EnEsc);
+Bevel b21 { 1, 0, 48, 4, bsLowered, bsFrame};
+Bevel b22 { 1, 4, 48, 8, bsLowered, bsFrame};
+Fields
+  wNote ('Статус договора/соглашения') :
+    [LIST 0 'оформляемый', 'как у документа-источника'], protect;
+  fltKatOrgs   ('Контрагенты') : protect;
+  CopySpec     ('Необходимость копирования спецификации из договора/соглашения',,sci1EnEsc) : noprotect;
+Buttons
+  cmOK,Default,,'Ввод - формирование соглашений',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+
+ `Статус док-тов:` .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Контрагенты:`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+    [.] копировать спецификацию`
+    [.] копировать кал.план`
+
+
+  <.Формировать.>  <.  Отмена   .>
+
+>>
+end;
+
+HandleEvent
+
+cmOK:
+{
+  if ( GetMarkerCount(Marker) = 0 )
+    {
+      Message('Не указаны контрагенты!', Warning);
+      SelectField(#fltKatOrgs);
+      Exit;
+    }
+  if (wParam = 1) pNote := wNote;
+  CloseInterface(cmDefault);
+}
+
+cmInit:
+{
+  if (GetFirst Dogovor <> tsOK)
+  {
+    message('Договор (nRec='+string(pDogovor)+') не найден', Error);
+    Abort;
+    Exit;
+  }
+
+  if ( Dogovor.VidDog = 14 )
+    {
+      var PrIsExtra: array[1..3] of string;
+
+      PrIsExtra[1] := 'Скидка по документу';
+      PrIsExtra[2] := 'Надбавка по документу';
+      PrIsExtra[3] := 'Агентское вознаграждение';
+
+      SetEnumList(scParamsBatAppDogMaker, #wExtra, PrIsExtra);
+
+      SetFieldSelectable(#wExtra   , FALSE);
+      SetFieldSelectable(#wVidExtra, FALSE);
+    }
+
+  if (wParam = 0)
+  {
+    SetFormat(scParamsBatAppDogMaker);
+    SetTitle('Параметры пакетного формирования соглашений');
+    dDate      := Cur_Date;
+    dFrom      := Dogovor.dInput;
+    dD1        := Dogovor.dBeg;
+    dD2        := Dogovor.dEnd;
+    wExtra     := Dogovor.isExtra;
+    doDiscount := Dogovor.Discount;
+    wVidExtra  := Dogovor.isSum;
+    pKatVidD   := Dogovor.cVidDog;
+    pNote      := oNotes.GetFirstNote(401, Dogovor.Status);
+    CopySpec   := 1;
+    wOrgs1     := 0;
+    wOrgs2     := 0;
+    LocateWin(0, 0, 51, 16, wnMainWindow);
+  }
+  else
+  {
+    SetFormat(scParamsBatDogCopyer);
+    SetTitle('Параметры тиражирования '+if(Dogovor.cDogovor = 0, 'договора', 'соглашения'));
+    wNote := word(pNote);
+    CopySpec := 3;
+    LocateWin(0, 0, 49, 12, wnMainWindow);
+  }
+
+  Marker := InitMarker('$$$b_sogpar$$$', 8, 100, 10, FALSE);
+  ClearMarker(Marker);
+
+  if ( Dogovor.cOrg <> 0 )
+    InsertMarker(Marker, Dogovor.cOrg);
+
+  InitFltKatOrgs;
+}
+
+cmDone:
+{
+  DoneMarker(Marker, '$$$b_sogpar$$$');
+}
+
+cmPick:
+{
+  case CurField of
+    #KatVidD.Name  :
+     {
+       var Owner1, OldVidD : comp;
+       OldVidD := pKatVidD;
+       Owner1 := GetTopOwner;
+       if (RunInterface('GetSomVidD', word(0), word(0), false, pKatVidD, word(0)) <> cmCancel)
+       {
+         if (GetFirst KatVidD <> tsOK) {};
+         if (Owner1 <> GetTopOwner)
+         {
+           message('Допускается менять вид соглашения только в рамках группы !', Warning);
+           set pKatVidD := OldVidD;
+         }
+       }
+     }
+    #KatNotes.Name :
+     {
+       RunInterface(GetSomKatNotes, word(401), 0, 0, false, pNote);
+       set pNote := pNote;
+     }
+    #fltKatOrgs :
+     {
+       MarkerDescr := InitMarker('KatOrgDescr', 8, 100, 10, FALSE);
+       ClearMarker(MarkerDescr);
+       var PickRec : comp;
+       var i, MrkCount : longint;
+       MrkCount := GetMarkerCount(Marker);
+       for (i := 1; i <= MrkCount; inc(i))
+         if GetMarker(Marker, i-1, PickRec)
+           _loop KatOrgDescr where (( PickRec == KatOrgDescr.cRec ))
+             InsertMarker(MarkerDescr, KatOrgDescr.nRec);
+       DoneMarker(MarkerDescr, 'KatOrgDescr');
+       DoneMarker(Marker, 'KatOrg');
+       RunInterface(GetSomeKontrPrim, true);
+       Marker := InitMarker('KatOrg', 8, 100, 10, FALSE);
+       InitFltKatOrgs;
+     }
+  end;
+}
+
+cmCheckField:
+{
+  case CurField of
+    #dDate : if (longint(dDate) = 0) { message('Необходимо заполнить поле!', Warning); Abort; };
+    #dFrom : if (longint(dFrom) = 0) { message('Необходимо заполнить поле!', Warning); Abort; };
+    #dD1   : if (dD1 < Dogovor.dBeg) { message('Дата начала соглашения не д.б. меньше '+DateToStr(Dogovor.dBeg, 'DD/MM/YYYY г.'), Warning); Abort; };
+    #dD2   : if (dD2 > Dogovor.dEnd) { message('Дата окончания соглашения не д.б. больше '+DateToStr(Dogovor.dEnd, 'DD/MM/YYYY г.'), Warning); Abort; }
+             else
+             if (dD2 < dD1) { message('Дата окончания соглашения не д.б. меньше '+DateToStr(dD1, 'DD/MM/YYYY г.'), Warning); Abort; };
+  end;
+}
+
+cmDelOnProtect:
+  case CurField of
+    #KatVidD.Name  : set pKatVidD := Dogovor.cVidDog;
+    #KatNotes.Name : set pNote := oNotes.GetFirstNote(401, Dogovor.Status);
+    #fltKatOrgs    :
+      {
+        ClearMarker(Marker);
+        if ( Dogovor.cOrg <> 0 )
+          InsertMarker(Marker, Dogovor.cOrg);
+        InitFltKatOrgs;
+      }
+  end;
+end;
+
+end.

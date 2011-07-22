@@ -1,0 +1,1589 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Представление товарных ПКП в виде списка
+//******************************************************************************
+
+#include iPKP_ViewTable.vih
+#include SpDocs.vih
+#include CalPlan.vih
+#include notes.vih
+#include MTRFuncs.vih
+#include SaldTune.vih
+#include xlReport.Vih
+
+Interface iPKP_ViewTable 'Представление товарных ПКП в виде списка' ( , hcBCTO_Tabl_Kalend_Plan, )Cyan;
+
+//------------------------------------------------------------------------------
+
+Table struct PKP_MC
+(
+  cMCUsl      : comp
+, PrMC        : word
+, Direct      : word
+, cOtpEd      : comp
+, cVal        : comp
+, pSpDocs     : comp
+, Price       : double
+, Name        : string
+, GrName      : string
+, ValName     : string
+, OtpName     : string
+, SortName    : string
+, SaldTuneName: string
+, cSaldTune   : comp
+, cKau        : array[0..9] of comp
+, Code        : string
+)
+With index
+(
+  PKP_MC01 = Code + SortName
+
+, PKP_MC02 = Direct
+           + cMCUsl
+           + PrMC
+           + cOtpEd
+           + cVal
+           + cSaldTune
+           + cKau[0]
+           + cKau[1]
+           + cKau[2]
+           + cKau[3]
+           + cKau[4]
+           + cKau[5]
+           + cKau[6]
+           + cKau[7]
+           + cKau[8]
+           + cKau[9]
+           + Price
+
+, PKP_MC03 = cSaldTune
+);
+
+Table struct PKP_Spec
+(
+  Direct   : word
+, cMCUsl   : comp
+, PrMC     : word
+, cOtpEd   : comp
+, cVal     : comp
+, wPeriod  : word
+, Status   : word
+, sNote    : string
+, Kol      : double
+, Price    : double
+, Summa    : double
+, pSpDocs  : comp
+, pCalPlan : comp
+, cSaldTune: comp
+, cKau     : array[0..9] of comp
+)
+With index
+(
+  PKP_Spec01 = wPeriod
+             + Direct
+             + cMCUsl
+             + PrMC
+             + cOtpEd
+             + cVal
+             + cSaldTune
+             + cKau[0]
+             + cKau[1]
+             + cKau[2]
+             + cKau[3]
+             + cKau[4]
+             + cKau[5]
+             + cKau[6]
+             + cKau[7]
+             + cKau[8]
+             + cKau[9]
+             + Price
+
+, PKP_Spec02 = wPeriod
+             + Direct
+             + cMCUsl
+             + PrMC
+             + cOtpEd
+             + cVal
+             + cSaldTune
+             + Price
+);
+
+Table struct PKP_Periods
+(
+  npp  : word
+, nRec : word
+, dFrom: date
+, dTo  : date
+)
+With index
+(
+  PKP_Periods01 = dFrom + dTo
+, PKP_Periods02 = npp
+, PKP_Periods03 = nRec
+);
+
+Const
+  MaxColInScrollView = 10;
+  MaxFieldsPKP       = 2;
+
+  cmGoToFirstPage = 6001;
+  cmGoToPrevPage  = 6002;
+  cmGoToNextPage  = 6003;
+  cmGoToLastPage  = 6004;
+end;
+
+#include SpDocs.var
+#include MTRFuncs.var
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string; Forward;
+
+//******************************************************************************
+
+Create view
+
+Var
+  UseDEI
+    : boolean;
+
+  Cur_Page
+, wViewFld
+, wKolFldVis
+, wViewKAU
+    : word;
+
+  dDate1
+, dDate2
+    : date;
+
+  oCalPlan
+    : CalPlan;
+
+  oNotes
+    : iNotes;
+
+  oSaldTune
+    : VipSaldTune;
+
+As select
+  GetKAUField(0) ( FieldName = vsKau0 )
+, GetKAUField(1) ( FieldName = vsKau1 )
+, GetKAUField(2) ( FieldName = vsKau2 )
+, GetKAUField(3) ( FieldName = vsKau3 )
+, GetKAUField(4) ( FieldName = vsKau4 )
+, GetKAUField(5) ( FieldName = vsKau5 )
+, GetKAUField(6) ( FieldName = vsKau6 )
+, GetKAUField(7) ( FieldName = vsKau7 )
+, GetKAUField(8) ( FieldName = vsKau8 )
+, GetKAUField(9) ( FieldName = vsKau9 )
+
+,  *
+
+From
+  PKP_MC (PKP_MC01)
+, PKP_MC PKP_MC1
+, PKP_Periods
+, PKP_Periods PKP_Periods2
+, PKP_Spec
+, CalPlan
+, IerCalPl
+, SpDocs
+, SpDocs      SpDocs1
+, Dogovor
+, CalPlan     CalPlan1
+, KatMC
+, KatUsl
+, GroupMC
+, GroupUsl
+, KatOtpEd
+, KlVal
+, KatNotes
+, SpecMTR
+, SaldTune
+, SaldTune    SaldTune1
+where
+((
+    PKP_Spec.pSpDocs == SpDocs1.nRec
+AND SpDocs1.cDoc     == CalPlan1.nRec
+AND PKP_MC.cSaldTune == SaldTune1.nRec
+))
+;
+
+//******************************************************************************
+
+#include ShowKau.vpp
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string;
+{
+  GetKAUField := #ShowKau(if(pNum = 0, SaldTune1.wObj, SaldTune1.wKau[pNum]), PKP_MC.cKau[pNum]);
+}
+
+//------------------------------------------------------------------------------
+// количество выводимых полей периода
+//------------------------------------------------------------------------------
+Function GetKolFldInPeriod: word;
+var i: word;
+{
+  Result := 0;
+
+  FOR(i := 0; i < MaxFieldsPKP; i := i + 1)
+    if ( (wViewFld and (1 shl i)) <> 0 )
+      Result := Result + 1;
+}
+
+//------------------------------------------------------------------------------
+// количество выводимых полей на странице
+//------------------------------------------------------------------------------
+Function GetRealKolFldVis: word;
+{
+  Result := GetKolFldInPeriod * RecordsInTable(#PKP_Periods); // всего полей для вывода
+
+  if ( Result > wKolFldVis )
+    Result := wKolFldVis;
+}
+
+//------------------------------------------------------------------------------
+// количество скролируемых странц
+//------------------------------------------------------------------------------
+Function GetMaxPage: word;
+{
+  Result := RecordsInTable(#PKP_Periods) * GetKolFldInPeriod div GetRealKolFldVis;
+
+  if ( RecordsInTable(#PKP_Periods) * GetKolFldInPeriod mod GetRealKolFldVis <> 0 )
+    Result := Result + 1;
+}
+
+//------------------------------------------------------------------------------
+// возвращает наименование поля
+//------------------------------------------------------------------------------
+Function GetFieldName(wFld: word): string;
+{
+  case wFld of
+    1: Result := 'Количество';
+    2: Result := 'Сумма';
+  else
+       Result := '';
+  end;
+}
+
+//------------------------------------------------------------------------------
+// для вывода последней страницы может понадобиться смещение полей
+//------------------------------------------------------------------------------
+Procedure GetTruePeriodAndOffset(var wPage, wOffset: word);
+var i: word;
+{
+  // если не последняя страница
+  // или
+  // количество выводимых полей кратно количеству полей на странице
+  // то корректировать ничего не нужно
+  if (
+      ( (wPage + 1) < GetMaxPage )
+       OR
+      ( (RecordsInTable(#PKP_Periods) * GetKolFldInPeriod mod GetRealKolFldVis) = 0 )
+     )
+    Exit;
+
+  // смещение влево, чтобы заполнить все поля
+  i := GetRealKolFldVis - RecordsInTable(#PKP_Periods) * GetKolFldInPeriod mod GetRealKolFldVis;
+
+  if ( i >= wOffset ) // это поле из предыдущей страницы
+    {
+      wPage   := wPage - 1;
+      wOffset := wOffset + GetRealKolFldVis;
+    }
+
+  wOffset := wOffset - i;
+}
+
+//------------------------------------------------------------------------------
+// определяем, что за i-ое поле
+//------------------------------------------------------------------------------
+Function GetFieldNo(wPage, i: word): word;
+var
+  j, k: word;
+{
+  GetTruePeriodAndOffset(wPage, i);
+
+  // определяем порядковое поле периода
+  //------------------------------------------------------------------------------
+  j := (wPage * GetRealKolFldVis + i) mod GetKolFldInPeriod;
+
+  if ( j = 0 )
+    j := GetKolFldInPeriod;
+  //------------------------------------------------------------------------------
+
+  // поиск j-го поля из выводимых
+  FOR(k := 0; k < MaxFieldsPKP; k := k + 1)
+    if ( ((1 shl k) AND wViewFld) <> 0 )
+      {
+        j := j - 1;
+
+        if ( j = 0 )
+          {
+            Result := k + 1;
+            Exit;
+          }
+      }
+
+  Result := MaxFieldsPKP;
+}
+
+//------------------------------------------------------------------------------
+// определяем период для поля
+//------------------------------------------------------------------------------
+Function GetPeriodNo(wPage, i: word): word;
+{
+  GetTruePeriodAndOffset(wPage, i);
+
+  Result := (wPage * GetRealKolFldVis + i) div GetKolFldInPeriod
+          + if((wPage * GetRealKolFldVis + i) mod GetKolFldInPeriod = 0, 0, 1)
+          - 1;
+
+  if ( GetFirst PKP_Periods where (( Result == PKP_Periods.npp )) = tsOk )
+    Result := PKP_Periods.nRec
+}
+
+//------------------------------------------------------------------------------
+// ищем ПКП в периоде
+Function FindMCPlan(wPage, wOffset: word): boolean;
+var
+  wPeriod: word;
+{
+  FindMCPlan := FALSE;
+
+  wPeriod := GetPeriodNo(wPage, wOffset);
+
+  if ( GetFirst PKP_Periods
+    where (( wPeriod == PKP_Periods.nRec )) <> tsOK )
+      Exit; // нереальный случай
+
+  _LOOP CalPlan where (( Dogovor.nRec    == CalPlan.cDogovor AND
+                         PKP_Periods.dTo == CalPlan.dTo ))
+    if ( CalPlan.DirectPlat = 0 )
+      {
+        FindMCPlan := TRUE;
+
+        Break;
+      }
+}
+
+//------------------------------------------------------------------------------
+Function GetPKPStatus(Buf: type$PKP_MC; wOffset: word): word;
+{
+  Result := 1;
+
+  if ( GetFirst PKP_Spec where (( GetPeriodNo(Cur_Page, wOffset)
+                                                == PKP_Spec.wPeriod   AND
+                                  Buf.Direct    == PKP_Spec.Direct    AND
+                                  Buf.cMCUsl    == PKP_Spec.cMCUsl    AND
+                                  Buf.PrMC      == PKP_Spec.PrMC      AND
+                                  Buf.cOtpEd    == PKP_Spec.cOtpEd    AND
+                                  Buf.cVal      == PKP_Spec.cVal      AND
+                                  Buf.cSaldTune == PKP_Spec.cSaldTune AND
+                                  Buf.cKau[0]   == PKP_Spec.cKau[0]   AND
+                                  Buf.cKau[1]   == PKP_Spec.cKau[1]   AND
+                                  Buf.cKau[2]   == PKP_Spec.cKau[2]   AND
+                                  Buf.cKau[3]   == PKP_Spec.cKau[3]   AND
+                                  Buf.cKau[4]   == PKP_Spec.cKau[4]   AND
+                                  Buf.cKau[5]   == PKP_Spec.cKau[5]   AND
+                                  Buf.cKau[6]   == PKP_Spec.cKau[6]   AND
+                                  Buf.cKau[7]   == PKP_Spec.cKau[7]   AND
+                                  Buf.cKau[8]   == PKP_Spec.cKau[8]   AND
+                                  Buf.cKau[9]   == PKP_Spec.cKau[9]   AND
+                                 ( abs(Buf.Price - PKP_Spec.Price) < 0.005 )
+                               )) = tsOk )
+    Result := PKP_Spec.Status
+  else
+    // поиск ПКП по периоду
+    if FindMCPlan(Cur_Page, wOffset)
+      Result := CalPlan.Status;
+}
+
+Procedure InsertNewSpecFromSpDocs(wPeriod: word);
+{
+  insert PKP_Spec set
+    PKP_Spec.cMCUsl    := SpDocs.cMCUsl
+  , PKP_Spec.PrMC      := SpDocs.PrMC
+  , PKP_Spec.Direct    := SpDocs.Direct
+  , PKP_Spec.cOtpEd    := SpDocs.cOtpEd
+  , PKP_Spec.cVal      := SpDocs.cVal
+  , PKP_Spec.pSpDocs   := SpDocs.nRec
+  , PKP_Spec.pCalPlan  := CalPlan.nRec
+  , PKP_Spec.wPeriod   := wPeriod
+  , PKP_Spec.Status    := CalPlan.Status
+  , PKP_Spec.sNote     := KatNotes.sName
+  , PKP_Spec.Kol       := SpDocs.Kol
+  , PKP_Spec.Price     := SpDocs.Price
+  , PKP_Spec.Summa     := SpDocs.Summa
+  , PKP_Spec.cSaldTune := PKP_MC.cSaldTune
+  , PKP_Spec.cKau[0]   := PKP_MC.cKau[0]
+  , PKP_Spec.cKau[1]   := PKP_MC.cKau[1]
+  , PKP_Spec.cKau[2]   := PKP_MC.cKau[2]
+  , PKP_Spec.cKau[3]   := PKP_MC.cKau[3]
+  , PKP_Spec.cKau[4]   := PKP_MC.cKau[4]
+  , PKP_Spec.cKau[5]   := PKP_MC.cKau[5]
+  , PKP_Spec.cKau[6]   := PKP_MC.cKau[6]
+  , PKP_Spec.cKau[7]   := PKP_MC.cKau[7]
+  , PKP_Spec.cKau[8]   := PKP_MC.cKau[8]
+  , PKP_Spec.cKau[9]   := PKP_MC.cKau[9]
+  ;
+
+  var i: byte;
+
+  FOR(i := 0; i <= 9; i := i + 1)
+    if ( PKP_MC.cKau[i] <> 0 )
+      wViewKAU := wViewKAU OR (1 shl i);
+}
+//******************************************************************************
+// создание списка товарных ПКП
+//******************************************************************************
+Procedure InsertNewMCFromSpDocs;
+{
+  if ( GetFirst FastFirstRow SpecMTR
+          where (( coSpDocs    == SpecMTR.coTable AND
+                   SpDocs.nRec == SpecMTR.cSpec
+                )) = tsOk )
+    {
+      if ( GetFirst FastFirstRow PKP_MC
+              where (( SpDocs.Direct     == PKP_MC.Direct    AND
+                       SpDocs.cMCUsl     == PKP_MC.cMCUsl    AND
+                       SpDocs.PrMC       == PKP_MC.PrMC      AND
+                       SpDocs.cOtpEd     == PKP_MC.cOtpEd    AND
+                       SpDocs.cVal       == PKP_MC.cVal      AND
+                       SpecMTR.cSaldTune == PKP_MC.cSaldTune AND
+                       SpecMTR.cObj      == PKP_MC.cKau[0]   AND
+                       SpecMTR.cKau[1]   == PKP_MC.cKau[1]   AND
+                       SpecMTR.cKau[2]   == PKP_MC.cKau[2]   AND
+                       SpecMTR.cKau[3]   == PKP_MC.cKau[3]   AND
+                       SpecMTR.cKau[4]   == PKP_MC.cKau[4]   AND
+                       SpecMTR.cKau[5]   == PKP_MC.cKau[5]   AND
+                       SpecMTR.cKau[6]   == PKP_MC.cKau[6]   AND
+                       SpecMTR.cKau[7]   == PKP_MC.cKau[7]   AND
+                       SpecMTR.cKau[8]   == PKP_MC.cKau[8]   AND
+                       SpecMTR.cKau[9]   == PKP_MC.cKau[9]   AND
+                       ( abs(SpDocs.Price - PKP_MC.Price) < 0.005 )
+                    )) = tsOk )
+        {
+          if ( SpDocs.TiDk <> 403 )
+            update current PKP_MC
+               set PKP_MC.pSpDocs := SpDocs.nRec
+                 , PKP_MC.Code    := SpDocs.Code;
+
+          Exit;
+        }
+    }
+  else
+    if ( GetFirst FastFirstRow PKP_MC
+            where (( SpDocs.Direct == PKP_MC.Direct    AND
+                     SpDocs.cMCUsl == PKP_MC.cMCUsl    AND
+                     SpDocs.PrMC   == PKP_MC.PrMC      AND
+                     SpDocs.cOtpEd == PKP_MC.cOtpEd    AND
+                     SpDocs.cVal   == PKP_MC.cVal      AND
+                     comp(0)       == PKP_MC.cSaldTune AND
+                     ( abs(SpDocs.Price - PKP_MC.Price) < 0.005 )
+                  )) = tsOk )
+      {
+        if ( SpDocs.TiDk <> 403 )
+          update current PKP_MC
+             set PKP_MC.pSpDocs := SpDocs.nRec
+               , PKP_MC.Code    := SpDocs.Code;
+
+        Exit;
+      }
+
+  ClearBuffer(#PKP_MC);
+
+  if ( SpDocs.PrMC = 1 )
+    {
+      if ( GetFirst FastFirstRow KatMC where (( SpDocs.cMCUsl == KatMC.nRec )) = tsOk )
+        PKP_MC.Name := KatMC.Name;
+
+      if ( GetFirst FastFirstRow GroupMC where (( SpDocs.cGrMCUsl == GroupMC.nRec )) = tsOk )
+        PKP_MC.GrName := GroupMC.Name;
+    }
+  else
+    {
+      if ( GetFirst FastFirstRow KatUsl where (( SpDocs.cMCUsl == KatUsl.nRec )) = tsOk )
+        PKP_MC.Name := KatUsl.Name;
+
+      if ( GetFirst FastFirstRow GroupUsl where (( SpDocs.cGrMCUsl == GroupUsl.nRec )) = tsOk )
+        PKP_MC.GrName := GroupUsl.Name;
+    }
+
+  if ( GetFirst FastFirstRow KlVal where (( SpDocs.cVal == KlVal.nRec )) = tsOk )
+    PKP_MC.ValName := KlVal.SimvolV
+  else
+    PKP_MC.ValName := sGetTune('NDE.SimvRub');
+
+  if ( GetFirst FastFirstRow KatOtpEd where (( SpDocs.cOtpEd == KatOtpEd.nRec )) = tsOk )
+    PKP_MC.OtpName := if(wGetTune('Doc.BrAbbrEd') = 0, KatOtpEd.ABBR, KatOtpEd.Name);
+
+  if ( SpDocs.TiDk <> 403 )
+    {
+      PKP_MC.pSpDocs := SpDocs.nRec;
+      PKP_MC.Code    := SpDocs.Code;
+    }
+
+  PKP_MC.cMCUsl   := SpDocs.cMCUsl;
+  PKP_MC.PrMC     := SpDocs.PrMC;
+  PKP_MC.Direct   := SpDocs.Direct;
+  PKP_MC.cOtpEd   := SpDocs.cOtpEd;
+  PKP_MC.Price    := SpDocs.Price;
+  PKP_MC.cVal     := SpDocs.cVal;
+  PKP_MC.SortName := string(PKP_MC.Direct)
+                   + string(PKP_MC.PrMC)
+                   + PKP_MC.Name
+                   + string(SpDocs.cOtpEd)
+                   + string(SpDocs.Price);
+
+  if ( GetFirst FastFirstRow SpecMTR
+          where (( coSpDocs          == SpecMTR.coTable AND
+                   SpDocs.nRec       == SpecMTR.cSpec   AND
+                   SpecMTR.cSaldTune == SaldTune.nRec
+                )) = tsOk )
+    {
+      PKP_MC.SaldTuneName := SaldTune.Name;
+      PKP_MC.cSaldTune    := SpecMTR.cSaldTune;
+      PKP_MC.cKau[0]      := SpecMTR.cObj;
+
+      var i: byte;
+
+      FOR(i := 1; i <= 9; i := i + 1)
+        PKP_MC.cKau[i] := SpecMTR.cKau[i];
+    }
+
+  insert current PKP_MC;
+}
+
+//------------------------------------------------------------------------------
+Procedure AfterEditPageField(Buf: type$PKP_MC; wOffset: word; doFieldValue: double);
+var IsNewSpec: boolean;
+{
+  IsNewSpec := ( GetFirst PKP_Spec
+                    where (( GetPeriodNo(Cur_Page, wOffset)
+                                           == PKP_Spec.wPeriod   AND
+                             Buf.Direct    == PKP_Spec.Direct    AND
+                             Buf.cMCUsl    == PKP_Spec.cMCUsl    AND
+                             Buf.PrMC      == PKP_Spec.PrMC      AND
+                             Buf.cOtpEd    == PKP_Spec.cOtpEd    AND
+                             Buf.cVal      == PKP_Spec.cVal      AND
+                             Buf.cSaldTune == PKP_Spec.cSaldTune AND
+                             Buf.cKau[0]   == PKP_Spec.cKau[0]   AND
+                             Buf.cKau[1]   == PKP_Spec.cKau[1]   AND
+                             Buf.cKau[2]   == PKP_Spec.cKau[2]   AND
+                             Buf.cKau[3]   == PKP_Spec.cKau[3]   AND
+                             Buf.cKau[4]   == PKP_Spec.cKau[4]   AND
+                             Buf.cKau[5]   == PKP_Spec.cKau[5]   AND
+                             Buf.cKau[6]   == PKP_Spec.cKau[6]   AND
+                             Buf.cKau[7]   == PKP_Spec.cKau[7]   AND
+                             Buf.cKau[8]   == PKP_Spec.cKau[8]   AND
+                             Buf.cKau[9]   == PKP_Spec.cKau[9]   AND
+                             ( abs(Buf.Price - PKP_Spec.Price) < 0.005 )
+                          )) <> tsOk );
+
+  if IsNewSpec
+  // необходимо добавить позицию в ПКП
+    {
+      if not FindMCPlan(Cur_Page, wOffset)
+        {
+          Message('Не найден товарный ПКП на период '
+                + DateToStr(PKP_Periods.dFrom, 'DD/MM/YYYY - ')
+                + DateToStr(PKP_Periods.dTo  , 'DD/MM/YYYY')
+                , Warning);
+          Exit;
+        }
+
+      if ( CalPlan.Status <> 0 )
+        {
+          Message('Редактировать ПКП можно только в статусе "оформляемый"!', Warning);
+          Exit;
+        }
+
+      if ( Buf.pSpDocs = 0 )
+      // такой позиции в договоре нет - создаем без привязки к позиц
+        {
+          ClearBuffer(#SpDocs);
+
+          SpDocs.PrMC   := Buf.PrMC;
+          SpDocs.Direct := Buf.Direct;
+          SpDocs.cMCUsl := Buf.cMCUsl;
+          SpDocs.Kol    := doFieldValue;
+          SpDocs.Price  := Buf.Price;
+          SpDocs.cOtpEd := Buf.cOtpEd;
+          SpDocs.cVal   := Buf.cVal;
+
+          oCalPlan.SetDefaultSpDog(SpDocs.Buffer, CalPlan.Buffer);
+
+          oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+          oSpDocs.ChangePosSpDocs(SpDocs.TiDk, CalPlan.nRec, SpDocs.nRec);
+          oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer, 2, 0, SpDocs.Kol, 0, SpDocs.TiDK);
+
+          update current PKP_MC set PKP_MC.pSpDocs := SpDocs.nRec;
+
+          // переносим ЦУ
+          if ( Buf.cSaldTune <> 0 )
+            {
+              SaveMyDsk(Buf.cSaldTune, 'KitKau.cSaldTune');
+              SaveMyDsk(Buf.cKau[0]  , 'KitKau.cObj');
+
+              var j: byte;
+
+              for (j := 1; j <= 9; inc(j))
+                SaveMyDsk(Buf.cKau[j], 'KitKau.cKau[' + string(j) + ']');
+
+              oMTRFun.InsSpecMTR(coSpDocs, SpDocs.nRec);
+            }
+        }
+      else
+        // создаем позицию по позиции договора
+        {
+          if ( oSpDocs.SpDocs_InsCurentFromUpDoc(Buf.pSpDocs
+                                               , CalPlan.nRec
+                                               , 403
+                                               , FALSE
+                                               , doFieldValue
+                                               , CalPlan.cShipment
+                                               , CalPlan.cTipOtg
+                                               , CalPlan.cWayMove
+                                               , oNotes.Notes_InUseStatus(CalPlan.cNote)
+                                               , CalPlan.DirectMC
+                                               , TRUE) = tsOK )
+            if ( GetFirst SpDocs where (( oSpDocs.GetCurrentPosition.nRec == SpDocs.nRec )) <> tsOk )
+              {
+                Message('Ошибка добавления позиции в спецификацию договора/соглашения', Warning);
+                Exit;
+              }
+        }
+
+      InsertNewMCFromSpDocs;
+      InsertNewSpecFromSpDocs(GetPeriodNo(Cur_Page, wOffset));
+
+      oCalPlan.ReCalcCalPlan(CalPlan.nRec);
+    }
+  else
+  // редактируем существующую позицию в ПКП
+    {
+      if ( PKP_Spec.Status <> 0 )
+        {
+          Message('Редактировать ПКП можно только в статусе "оформляемый"!', Warning);
+          Exit;
+        }
+
+      if ( GetFirst FastFirstRow SpDocs where (( PKP_Spec.pSpDocs == SpDocs.nRec )) <> tsOK )
+        {
+          Message('Не найдена соответствующая полю позиция спецификации!', Warning);
+          Exit;
+        }
+
+      case GetFieldNo(Cur_Page, wOffset) of
+        1: { PKP_Spec.Kol   := doFieldValue; PKP_Spec.Summa := PKP_Spec.Kol   * PKP_MC.Price; }
+        2: { PKP_Spec.Summa := doFieldValue; PKP_Spec.Kol   := PKP_Spec.Summa / PKP_MC.Price; }
+      end;
+
+      var Diff: double; Diff := PKP_Spec.Kol - SpDocs.Kol;
+
+      if ( Diff = 0 )
+        Exit;
+
+      var OldKolDEI: double;
+
+      OldKolDEI := SpDocs.Kol;
+
+      SpDocs.Kol := PKP_Spec.Kol;
+
+      oSpDocs.UpDate_current_SpDocs(SpDocs.BufferP);
+
+      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, SpDocs.cDoc, SpDocs.nRec);
+
+      oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer, 2, OldKolDEI, SpDocs.Kol, 0, SpDocs.TiDK);
+
+      oCalPlan.ReCalcCalPlan(SpDocs.cDoc);
+
+      PKP_Spec.Kol   := SpDocs.Kol;
+      PKP_Spec.Summa := SpDocs.Summa;
+
+      update current PKP_Spec;
+    }
+
+  RescanPanel(#PKP_MC);
+}
+
+//------------------------------------------------------------------------------
+Function GetSpecInfo(Buf: type$PKP_MC; wPage, wOffset: word): double;
+{
+  Result := 0.0;
+
+  if ( GetFirst PKP_Spec where (( GetPeriodNo(wPage, wOffset)
+                                                == PKP_Spec.wPeriod   AND
+                                  Buf.Direct    == PKP_Spec.Direct    AND
+                                  Buf.cMCUsl    == PKP_Spec.cMCUsl    AND
+                                  Buf.PrMC      == PKP_Spec.PrMC      AND
+                                  Buf.cOtpEd    == PKP_Spec.cOtpEd    AND
+                                  Buf.cVal      == PKP_Spec.cVal      AND
+                                  Buf.cSaldTune == PKP_Spec.cSaldTune AND
+                                  Buf.cKau[0]   == PKP_Spec.cKau[0]   AND
+                                  Buf.cKau[1]   == PKP_Spec.cKau[1]   AND
+                                  Buf.cKau[2]   == PKP_Spec.cKau[2]   AND
+                                  Buf.cKau[3]   == PKP_Spec.cKau[3]   AND
+                                  Buf.cKau[4]   == PKP_Spec.cKau[4]   AND
+                                  Buf.cKau[5]   == PKP_Spec.cKau[5]   AND
+                                  Buf.cKau[6]   == PKP_Spec.cKau[6]   AND
+                                  Buf.cKau[7]   == PKP_Spec.cKau[7]   AND
+                                  Buf.cKau[8]   == PKP_Spec.cKau[8]   AND
+                                  Buf.cKau[9]   == PKP_Spec.cKau[9]   AND
+                                  ( abs(Buf.Price - PKP_Spec.Price) < 0.005 )
+                               )) = tsOk )
+    case GetFieldNo(wPage, wOffset) of
+      1: Result := PKP_Spec.Kol;
+      2: Result := PKP_Spec.Summa;
+    end;
+}
+
+//******************************************************************************
+
+Procedure SetVisibleFieldsInPage; forward;
+
+Browse brPeriods(, , sci1Esc);
+  Show at (,, 22, 5) Fixed_Y
+  Table PKP_Periods2;
+
+Fields
+  DateToStr(PKP_Periods2.dFrom, 'DD.MM.YYYY') + DateToStr(PKP_Periods2.dTo, '-DD.MM.YYYY')
+   #3'Периоды товарных ПКП': [22, 'DD.MM.YYYY'], Protect, Centered, NoAutoSize;
+end;
+
+Panel p1;
+
+Screen scPeriods(, , sci1Esc);
+  Show at (23,,, 5) Fixed_Y
+
+Fields
+//******************************************************************************
+  wViewFld  : NoProtect;
+//******************************************************************************
+  wKolFldVis: [List 1 '1','2','3','4','5','6','7','8','9','10'], Protect;
+//******************************************************************************
+  if(dDate1 = ZeroDate, '', DateToStr(dDate1, 'с DD.MM.YYYY')) + if(dDate2 = ZeroDate, '', DateToStr(dDate2, ' по DD.MM.YYYY'))
+            : Skip,
+    { Font = { Bold = TRUE } };
+//******************************************************************************
+<<
+Выводимые поля по периодам Количество видимых полей по периодам:
+ [.] количество`            .@@@@
+ [.] сумма     `
+
+Фильтр на периоды ПКП:.@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+HandleEvent
+
+cmCheckField:
+  case CurField of
+//******************************************************************************
+    #wViewFld:
+      {
+        if ( ( wViewFld = 1 ) OR ( wViewFld = 2 ) )
+          ClusterDisabledField(#wViewFld, wViewFld)
+        else
+          ClusterDisabledField(#wViewFld, 0);
+
+        Cur_Page := 0;
+        SetVisibleFieldsInPage;
+      }
+//******************************************************************************
+    #wKolFldVis:
+      {
+        if ( ( wKolFldVis = 0 ) OR ( wKolFldVis > MaxColInScrollView ) )
+          {
+            Message('Значение д.б. в пределах от 1 до ' + string(MaxColInScrollView) + ' включительно!', Warning);
+            Abort;
+          }
+        else
+          {
+            Cur_Page := 0;
+            SetVisibleFieldsInPage;
+          }
+      }
+//******************************************************************************
+  end;
+
+end; // HandleEvent
+
+end; // Panel
+
+ToolBar
+#ifdef ComponentVersion
+    F_Common::tbTree_brows
+  , F_Common::tbPrintDoc
+#else
+    tbTree_brows
+  , tbPrintDoc
+#end
+;
+
+Browse brTableHeader(, , sci1Esc);
+  Show at (, 6, 56,) Fixed_X
+    NoMove
+  , ExcelColumns
+  , AlwaysShowhScroll
+  Table PKP_MC;
+
+Fields
+//******************************************************************************
+  PKP_MC.Code     #13#3'№'#13#3'п/п'
+                  ('Порядковый номер из спецификации договора/соглашения')
+                  : [10], Protect;
+//******************************************************************************
+  if(PKP_MC.Direct = 1, '1->2', '2->1')
+                  #13#3'Напр.'
+                  ('Направление отношений')
+                  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  if(PKP_MC.PrMC = 1, 'МЦ', 'Усл')
+                  #13#3'Тип'
+                  ('МЦ или услуга')
+                  : [3], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  PKP_MC.GrName   #13#3'Группа'
+                  ('Группа МЦ')
+                  : [15], Protect;
+//******************************************************************************
+  PKP_MC.Name     #13#3'Наименование'#13#3'позиции'
+                  ('Наименование позиции')
+                  : [20], Protect;
+//******************************************************************************
+  PKP_MC.OtpName  #13#3'ЕдИзм'
+                  ('Отпускная единица измерения')
+                  : [6], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  PKP_MC.Price    #13#3'Цена'
+                  : [13.2, '\2p[|-]3666`666`666`666.88'], Protect;
+//******************************************************************************
+  PKP_MC.ValName  #13#3'Вал.'
+                  : [4], Skip, { Font = { Italic = TRUE } }, NoAutoSize, Centered;
+//******************************************************************************
+  PKP_MC.SaldTuneName
+                  #13#3'Объект ЦУ': [12], Protect, NoAutoSize;
+  vsKau0          #13#3'КАУ 1'    : [12], Protect, NoAutoSize;
+  vsKau1          #13#3'КАУ 2'    : [12], Protect, NoAutoSize;
+  vsKau2          #13#3'КАУ 3'    : [12], Protect, NoAutoSize;
+  vsKau3          #13#3'КАУ 4'    : [12], Protect, NoAutoSize;
+  vsKau4          #13#3'КАУ 5'    : [12], Protect, NoAutoSize;
+  vsKau5          #13#3'КАУ 6'    : [12], Protect, NoAutoSize;
+  vsKau6          #13#3'КАУ 7'    : [12], Protect, NoAutoSize;
+  vsKau7          #13#3'КАУ 8'    : [12], Protect, NoAutoSize;
+  vsKau8          #13#3'КАУ 9'    : [12], Protect, NoAutoSize;
+  vsKau9          #13#3'КАУ 10'   : [12], Protect, NoAutoSize;
+//******************************************************************************
+end;
+
+Browse brTableView(, , sci1Esc);
+  Show at (57, 6,,)
+    NoMove
+  , AlwaysShowhScroll
+  Table PKP_MC;
+
+Fields
+//******************************************************************************
+  [DoFirstPeriod '']
+  '<<'            #3'', #3'<<'
+                  : [2], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  [DoPrevPeriod '']
+  '<'             #3'', #3'<'
+                  : [1], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  [PageField1  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  1) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  1) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  1) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField2  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  2) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  2) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  2) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField3  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  3) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  3) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  3) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField4  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  4) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  4) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  4) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField5  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  5) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  5) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  5) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField6  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  6) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  6) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  6) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField7  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  7) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  7) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  7) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField8  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  8) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  8) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  8) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField9  ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page,  9) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer,  9) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer,  9) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [PageField10 ''] GetSpecInfo(PKP_MC.Buffer, Cur_Page, 10) #3'': [15], NoProtect, LessNull,
+    { Font = { Bold  =  ( GetPKPStatus(PKP_MC.Buffer, 10) <> 0 );
+               Color = if(GetPKPStatus(PKP_MC.Buffer, 10) <> 0, ColorSysGreen, 0)
+    } };
+//******************************************************************************
+  [DoNextPeriod '']
+  '>'            #3'', #3'>'
+                  : [1], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  [DoLastPeriod '']
+  '>>'           #3'', #3'>>'
+                  : [2], Protect, NoAutoSize, Centered;
+//******************************************************************************
+end;
+//------------------------------------------------------------------------------
+
+Procedure SetFormatFieldsInPage;
+var
+  wKol, i: word;
+{
+  wKol := GetRealKolFldVis;
+
+  FOR(i := 1; i <= wKol; i := i + 1 )
+    {
+      // определяем период
+      var wPeriod: word; wPeriod := GetPeriodNo(Cur_Page, i);
+      var wFld   : word; wFld    := GetFieldNo (Cur_Page, i);
+
+      var sTitle: string; sTitle := '';
+
+      if ( wPeriod < RecordsInTable(#PKP_Periods) )
+        {
+          if ( GetFirst PKP_Periods where (( wPeriod == PKP_Periods.nRec )) = tsOk )
+            sTitle := ''#3 + DateToStr(PKP_Periods.dFrom, 'DD.MM.YYYY') + ''#13#3
+                           + DateToStr(PKP_Periods.dTo  , 'DD.MM.YYYY') + ''#13#3
+          else
+            sTitle := ''#3'? период №' + string(wPeriod) + ''#13#3;
+
+          sTitle := sTitle + GetFieldName(wFld);
+
+          cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Title'  , sTitle);
+
+          case wFld of
+            1:
+              {
+                cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Points'       , 3);
+                cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'PassiveFormat', '\3p[|-]3666`666`666`666.888');
+                cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'PickButton'   , UseDEI);
+              }
+            2:
+              {
+                cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Points'       , 2);
+                cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'PassiveFormat', '\2p[|-]3666`666`666`666.88');
+                cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'PickButton'   , FALSE);
+              }
+          end;
+        }
+    }
+}
+
+Procedure SetVisibleFieldsInPage;
+var
+  wKol, i: word;
+{
+  wKol := GetRealKolFldVis;
+
+  FOR(i := 1; i <= MaxColInScrollView; i := i + 1 )
+    {
+      if ( i <= wKol )
+        {
+          cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Visible', TRUE);
+          cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Protect', FALSE);
+          cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Skip'   , FALSE);
+        }
+      else
+        cfsSetProp('c_BRTABLEVIEW_PAGEFIELD' + string(i), 'Visible', FALSE);
+    }
+
+  SetFormatFieldsInPage;
+}
+
+Function FindSimilarPKP_Spec: boolean;
+{
+  if ( GetFirst FastFirstRow SpecMTR where (( coSpDocs    == SpecMTR.coTable  AND
+                                              SpDocs.nRec == SpecMTR.cSpec )) = tsOk )
+    Result := RecordExists PKP_Spec
+                    where (( PKP_Periods.nRec  == PKP_Spec.wPeriod   AND
+                             SpDocs.Direct     == PKP_Spec.Direct    AND
+                             SpDocs.cMCUsl     == PKP_Spec.cMCUsl    AND
+                             SpDocs.PrMC       == PKP_Spec.PrMC      AND
+                             SpDocs.cOtpEd     == PKP_Spec.cOtpEd    AND
+                             SpDocs.cVal       == PKP_Spec.cVal      AND
+                             SpecMTR.cSaldTune == PKP_Spec.cSaldTune AND
+                             SpecMTR.cObj      == PKP_Spec.cKau[0]   AND
+                             SpecMTR.cKau[1]   == PKP_Spec.cKau[1]   AND
+                             SpecMTR.cKau[2]   == PKP_Spec.cKau[2]   AND
+                             SpecMTR.cKau[3]   == PKP_Spec.cKau[3]   AND
+                             SpecMTR.cKau[4]   == PKP_Spec.cKau[4]   AND
+                             SpecMTR.cKau[5]   == PKP_Spec.cKau[5]   AND
+                             SpecMTR.cKau[6]   == PKP_Spec.cKau[6]   AND
+                             SpecMTR.cKau[7]   == PKP_Spec.cKau[7]   AND
+                             SpecMTR.cKau[8]   == PKP_Spec.cKau[8]   AND
+                             SpecMTR.cKau[9]   == PKP_Spec.cKau[9]   AND
+                             ( abs(SpDocs.Price - PKP_Spec.Price) < 0.005 )
+                          )) = tsOk
+  else
+    Result := RecordExists PKP_Spec
+                    where (( PKP_Periods.nRec == PKP_Spec.wPeriod   AND
+                             SpDocs.Direct    == PKP_Spec.Direct    AND
+                             SpDocs.cMCUsl    == PKP_Spec.cMCUsl    AND
+                             SpDocs.PrMC      == PKP_Spec.PrMC      AND
+                             SpDocs.cOtpEd    == PKP_Spec.cOtpEd    AND
+                             SpDocs.cVal      == PKP_Spec.cVal      AND
+                             comp(0)          == PKP_Spec.cSaldTune AND
+                             ( abs(SpDocs.Price - PKP_Spec.Price) < 0.005 )
+                          )) = tsOk;
+}
+
+Function BuildListPKP(pDogovor: comp): boolean;
+var
+  lCount: longint;
+{
+  Result := FALSE;
+
+  if ( GetFirst Dogovor where (( pDogovor == Dogovor.nRec )) <> tsOk )
+    {
+      Message('Не найден договор/соглашение (nRec = ' + string(pDogovor) + ')', Warning);
+      Exit;
+    }
+
+  dDate1 := ZeroDate;
+  dDate2 := ZeroDate;
+
+  // определяем период КП
+  _LOOP IerCalPl where (( pDogovor      == IerCalPl.cDogovor AND
+                          word(1)       == IerCalPl.isLeaf   AND
+                          IerCalPl.cRec == CalPlan.nRec
+                       ))
+    {
+      if ( CalPlan.DirectPlat > 0 )
+        Continue;
+
+      if ( ( dDate1 = ZeroDate ) OR ( dDate1 > CalPlan.dFrom ) )
+        dDate1 := CalPlan.dFrom;
+
+      if ( ( dDate2 = ZeroDate ) OR ( dDate2 < CalPlan.dTo ) )
+        dDate2 := CalPlan.dTo;
+    }
+
+  if ( RunDialog('GetIntervalDates', dDate1, dDate2) = cmCancel )
+    Exit;
+
+  lCount := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer, 'Подсчет итераций ...', 1);
+
+  _LOOP IerCalPl where (( pDogovor      == IerCalPl.cDogovor AND
+                          word(1)       == IerCalPl.isLeaf   AND
+                          IerCalPl.cRec == CalPlan.nRec
+                       ))
+    {
+      lCount := lCount + 1;
+
+      if ( CalPlan.DirectPlat > 0 )
+        Continue;
+
+      if ( ( dDate2 <> ZeroDate ) AND ( dDate2 < CalPlan.dFrom ) OR ( dDate1 > CalPlan.dTo ) )
+        Continue;
+
+      _LOOP SpDocs where (( word(403) == SpDocs.TiDk AND IerCalPl.cRec == SpDocs.cDoc ))
+        lCount := lCount + 1;
+    }
+
+  StopVisual('', 0);
+
+  delete all PKP_Periods;
+  delete all PKP_MC;
+  delete all PKP_Spec;
+
+  StartNewVisual(vtIndicatorVisual
+               , vfTimer + vfBreak + vfConfirm
+               , 'Построение линейного списка товарного КП...'
+               , lCount);
+
+  _LOOP IerCalPl where (( pDogovor      == IerCalPl.cDogovor AND
+                          word(1)       == IerCalPl.isLeaf   AND
+                          IerCalPl.cRec == CalPlan.nRec      AND
+                          CalPlan.cNote == KatNotes.nRec
+                       ))
+    if Not NextVisual
+      {
+        StopVisual('', 0);
+        Exit;
+      }
+    else
+      {
+        if ( CalPlan.DirectPlat > 0 )
+          Continue;
+
+        // фильтр на период
+        if ( ( dDate2 <> ZeroDate ) AND ( dDate2 < CalPlan.dFrom ) OR ( dDate1 > CalPlan.dTo ) )
+          Continue;
+
+        // заполняем таблицу периодов
+        if ( GetFirst FastFirstRow PKP_Periods
+                where (( CalPlan.dFrom == PKP_Periods.dFrom
+                     AND CalPlan.dTo   == PKP_Periods.dTo )) <> tsOk )
+          insert PKP_Periods set
+            PKP_Periods.dFrom := CalPlan.dFrom
+          , PKP_Periods.dTo   := CalPlan.dTo
+          , PKP_Periods.nRec  := RecordsInTable(#PKP_Periods)
+            ;
+
+        _LOOP SpDocs where (( word(403) == SpDocs.TiDk AND IerCalPl.cRec == SpDocs.cDoc ))
+          {
+            if Not NextVisual
+              {
+                StopVisual('', 0);
+                Exit;
+              }
+
+            // проверяем на уникальность позиции
+            // д.б. 1 позиция в одном ПКП с уникальными значениями следующих атрибутов:
+            // - тип позиции (МЦ/Услуга)
+            // - ссылка на МЦ/Услугу
+            // - ссылка на ЕдИзм
+            // - ссылка на валюту
+            // - цена
+            // значения КАУ ЦУ
+            if FindSimilarPKP_Spec
+              {
+                var tmpS: string;
+
+                if ( SpDocs.PrMC = 1 )
+                  tmpS := 'МЦ: ' + if(GetFirst KatMC where (( SpDocs.cMCUsl == KatMC.nRec )) = tsOk
+                                    , KatMC.Name
+                                    , '?(SpDocs.cMCUsl = ' + string(SpDocs.cMCUsl) + ')')
+                else
+                  tmpS := 'Услуга: ' + if(GetFirst KatUsl where (( SpDocs.cMCUsl == KatUsl.nRec )) = tsOk
+                                    , KatUsl.Name
+                                    , '?(SpDocs.cMCUsl = ' + string(SpDocs.cMCUsl) + ')');
+
+                Message('Нет уникальности по ' + if(SpDocs.PrMC = 1, 'мц', 'услуге')
+                      + ', отп.ед., валюте, значениям КАУ ЦУ, цене и периоду:'#13
+                      + tmpS + ''#13
+                      + 'период: ' + DateToStr(CalPlan.dFrom, 'с DD.MM.YYYY')
+                                   + DateToStr(CalPlan.dTo, ' по DD.MM.YYYY') + ''#13
+                      + 'ПКП №' + CalPlan.NoDoc + ''#13
+                      + '№ п/п ' + SpDocs.Code
+                      , Information
+                       );
+
+                StopVisual('', 0);
+                Exit;
+              }
+
+            InsertNewMCFromSpDocs;
+            InsertNewSpecFromSpDocs(PKP_Periods.nRec);
+          }
+      }
+
+  StopVisual('', 0);
+
+  if ( GetFirst PKP_MC <> tsOk )
+    {
+      Message('Отсутствует товарный КП за указанный период', Information);
+      Exit;
+    }
+
+  lCount := 0;
+
+  _LOOP SpDocs where (( Dogovor.TiDk == SpDocs.TiDk AND pDogovor == SpDocs.cDoc ))
+    lCount := lCount;
+
+  StartNewVisual(vtIndicatorVisual
+               , vfTimer
+               , 'Пополнение позициями из договора...'
+               , lCount);
+
+  _LOOP SpDocs where (( Dogovor.TiDk == SpDocs.TiDk AND pDogovor == SpDocs.cDoc ))
+    {
+      NextVisual;
+
+      InsertNewMCFromSpDocs;
+    }
+
+  StopVisual('', 0);
+
+  lCount := 0;
+
+  _LOOP PKP_Periods ordered by PKP_Periods.dFrom, PKP_Periods.dTo
+    {
+      update current PKP_Periods set PKP_Periods.npp := lCount;
+      lCount := lCount + 1;
+    }
+
+  Cur_Page := 0;
+
+  SetVisibleFieldsInPage;
+
+//******************************************************************************
+// Не показываем поля КАУ, по которым нет значений ни в одной из позиций ПКП
+//******************************************************************************
+  var i: byte;
+
+  FOR(i := 0; i <= 9; i := i + 1)
+    if ( (wViewKAU and (1 shl i)) = 0)
+      case i of
+        0: SetFieldVisible(#vsKau0, FALSE);
+        1: SetFieldVisible(#vsKau1, FALSE);
+        2: SetFieldVisible(#vsKau2, FALSE);
+        3: SetFieldVisible(#vsKau3, FALSE);
+        4: SetFieldVisible(#vsKau4, FALSE);
+        5: SetFieldVisible(#vsKau5, FALSE);
+        6: SetFieldVisible(#vsKau6, FALSE);
+        7: SetFieldVisible(#vsKau7, FALSE);
+        8: SetFieldVisible(#vsKau8, FALSE);
+        9: SetFieldVisible(#vsKau9, FALSE);
+      end;
+
+  if (
+      ( RecordExists PKP_MC where (( comp(0) >> PKP_MC.cSaldTune )) <> tsOk )
+       AND
+      ( RecordExists PKP_MC where (( comp(0) << PKP_MC.cSaldTune )) <> tsOk )
+     )
+    SetFieldVisible(#PKP_MC.SaldTuneName, FALSE);
+//******************************************************************************
+
+  RereadRecord(#PKP_Periods2);
+  RereadRecord(#PKP_MC);
+
+  Result := TRUE;
+}
+
+//------------------------------------------------------------------------------
+//Печать товарных ПКП
+Procedure PrintPKP;
+var
+  pXL: XLSRepBuilder;
+  ID, sXLTFileName, sXLSFileName: string;
+  i, j: integer;
+{
+  ID := 'L_Dogovor\printPKP';
+
+  if ( not ReadMyDsk(sXLTFileName, ID, TRUE) )
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование календарного плана...', 1);
+
+  sXLSFileName := pXL.CreateReport(sXLTFileName, TRUE);
+
+  pXL.CreateVar(sXLSFileName);
+
+  i := 1;
+  j := 1;
+
+  _LOOP PKP_Periods
+    {
+      pXL.SetStringVar('Title_'  + string(i++), 'Количество');
+      pXL.SetStringVar('Title_'  + string(i++), 'Сумма');
+    }
+
+  _LOOP PKP_Periods
+    {
+      pXL.SetStringVar('Period_' + String(j++),  DateToStr(PKP_Periods.dFrom,'DD.MM.YYYY')
+                                               + '-'
+                                               + DateToStr(PKP_Periods.dTo,'DD.MM.YYYY'));
+    }
+
+  if (GetFirst KatOrg where (( Dogovor.cOrg == KatOrg.NRec )) = tsOk)
+    pXL.SetStringVar('Kontr', KatOrg.Name);
+
+  pXL.SetStringVar('NoDog'  , Dogovor.Nodoc);
+  pXL.SetStringVar('Date'   , Dogovor.DDoc);
+  pXL.SetStringVar('From'   , dDate1);
+  pXL.SetStringVar('To'     , dDate2);
+  pXL.SetNumberVar('Periods', RecordsInTable(tnPKP_Periods));
+  pXL.SetNumberVar('MCCount', RecordsInTable(tnPKP_MC));
+
+  pXL.PublishVar;
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('Periods');
+
+  for( i := 1; i <= RecordsInTable(tnPKP_Periods) * 2 + 6; i++)
+    pXL.CreateTblFld('Value_' + string(i));
+
+  _LOOP PKP_MC
+    {
+      pXL.SetTblStringFldValue('Value_1', PKP_MC.CODE);
+      pXL.SetTblStringFldValue('Value_2', PKP_MC.GrName);
+      pXL.SetTblStringFldValue('Value_3', PKP_MC.Name);
+      pXL.SetTblStringFldValue('Value_4', PKP_MC.OtpName);
+      pXL.SetTblStringFldValue('Value_5', PKP_MC.Price);
+      pXL.SetTblStringFldValue('Value_6', PKP_MC.ValName);
+
+      i := 7;
+
+      _LOOP PKP_Periods
+        _LOOP PKP_Spec where (( PKP_Periods.nRec == PKP_Spec.wPeriod AND
+                                PKP_MC.Direct    == PKP_Spec.Direct  AND
+                                PKP_MC.cMCUsl    == PKP_Spec.cMCUsl ))
+
+          {
+            pXL.SetTblStringFldValue('Value_' + String(i++), PKP_Spec.Kol);
+            pXL.SetTblStringFldValue('Value_' + String(i++), PKP_Spec.Summa);
+          }
+
+      pXL.InsTblRow;
+    }
+
+  pXL.PublishTbl('Periods');
+  pXL.LoadReport(sXLSFileName);
+  pXL.DisConnectExcel;
+
+  StopVisual('', 0);
+}
+
+//------------------------------------------------------------------------------
+
+TableEvent Table PKP_MC
+
+cmSetCurField:
+  {
+    case Target of
+      #DoFirstPeriod: PutCommand(cmGoToFirstPage);
+      #DoPrevPeriod : PutCommand(cmGoToPrevPage);
+      #DoNextPeriod : PutCommand(cmGoToNextPage);
+      #DoLastPeriod : PutCommand(cmGoToLastPage);
+    else
+      Exit;
+    end;
+
+    Abort;
+  }
+
+end;
+
+HandleEvent
+
+cmOnVipLoad:
+{
+  cfsSetCurrentContainer('iPKP_ViewTable');
+
+  if ( Not ReadMyDsk(wViewFld, 'iPKP_ViewTable_wViewFld', TRUE) )
+    wViewFld := 1 shl MaxFieldsPKP - 1;
+
+  if ( wViewFld = 0 ) OR ( wViewFld > (1 shl MaxFieldsPKP - 1) )
+    wViewFld := 1 shl MaxFieldsPKP - 1;
+
+  if ( Not ReadMyDsk(wKolFldVis, 'iPKP_ViewTable_wKolFldVis', TRUE) )
+    wKolFldVis := MaxFieldsPKP;
+
+  if ( wKolFldVis = 0 ) OR ( wKolFldVis > MaxColInScrollView )
+    wKolFldVis := MaxFieldsPKP;
+
+  UseDEI := boGetTune('Doc.DEI.CalPlan');
+
+  wViewKAU := 0;
+}
+
+cmOnVipUnLoad:
+{
+  SaveMyDsk(wViewFld  , 'iPKP_ViewTable_wViewFld');
+  SaveMyDsk(wKolFldVis, 'iPKP_ViewTable_wKolFldVis');
+}
+
+cmGoToFirstPage:
+{
+  if ( Cur_Page = 0 )
+    Exit;
+
+  Cur_Page := 0;
+  SetFormatFieldsInPage;
+  RereadRecord(#PKP_MC);
+}
+
+cmGoToPrevPage:
+{
+  if ( Cur_Page = 0 )
+    Exit;
+
+  Cur_Page := Cur_Page - 1;
+  SetFormatFieldsInPage;
+  RereadRecord(#PKP_MC);
+}
+
+cmGoToNextPage:
+{
+  if ( (Cur_Page + 1) = GetMaxPage )
+    Exit;
+
+  Cur_Page := Cur_Page + 1;
+  SetFormatFieldsInPage;
+  RereadRecord(#PKP_MC);
+}
+
+cmGoToLastPage:
+{
+  if ( Cur_Page = (GetMaxPage - 1) )
+    Exit;
+
+  Cur_Page := GetMaxPage - 1;
+  SetFormatFieldsInPage;
+  RereadRecord(#PKP_MC);
+}
+
+cmExprFieldChanged:
+{
+  var iFld: byte;
+
+  case CurField of
+    #PageField1 : iFld :=  1;
+    #PageField2 : iFld :=  2;
+    #PageField3 : iFld :=  3;
+    #PageField4 : iFld :=  4;
+    #PageField5 : iFld :=  5;
+    #PageField6 : iFld :=  6;
+    #PageField7 : iFld :=  7;
+    #PageField8 : iFld :=  8;
+    #PageField9 : iFld :=  9;
+    #PageField10: iFld := 10;
+  else // а вдруг ?!
+    Exit;
+  end;
+
+  AfterEditPageField(PKP_MC.Buffer, iFld, double(ExprFieldValue));
+}
+
+cmPick:
+{
+  var iFld: byte;
+
+  case CurField of
+    #PageField1 : iFld :=  1;
+    #PageField2 : iFld :=  2;
+    #PageField3 : iFld :=  3;
+    #PageField4 : iFld :=  4;
+    #PageField5 : iFld :=  5;
+    #PageField6 : iFld :=  6;
+    #PageField7 : iFld :=  7;
+    #PageField8 : iFld :=  8;
+    #PageField9 : iFld :=  9;
+    #PageField10: iFld := 10;
+  else // а вдруг ?!
+    Exit;
+  end;
+
+  if ( GetFirst PKP_Spec where (( GetPeriodNo(Cur_Page, iFld)
+                                                   == PKP_Spec.wPeriod   AND
+                                  PKP_MC.Direct    == PKP_Spec.Direct    AND
+                                  PKP_MC.cMCUsl    == PKP_Spec.cMCUsl    AND
+                                  PKP_MC.PrMC      == PKP_Spec.PrMC      AND
+                                  PKP_MC.cOtpEd    == PKP_Spec.cOtpEd    AND
+                                  PKP_MC.cVal      == PKP_Spec.cVal      AND
+                                  PKP_MC.cSaldTune == PKP_Spec.cSaldTune AND
+                                  PKP_MC.cKau[0]   == PKP_Spec.cKau[0]   AND
+                                  PKP_MC.cKau[1]   == PKP_Spec.cKau[1]   AND
+                                  PKP_MC.cKau[2]   == PKP_Spec.cKau[2]   AND
+                                  PKP_MC.cKau[3]   == PKP_Spec.cKau[3]   AND
+                                  PKP_MC.cKau[4]   == PKP_Spec.cKau[4]   AND
+                                  PKP_MC.cKau[5]   == PKP_Spec.cKau[5]   AND
+                                  PKP_MC.cKau[6]   == PKP_Spec.cKau[6]   AND
+                                  PKP_MC.cKau[7]   == PKP_Spec.cKau[7]   AND
+                                  PKP_MC.cKau[8]   == PKP_Spec.cKau[8]   AND
+                                  PKP_MC.cKau[9]   == PKP_Spec.cKau[9]   AND
+                                  ( abs(PKP_MC.Price - PKP_Spec.Price) < 0.005 )
+                               )) <> tsOk )
+    {
+      Message('Отсутствует данная позиция номенклатуры в данном периоде', Information);
+      Exit;
+    }
+
+  // редактируем существующую позицию в ПКП
+  if ( PKP_Spec.Status <> 0 )
+    {
+      Message('Редактировать ПКП можно только в статусе "оформляемый"!', Warning);
+      Exit;
+    }
+
+  if ( GetFirst FastFirstRow SpDocs where (( PKP_Spec.pSpDocs == SpDocs.nRec )) <> tsOK )
+    {
+      Message('Не найдена соответствующая полю позиция спецификации!', Warning);
+      Exit;
+    }
+
+  var OldKolDEI: double; OldKolDEI := SpDocs.Kol;
+
+  RunInterface('KolDopEd',
+                word(coSpDocs),    // coTable,  код таблицы спецификации
+                SpDocs.nRec,       // cRec,     ссылка на спецификацию
+                2,                 // wTipKol,  тип количества
+                'Ввод количества', // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                SpDocs.cMCUSL,     // cMCUsl,   NRec МЦ/услуги
+                SpDocs.PrMC,       // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                SpDocs.Price,      // Price,    цена за 1-у отпускную единицу
+                2,                 // forPrice, кол-во знаков после запятой в цене
+                2,                 // forSumma, кол-во знаков после запятой в стоимости
+                PKP_MC.cVal,       // cVal,     валюта переданной цены
+                SpDocs.cOtpEd,     // cOtpEd,   ссылка на отпускную единицу измерения
+                SpDocs.Kol,        // fKol      количество в отпускных единицах (возвращаемый параметр)
+                longint(0),
+                word(403)
+              );
+
+  if ( OldKolDEI <> SpDocs.Kol )
+    AfterEditPageField(PKP_MC.Buffer, iFld, SpDocs.Kol);
+}
+
+cmAccording:
+  OnAccording;
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuiPKP_ViewTable'));
+
+cmPrintDoc:
+  PrintPKP;
+
+cmValue1:
+  {
+    var ID, sXLTFileName: string;
+
+    ID := 'L_Dogovor\printPKP';
+
+    if  not ReadMyDsk(sXLTFileName, ID, true)
+      set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+    runinterface('xlrepsetup',1,ID,sXLTFileName);
+  }
+end;
+
+End.
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::iPKP_ViewTable>L_Dogovor::iPKP_ViewTable - Представление товарных ПКП в виде списка</link>
+#end
+mnuiPKP_ViewTable Menu
+{
+- 'Печать товарных ПКП', cmPrintDoc,'Печать товарных ПКП', hcdg_pech_PKP , 'Ctrl+P', kbCtrlP, sci1Esc;
+- 'Настройка Excel шаблона', cmValue1, 'Настройка Excel шаблона',,,,sci1Esc;
+-----------;
+- 'Представление товарных ПКП в иерархическом виде', cmAccording, 'Переключает режим отображения на иерархический', hcBCTO_Predst_Tov_PKP,'Alt+S', kbAltS, sci1Esc;
+}

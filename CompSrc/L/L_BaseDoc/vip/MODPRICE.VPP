@@ -1,0 +1,191 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Модификация цен по выбранному прайсу
+//******************************************************************************
+
+{
+  if ( Not EditDOPosEnabled(TRUE, TRUE) )
+    Exit;
+
+  if (
+      ( ( tipDO = 101 ) AND boGetTune('Doc.Buy.NotEditDO') )
+    OR
+      ( ( tipDO = 201 ) AND boGetTune('Doc.Sell.NotEditDO') )
+    OR
+      ( ( tipDO = 1410) AND boGetTune('Doc.Wood.NarAkt.NotEditDO') )
+    OR
+      ( ( tipDO = 1420) AND boGetTune('Doc.Wood.Schet.NotEditDO') )
+     )
+    if ( IsValid(tnBaseFin) OR IsValid(tnKatSopr) )
+      {
+        Message('Редактирование документа-основания при наличии '
+              + 'сопроводительных или платежных документов ЗАПРЕЩЕНО!'
+              , Information);
+        Exit;
+      }
+
+  if ( ( BaseDoc.cNalog <> 0 ) AND ( BaseDoc.direct <> 2 ) )
+    {
+      Message('При данной настройке пользователя не допускается изменение цен!', Information);
+      Exit;
+    }
+
+  RVhod  := BaseDoc.VhodNal;
+  PrNrec := 0;
+
+  if boGetTune('Price.GrKontr')  // искать прайс по группе
+    if not GetKlPriceOnGroup(BaseDoc.cOrg, PrNrec, word(0), word(1), word(0))
+      Exit;
+
+  if ( PrNrec = 0 )
+    if ( RunInterface('GetKlPr', PrNrec, RVhod, word(1), word(0)) = cmCancel )
+      Exit;
+
+  if ( GetFirst KlPrice where (( PrNRec == KlPrice.nRec )) <> tsOk )
+    {
+      Message('Прайс-лист не найден!', Information);
+      Exit;
+    }
+
+  var KlVidForm: word;  KlVidForm := KlPrice.VidForm;
+  var KlTip    : word;  KlTip     := KlPrice.Tip;
+
+
+  if ( ( BaseDoc.cVal = 0 ) AND ( KlPrice.TipMoney = 1 ) )
+    {
+      Par1 := 0;
+      ClusterDisabledField(#Par1, 0);
+    }
+  else
+    {
+      Par1 := if(BaseDoc.cVal = KlPrice.cVal, 0, 1);
+
+      ClusterDisabledField(#Par1, word(-1));
+    }
+
+  if ( RunWindowModal(ModPricePar) <> cmDefault )
+    {
+      Abort;
+      Exit;
+    }
+
+  var dValNalog: date;
+
+  dValNalog := if (BaseDoc.dValCurse = ZeroDate, BaseDoc.dDoc, BaseDoc.dValCurse);
+
+  BaseDoc.dPrice := KlPrice.dprice;
+
+  _LOOP SpStep
+    if (
+        (
+         ( ( KlTip  = 1 ) AND ( SpStep.PrMC = 2 ) )
+          OR
+         ( ( KlTip <> 1 ) AND ( SpStep.PrMC = 1 ) )
+         )
+        )
+         AND // фильтр по прайс-листу в позициях
+        ( ( SpStep.cPriceList = pFltKlPrice ) OR ( pFltKlPrice = -1 ) )
+      if(if(KlVidForm = 0,
+            (GetFirst Prices where (( SpStep.cMCUsl == Prices.cThing AND
+                                      PrNrec        == Prices.cKlPrice ))),
+            (GetFirst Prices where (( SpStep.cMCUsl == Prices.cThing   AND
+                                      PrNrec        == Prices.cKlPrice AND
+                                      SpStep.cParty == Prices.cParty )))
+           ) <> tsOk)
+      {
+        if ( Par2 <> 0 )
+          {
+            SpStep.Price      := 0;
+            SpStep.cPriceList := 0;
+
+            update current SpStep;
+          }
+      }
+    else
+      {
+        #ifdef _RemPrice_
+        if ( GetFirst FastFirstRow JobRem where (( SpStep.nRec == JobRem.cRabRem AND word(0) == JobRem.TipDoc )) = tsOk )
+          Continue;
+        #endif
+
+        #ifdef _RemPrice_
+        if ( tipDO = 550 ) // Ремонты
+          PriceR := KatOtpEdRab.Koef;
+        #else
+        PriceR := KatOtpEd.Koef;
+        #endif
+
+        SpStep.cPriceList := Prices.cKlPrice;
+        PriceV := fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+        // Пересчет цен прайса при разной входимости налогов
+        if ( ( BaseDoc.VhodNal <> RVhod ) AND fnal )
+          if ( BaseDoc.VhodNal = 1 ) // налоги входят в цену
+            {
+              CountNalogPrice(BaseDoc.nRec
+                            , SpStep.nRec
+                            , tipDo + 1000
+                            , if(SpStep.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal)
+                            , BaseDoc.cOrg
+                            , SpStep.Kol
+                            , SpStep.cOtpEd
+                            , dValNalog
+                            , BaseDoc.cVal
+                            , 0
+                            , Prices.Price
+                            , Prices.SumVal
+                            , BaseDoc.cPayment
+                             );
+
+              Prices.Price  := GetNalogPrice;
+              Prices.SumVal := GetNalogValPrice;
+            }
+          else
+            {
+              CountBasePrice(BaseDoc.nRec
+                           , SpStep.nRec
+                           , tipDo + 1000
+                           , if(SpStep.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal)
+                           , BaseDoc.cOrg
+                           , SpStep.Kol
+                           , SpStep.cOtpEd
+                           , dValNalog
+                           , BaseDoc.cVal
+                           , 0
+                           , Prices.Price
+                           , Prices.SumVal
+                           , BaseDoc.cPayment
+                            );
+
+              Prices.Price  := GetBasePrice;
+              Prices.SumVal := GetBaseValPrice;
+            }
+
+        var NewPrice: double;
+
+        if ( BaseDoc.cVal = 0 )
+          {
+            if ( ( Prices.cVal = 0 ) OR ( Par1 = 0 ) )
+              NewPrice := Prices.Price
+            else
+              NewPrice := oValFunc.GetNatCurrency(Prices.cVal, Prices.SumVal, dValNalog);
+          }
+        else
+          {
+            if ( Prices.cVal = 0 )
+              NewPrice := oValFunc.GetAnyCurrency(comp(0), Prices.Price, dValNalog, BaseDoc.cVal);
+            else
+              if ( BaseDoc.cVal <> Prices.cVal )
+                NewPrice := oValFunc.GetAnyCurrency(Prices.cVal, Prices.SumVal, dValNalog, BaseDoc.cVal)
+              else
+                NewPrice := Prices.SumVal;
+          }
+
+        SpStep.Price := oDOfuns.DoRoundVltP(tipdo, NewPrice * (1 - BaseDoc.KolKompl/100) * PriceR/PriceV);
+
+        update current SpStep;
+      }
+
+  GetTotalSkid(FALSE);  //полный пересчет
+}

@@ -1,0 +1,1613 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Выбор спецификаций из дог-согл-кал.плана
+//******************************************************************************
+
+! Фильтры передаюся через DSK посредством параметра интерфейса DskParams,
+! в который передается набор констант, соответствующих каждому фильтру
+! (или группе фильтров), который нужно использовать. Т.е. в DSK не обяза-
+! тельно определять значения ВСЕХ фильтров, а только тех, которые хотите
+! использовать и в DskParams передать константу этого фильтра - признак
+! того, что этот фильтр (или группу фильтров) нужно использовать.
+
+!───────────────────┬───────────────────┬──────────────────────────────────────
+!                   │                   │     НАИМЕНОВАНИЕ ПАРАМЕРТОВ В DSK
+!     ФИЛЬТРЫ       │     КОНСТАНТЫ     ├───────────────────┬──────────────────
+!                   │                   │МАСКА ПРИМЕНЯЕМОСТИ│ЗНАЧЕНИЕ ПАРАМЕТРА
+!───────────────────┴───────────────────┴───────────────────┴──────────────────
+!
+!-- Группа 1 ------------------------------------------------------------------
+! по группе дескр.    vcGetDog_DesGr      'GetDAK_DesGr_e'    'GetDAK_DesGr'   - string
+! по дескр.           vcGetDog_Descr      'GetDAK_Descr_e'    'GetDAK_Descr'   - string
+! по дате(dDoc,dInput)vcGetDog_Date       'GetDAK_Date_e'     'GetDAK_begDate' - date
+!                                                             'GetDAK_endDate' - date
+! по сроку действ.    vcGetDog_DateSrok   'GetDAK_DateSrok_e' 'GetDAK_begDateSrok' - date
+!                                                             'GetDAK_endDateSrok' - date
+!
+!-- Группа 2 ------------------------------------------------------------------
+! по собств. орг-ции  vcGetDog_MyOrg      'GetDAK_MyOrg_e'    'GetDAK_MyOrg'   - NRec
+! по контрагенту (Гр) vcGetDog_Kontr      'GetDAK_Kontr_e'    'GetDAK_Kontr'   - NRec маркер 'MGetDocs_Kontr'
+! по грузоотправителю vcGetDog_GruzFrom   (только для CalPlan)'GetDAK_GruzFrom'- NRec
+! по грузополучателю  vcGetDog_GruzTo     (только для CalPlan)'GetDAK_GruzTo'  - NRec
+! по плательщику (Гр) vcGetDog_Plat       'GetDAK_Plat_e'     'GetDAK_Plat'    - NRec маркер 'MGetDocs_Plat'
+! по получателю  (Гр) vcGetDog_Pol        'GetDAK_Pol_e'      'GetDAK_Pol'     - NRec маркер 'MGetDocs_Pol'
+! по валюте           vcGetDog_Valut      'GetDAK_Valut_e'    'GetDAK_Valut'   - NRec
+!
+!-- Группа 3 ------------------------------------------------------------------
+! по программе        vcGetDog_Progr      'GetDAK_Progr_e'    'GetDAK_Progr'   - NRec
+! по виду док.   (Гр) vcGetDog_VidDoc     'GetDAK_VidDoc_e'   'GetDAK_VidDoc'  - NRec маркер 'MKatVidD'
+! по статусу (номеру) vcGetDog_Status     'GetDAK_Status_e'   'GetDAK_Status'  - NRec
+! по KatNotes    (Гр) vcGetDog_KatStatus  'GetDAK_KatStatus_e''GetDAK_KatStatus' - NRec
+!
+!-- Группа 4 ------------------------------------------------------------------
+! по договору         vcGetDog_Dogovor                        'GetDAK_Dogovor' - NRec
+! по соглашению       vcGetDog_AppDog                         'GetDAK_AppDog'  - NRec
+! по кал. плану       vcGetDog_CalPlan                        'GetDAK_CalPlan' - NRec
+!
+!-- Группа 5 ------------------------------------------------------------------
+! наличие к.плана     vcGetDog_ExistKP - оставляет только те договоры и соглашения,
+!                                        у которых есть КП
+!──────────────────────────────────────────────────────────────────────────────
+! Примечание: МАСКА ПРИМЕНЯЕМОСТИ: 0 - применять фильтр ко всем документам
+!                                  1 - только к договорам
+!                                  2 - только к соглашениям
+!                                  4 - только к пунктам календарного плана
+!
+! (Гр) - возможен групповой фильтр. Если ЗНАЧЕНИЕ ПАРАМЕТРА = 0 или не задано
+! то пытается читать из соответствующего маркера. В противном случае
+! ЗНАЧЕНИЕ ПАРАМЕТРА воспринимается как NRec для одиночного фильтра.
+!
+! Пример заполнения DSK находится в setdsk.vpp - можно просто его скопировать
+! в свой интерфейс и подставить нужные параметры
+
+#include GetDocs5.obj // Объектный интерфейс с функциями формирования
+
+#doc
+Интерфейс пакетного формирования документов по договорам
+#end
+Interface Dog2AnyDocs
+  Show at (,, 135,);
+
+Create View
+
+Var
+//--параметры
+  FunctionID         : word;
+  Realization        : string;
+//--
+  sTitle             : string;
+  Number_Screen,
+  wParams,
+  wOtherParams       : word;
+  CheckOnMark        : word; // Пометка только с одинаковыми:
+                             // Бит 1 (  1) : Пометка только из одного договора
+                             //     2 (  2) : Контрагент
+                             //     3 (  4) : Валюта
+                             //     4 (  8) : Входимость налогов
+                             //     5 ( 16) : Направление договора
+                             //     6 ( 32) : Плательщик
+                             //     7 ( 64) : Получатель платежа
+                             //     8 (128) : Не с нулевым остатком (SpDocs.Ostatok)
+  DskParams          : longint;
+  whc_User           : word;
+  sHelpLine          : string;
+  Node,MarkDog       : comp;
+  M_DOpredopl,
+  M_DOpredopl2,
+  M_ExistDO_SpDog,
+  Marker_LOOP,
+  Index_Docs         : longint;
+  EmptyAppDog        : boolean;
+  v_ProcOpl          : double;
+  p_FinPlan          : boolean;
+  p_cVal             : comp;
+  p_VhodNal,
+  p_Direct           : word;
+  p_cKontrag,
+  p_cPlat,
+  p_cPol             : comp;
+  refObj             : Dog2AnyDocsObj;
+  isBrowse,AskMark   : boolean;
+  Show_brSpecifDocs, // 0 - скрыть; 1 - просмотр; 2 - выбор
+  Show_brSpecifItogo : word;
+  s_SimvRub          : string;
+
+As select
+//******************************************************************************
+  if (SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs), '  √', SGetDocs.scurDirect)
+    ( FieldName = Picked )
+//******************************************************************************
+, if (SGetDocs.wDocType = 4, SGetDocs.cCalPlan, SGetDocs.nRec)
+    ( FieldName = NRec4SpDocs )
+//******************************************************************************
+, if (SpDocs.cGrMCUsl = 0, '',
+    if ((SpDocs.PrMC = 1) or
+        (SpDocs.PrMC = 4) or
+        (SpDocs.PrMC = 5), if(IsValid(tnGroupMC), GroupMC.Name, '? Группа МЦ ' + string(SpDocs.cGrMCUsl)),
+    if ((SpDocs.PrMC = 2) or
+        (SpDocs.PrMC = 3), if(IsValid(tnGroupUsl), GroupUsl.Name, '? Группа услуг ' + string(SpDocs.cGrMCUsl)), '')))
+    ( FieldName = SpGrName )
+//******************************************************************************
+, if (SpDocs.cMCUsl = 0,'',
+    if ((SpDocs.PrMC = 1) or
+        (SpDocs.PrMC = 4) or
+        (SpDocs.PrMC = 5),if(IsValid(tnKatMC2), KatMC2.Name, '? MC ' + string(SpDocs.cMCUsl)),
+    if ((SpDocs.PrMC = 2) or
+        (SpDocs.PrMC = 3),if(IsValid(tnKatUsl2), KatUsl2.Name, '? Услуга ' + string(SpDocs.cMCUsl)),
+    '')))
+    ( FieldName = SpObjName )
+//******************************************************************************
+, if (SpDocs.cVal = 0, s_SimvRub, KlVal.SimvolV)
+    ( FieldName = ValutName )
+//******************************************************************************
+, if (SGetDocs2.wDocType = 4, SGetDocs2.cCalPlan, SGetDocs2.nRec)
+    ( FieldName = NRec4SpDocs2 )
+//******************************************************************************
+, if (SGetDocs.wDocType = 4,CalPlan.cVal,Dogovor.cVal)
+    ( FieldName = Get_cVal )
+//******************************************************************************
+, if (SGetDocs.wDocType = 4, CalPlan.VhodNal, Dogovor.VhodNal)
+    ( FieldName = Get_VhodNal )
+//******************************************************************************
+, if (SearchMarker(M_DOpredopl2, SpDocs.nRec, Index_Docs), '  √',
+    if (SearchMarker(M_ExistDO_SpDog, SpDocs.nRec, Index_Docs), SGetDocs.scurDirect, '' ))
+    ( FieldName = Picked2 )
+//******************************************************************************
+, if (SSpDocs3.cGrMCUsl = 0, '',
+    if ((SSpDocs3.PrMC = 1) or
+        (SSpDocs3.PrMC = 4) or
+        (SSpDocs3.PrMC = 5), if(IsValid(tnGroupMC3), GroupMC3.Name, '? Группа МЦ ' + string(SSpDocs3.cGrMCUsl)),
+    if ((SSpDocs3.PrMC = 2) or
+        (SSpDocs3.PrMC = 3), if(IsValid(tnGroupUsl3), GroupUsl3.Name, '? Группа услуг ' + string(SSpDocs3.cGrMCUsl)), '')))
+    ( FieldName = SpGrName3 )
+//******************************************************************************
+, if (SSpDocs3.cMCUsl = 0, '',
+    if ((SSpDocs3.PrMC = 1) or
+        (SSpDocs3.PrMC = 4) or
+        (SSpDocs3.PrMC = 5), if(IsValid(tnKatMC3), KatMC3.Name, '? MC ' + string(SSpDocs3.cMCUsl)),
+    if ((SSpDocs3.PrMC = 2) or
+        (SSpDocs3.PrMC = 3), if(IsValid(tnKatUsl3), KatUsl3.Name, '? Услуга ' + string(SSpDocs3.cMCUsl)), '')))
+    ( FieldName = SpObjName3 )
+//******************************************************************************
+, if (SSpDocs3.cVal = 0, s_SimvRub, KlVal3.SimvolV)
+    ( FieldName = ValutName3 )
+//******************************************************************************
+, if (SGetDocs.VidPlan = 100, '',
+  if (((SGetDocs.Direct mod 2) = 1) and (SGetDocs.VidPlan <> 2) or
+      ((SGetDocs.Direct mod 2) = 0) and (SGetDocs.VidPlan =  2), '1->2', '2->1'))
+    ( FieldName = sDirect )
+//******************************************************************************
+, if (IsValid(tnSGetDocs),
+  if (SGetDocs.wDocType = 1,     // договор
+    if (SGetDocs.cZamena = 0, 'Договор', 'Отм. Договор'),
+    if (SGetDocs.wDocType = 2,   // соглашение
+      if (SGetDocs.cZamena = 0, 'Уточн. Соглашение', 'Отм. Соглашение'),
+      // календарный план SGetDocs.wDocType = 4
+      if (SGetDocs.VidPlan = 100, 'КП обобщенный',
+      if (SGetDocs.VidPlan = 1, 'КП мц/услуги', 'КП финансовый')))), '')
+    ( FieldName = sDocType )
+//******************************************************************************
+
+From
+  SGetDocs
+, Dogovor
+, CalPlan
+, KlVal
+, SpDocs
+, KatOtpEd
+, GroupMC
+, GroupUsl
+, KatNotes
+, KatNotes KatNotesDog
+, KatOrg
+, KatMC    KatMC2
+, KatMC    KatMC3
+, KatUsl   KatUsl2
+, KatUsl   KatUsl3
+, SGetDocs SGetDocs2
+, SpDocs   SpDocs2
+, SpDocs   SpDocs0
+, GroupMC  GroupMC3
+, GroupUsl GroupUsl3
+, KatOtpEd KatOtpEd3
+, KlVal    KlVal3
+, SGetDocs SGetDocs_s
+, SGetDocs SGetDocsOwner
+, SSpDocs3
+
+Where
+((
+    Node                           == SGetDocs.cOwner
+and SGetDocs.nRec                  == SGetDocs_s.cOwner
+and SGetDocs.cOwner                == SGetDocsOwner.nRec
+and SGetDocs.cOrg                  == KatOrg.nRec
+and SGetDocs.cNote                 == KatNotes.nRec
+
+and word(399 + SGetDocs.wDocType)  == SpDocs.TiDk
+and NRec4SpDocs                    == SpDocs.cDoc
+and SpDocs.cMCUsl                  == KatMC2.nRec
+and SpDocs.cMCUsl                  == KatUsl2.nRec
+and SpDocs.cGrMCUsl                == GroupMC.nRec
+and SpDocs.cGrMCUsl                == GroupUsl.nRec
+and SpDocs.cOtpEd                  == KatOtpEd.nRec
+and SpDocs.cVal                    == KlVal.nRec
+
+and word(399 + SGetDocs2.wDocType) == SpDocs2.TiDk
+and NRec4SpDocs2                   == SpDocs2.cDoc
+
+and SSpDocs3.cGrMCUsl              == GroupMC3.nRec
+and SSpDocs3.cGrMCUsl              == GroupUsl3.nRec
+and SSpDocs3.cMCUsl                == KatMC3.nRec
+and SSpDocs3.cMCUsl                == KatUsl3.nRec
+and SSpDocs3.cOtpEd                == KatOtpEd3.nRec
+and SSpDocs3.cVal                  == KlVal3.nRec
+))
+
+bounds b_4_Dog      SGetDocs.nRec     == Dogovor.nRec
+bounds b_4_CalPlan  SGetDocs.cCalPlan == CalPlan.nRec
+
+#include GetDocs.ord
+
+;
+
+Parameters
+  FunctionID  // Что должна делать функция :
+              // 1 - для GETDOCS3.VIP (ДО на предоплату по выбранным позициям)
+              // 2 - для DOG2DO.VIP   (ДО на предоплату)
+              // 3 - для DOG2NAKL.VIP (накладные,акты)
+              // По умолчанию Выбор экрана с начальными фильтрами для 'BegFil'
+              // Number_Screen = FunctionID, но можно переопределить в SetBrowseOptions()
+              // т.о. можно сделать один Number_Screen для нескольких FunctionID
+, Realization // Имя реализации объектного интерфейса Dog2AnyDocsObj
+;
+
+#include gdocs2.vpp // на таблице в памяти
+
+!------------------------------------------------------------------------------
+
+Tree trTreeTables (,, sci1EnInsTree);
+  Show at (,,, 9);
+
+  Table SGetDocs;
+
+Fields { Font = { Color = if(Picked = '  √', ColorMark, 0) } };
+//******************************************************************************
+  sDocType       #3'Документ'
+                 ('Договор, соглашение или пункт календарного плана')
+                 : [19], Protect;
+//******************************************************************************
+  SGetDocs.DesGr #3'Группа'
+                 ('Код группы пользователей')
+                 : [5], Protect, NoAutoSize;
+//******************************************************************************
+  SGetDocs.Descr #3'Дескр.'
+                 ('Дескриптор(идентификатор) пользователя')
+                 : [5], Protect, NoAutoSize;
+//******************************************************************************
+  SGetDocs.dDoc  #3'Дата', #3'заключения'
+                 ('Дата заключения договора/соглашения/пункта календарного плана')
+                 : [10,'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  SGetDocs.dBeg  #3'исполнение', #3'c'
+                 ('Начальная дата периода исполнения')
+                 : [10,'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  SGetDocs.dEnd  '', #3'по'
+                 ('Конечная дата периода исполнения')
+                 : [10,'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  SGetDocs.NoDoc #3'Номер'
+                 ('Внутренний номер')
+                 : [7], Protect, NoAutoSize;
+//******************************************************************************
+  KatOrg.Name    #3'Контрагент'
+                 ('Контрагент документа')
+                 : [22], Protect;
+//******************************************************************************
+  if(SGetDocs.VidPlan = 100, '', KatNotes.sName)
+                 #3'Статус', #3'документа'
+                 : [9], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//******************************************************************************
+  sDirect        #3'Вид'
+                 ('"1->2" - документ на продажу; "2->1" - документ на закупку')
+                 : [4], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  [DopProcOnDoc '']
+  if((SGetDocs.VidPlan = 0) and (SGetDocs.TipMoney = 2), DoubleToStr(SGetDocs.DopProc, '\2p[|-]3666.88'), '')
+                 #3'% к курсу'
+
+                 ('Процент к курсу на момент оплаты',,)
+                 : [6], Protect, NoAutoSize;
+//******************************************************************************
+  Picked         #3''
+                 : [10], Protect;
+//******************************************************************************
+end;
+
+Browse brTables (,, sci1EnIns);
+  Show at (,,, 9);
+
+  Table SGetDocs;
+
+Fields { Font = { Color = if(Picked = '  √', ColorMark, 0) } };
+//******************************************************************************
+  sDocType       #3'Документ'
+                 ('Договор, соглашение или пункт календарного плана')
+                 : [19], Protect;
+//******************************************************************************
+  SGetDocs.DesGr #3'Группа'
+                 ('Код группы пользователей')
+                 : [5], Protect, NoAutoSize;
+//******************************************************************************
+  SGetDocs.Descr #3'Дескр.'
+                 ('Дескриптор(идентификатор) пользователя')
+                 : [5], Protect, NoAutoSize;
+//******************************************************************************
+  SGetDocs.dDoc  #3'Дата', #3'заключения'
+                 ('Дата заключения договора/соглашения/пункта календарного плана')
+                 : [10,'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  SGetDocs.dBeg  #3'исполнение', #3'c'
+                 ('Начальная дата периода исполнения')
+                 : [10,'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  SGetDocs.dEnd  '', #3'по'
+                 ('Конечная дата периода исполнения')
+                 : [10,'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  SGetDocs.NoDoc #3'Номер'
+                 ('Внутренний номер')
+                 : [7], Protect, NoAutoSize;
+//******************************************************************************
+  KatOrg.Name    #3'Контрагент'
+                 ('Контрагент документа')
+                 : [22], Protect;
+//******************************************************************************
+  if(SGetDocs.VidPlan = 100, '', KatNotes.sName)
+                 #3'Статус', #3'документа'
+                 : [ 9], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//******************************************************************************
+  sDirect        #3'Вид'
+                 ('"1->2" - документ на продажу; "2->1" - документ на закупку')
+                 : [4], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  DopProcOnDoc   #3'% к курсу'
+                 ('Процент к курсу на момент оплаты',,)
+                 : [6], Protect, NoAutoSize;
+//******************************************************************************
+  Picked         #3''
+                 : [10], Protect;
+//******************************************************************************
+end;
+
+Browse brSpecifDocs (,, sci1EnIns);
+  Show at (, 10,, 15);
+
+  Table SpDocs;
+
+Fields { Font = { Color = if (Picked2 = '  √', ColorMark, 0) } };
+//******************************************************************************
+  SpDocs.Code    #3'№'
+                 ('Номер позиции спецификации')
+                 : [3], Skip, NoAutoSize;
+//******************************************************************************
+  SpDocs.PrMC    #3'МЦ/У'
+                 ('Признак МЦ или услуги')
+                 : [4], Skip, Centered, NoAutoSize,
+                 [LIST 1 'Т', 'У', 'УП', 'ДС', 'ГП'];
+//******************************************************************************
+  SpGrName       #3'Группа'
+                 ('Группа МЦ/услуг')
+                 : [8], Protect;
+//******************************************************************************
+  SpObjName      #3'Наименование'
+                 ('Наименование МЦ/услуги')
+                 : [15], Protect;
+//******************************************************************************
+  KatOtpEd.Abbr  #3'ЕдИзм'
+                 ('Наименование отпускной единицы измерения')
+                 : [5], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  SpDocs.Kol     #3'Количество'
+                 ('Количество МЦ/услуг')
+                 : [10, '\3p[|-]3666`666`666.888'], Protect;
+//******************************************************************************
+  SpDocs.Ostatok / KatOtpEd.Koef
+                 #3'Остаток'
+                 ('Остаток МЦ/услуг')
+                 : [10, '\3p[|-]3666`666`666.888'], Protect;
+//******************************************************************************
+  ValutName      #3'Вал.'
+                 ('Валюта')
+                 : [4], Skip, { Font = { Italic = TRUE } }, NoAutoSize, Centered;
+//******************************************************************************
+  SpDocs.Price   #3'Цена'
+                 ('Цена за единицу МЦ/услуги')
+                 : [12, '\2p[|-]36`666`666`666`666.88'], Protect;
+//******************************************************************************
+  SpDocs.Summa   #3'Сумма'
+                 ('Сумма по позиции')
+                 : [15, '\2p[|-]36`666`666`666`666.88'], Protect;
+//******************************************************************************
+  Picked2        #3''
+                 : [10], Protect;
+//******************************************************************************
+end;
+
+Browse brSpecifItogo (,, sci1EnEsc);
+  Show at (, 16,,);
+
+  Table SSpDocs3;
+
+Fields
+//******************************************************************************
+  SSpDocs3.Code    #3'№'
+                   ('Номер позиции спецификации')
+                   : [3], Skip, NoautoSize;
+//******************************************************************************
+  SSpDocs3.PrMC    #3'МЦ/У'
+                   ('Признак МЦ или услуги')
+                   : [4], Skip, Centered, NoAutoSize,
+                   [LIST 1 'Т', 'У', 'УП', 'ДС', 'ГП'];
+//******************************************************************************
+  SpGrName3        #3'Группа'
+                   ('Группа МЦ/услуг')
+                   : [8], Protect;
+//******************************************************************************
+  SpObjName3       #3'Наименование'
+                   ('Наименование МЦ/услуги')
+                   : [15], Protect;
+//******************************************************************************
+  KatOtpEd3.Abbr   #3'ЕдИзм'
+                   ('Наименование отпускной единицы измерения')
+                   : [5], Protect, NoAutoSize, Centered;
+//******************************************************************************
+  SSpDocs3.Kol     #3'Количество'
+                   ('Количество МЦ/услуг')
+                   : [10, '\3p[|-]3666`666`666.888'], Protect;
+//******************************************************************************
+  ValutName3       #3'Вал.'
+                   ('Валюта')
+                   : [4], Skip, { Font = { Italic = TRUE } }, NoAutoSize, Centered;
+//******************************************************************************
+  SSpDocs3.Price   #3'Цена'
+                   ('Цена за единицу МЦ/услуги')
+                   : [12, '\2p[|-]36`666`666`666`666.88'], Protect;
+//******************************************************************************
+  SSpDocs3.Summa   #3'Сумма'
+                   ('Сумма по позиции')
+                   : [20, '\2p[|-]36`666`666`666`666.88'], Protect;
+//******************************************************************************
+end;
+
+!------------------------------------------------------------------------------
+
+Procedure SetMyTitle;
+{
+  SetTitle(sTitle + ' (помечено документов: ' + string(GetMarkerCount(M_DOpredopl))
+         + if(Show_brSpecifDocs = 2, ', позиций: ' + string(GetMarkerCount(M_DOpredopl2)), '') + ')');
+}
+
+Function CanMark(tr : boolean) : boolean;
+var savNode : comp;
+{
+  CanMark := true;
+  savNode := Node;
+
+  TreePushPos(trTreeTables);
+
+  while (SGetDocs.cOwner <> 0) do
+    TreeJumpToRecord(trTreeTables,SGetDocs.cOwner);
+
+  if (not tr)
+    MarkDog := SGetDocs.nRec
+  else
+    if ( ( MarkDog <> 0 ) AND ( SGetDocs.nRec <> MarkDog ) )
+      CanMark := false;
+
+  TreePopPos(trTreeTables);
+
+  Node := savNode;
+}
+
+//-- заново пронумеровать все позиции спецификации
+// возвращает количество позиций спецификации
+Function UpDateSSpDocs3Code : word;
+var
+  i                   : word;
+  Marker, MarkerCount : longint;
+  SpDocNRec           : comp;
+{
+  Marker := InitMarker('spdocs_SpDocsNpp', 8, 10, 10, false);
+
+  ClearMarker(Marker);
+
+  _LOOP NOCACHE SSpDocs3
+    InsertMarker(Marker,SSpDocs3.nRec);
+
+  MarkerCount := GetMarkerCount(Marker);
+
+  FOR(i := 0; i < MarkerCount; i := i + 1)
+    if GetMarker(Marker, i, SpDocNRec)
+      if ( GetFirst FastFirstRow SSpDocs3 where (( SpDocNRec == SSpDocs3.nRec )) = tsOk )
+        if ( SSpDocs3.Code <> (i + 1) )
+          {
+            SSpDocs3.Code := i + 1;
+            update current SSpDocs3;
+          }
+
+  DoneMarker(Marker, 'spdocs_SpDocsNpp');
+
+  UpDateSSpDocs3Code := MarkerCount;
+}
+
+/* Mode = 1 - Insert */
+/* Mode = 2 - Delete */
+Procedure InsDel_TRUE_SpMarker(Mode      : word;
+                               _marker   : longint;
+                               _NRec     : comp;
+                               _PrMC     : word;
+                               _cGrMCUsl : comp;
+                               _cMCUsl   : comp;
+                               _cOtpEd   : comp;
+                               _cVal     : comp;
+                               _Price    : double;
+                               _KOL      : double;
+                               _Summa    : double);
+{
+  if (_KOL <= 0)
+    Exit;
+
+  if (Mode = 1)
+    InsertMarker(_marker, _NRec)
+  else
+    DeleteMarker(_marker, _NRec);
+
+  if (Show_brSpecifItogo = 0)
+    EXIT;
+
+  PushPos(#SSpDocs3);
+
+  if (GetFirst FastFirstRow SSpDocs3
+         where (( _PrMC     == SSpDocs3.PrMC     and
+                  _cGrMCUsl == SSpDocs3.cGrMCUsl and
+                  _cMCUsl   == SSpDocs3.cMCUsl   and
+                  _cOtpEd   == SSpDocs3.cOtpEd   and
+                  _cVal     == SSpDocs3.cVal     and
+                  _Price    == SSpDocs3.Price )) = tsOk)
+    {
+      if (Mode = 1)
+        {
+          SSpDocs3.Kol   := SSpDocs3.Kol   + _KOL;
+          SSpDocs3.Summa := SSpDocs3.Summa + _Summa;
+          update current SSpDocs3;
+        }
+      else // Delete
+        if (SSpDocs3.Kol <= _KOL)
+          delete current SSpDocs3
+        else
+          {
+            SSpDocs3.Kol   := SSpDocs3.Kol   - _KOL;
+            SSpDocs3.Summa := SSpDocs3.Summa - _Summa;
+
+            update current SSpDocs3;
+          }
+    }
+  else
+    if (Mode = 1)
+      {
+        ClearBuffer(#SSpDocs3);
+
+        SSpDocs3.Code     := 10000;
+        SSpDocs3.PrMC     := _PrMC;
+        SSpDocs3.cGrMCUsl := _cGrMCUsl;
+        SSpDocs3.cMCUsl   := _cMCUsl;
+        SSpDocs3.cOtpEd   := _cOtpEd;
+        SSpDocs3.cVal     := _cVal;
+        SSpDocs3.Price    := _Price;
+        SSpDocs3.Kol      := _KOL;
+        SSpDocs3.Summa    := _Summa;
+
+        insert current SSpDocs3;
+      }
+
+  UpDateSSpDocs3Code;
+
+  PopPos(#SSpDocs3);
+}
+
+Procedure Delete_ONE_SpMarker;
+{
+  if (Show_brSpecifDocs <> 2)
+    EXIT;
+
+  if SearchMarker(M_DOpredopl2, SpDocs.nRec, Index_Docs)
+    InsDel_TRUE_SpMarker(2,
+                         M_DOpredopl2,
+                         SpDocs.nRec,
+                         SpDocs.PrMC,
+                         SpDocs.cGrMCUsl,
+                         SpDocs.cMCUsl,
+                         SpDocs.cOtpEd,
+                         SpDocs.cVal,
+                         SpDocs.Price,
+                         SpDocs.Kol,
+                         SpDocs.Summa);
+
+  // если к МЦ привязана услуга
+  if ((SpDocs.PrMC = 1) OR (SpDocs.PrMC = 3))
+    _LOOP SpDocs0 where (( SpDocs.nRec == SpDocs0.cSpMC ))
+      if SearchMarker(M_DOpredopl2, SpDocs0.nRec, Index_Docs)
+        InsDel_TRUE_SpMarker(2,
+                             M_DOpredopl2,
+                             SpDocs0.nRec,
+                             SpDocs0.PrMC,
+                             SpDocs0.cGrMCUsl,
+                             SpDocs0.cMCUsl,
+                             SpDocs0.cOtpEd,
+                             SpDocs0.cVal,
+                             SpDocs0.Price,
+                             SpDocs0.Kol,
+                             SpDocs0.Summa);
+
+  // если услуга привязана к МЦ
+  if ( ((SpDocs.PrMC = 2) OR (SpDocs.PrMC = 4) OR (SpDocs.PrMC = 5)) AND (SpDocs.cSpMC <> 0) )
+    if ( GetFirst FastFirstRow SpDocs0 where (( SpDocs.cSpMC == SpDocs0.nRec )) = tsOk)
+      if SearchMarker(M_DOpredopl2, SpDocs0.nRec, Index_Docs)
+        InsDel_TRUE_SpMarker(2,
+                             M_DOpredopl2,
+                             SpDocs0.nRec,
+                             SpDocs0.PrMC,
+                             SpDocs0.cGrMCUsl,
+                             SpDocs0.cMCUsl,
+                             SpDocs0.cOtpEd,
+                             SpDocs0.cVal,
+                             SpDocs0.Price,
+                             SpDocs0.Kol,
+                             SpDocs0.Summa);
+}
+
+Procedure Delete_Marker;
+{
+  DeleteMarker(M_DOpredopl, SGetDocs.nRec);
+  if (GetMarkerCount(M_DOpredopl) = 0)
+    MarkDog := 0;
+}
+
+Procedure Delete_SpMarker;
+{
+  if (Show_brSpecifDocs <> 2)
+    EXIT;
+
+  PushPos(#SpDocs);
+
+  _LOOP SpDocs
+    Delete_ONE_SpMarker;
+
+  PopPos(#SpDocs);
+}
+
+Procedure Insert_ONE_SpMarker;
+{
+  if (Show_brSpecifDocs <> 2)
+    EXIT;
+
+  if ((CheckOnMark and 128) <> 0)
+    if (SpDocs.Ostatok <= 0)
+      {
+        Message('Количество по спецификации исчерпано ранее созданными документами !', Information + CancelButton);
+        Exit;
+      }
+
+  if not SearchMarker(M_DOpredopl2, SpDocs.nRec, Index_Docs)
+    InsDel_TRUE_SpMarker(1,
+                         M_DOpredopl2,
+                         SpDocs.nRec,
+                         SpDocs.PrMC,
+                         SpDocs.cGrMCUsl,
+                         SpDocs.cMCUsl,
+                         SpDocs.cOtpEd,
+                         SpDocs.cVal,
+                         SpDocs.Price,
+                         SpDocs.Kol,
+                         SpDocs.Summa);
+
+  // если к МЦ привязана услуга
+  if ((SpDocs.PrMC = 1) OR (SpDocs.PrMC = 3))
+    _LOOP SpDocs0 where (( SpDocs.nRec == SpDocs0.cSpMC ))
+      if not SearchMarker(M_DOpredopl2, SpDocs0.nRec, Index_Docs)
+        InsDel_TRUE_SpMarker(1,
+                             M_DOpredopl2,
+                             SpDocs0.nRec,
+                             SpDocs0.PrMC,
+                             SpDocs0.cGrMCUsl,
+                             SpDocs0.cMCUsl,
+                             SpDocs0.cOtpEd,
+                             SpDocs0.cVal,
+                             SpDocs0.Price,
+                             SpDocs0.Kol,
+                             SpDocs0.Summa);
+
+  // если услуга привязана к МЦ
+  if ( ((SpDocs.PrMC = 2) OR (SpDocs.PrMC = 4) OR (SpDocs.PrMC = 5)) AND (SpDocs.cSpMC <> 0) )
+    if (GetFirst FastFirstRow SpDocs0 where (( SpDocs.cSpMC == SpDocs0.nRec )) = tsOk)
+      if not SearchMarker(M_DOpredopl2, SpDocs0.nRec, Index_Docs)
+        InsDel_TRUE_SpMarker(1,
+                             M_DOpredopl2,
+                             SpDocs0.nRec,
+                             SpDocs0.PrMC,
+                             SpDocs0.cGrMCUsl,
+                             SpDocs0.cMCUsl,
+                             SpDocs0.cOtpEd,
+                             SpDocs0.cVal,
+                             SpDocs0.Price,
+                             SpDocs0.Kol,
+                             SpDocs0.Summa);
+}
+
+Procedure Insert_SpMarker;
+{
+  if (Show_brSpecifDocs <> 2)
+    EXIT;
+
+  PushPos(#SpDocs);
+
+  _LOOP SpDocs
+    Insert_ONE_SpMarker;
+
+  PopPos(#SpDocs);
+}
+
+Function Insert_Marker(var Mes1    : boolean;
+                       var Mes2    : boolean;
+                           Mark_Sp : boolean) : boolean;
+var stt : string;
+{
+  Insert_Marker := false;
+
+  stt := '';
+
+  if not (IsValid(#SpDocs) OR SGetDocs.IsFinPKP)
+    stt := 'Нет спецификации !';
+
+  if ( (stt = '') and (GetMarkerCount(M_DOpredopl) > 0) )
+    {
+      if p_FinPlan
+        stt := 'Формирование возможно только по одному финансовому ПКП !';
+
+      // Помечаем финансовый после пометки товарных
+      if ( SGetDocs.IsFinPKP AND (stt = '') )
+        stt := 'Не совпал тип ПКП !';
+
+      // Пометка только из одного договора
+      if ((CheckOnMark and 1) <> 0)
+        if (not CanMark(true))
+          stt := 'Не совпал договор !';
+
+      // Контрагент
+      if ((CheckOnMark and 2) <> 0)
+        if ( (p_cKontrag <> SGetDocs.cOrg) AND (stt='') )
+          stt := 'Не совпал контрагент !';
+
+      // Валюта
+      if ((CheckOnMark and 4) <> 0)
+        if ( (p_cVal <> Get_cVal) AND (stt = '') )
+          stt := 'Не совпала валюта !';
+
+      // Входимость налогов
+      if ((CheckOnMark and 8) <> 0)
+        if ( (p_VhodNal <> Get_VhodNal) AND (stt = '') )
+          stt := 'Не совпала входимость налогов !';
+
+      // Направление договора
+      if ((CheckOnMark and 16) <> 0)
+        if ( (p_Direct <> SGetDocs.Direct) AND (stt = '') )
+          stt := 'Не совпало направление договора !';
+
+      // Плательщик
+      if ((CheckOnMark and 32) <> 0)
+        if ( (((SGetDocs.Direct mod 2) = 1) AND (p_cPlat <> SGetDocs.cPlat)) AND (stt = '') )
+          stt := 'Не совпал плательщик !';
+
+      // Получатель платежа
+      if ((CheckOnMark and 64) <> 0)
+        if ( (((SGetDocs.Direct mod 2) = 0) AND (p_cPol <> SGetDocs.cPol )) AND (stt = '') )
+          stt := 'Не совпал получатель платежа !';
+    }
+
+  if ( ((CheckOnMark and 128) <> 0) AND (stt = '') )
+    {
+      stt := 'Количество по спецификации исчерпано ранее созданными документами !';
+
+      PushPos(#SpDocs);
+
+      _LOOP SpDocs
+        if (SpDocs.Ostatok > 0)
+          {
+            stt := '';
+            Break;
+          }
+
+      PopPos(#SpDocs);
+    }
+
+  if (stt <> '')
+    {
+      if Mes1
+        Message(stt, Information + CancelButton);
+
+      Mes1 := false;
+      Exit;
+    }
+
+  if (SGetDocs.scurDirect <> '')
+    if (AskMark and Mes2)
+      {
+        Mes2 := false;
+
+        if (Message('По данному документу договора уже было формирование.'#13
+                  + 'Пометить документ для формирования ?', Confirmation + YesNo) <> cmYes)
+          Exit;
+
+        AskMark := false;
+      }
+
+  if (GetMarkerCount(M_DOpredopl) = 0)
+    CanMark(false);
+
+  p_FinPlan  := SGetDocs.IsFinPKP;
+  p_cVal     := Get_cVal;
+  p_VhodNal  := Get_VhodNal;
+  p_Direct   := SGetDocs.Direct;
+  p_cKontrag := SGetDocs.cOrg;
+  p_cPlat    := SGetDocs.cPlat;
+  p_cPol     := SGetDocs.cPol;
+
+  if not SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs)
+    InsertMarker(M_DOpredopl, SGetDocs.nRec);
+
+  Insert_Marker := true;
+
+  if Mark_Sp
+    Insert_SpMarker;
+}
+
+Procedure CheckMarkOne_SpDocs;
+var MarkOne_SpDocs : boolean;
+{
+  MarkOne_SpDocs := false;
+
+  PushPos(#SpDocs);
+
+  _LOOP SpDocs
+    if SearchMarker(M_DOpredopl2, SpDocs.nRec, Index_Docs)
+      {
+        MarkOne_SpDocs := true;
+        Break;
+      }
+
+  PopPos(#SpDocs);
+
+  if (not MarkOne_SpDocs)
+    Delete_Marker;
+}
+
+Function CanMark_SpDocs(AllSp : boolean) : boolean;
+var Mes1, Mes2, res : boolean;
+{
+  CanMark_SpDocs := false;
+
+  Mes1 := true;
+  Mes2 := true;
+  res  := true;
+
+  if (SGetDocs.wDocType < 4) // Договор или соглашение
+    {
+      if (GetFirst SGetDocs2 where(( SGetDocs.nRec == SGetDocs2.cOwner )) = tsOk)
+        if (GetFirst SpDocs2 = tsOk)
+          res := false;
+    }
+  else // Календарный план
+    if (GetFirst SGetDocs2 where(( SGetDocs.cOwner == SGetDocs2.cOwner and
+                                   word(2)         == SGetDocs2.wDocType )) = tsOk)
+      // есть соглашение на том же уровне
+      if (GetFirst SpDocs2 = tsOk)
+        res := false;
+
+  if (not res)
+    Message('Помечайте нижестоящие документы !', Information + OkButton);
+  else
+    if Insert_Marker(Mes1, Mes2, AllSp)
+      CanMark_SpDocs := true;
+}
+
+!--- ФУНКЦИИ ПОМЕТКИ ВЕТВИ ДЕРЕВА --------------------
+
+
+Function SearchFirstMarker : boolean;
+var SavePos,SaveNrec : comp;
+{
+  SearchFirstMarker := false;
+
+  if SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs)
+    {
+      SearchFirstMarker := true;
+      Exit;
+    }
+
+  SavePos := SGetDocs.nRec;
+
+  TreeCloseNode(trTreeTables);
+
+  if TreeGetNext(trTreeTables)
+    {
+      SaveNrec := SGetDocs.nRec;
+      TreeGetPrev(trTreeTables);
+    }
+
+  TreeOpenNode(trTreeTables);
+
+  if TreeGetNext(trTreeTables)
+    do
+      {
+        if (SGetDocs.nRec = SaveNrec)
+          Break;
+
+        if SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs)
+          {
+            SearchFirstMarker := true;
+            Break;
+          }
+
+        TreeOpenNode(trTreeTables);
+      }
+    while TreeGetNext(trTreeTables);
+
+  TreeJumpToRecord(trTreeTables, SavePos);
+}
+
+Procedure MarkGroup(Mes1 : boolean; var Mes2 : boolean);
+var
+  _isLeaf, AppExist : boolean;
+  savNode           : comp;
+  fromLevel         : integer;
+{
+  TreePushPos(trTreeTables);
+
+  if ( RecordExists SGetDocs_s = tsOk ) // есть подчиненные
+    {
+      // визуально открываем всю ветку
+      fromLevel := TreeLevel(trTreeTables);
+
+      do
+        TreeOpenNode(trTreeTables);
+      While ( TreeGetNext(trTreeTables) AND (TreeLevel(trTreeTables) > fromLevel) );
+
+      TreePopPos(trTreeTables);
+      TreePushPos(trTreeTables);
+    }
+
+  if (SGetDocs.wDocType = 4) // КП
+    {
+      TreeJumpToRecord(trTreeTables, if(SGetDocs.cAppDogovor <> 0, SGetDocs.cAppDogovor, SGetDocs.cDogovor));
+
+      _LOOP SGetDocs_s
+        if (SGetDocs_s.wDocType = 2) // у владельца КП есть и соглашение
+          {
+            TreePopPos(trTreeTables);
+
+            if ( RecordExists SGetDocs_s <> tsOk ) // нет подчиненных
+              TreeGetNext(trTreeTables);
+
+            Exit;
+          }
+
+      TreePopPos(trTreeTables);
+      TreePushPos(trTreeTables);
+    }
+  // У КП нет соглашений на его уровне
+
+  _isLeaf := true;
+
+  ClearMarker(Marker_LOOP);
+
+  InsertMarker(Marker_LOOP,SGetDocs.nRec);
+
+  savNode := Node;
+
+  while (GetMarkerCount(Marker_LOOP) > 0) do
+    {
+      GetMarker(Marker_LOOP, 0, Node);
+
+      AppExist := false;
+
+      _LOOP SGetDocs
+        {
+          _isLeaf := false; // у документа что-то есть
+
+          if (SGetDocs.wDocType = 2) // Соглашение
+            AppExist := true;
+
+          if (SGetDocs.wDocType = 4) // КП
+            if (AppExist)
+              Break;
+
+          if ( RecordExists SGetDocs_s = tsOk ) // есть подчиненные
+            InsertMarker(Marker_LOOP, SGetDocs.nRec)
+          else
+            Insert_Marker(false, Mes2, true)
+        }
+
+      AtDeleteMarker(Marker_LOOP, 0);
+    }
+
+  Node := savNode;
+
+  TreePopPos(trTreeTables);
+
+  if (_isLeaf)
+    {
+      Insert_Marker(Mes1, Mes2, true);
+      TreeGetNext(trTreeTables);
+    }
+}
+
+Procedure UnMarkGroup;
+var SavePos,SaveNrec : comp;
+{
+  SavePos := SGetDocs.nRec;
+
+  if SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs)
+    {
+      Delete_Marker;
+      Delete_SpMarker;
+    }
+
+  TreeCloseNode(trTreeTables);
+
+  if TreeGetNext(trTreeTables)
+    {
+      SaveNrec := SGetDocs.nRec;
+      TreeGetPrev(trTreeTables);
+    }
+
+  TreeOpenNode(trTreeTables);
+
+  var ret : boolean; ret := true;
+
+  if TreeGetNext(trTreeTables)
+    do
+      {
+        if (SGetDocs.nRec = SaveNrec)
+          if ret
+            Exit
+          else
+            Break;
+
+        ret := false;
+
+        if SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs)
+          {
+            Delete_Marker;
+            Delete_SpMarker;
+          }
+
+        TreeOpenNode(trTreeTables);
+      }
+    while TreeGetNext(trTreeTables);
+
+  TreeJumpToRecord(trTreeTables, SavePos);
+}
+
+Procedure SelectAll;
+var Mes2 : boolean;
+{
+  TreePushPos(trTreeTables);
+
+  while (SGetDocs.cOwner <> 0) do
+    TreeJumpToRecord(trTreeTables, SGetDocs.cOwner);
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Анализ и пометка всех возможных позиций...', 1);
+
+  Mes2 := true;
+
+  MarkGroup(false, Mes2);
+
+  _LOOP SGetDocs2 where (( comp(0) == SGetDocs2.cOwner ))
+    {
+      if (not NextVisual)
+        {
+          StopVisual('', 0);
+          TreePopPos(trTreeTables);
+          Exit;
+        }
+
+    if TreeJumpToRecord(trTreeTables, SGetDocs2.nRec)
+      MarkGroup(false, Mes2);
+    }
+
+  StopVisual('', 0);
+
+  TreePopPos(trTreeTables);
+ }
+
+Function GetDocTreeType: byte;
+{
+  if (RecordExists SGetDocs_s <> tsOK)
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(trTreeTables), ntfOpen, ntfClose);
+}
+#define SHOW_NOTES_ICONS
+#include DogIcons.vpp
+
+!------------------------------------------------------------------------------
+
+HandleEvent // Interface
+
+cmTreeTop:
+  Node := 0;
+
+cmTreeUp:
+  Node := SGetDocs.cOwner;
+
+cmTreeDown:
+  Node := SGetDocs.nRec;
+
+cmTreeNodeType:
+  {
+    var DocTreeType: byte;
+
+    DocTreeType := GetDocTreeType;
+
+    if (SGetDocs.VidPlan = 100)
+      {
+        TreeSetNodeType(trTreeTables, DocTreeType);
+        Exit;
+      }
+
+    TreeSetNodeType(trTreeTables,
+                    DocTreeType,
+                    GetDocTreeIconEx(if(SGetDocs.wDocType = 1, word(400),
+                                     if(SGetDocs.wDocType = 2, word(401), word(403))),
+                                     KatNotes.Status,
+                                     DocTreeType,
+                                     KatNotes.nRec));
+  }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(trTreeTables, SGetDocs.cOwner);
+
+cmInit:
+{
+  if (GetFirst Dogovor where (( comp(0) == Dogovor.cDogovor )) <> tsOk)
+    {
+      Message('Нет ни одного договора!', Warning + CancelButton);
+      Abort;
+      Exit;
+    }
+
+  SetOrder(tiByDate);
+  SetColumnSorting(trTreeTables, #SGetDocs.dDoc, 1);
+
+  SetFieldVisible(#DopProcOnDoc, FunctionID <> 3);
+
+  GetVipRef(refObj, #AddComp('L_DOGOVOR')Realization);
+
+  var name_st : string;
+
+  sTitle        := '';
+  name_st       := '  √';
+  Number_Screen := FunctionID; // Выбор экрана с начальными фильтрами для BegFil
+  DskParams     := 0;
+  whc_User      := 0;
+  sHelpLine     := '';
+  wOtherParams  := 0;
+
+  refObj.SetBrowseOptions(sTitle,
+                          name_st,
+                          Show_brSpecifDocs,
+                          Show_brSpecifItogo,
+                          whc_User,
+                          sHelpLine,
+                          CheckOnMark,   // параметры группового выбора
+                          Number_Screen, // т.о. можно сделать один Number_Screen для нескольких FunctionID
+                          DskParams,     // можно самому настроить фильтры, не вызывая 'BegFil' (Number_Screen = 0)
+                          wOtherParams
+                          );
+
+  if (sTitle = '')
+    sTitle := 'Выбор набора документов';
+
+  // привязываем нужный хелп
+  SetHelpAndStatusContext(trTreeTables , -1, sci1EnInsTree, whc_User);
+  SetHelpAndStatusContext(brTables     , -1, sci1EnIns    , whc_User);
+  SetHelpAndStatusContext(brSpecifDocs , -1, sci1EnIns    , whc_User);
+  SetHelpAndStatusContext(brSpecifItogo, -1, sci1EnEsc    , whc_User);
+
+  if (sHelpLine = '')
+    {
+      SetFieldSelectable(#Picked , FALSE);
+      SetFieldSelectable(#Picked2, FALSE);
+    }
+  else
+    {
+      SetInternalHelpLine(trTreeTables, #Picked , sHelpLine);
+      SetInternalHelpLine(brTables    , #Picked , sHelpLine);
+      SetInternalHelpLine(brSpecifDocs, #Picked2, sHelpLine);
+    }
+
+  if (Number_Screen <> 0) // 0 - не вызывать никаких фильтров
+    if (RunInterface('BegFil', Number_Screen, v_ProcOpl, wParams, DskParams) = cmCancel)
+      {
+        Abort;
+        Exit;
+      }
+
+  if ((wOtherParams and 1) <> 0) // по Enter закрывать интерфейс
+    SetInterfaceOptions(opDoAccept or opEscClose or opCyanInterface)
+  else
+    SetInterfaceOptions(opEscClose or opCyanInterface);
+
+  Init_DSK_Params;
+
+  ReSetBounds(#SGetDocs);
+
+  if (not MakeTree)
+    {
+      Abort;
+      Exit;
+    }
+
+  SetBounds(#SGetDocs);
+
+  if (RecordsInTable(#SGetDocs) = 0)
+    {
+      Message('Нет документов, удовлетворяющих фильтру!', Information);
+      Abort;
+      Exit;
+    }
+
+  MarkDog := 0;
+
+  M_DOpredopl     := InitMarker('GetDocs'                , 8, 100, 10, false); // нужен несортированный маркер
+  M_DOpredopl2    := InitMarker('GetDocs_Sp'             , 8, 100, 10);
+  M_ExistDO_SpDog := InitMarker('GetDocs_ExistDocBySpDog', 8, 100, 10);
+  Marker_LOOP     := InitMarker('MGetDocs_Tree_LOOP'     , 8, 100, 10, false); // несортированный маркер
+
+  ClearMarker(M_DOpredopl);
+  ClearMarker(M_DOpredopl2);
+  ClearMarker(M_ExistDO_SpDog);
+
+  SetColumnTitle(trTreeTables, #Picked,  name_st);
+  SetColumnTitle(brTables,     #Picked,  name_st);
+  SetColumnTitle(brSpecifDocs, #Picked2, name_st);
+
+  refObj.FillExistDocs(M_ExistDO_SpDog, FunctionID);
+
+  AddBounds(tbb_4_Dog);
+  AddBounds(tbb_4_CalPlan);
+
+  //--------- Установка внешнего вида
+  cfsSetCurrentContainer('Dog2AnyDocs');
+
+  cfsSetProp('brSpecifDocs',  'Visible', Show_brSpecifDocs <> 0);
+  cfsSetProp('brSpecifItogo', 'Visible', Show_brSpecifDocs * Show_brSpecifItogo <> 0);
+
+  if (Show_brSpecifDocs = 0) // скрываем оба browse
+    {
+      cfsSetProp('trTreeTables',  'RectB_Y', integer(23));
+      cfsSetProp('brTables'    ,  'RectB_Y', integer(23));
+    }
+  else
+    if (Show_brSpecifItogo = 0) // скрываем только итоговую спецификацию
+      {
+        cfsSetProp('brSpecifDocs',  'RectA_Y', integer(16));
+        cfsSetProp('brSpecifDocs',  'RectB_Y', integer(23));
+        cfsSetProp('trTreeTables',  'RectB_Y', integer(15));
+        cfsSetProp('brTables'    ,  'RectB_Y', integer(15));
+      }
+    else
+      {
+        cfsSetProp('brSpecifDocs',  'RectA_Y', integer(10));
+        cfsSetProp('brSpecifDocs',  'RectB_Y', integer(15));
+        cfsSetProp('trTreeTables',  'RectB_Y', integer(9));
+        cfsSetProp('brTables'    ,  'RectB_Y', integer(9));
+      }
+
+  if (Show_brSpecifDocs = 1) // только просмотр
+    {
+      SetFieldVisible(#Picked2, FALSE);
+      SetHelpAndStatusContext(brSpecifDocs, -1, sci1EnEsc, 0);
+    }
+
+  AskMark   := true;
+  isBrowse  := false;
+
+  InitDocIconsArray;
+
+  s_SimvRub := sGetTune('NDE.SimvRub');
+
+  SelectField(#SGetDocs.NoDoc);
+
+  SetMyTitle;
+
+  ReReadRecord(#SGetDocs);
+
+  TreeGetLast(trTreeTables);
+}
+
+cmDefault:
+{
+  if (isBrowse)
+    {
+      isBrowse := false;
+
+      var _nrec : comp; _nrec := SGetDocs.nRec;
+
+      SetBounds(#SGetDocs);
+
+      TreeJumpToRecord (trTreeTables,_nrec);
+
+      SetFormat(trTreeTables);
+
+      Abort;
+      Exit;
+    }
+
+  if (GetMarkerCount(M_DOpredopl) = 0)
+    ProcessCommand(cmMarkUnMark);
+
+  if (GetMarkerCount(M_DOpredopl) = 0)
+    {
+      Abort;
+      Exit;
+    }
+
+  if ((wOtherParams and 1) <> 0) // по Enter закрывать интерфейс
+    Exit; // Формирование происходит потом после закрытия интерфейса
+
+  refObj.MakeDocBySelection(M_DOpredopl,
+                            M_DOpredopl2,
+                            M_ExistDO_SpDog,
+                            FunctionID,
+                            wParams);
+
+  p_FinPlan := false;
+
+  SetMyTitle;
+
+  RereadRecord(#SGetDocs);
+
+  if (Show_brSpecifDocs  <> 0)
+    RereadRecord(#SpDocs);
+
+  if (Show_brSpecifItogo <> 0)
+    {
+      UpDateSSpDocs3Code;
+      RereadRecord(#SSpDocs3);
+    }
+} // cmDefault
+
+cmDone:
+{
+  DoneMarker(M_DOpredopl    , 'GetDocs');
+  DoneMarker(M_DOpredopl2   , 'GetDocs_Sp');
+  DoneMarker(M_ExistDO_SpDog, 'GetDocs_ExistDocBySpDog');
+  DoneMarker(Marker_LOOP    , 'MGetDocs_Tree_LOOP');
+}
+
+cmMarkUnMark: // Если на группу то выбирать все из группы
+{
+  var Mes2 : boolean; Mes2 := true;
+
+  AskMark := true;
+
+  if (CurTable = #SGetDocs)
+    {
+      if SearchFirstMarker
+        {
+          if ( RecordExists SGetDocs_s <> tsOk ) // это группа
+            UnMarkGroup
+          else
+            {
+              Delete_Marker;
+              Delete_SpMarker;
+              TreeGetNext(trTreeTables);
+            }
+        }
+      else
+        MarkGroup(true, Mes2);
+    }
+
+  var _Next : boolean; _Next := true;
+
+  if (CurTable = #SpDocs)
+    {
+      if SearchMarker(M_DOpredopl, SGetDocs.nRec, Index_Docs)
+        {
+          if SearchMarker(M_DOpredopl2, SpDocs.nRec, Index_Docs)
+            {
+              Delete_ONE_SpMarker;
+              CheckMarkOne_SpDocs;
+            }
+          else
+            Insert_ONE_SpMarker;
+        }
+      else
+        if CanMark_SpDocs(false)
+          Insert_ONE_SpMarker
+        else
+          _Next := false;
+
+      if _Next
+        if (GetNext SpDocs <> tsOk)
+          {}
+    }
+
+  SetMyTitle;
+
+  ReScanPanel(#SGetDocs);
+  ReScanPanel(#SpDocs);
+  RereadRecord(#SSpDocs3);
+}
+
+cmSelectAll:
+{
+  AskMark := true;
+
+  if (CurTable = #SGetDocs)
+    SelectAll;
+
+  if (CurTable = #SpDocs)
+    CanMark_SpDocs(true);
+
+  SetMyTitle;
+
+  ReScanPanel(#SGetDocs);
+  ReScanPanel(#SpDocs);
+  RereadRecord(#SSpDocs3);
+}
+
+cmUnSelectAll:
+{
+  ClearMarker(M_DOpredopl);
+  ClearMarker(M_DOpredopl2);
+
+  delete all SSpDocs3;
+
+
+  MarkDog := 0;
+  SetMyTitle;
+
+  ReScanPanel(#SGetDocs);
+  ReScanPanel(#SpDocs);
+  RereadRecord(#SSpDocs3);
+}
+
+cmOpenSearch:
+{
+  if ( ((CurField = #SGetDocs.dDoc ) OR (CurField = #SGetDocs.NoDoc)) AND (not isBrowse) )
+    {
+      isBrowse := true;
+
+      ReSetBounds(#SGetDocs);
+
+      SetFormat(brTables);
+    }
+}
+
+cmCloseSearch:
+  if (isBrowse)
+    {
+      isBrowse := false;
+      Node     := SGetDocs.cOwner;
+
+      var _nrec : comp; _nrec := SGetDocs.nRec;
+
+      SetBounds(#SGetDocs);
+
+      TreeJumpToRecord(trTreeTables, _nrec);
+
+      SetFormat(trTreeTables);
+    }
+
+cmShowAll: // Раскрыть все ветки
+{
+  if isBrowse
+    Exit;
+
+  var sav_NRec : comp; sav_NRec := SGetDocs.nRec;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Раскрытие всех веток...', 1);
+
+  if TreeGetFirst(trTreeTables)
+    do
+      {
+        NextVisual;
+        TreeOpenNode(trTreeTables);
+      }
+    While TreeGetNext(trTreeTables);
+
+  StopVisual('', 0);
+
+  TreeJumpToRecord(trTreeTables, sav_NRec);
+
+  ReScanPanel(#SGetDocs);
+}
+
+cmHideAll: // Свернуть все ветки
+{
+  if isBrowse
+    Exit;
+
+  var sav_NRec : comp;
+
+  while (SGetDocs.cOwner <> 0) do
+    TreeJumpToRecord(trTreeTables, SGetDocs.cOwner);
+
+  sav_NRec := SGetDocs.nRec;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Сворачивание всех веток...', 1);
+
+  if (TreeGetFirst(trTreeTables))
+    do
+      {
+        NextVisual;
+        TreeCloseNode(trTreeTables);
+!        TreeCloseAllOpenedNode(trTreeTables);
+      }
+    While TreeGetNext(trTreeTables);
+
+  StopVisual('', 0);
+
+  TreeJumpToRecord(trTreeTables, sav_NRec);
+
+  ReScanPanel(#SGetDocs);
+}
+
+cmHotKeys:
+  if not isBrowse
+    case FunctionID of
+      1, 2:
+        PutHotCommand(RunMenu('mnuDog2AnyDocs'));
+    else
+        PutHotCommand(RunMenu('GetDocs_HotKeys'));
+    end;
+
+cmAccording: //AltS
+   case FunctionID of
+     1, 2: RunInterface('ViewDObyDog', SGetDocs.cDogovor, SGetDocs.cAppDogovor, SGetDocs.cCalPlan);
+   end;
+
+#include GetDocs.han
+
+end; // HandleEvent Interface
+
+end. // Interface
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::Dog2AnyDocs>L_Dogovor::Dog2AnyDocs - Пакетное формирования документов по договорам</link>
+#end
+mnuDog2AnyDocs Menu
+{
+//******************************************************************************
+- 'Просмотр сформированных документов'
+  , cmAccording
+  , 'Просмотр документов, сформированных по текущему договору/ПКП'
+  , ,'Alt+S', kbAltS, sci1Esc;
+//******************************************************************************
+---------------;
+//******************************************************************************
+- 'Раскрыть все ветки'
+  , cmShowAll
+  , 'Разворачивает все дерево документов'
+  , ,'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//******************************************************************************
+- 'Свернуть все ветки'
+  , cmHideAll
+  , 'Сворачивает все дерево документов'
+  , , 'Ctrl+''-''', kbCtrlGrayMinus, sci1Esc;
+//******************************************************************************
+}

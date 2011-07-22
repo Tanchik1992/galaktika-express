@@ -1,0 +1,191 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+// Пересчет средних цен по внутренним накладным
+//******************************************************************************
+
+#ifNdef _SrPSopr_vpp_
+#define _SrPSopr_vpp_
+
+//******************************************************************************
+
+#include MSfunc.vpp
+#include fsround.vpp
+#include SaldoMcS.vpp
+
+//******************************************************************************
+
+Procedure CalcSrPrice;  // Перерасчет средних цен в накладной
+var Sp, Pp, Mp: comp;
+{
+  if (not IsValid(#SpSopr))
+    Exit;
+
+  if (not InitMCInfo(KatSopr.dSopr))
+    Exit;
+
+  TypeOstatki(FALSE);
+  LockValOt(TRUE);
+  SkladProizv(0);
+
+  if ( (TypeSopr > 501) AND (TypeSopr < 510) )
+    //для всех производственных кроме отпускной
+    SkladProizv(1);
+
+  #ifdef _NewRemont_
+  if (TypeSopr = 552) OR (TypeSopr = 553) OR (TypeSopr = 554) OR (TypeSopr = 557) OR (TypeSopr = 559)// из ремонтов
+    SkladProizv(2);
+  #end
+
+  Sp := if (KatSopr.cPodrFrom = 0, comp(-1), KatSopr.cPodrFrom);
+  Mp := if (KatSopr.cMolFrom = 0, comp(-1), KatSopr.cMolFrom);
+ 
+  #ifdef _NewRemont_
+  if (TypeSopr = 553) OR (TypeSopr = 554) OR (TypeSopr = 557) OR (TypeSopr = 559)// из ремонтов
+  {
+    Sp := if (KatSopr.cPodrTo = 0, comp(-1), KatSopr.cPodrTo);
+    Mp := if (KatSopr.cMolFrom = 0, comp(-1), KatSopr.cMolFrom);
+  }
+  #end
+
+  KatSopr.Summa := 0;
+  KatSopr.SumVal := 0;
+  ResetBounds(#KatOtpEd);
+  StartNewVisual(vtRotateVisual, 0, 'Пересчет цен в накладной', 1);
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr
+    if SpSopr.PrMc = 1
+      {
+        NextVisual;
+        //поиск расходного SpOrder для позиции
+        if GetFirst SpOrder where ((SpSopr.NRec == SpOrder.cSpSopr AND
+                                        word(1) == SpOrder.VidOrder (noindex) )) = tsOk
+          {
+            var srPrice_, srVPrice_, kol_: double; var cVal_: comp;
+            srPrice_ := 0; srVPrice_ := 0;  kol_ := 0;  cVal_ := SpOrder.cVal;
+
+            _LOOP SpOrder where ((SpSopr.NRec == SpOrder.cSpSopr AND
+                                      word(1) == SpOrder.VidOrder (noindex) ))
+              {
+                NextVisual;
+                srPrice_ := ((srPrice_ * kol_) + (SpOrder.rSrPrice * SpOrder.kol)) / (kol_ + SpOrder.kol);
+                srVPrice_ := ((srVPrice_ * kol_) + (SpOrder.rVPrice * SpOrder.kol)) / (kol_ + SpOrder.kol);
+                kol_ := kol_ + SpOrder.kol;
+              }
+
+            SpSopr.cVal  := cVal_;
+            SpSopr.Price := srPrice_;
+            SpSopr.VPrice := srVPrice_;
+          }
+        else //расходного ордера нет
+          {
+            Pp := if (SpSopr.cParty = 0, comp(-1), SpSopr.cParty);
+            if ( NOT CalcPriceFromPrihod(FALSE) )
+              {
+                SpSopr.cVal  := StepMCInfo(SpSopr.cMCUsl, SpSopr.cVal, Sp, Mp, Pp);
+                SpSopr.Price := AveragePrice;
+                SpSopr.VPrice := AverageVPrice;
+              }
+            else
+              {
+                SpSopr.Price := SpSopr.Price/fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);  //в отп.ед. будет перевод ниже
+                SpSopr.VPrice := SpSopr.VPrice/fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd); //в отп.ед. будет перевод ниже
+              }
+          }
+
+        SpSopr.rVPrice := SpSopr.VPrice;
+        SpSopr.rPrice := SpSopr.Price;
+
+        var k22: double; k22 := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+        SpSopr.Price   := SpSopr.Price  * k22;
+        SpSopr.rPrice  := SpSopr.Price;
+        SpSopr.VPrice  := SpSopr.VPrice * k22;
+        SpSopr.rVPrice := SpSopr.VPrice;
+
+        SpSopr.rPrice  := SpSopr.Price;
+        SpSopr.rVPrice := SpSopr.VPrice;
+
+        #ifdef SOPINMOV_VIP
+        SpSopr.Price  := RoundRubOrd(SpSopr.rPrice, SpSopr.KolFact);
+        SpSopr.VPrice := RoundValOrd(SpSopr.rVPrice, SpSopr.KolFact);
+        #end
+
+        Update current SpSopr;
+        KatSopr.Summa := KatSopr.Summa + SpSopr.KolOpl * SpSopr.Price;
+        KatSopr.SumVal := KatSopr.SumVal + SpSopr.KolOpl * SpSopr.VPrice;
+
+#ifdef _AKTUSLB_VIP
+        if (KatSopr.VidSopr = 110)
+          if (IsValid(#SpDocSmeta))
+            if (IsValid(#SpStepRem))
+            {
+              SpStepRem.SumMC := SpSopr.Price;
+              SpStepRem.SumUsl := SpSopr.VPrice;
+              if (update current SpStepRem = tsOk)
+              {
+              }
+            }
+#end
+      }
+
+  PopPos(#SpSopr);
+  StopVisual('', 0);
+  SetBounds(#KatOtpEd);
+
+  DoneMCInfo;
+  KatSopr.Summa := FSRoundRub(KatSopr.Summa);
+
+  set KatSopr.SumVal := FSRoundVal(KatSopr.SumVal);
+  RereadRecord(#SpSopr);
+}
+
+//******************************************************************************
+
+Procedure CalcSrPricePos;       // Пересчет средней цены в позиции накладной
+{
+  if ( NOT CalcPriceFromPrihod(FALSE) )
+    {
+      if (not InitMCInfo(KatSopr.dSopr))
+        Exit;
+
+      LockValOt(TRUE);
+      SkladProizv(0);
+
+      if ( (TypeSopr > 501) and (TypeSopr < 510) )
+       //для всех производственных кроме отпускной
+        SkladProizv(1);
+
+      #ifdef _NewRemont_
+      if (TypeSopr = 552) OR (TypeSopr = 553) OR (TypeSopr = 554) OR (TypeSopr = 557) OR (TypeSopr = 559)// из ремонтов
+        SkladProizv(2);
+      #end
+
+      SpSopr.cVal := StepMCInfo(SpSopr.cMCUsl, SpSopr.cVal,
+                        if (KatSopr.cPodrFrom = 0, comp(-1), KatSopr.cPodrFrom),
+                        if (KatSopr.cMolFrom = 0, comp(-1), KatSopr.cMolFrom),
+                        if (SpSopr.cParty = 0, comp(-1), SpSopr.cParty));
+
+      //KatSopr.Summa := KatSopr.Summa - SpSopr.KolOpl * SpSopr.Price;
+      //KatSopr.SumVal := KatSopr.SumVal - SpSopr.KolOpl * SpSopr.VPrice;
+
+      SpSopr.Price := AveragePrice * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+      set SpSopr.VPrice := AverageVPrice * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+      DoneMCInfo;
+    }
+
+  SpSopr.rPrice  := SpSopr.Price;
+  SpSopr.rVPrice := SpSopr.VPrice;
+
+  #ifdef SOPINMOV_VIP
+  SpSopr.Price  := RoundRubOrd(SpSopr.rPrice, SpSopr.KolFact);
+  SpSopr.VPrice := RoundValOrd(SpSopr.rVPrice, SpSopr.KolFact);
+  #end
+
+  //KatSopr.Summa := FSRoundRub(KatSopr.Summa + SpSopr.KolOpl * SpSopr.Price);
+  //set KatSopr.SumVal := FSRoundVal(KatSopr.SumVal + SpSopr.KolOpl * SpSopr.VPrice);
+}
+
+//******************************************************************************
+
+#end

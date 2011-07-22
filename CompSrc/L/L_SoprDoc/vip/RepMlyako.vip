@@ -1,0 +1,709 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - логистика
+// Отчет приемная квитанция          1000000000335h
+//******************************************************************************
+
+#include ValFunc.vih
+#include katorg.vih
+#include ExtAttrClass.vih
+#include ExtAttr.vih    // ф-ции для работы с внешними атрибуты
+#include OrganizationInfo.vih
+#include AdrFunc.vih
+
+Interface iRepMlyako 'Приемная квитанция' EscClose;
+
+#include mlyako.inc
+#include ValFunc.var
+
+
+table struct FR_table
+(
+  nRec            : word
+, wTip            : word
+, YearDoc         : word
+, kurs            : string
+, bDate           : date
+, eDate           : date
+
+, cBasedoc        : string[20]
+
+, H_NomSchet      : string
+, H_dateSchet     : string
+
+, H_SimvVal       : string
+, H_SimvRub       : string
+, H_descr         : string
+
+, H_kontr1        : string
+, H_unn_name1     : string
+, H_unn1          : string
+, H_unnKpp_name1  : string
+, H_unnKpp1       : string
+, H_bank1         : string
+, H_bankhead1     : string
+, H_bankAddr1     : string
+, H_bankcity1     : string
+, H_schNom1       : string
+, H_mfo1          : string
+, H_kod1          : string
+, H_adres1        : string
+, H_telFax1       : string
+, H_kontr2        : string
+, H_unn_name2     : string
+, H_unn2          : string
+, H_unnKpp_name2  : string
+, H_unnKpp2       : string
+, H_bank2         : string
+, H_bankhead2     : string
+, H_bankAddr2     : string
+, H_bankcity2     : string
+, H_schNom2       : string
+, H_mfo2          : string
+, H_kod2          : string
+, H_adres2        : string
+, H_telFax2       : string
+, H_Prim          : string
+
+, strSkid         : string
+, SkidNOX_Price   : double
+, SkidNOX_NDS     : double
+, SkidNOX_SumNDS  : double
+, SkidNOX_Summa   : double
+
+, strDostavka     : string
+, Dost_Price      : double
+, Dost_NDS        : double
+, Dost_SumNDS     : double
+, Dost_Summa      : double
+
+, strDopTime      : string
+, DopT_Price      : double
+, DopT_NDS        : double
+, DopT_SumNDS     : double
+, DopT_Summa      : double
+
+, strPopul        : string
+, Pop_Price       : double
+, Pop_NDS         : double
+, Pop_SumNDS      : double
+, Pop_Summa       : double
+
+, strCentrV       : string
+, CV_Price        : double
+, CV_NDS          : double
+, CV_SumNDS       : double
+, CV_Summa        : double
+
+, strBelok        : string
+, Belok_Price     : double
+, Belok_NDS       : double
+, Belok_SumNDS    : double
+, Belok_Summa     : double
+
+, Belok           : double
+)
+with index
+(
+  indSch = nRec
+);
+
+table struct FR_Specif
+(
+  nRec            : comp
+, nRec2           : word
+, Name            : string
+, Sort            : string
+, KolP            : double
+, KolJ            : double
+, Price           : double
+, Sum             : double
+, NDS             : double
+, SumNDS          : double
+, Summa           : double
+, NomPP           : string
+, cBasedoc        : string
+
+)
+with index
+(
+  indSp1 = nRec
+, indSp2 = nRec2
+, indSp3 = Sort + Price + cBasedoc
+);
+
+
+Create view
+var
+  s_SimvRub   : string;
+
+  fr_nrec     : word;
+
+  cRecOrg
+, cMlyako
+, cMNas
+, cMSZ
+, cBaseDoc    : comp;
+
+  LL          : Katorg new;
+  iOJI        : IOrganizationJuridicalInfo;
+  AF          : AddressFunc;
+  dCursa      : date;
+  piExAttr    : iExtAttr;
+
+  dNDS        : double;
+
+
+As select
+  KatSopr.*
+, SpSopr.*
+
+, if(BaseDoc.cVal <> 0, KlVal.SimVolV, s_SimvRub)
+    ( FieldName = SimvolB )
+, if (KatSopr.cVal = 0, SpSopr.rPrice, SpSopr.rVPrice)
+    ( FieldName = Prv )
+, if (KatSopr.cVal = 0, SpSopr.Price * SpSopr.KolOpl, SpSopr.VPrice * SpSopr.KolOpl)
+    ( FieldName = SumPrice )
+
+from
+  KatSopr
+, SpSopr
+, BaseDoc
+, StepDoc
+, FR_table
+, FR_Specif
+, KlVal
+, CursVal
+, Katorg Myorg
+, KatBank MyBank
+, Katorg  KatOrgXL
+, PrKachvo
+, ValKontr
+, KatMC
+, KatUsl
+, SpGrNal
+, KatPokaz
+
+where
+((
+     BaseDoc.NRec            ==  StepDoc.cBaseDoc
+AND  StepDoc.NRec            ==  KatSopr.cStepDoc
+AND  KatSopr.NRec            ==  SpSopr.cSopr
+AND  BaseDoc.cVal            ==  KlVal.nRec
+AND  BaseDoc.cVal            ==  CursVal.KodValut
+AND  coGetTune('Myorg')      ==  Myorg.nRec
+AND  BaseDoc.cMyBank         ==  MyBank.nRec
+AND  cRecOrg                 ==  KatOrgXL.nRec
+
+AND  word(2)                 ==  PrKachvo.TipProba
+AND  coKatMc                 ==  PrKachvo.wTable
+AND  SpSopr.cMcUsl           ==  PrKachvo.cOwner
+AND  SpSopr.cParty           ==  PrKachvo.cAnVal3   (noindex)
+
+AND  PrKachvo.cWork1         ==  KatSort.nRec
+AND  cMlyako                 ==  KatMC.NRec
+AND  SpSopr.cMcUsl           ==  KatUsl.NRec
+
+AND PrKachvo.nRec            == RezKontr.cKachvoPr
+AND SpSopr.cParty            == RezKontr.cParty    (noindex)
+AND SpSopr.cMcUsl            == RezKontr.cMc       (noindex)
+AND coKatMc                  == RezKontr.wTable    (noindex)
+
+))
+;
+
+//******************************************************************************
+Parameters
+  cBaseDoc
+;
+
+//******************************************************************************
+var oExtAttr  : iExtAttr;    //работа с внешними атрибутами
+//******************************************************************************
+
+DataStream DTS
+(
+  [CFH]      CommonFormHeader;
+//  [vid]      fr_vid;
+  [wCountry] wGetTune('Country');
+
+  Table Fr_table
+  (
+    [NRec            ] fr_table.Nrec              ;
+    [kurs            ] fr_table.kurs              ;
+    [Tip             ] fr_table.wTip              ;
+    [YearDoc         ] fr_table.YearDoc           ;
+    [bDate           ] fr_table.bDate             ;
+    [eDate           ] fr_table.eDate             ;
+    [H_descr         ] fr_table.H_descr           ;
+    [H_NomSchet      ] fr_table.H_NomSchet        ;
+    [H_dateSchet     ] fr_table.H_dateSchet       ;
+    [H_simvVal       ] fr_table.H_simvVal         ;
+    [H_simvRub       ] fr_table.H_simvRub         ;
+
+    [H_kontr1        ] fr_table.H_kontr1          ;
+    [H_unn_name1     ] fr_table.H_unn_name1       ;
+    [H_unn1          ] fr_table.H_unn1            ;
+    [H_unnKpp_name1  ] fr_table.H_unnKpp_name1    ;
+    [H_unnKpp1       ] fr_table.H_unnKpp1         ;
+    [H_bank1         ] fr_table.H_bank1           ;
+    [H_bankhead1     ] fr_table.H_bankhead1       ;
+    [H_bankcity1     ] fr_table.H_bankcity1       ;
+    [H_bankAddr1     ] fr_table.H_bankAddr1       ;
+    [H_schNom1       ] fr_table.H_schNom1         ;
+    [H_mfo1          ] fr_table.H_mfo1            ;
+    [H_kod1          ] fr_table.H_kod1            ;
+    [H_adres1        ] fr_table.H_adres1          ;
+    [H_telFax1       ] fr_table.H_telFax1         ;
+    [H_kontr2        ] fr_table.H_kontr2          ;
+    [H_unn_name2     ] fr_table.H_unn_name2       ;
+    [H_unn2          ] fr_table.H_unn2            ;
+    [H_unnKpp_name2  ] fr_table.H_unnKpp_name2    ;
+    [H_unnKpp2       ] fr_table.H_unnKpp2         ;
+    [H_bank2         ] fr_table.H_bank2           ;
+    [H_bankhead2     ] fr_table.H_bankhead2       ;
+    [H_bankAddr2     ] fr_table.H_bankAddr2       ;
+    [H_bankcity2     ] fr_table.H_bankcity2       ;
+    [H_schNom2       ] fr_table.H_schNom2         ;
+    [H_mfo2          ] fr_table.H_mfo2            ;
+    [H_kod2          ] fr_table.H_kod2            ;
+    [H_adres2        ] fr_table.H_adres2          ;
+    [H_telFax2       ] fr_table.H_telFax2         ;
+    [H_Prim          ] fr_table.H_Prim            ;
+
+    [F_Boss          ] sGetTune('Boss')           ;
+    [F_MailBuh       ] sGetTune('MainBuh')        ;
+
+    [strSkid         ] fr_table.strSkid           ;
+    [SkidNOX_Price   ] fr_table.SkidNOX_Price     ;
+    [SkidNOX_NDS     ] fr_table.SkidNOX_NDS       ;
+    [SkidNOX_SumNDS  ] fr_table.SkidNOX_SumNDS    ;
+    [SkidNOX_Summa   ] fr_table.SkidNOX_Summa     ;
+
+    [strDostavka     ] fr_table.strDostavka       ;
+    [Dost_Price      ] fr_table.Dost_Price        ;
+    [Dost_NDS        ] fr_table.Dost_NDS          ;
+    [Dost_SumNDS     ] fr_table.Dost_SumNDS       ;
+    [Dost_Summa      ] fr_table.Dost_Summa        ;
+
+    [strDopTime      ] fr_table.strDopTime        ;
+    [DopT_Price      ] fr_table.DopT_Price        ;
+    [DopT_NDS        ] fr_table.DopT_NDS          ;
+    [DopT_SumNDS     ] fr_table.DopT_SumNDS       ;
+    [DopT_Summa      ] fr_table.DopT_Summa        ;
+
+    [strPopul        ] fr_table.strPopul          ;
+    [Pop_Price       ] fr_table.Pop_Price         ;
+    [Pop_NDS         ] fr_table.Pop_NDS           ;
+    [Pop_SumNDS      ] fr_table.Pop_SumNDS        ;
+    [Pop_Summa       ] fr_table.Pop_Summa         ;
+
+    [strCentrV       ] fr_table.strCentrV         ;
+    [CV_Price        ] fr_table.CV_Price          ;
+    [CV_NDS          ] fr_table.CV_NDS            ;
+    [CV_SumNDS       ] fr_table.CV_SumNDS         ;
+    [CV_Summa        ] fr_table.CV_Summa          ;
+
+    [strBelok        ] fr_table.strBelok          ;
+    [Belok_Price     ] fr_table.Belok_Price       ;
+    [Belok_NDS       ] fr_table.Belok_NDS         ;
+    [Belok_SumNDS    ] fr_table.Belok_SumNDS      ;
+    [Belok_Summa     ] fr_table.Belok_Summa       ;
+
+    [Belok           ] fr_table.Belok             ;
+  );
+
+  Table Fr_Specif
+    (
+      [nRec        ] FR_Specif.nRec       ;
+      [nRec2       ] FR_Specif.nRec2      ;
+      [NomPP       ] FR_Specif.NomPP      ;
+      [Name        ] FR_Specif.Name       ;
+      [Sort        ] FR_Specif.Sort       ;
+      [KolP        ] FR_Specif.KolP       ;
+      [KolJ        ] FR_Specif.KolJ       ;
+      [Price       ] FR_Specif.Price      ;
+      [Sum         ] FR_Specif.Sum        ;
+      [NDS         ] FR_Specif.NDS        ;
+      [SumNDS      ] FR_Specif.SumNDS     ;
+      [Summa       ] FR_Specif.Summa      ;
+    );
+)
+end;
+
+
+//******************************************************************************
+//******************************************************************************
+#include prndocs.vpp
+//******************************************************************************
+
+//******************************************************************************
+function GetJurAddrForSF(cOrgRec: comp) : String;
+var
+  ExAttrFun: iExtAttr;
+  csAttrAddress: string;
+  aAddr : String;
+{
+  GetJurAddrForSF := '';
+  csAttrAddress:='Юридический адрес';
+
+  cRecOrg := cOrgRec;
+
+  aAddr := Trim(ExAttrFun.sGetAttr(coKatOrg, cOrgRec, csAttrAddress));
+
+  if (aAddr <> '')
+  {
+    GetJurAddrForSF := aAddr;
+    Exit;
+  }
+
+  if boGetTune('Rep.FullOrgAddr')
+  {
+    if ( GetFirst fastfirstrow KatOrgXL = tsOk )
+      if (KatOrgXL.Addr <>'')
+        aAddr := LL.FullOrgAddr(cOrgRec);
+  }
+  else
+    {
+      if ( GetFirst fastfirstrow KatOrgXL = tsOk )
+        aAddr := KatOrgXL.Addr
+      else
+        aAddr := '';
+    }
+
+  if (aAddr = '')
+    if IOrganizationInfoFinder(iOJI).Seek(cOrgRec)
+      aAddr := Trim(AF.GetFullAddressInd(Comp(iOJI.GetJuridicalAddress)));
+
+  GetJurAddrForSF := aAddr;
+}
+
+//******************************************************************************
+
+function GetNDS (cGrNalog : comp) : double;
+{
+  if GetFirst SpGrNal where ((cGrNalog                     ==  SpGrNal.cGrNal
+                         AND  coGetTune('NALOG.CNALOGNDS') ==  SpGrNal.cNalog)) = tsOk
+    GetNDS := SpGrNal.Nalog
+  else
+    GetNDS := 0;
+}
+//******************************************************************************
+
+Function GetPokaz(namePok : string) : double;
+{
+  GetPokaz := 1;
+
+  if ( GetFirst KatPokaz where (( namePok == KatPokaz.Name )) = tsOk )
+   if ( GetFirst ValKontr where ((RezKontr.nRec == ValKontr.cRezKontr
+                              AND KatPokaz.nRec == ValKontr.cKatPokaz (noindex))) = tsOk )
+     GetPokaz := ValKontr.Value;
+}
+
+//******************************************************************************
+
+Procedure PrintRep;
+var
+  kurs  : double;
+  cNrec1
+, cNrec2 : comp;
+{
+  StartNewVisual( vtNumericVisual
+                , vfTimer + vfBreak + vfConfirm
+                , ''#3'Печать документов...'
+                , 1
+                );
+
+  Delete All Fr_table;
+  Delete All Fr_Specif;
+
+  Kurs := 1;
+
+  dCursa := BaseDoc.dDoc;
+
+  if ( BaseDoc.cVal <> comp(0) )
+    if ( (BaseDoc.TipMoney = 2) and (BaseDoc.ValCurse <> 0) )
+      Kurs := BaseDoc.ValCurse * (1 + BaseDoc.DopProc / 100);
+    else
+      if oValFunc.GetCurse(BaseDoc.cVal, dCursa, Kurs)
+        Kurs := Kurs * (1 + BaseDoc.DopProc / 100);
+
+  cNrec1 := fr_nrec;
+
+  ClearBuffer(#fr_table);
+  fr_table.nRec            := cNrec1;
+  fr_table.wTip            := 0;
+  fr_table.kurs            := 'Курс ' + SimvolB + ' ' + string(Kurs) + ' на '
+                            + DateToStr(if(BaseDoc.ValCurse<>0, BaseDoc.dValCurse, CursVal.DatVal) , '');
+
+  fr_table.bDate           := oExtAttr.dGetAttr(coBaseDoc, BaseDoc.NRec, 'Начало периода'  );
+  fr_table.eDate           := oExtAttr.dGetAttr(coBaseDoc, BaseDoc.NRec, 'Окончание периода');
+  fr_table.YearDoc         := BaseDoc.YearDoc;
+  fr_table.H_descr         := BaseDoc.Descr;
+  fr_table.H_simvVal       := SimvolB;
+  fr_table.H_simvRub       := s_SimvRub;
+  fr_table.H_NomSchet      := BaseDoc.NoDoc;
+  fr_table.H_dateSchet     := DateToStr(BaseDoc.dDoc, 'DD/MM/YYYY');
+
+  GetInfoKatorg(Myorg.nRec, MyBank.nRec, InfoKO);
+  fr_table.H_kontr1       :=  InfoKO.KOName;
+  fr_table.H_unn_name1    :=  sGetTune('KatOrg.FldView.UNN') + ':';
+  fr_table.H_unn1         :=  InfoKO.KOUNN;
+  fr_table.H_unnKpp_name1 :=  sGetTune('KatOrg.FldView.UNN') + ' / КПП:';
+
+  if (InfoKO.KOUNN <> 0) or (InfoKO.KOKODPLATNDS <> 0)
+    fr_table.H_unnKpp1    := InfoKO.KOUNN + ' / '+  InfoKO.KOKODPLATNDS;
+
+  fr_table.H_bank1        := InfoKO.KBName;
+!  fr_table.H_bankhead1    := InfoKO.KBHeadName;
+  fr_table.H_bankAddr1    := InfoKO.KBAddr;
+  fr_table.H_bankcity1    := InfoKO.KBCity;
+  fr_table.H_schNom1      := InfoKO.KBSchet1 + ' ' + sGetTune('KatOrg.FldView.MFO') + ' ' + InfoKO.KBMFO1;
+  fr_table.H_mfo1         := InfoKO.KBSchet2 + ' ' + sGetTune('KatOrg.FldView.MFO') + ' ' + InfoKO.KBMFO2;
+  fr_table.H_kod1         := if(InfoKO.KBSchet1<>'', '№ ' + InfoKO.KBSchet1, '') + if(InfoKO.KBName <> '', ' т ' +  InfoKO.KBName, '')
+                             + if(InfoKO.KBAddr<> '', ', ' + InfoKO.KBAddr, '')
+                             + if(InfoKO.KBMFO1<>'', ', код ' + InfoKO.KBMFO1, '');
+
+  fr_table.H_adres1       := GetJurAddrForSF(Myorg.nRec);
+  fr_table.H_telFax1      := InfoKO.KOTel;
+
+  GetInfoKatorg(BaseDoc.corg, BaseDoc.cBank, InfoKO);
+  fr_table.H_kontr2       := InfoKO.KOName;
+  fr_table.H_unn_name2    :=  sGetTune('KatOrg.FldView.UNN') + ':';
+  fr_table.H_unn2         :=  InfoKO.KOUNN;
+  fr_table.H_unnKpp_name2 :=  sGetTune('KatOrg.FldView.UNN') + ' / КПП:';
+
+  if (InfoKO.KOUNN <> 0) or (InfoKO.KOKODPLATNDS <> 0)
+    fr_table.H_unnKpp2    := InfoKO.KOUNN + ' / '+  InfoKO.KOKODPLATNDS;
+
+  fr_table.H_bank2        := InfoKO.KBName;
+!  fr_table.H_bankhead2    := InfoKO.KBHeadName;
+  fr_table.H_bankAddr2    := InfoKO.KBAddr;
+  fr_table.H_bankcity2    := InfoKO.KBCity;
+  fr_table.H_schNom2      := InfoKO.KBSchet1 + ' ' + sGetTune('KatOrg.FldView.MFO') + ' ' + InfoKO.KBMFO1;
+  fr_table.H_mfo2         := InfoKO.KBSchet2 + ' ' + sGetTune('KatOrg.FldView.MFO') + ' ' + InfoKO.KBMFO2;
+  fr_table.H_kod2         := if(InfoKO.KBSchet1<>'', '№ ' + InfoKO.KBSchet1, '') + if(InfoKO.KBName <> '', ' т ' +  InfoKO.KBName, '')
+                             + if(InfoKO.KBAddr<> '', ', ' + InfoKO.KBAddr, '')
+                             + if(InfoKO.KBMFO1<>'', ', код ' + InfoKO.KBMFO1, '');
+
+  fr_table.H_adres2       := GetJurAddrForSF(Myorg.nRec);
+  fr_table.H_telFax2      := InfoKO.KOTel;
+
+  var bPopul : boolean;
+
+  fr_nrec := fr_nrec + 1;
+  cNrec2  := fr_nrec;
+
+  var dKol    : double;
+  var dSumNDS : double;
+  var dSum    : double;
+
+  var dMassa  : double; dMassa  := 0;
+  var dMassaB : double; dMassaB := 0;
+  var Koef    : double;
+
+  _LOOP KatSopr
+    {
+      bPopul := false;
+
+      if (GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr
+                              AND cMlyako      == SpSopr.cMcUsl
+                              AND word(1)      == SpSopr.PrMC)) = tsOk)
+        {
+
+          if (cMNas = KatSopr.cPayment)
+            bPopul := TRUE;
+          else
+            if (cMSZ <> KatSopr.cPayment)
+              continue;
+
+          Koef  := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+          if (Getfirst fr_Specif where ((KatSort.Name           == FR_Specif.Sort
+                                     AND Prv                    == FR_Specif.Price
+                                     AND string(cBasedoc, 0, 0) == FR_Specif.cBasedoc )) = tsOk)
+            {
+              dKol    := SpSopr.KolFact* Koef * GetPokaz(strPokaz1)/3.4;
+              dSumNDS := FR_Specif.Price * dKol * FR_Specif.NDS/100;
+              dSum    := FR_Specif.Price * dKol;
+
+              set FR_Specif.KolP     := FR_Specif.KolP   + SpSopr.KolFact * Koef;
+              set FR_Specif.KolJ     := FR_Specif.KolJ   + dKol;
+              set FR_Specif.SumNDS   := FR_Specif.SumNDS + dSumNDS;
+              set FR_Specif.Sum      := FR_Specif.Sum    + dSum;
+              set FR_Specif.Summa    := FR_Specif.Summa  + dSum + dSumNDS;
+              update current FR_Specif;
+            }
+          else
+            {
+              ClearBuffer(#fr_Specif);
+              FR_Specif.cBasedoc := string(cBasedoc, 0, 0);
+              FR_Specif.nRec2    := if (bPopul, cNrec2, cNrec1);
+              FR_Specif.Name     := KatMC.Name;
+              FR_Specif.Sort     := Katsort.Name;
+              FR_Specif.KolP     := SpSopr.KolFact * Koef;
+              FR_Specif.KolJ     := SpSopr.KolFact * Koef * GetPokaz(strPokaz1)/3.4;
+              FR_Specif.Price    := Prv;
+              FR_Specif.NDS      := dNDS;
+              FR_Specif.SumNDS   := FR_Specif.Price * FR_Specif.KolJ * FR_Specif.NDS/100;
+              FR_Specif.Sum      := FR_Specif.Price * FR_Specif.KolJ;
+              FR_Specif.Summa    := FR_Specif.Sum + FR_Specif.SumNDS;
+              insert current fr_Specif;
+            }
+
+          dMassa  := dMassa  + SpSopr.KolFact * Koef;
+          dMassaB := dMassaB + SpSopr.KolFact * Koef * GetPokaz(strPokaz8);
+        }
+      else
+        continue;
+
+      if (NOT bPopul)
+        {
+          _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+            if (word(1) <> SpSopr.PrMC)
+              {
+                if (GetFirst KatUsl <> tsOK)
+                  continue;
+
+                //Услуга "Скидка за неохлажденность"
+                if (SpSopr.cMcUsl = coGetTune('Oper.Buy.NaklPrMS.UslDiscount'))
+                  {
+                    fr_table.strSkid         := KatUsl.Name;
+                    fr_table.SkidNOX_Price   := fr_table.SkidNOX_Price  + Prv;
+                    fr_table.SkidNOX_NDS     := GetNDS(KatUsl.cGrNal);
+                    fr_table.SkidNOX_SumNDS  := fr_table.SkidNOX_SumNDS + Prv * fr_table.SkidNOX_NDS / 100;
+                    fr_table.SkidNOX_Summa   := fr_table.SkidNOX_Summa  + if (KatSopr.VhodNal = 1, Prv, Prv + Prv * fr_table.SkidNOX_NDS / 100);
+                    continue;
+                  }
+                //Услуга "Доставка молока"
+                if (SpSopr.cMcUsl = coGetTune('Oper.Buy.NaklPrMS.UslDelivery'))
+                  {
+                    fr_table.strDostavka     := KatUsl.Name;
+                    fr_table.Dost_Price      := fr_table.Dost_Price  + Prv;
+                    fr_table.Dost_NDS        := GetNDS(KatUsl.cGrNal);
+                    fr_table.Dost_SumNDS     := fr_table.Dost_SumNDS + Prv * fr_table.Dost_NDS / 100;
+                    fr_table.Dost_Summa      := fr_table.Dost_Summa  + if (KatSopr.VhodNal = 1, Prv, Prv + Prv * fr_table.Dost_NDS / 100);
+                    continue;
+                  }
+
+                //Услуга "Доплата за дополнительное время"
+                if (SpSopr.cMcUsl = coGetTune('Oper.Buy.NaklPrMS.DopTime'))
+                  {
+                    fr_table.strDopTime      := KatUsl.Name;
+                    fr_table.DopT_Price      := fr_table.DopT_Price  + Prv;
+                    fr_table.DopT_NDS        := GetNDS(KatUsl.cGrNal);
+                    fr_table.DopT_SumNDS     := fr_table.DopT_SumNDS + Prv * fr_table.DopT_NDS / 100;
+                    fr_table.Dopt_Summa      := fr_table.Dopt_Summa  + if (KatSopr.VhodNal = 1, Prv, Prv + Prv * fr_table.Dopt_NDS / 100);
+                    continue;
+                  }
+
+                //Услуга "Заготовка молока у населения"
+                if (SpSopr.cMcUsl = coGetTune('Oper.Buy.NaklPrMS.UslStorage'))
+                  {
+                    fr_table.strPopul    := KatUsl.Name;
+                    fr_table.Pop_Price   := fr_table.Pop_Price  + Prv;
+                    fr_table.Pop_NDS     := GetNDS(KatUsl.cGrNal);
+                    fr_table.Pop_SumNDS  := fr_table.Pop_SumNDS + Prv * fr_table.Pop_NDS / 100;
+                    fr_table.Pop_Summa   := fr_table.Pop_Summa  + if (KatSopr.VhodNal = 1, Prv, Prv + Prv * fr_table.Pop_NDS / 100);
+                    continue;
+                  }
+
+                //Услуга "Удержание за простой центровывоза"
+                if (SpSopr.cMcUsl = coGetTune('Oper.Buy.NaklPrMS.UdCentrV'))
+                  {
+                    fr_table.strCentrV      := KatUsl.Name;
+                    fr_table.CV_Price       := fr_table.CV_Price  + Prv;
+                    fr_table.CV_NDS         := GetNDS(KatUsl.cGrNal);
+                    fr_table.CV_SumNDS      := fr_table.CV_SumNDS + Prv * fr_table.CV_NDS / 100;
+                    fr_table.CV_Summa       := fr_table.CV_Summa  + if (KatSopr.VhodNal = 1, Prv, Prv + Prv * fr_table.CV_NDS / 100);
+                    continue;
+                  }
+
+                //Услуга "Отклонение содержания белка от базисной нормы"
+                if (SpSopr.cMcUsl = coGetTune('Oper.Buy.NaklPrMS.UslOtkl'))
+                  {
+                    fr_table.strBelok      := KatUsl.Name;
+                    fr_table.Belok_Price   := fr_table.Belok_Price  + Prv;
+                    fr_table.Belok_NDS     := GetNDS(KatUsl.cGrNal);
+                    fr_table.Belok_SumNDS  := fr_table.Belok_SumNDS + Prv * fr_table.Belok_NDS / 100;
+                    fr_table.Belok_Summa   := fr_table.Belok_Summa  + if (KatSopr.VhodNal = 1, Prv, Prv + Prv * fr_table.Belok_NDS / 100);
+
+                    continue;
+                  }
+
+              }
+        }
+    }
+
+  fr_table.Belok := dMassaB / dMassa;
+
+  if (GetFirst FR_Specif where ((cNrec1 == FR_Specif.nRec2)) = tsOk)
+    insert current fr_Table;
+
+  if (GetFirst FR_Specif where ((cNrec2 == FR_Specif.nRec2)) = tsOk)
+    {
+      fr_table.nRec            := cNrec2;
+      fr_table.wTip            := 1;
+
+      fr_table.strSkid         := '';
+      fr_table.SkidNOX_Price   := 0;
+      fr_table.SkidNOX_NDS     := 0;
+      fr_table.SkidNOX_SumNDS  := 0;
+
+      fr_table.strDostavka     := '';
+      fr_table.Dost_Price      := 0;
+      fr_table.Dost_NDS        := 0;
+      fr_table.Dost_SumNDS     := 0;
+
+      fr_table.strDopTime      := '';
+      fr_table.DopT_Price      := 0;
+      fr_table.DopT_NDS        := 0;
+      fr_table.DopT_SumNDS     := 0;
+
+      fr_table.strPopul        := '';
+      fr_table.Pop_Price       := 0;
+      fr_table.Pop_NDS         := 0;
+      fr_table.Pop_SumNDS      := 0;
+
+      fr_table.strCentrV       := '';
+      fr_table.CV_Price        := 0;
+      fr_table.CV_NDS          := 0;
+      fr_table.CV_SumNDS       := 0;
+
+      fr_table.strBelok        := '';
+      fr_table.Belok_Price     := 0;
+      fr_table.Belok_NDS       := 0;
+      fr_table.Belok_SumNDS    := 0;
+
+      fr_table.Belok           := 0;
+      insert current fr_Table;
+    }
+
+  StopVisual('', 0);
+
+  RunFReport(DTS, 'Приемная квитанция', false);
+}
+
+
+HandleEvent
+
+cmInit:
+  {
+    fr_nrec   := 1;
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    set cMlyako := coGetTune('OPER.BUY.NAKLPRMS.MCMILK');
+    set cMNas   := coGetTune('Oper.Buy.NaklPrMS.FormPhys');
+    set cMSZ    := coGetTune('Oper.Buy.NaklPrMS.FormHoz');
+
+    if (GetFirst KatMc = tsOk)
+      dNDS := GetNDS(KatMC.cGrNal)
+
+    if (GetFirst BaseDoc where ((cBaseDoc == BaseDoc.NRec)) <> tsOk)
+      exit;
+
+    PrintRep;
+  }
+
+end;
+end.

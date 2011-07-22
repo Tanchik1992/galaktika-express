@@ -1,0 +1,790 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Формирование Накладной по тек.наличию МЦ(TekSaldo)        ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#doc
+Назначение:
+  Интерфейс предназначен для автораспределения спецификации док-та(Накладной на отпуск)
+  с учетом текущего наличия по разрезам хранения. Если количества не достаточно, то
+  выдается отчет о нераспределенных МЦ. На выбор МЦ можно влиять через параметр,
+  который можно установить в диалоговом окне при вызове интерфейса:
+    'Код партии по возр.'
+    'Код партии по убыв.'
+    'Дата годности партии по возр.'
+    'Дата годности партии по убыв.'
+  В зависимости от выбранного параметра будут в первую очередь отбиратьсья МЦ,
+  которые удовл.условию.
+  Сервисный интерфейс, используется в форме М-4
+
+Параметры:
+  c1    - ссылка на сопр.документ
+  wMode - режим работы
+#end
+
+/*
+  (wMode and 1): =1 - автоматическое распределение, =0 - открыть окно параметров
+  (wMode and 2): =2 - параметры по умолчанию, =0 - параметры из dsk
+  (wMode and 4): =4 - цена из партии, =0 - не менять цену
+*/
+
+//******************************************************************************
+
+#include oDEI.vih
+#include MTRFuncs.vih
+#include notes.vih
+#include oEdIzm.vih
+#include SpNext.vih
+#include SDfuns.vih
+#include CalcFuns.vih
+
+//******************************************************************************
+Interface RemakeSpSoprOnTeksaldo;
+
+#include oEdIzm.var
+#include SpNext.var
+#include SDfuns.var
+#include CalcFuns.var
+#include MTRFuncs.var
+
+Table STRUCT MemSpSopr "Таблица в памяти"
+(
+  NRec          : comp,
+  SpSoprNRec    : comp,
+  cMCUSL        : comp ,
+  TekSaldocParty: comp ,
+  KodParty      : string[20],
+  dGodnParty    : Date  ,
+  TekSaldoOst   : double,
+  SpSoprKolOpl  : double,
+  ManualTax     : word,
+  wNpp          : word,
+  ccPodr        : comp,
+  ccMOL         : comp,
+  ccParty       : comp
+)
+With Index
+(
+  TMP00indexmem = wNpp + cMCUSL + KodParty
+, TMP01indexmem = wNpp + cMCUSL + dGodnParty
+, TMP02indexmem = NRec(Unique, Surrogate, Journal)
+, TMP03indexmem = cMCUSL
+);
+
+Table STRUCT MemSpDocNal "Таблица в памяти"
+(
+  cSpDoc   : comp    "Позиция документа",
+  cDoc     : comp    "Ссылка на документ",
+  TipDoc   : word    "Тип документа",
+  cGrNal   : comp    "Ссылка на GrNal",
+  cNalog   : comp    "Ссылка на налог ( Katnalog ) ",
+  Nalog    : double  "Ставка налога",
+  SumNal   : double  "Сумма налога в вал. налога",
+  cVal     : comp    "Валюта налога",
+  SumVal   : double  "Сумма налога в валюте документа",
+  Summa    : double  "Сумма налога в НДЕ",
+  IsAgreg  : boolean "Агрегировать по ставкам - да/нет",
+  cOrg     : comp    "Ссылка на получателя налога",
+  ValCurse : double  "Курс уплаты налога к НДЕ",
+  CrosCurse: double  "Курс уплаты налога к SumVal",
+  Npp      : word    "Порядок для сортировки",
+  IsCustom : word    "Копия из SpGrNal"
+)
+With Index
+(
+ MemSpDocNal01 = cSpDoc + TipDoc
+);
+
+//********************************************************************************
+
+Create view
+var
+  c1,_ParamKatOrg : comp;    // c1- KatSopr.NRec
+  _Param          : word;
+  ShowRep         : boolean;
+  oNotes          : iNotes;
+  wNal            : word;    // проверка наличия на дату создания документа
+  wMode           : word;    // режим работы интерфейса
+  dPrKol          : double;  // точность
+
+As select
+  if(IsValid(tnKatOrg), KatOrg.Name, '=не определен=')
+        ( FieldName = FKatOrgName )
+from
+  KatSopr
+, SpSopr
+, TekSaldo
+, KatParty
+, MemSpSopr
+, KatMC
+, SpDocNal
+, MemSpDocNal
+, KatPodr
+, KatMol
+, KatOtpEd
+, KatOrg
+, KatParty KatPartyMC
+, KatParty KatParty2
+, SpecMTR
+, SpSopr SpSopr2
+, AttrVal AttrVal2
+, ExClassVal ExClassVal2
+
+where
+((
+     c1                 ==  KatSopr.NRec
+and  KatSopr.NRec       ==  SpSopr.cSopr
+and  KatSopr.cPodrFrom  ==  KatPodr.NRec
+and  KatSopr.cMolFrom   ==  KatMol.NRec
+
+and  SpSopr.cMCUSL      ==  KatPartyMC.NRec
+and  SpSopr.cOtpEd      ==  KatOtpEd.NRec
+and  _ParamKatOrg       ==  KatOrg.NRec
+and  SpSopr.NRec        ==  SpDocNal.cSpDoc
+and  KatSopr.VidSopr    ==  SpDocNal.TipDoc
+and  MemSpSopr.NRec     ==  MemSpDocNal.cSpDoc
+and  word(-1)           ==  MemSpDocNal.TipDoc
+and  coSpSopr           ==  SpecMTR.coTable
+and  SpSopr.NRec        ==  SpecMTR.cSpec
+
+and  TekSaldo.cParty    ==  KatParty.NRec
+and  SpSopr2.cParty     ==  KatParty2.nRec
+))
+
+Bounds TekSaldoMC =
+     SpSopr.cMCUSL      ==  TekSaldo.cMC
+
+Bounds TekSaldoPodr =
+     SpSopr.cMCUSL      ==  TekSaldo.cMC
+and  KatSopr.cPodrFrom  ==  TekSaldo.cPodr
+
+Bounds TekSaldoMol =
+     SpSopr.cMCUSL      ==  TekSaldo.cMC
+and  KatSopr.cPodrFrom  ==  TekSaldo.cPodr
+and  KatSopr.cMolFrom   ==  TekSaldo.cMol
+;
+
+Parameters
+  c1
+, wMode;
+
+Form errr('errr.OUT', 'ERRR') with novisual;
+
+//******************************************************************************
+Procedure MakeMemSpDocNal;
+{
+  _LOOP SpDocNal
+  {
+    ClearBuffer(#MemSpDocNal);
+    MemSpDocNal.cSpDoc    := MemSpSopr.NRec;
+    MemSpDocNal.cDoc      := SpDocNal.cDoc;
+    MemSpDocNal.TipDoc    := word(-1);
+    MemSpDocNal.cGrNal    := SpDocNal.cGrNal;
+    MemSpDocNal.cNalog    := SpDocNal.cNalog;
+    MemSpDocNal.Nalog     := SpDocNal.Nalog;
+    MemSpDocNal.SumNal    := SpDocNal.SumNal;
+    MemSpDocNal.cVal      := SpDocNal.cVal;
+    MemSpDocNal.SumVal    := SpDocNal.SumVal;
+    MemSpDocNal.Summa     := SpDocNal.Summa;
+    MemSpDocNal.IsAgreg   := SpDocNal.IsAgreg;
+    MemSpDocNal.cOrg      := SpDocNal.cOrg;
+    MemSpDocNal.ValCurse  := SpDocNal.ValCurse;
+    MemSpDocNal.CrosCurse := SpDocNal.CrosCurse;
+    MemSpDocNal.Npp       := SpDocNal.Npp;
+    MemSpDocNal.IsCustom  := SpDocNal.IsCustom;
+
+    Insert Current MemSpDocNal;
+  }
+}
+
+//******************************************************************************
+Procedure ReMakeMemSpDocNal(coeff: double);
+{
+  MemSpDocNal.Summa  := MemSpDocNal.Summa*coeff;
+  MemSpDocNal.SumVal := MemSpDocNal.SumVal*coeff;
+  MemSpDocNal.SumNal := MemSpDocNal.SumNal*coeff;
+
+  Update Current MemSpDocNal;
+}
+
+//******************************************************************************
+Procedure MakeSpDocNal(coeff: double;_MEMTabNRec: comp);
+{
+  _LOOP MemSpDocNal where(( _MEMTabNRec  ==  MemSpDocNal.cSpDoc and
+                            word(-1)     ==  MemSpDocNal.TipDoc ))
+  {
+    ClearBuffer(#SpDocNal);
+    SpDocNal.cSpDoc    := SpSopr2.NRec;
+    SpDocNal.cDoc      := MemSpDocNal.cDoc;
+    SpDocNal.TipDoc    := KatSopr.VidSopr;
+    SpDocNal.cGrNal    := MemSpDocNal.cGrNal;
+    SpDocNal.cNalog    := MemSpDocNal.cNalog;
+    SpDocNal.Nalog     := MemSpDocNal.Nalog;
+    SpDocNal.SumNal    := MemSpDocNal.SumNal*coeff;
+    SpDocNal.cVal      := MemSpDocNal.cVal;
+    SpDocNal.SumVal    := MemSpDocNal.SumVal*coeff;
+    SpDocNal.Summa     := MemSpDocNal.Summa*coeff;
+    SpDocNal.IsAgreg   := MemSpDocNal.IsAgreg;
+    SpDocNal.cOrg      := MemSpDocNal.cOrg;
+    SpDocNal.ValCurse  := MemSpDocNal.ValCurse;
+    SpDocNal.CrosCurse := MemSpDocNal.CrosCurse;
+    SpDocNal.Npp       := MemSpDocNal.Npp;
+    SpDocNal.IsCustom  := MemSpDocNal.IsCustom;
+
+    Insert Current SpDocNal;
+  }
+}
+
+//******************************************************************************
+// Копирование ДЕИ
+Procedure CopyDEI(wPar: word; Kol, Kol2: double);
+var
+  oKatDEI: iKatDEI;
+
+{
+  oKatDEI.CopyDopEd( word(coSpSopr), SpSopr.NRec , wPar, Kol , word(coSpSopr)
+                                   , SpSopr2.NRec, wPar, Kol2, SpSopr2.VidSopr);
+}
+
+//******************************************************************************
+Procedure WriteERRRMessage(KOL: string);
+{
+  ERRR.write('По матценности "' + KatMC.Name + '" осталось не распр.кол-во: ' + string(KOL));
+  ShowRep := TRUE;
+}
+
+//******************************************************************************
+// копирование связанных элементов
+Procedure CopyRelSpSopr (tSource: comp);
+{
+  if GetFirst SpSopr where ((tSource == SpSopr.NRec)) <> tsOk
+    EXIT;
+
+  // копирование МТР
+  oMTRFun.CopySpecMTR(coSpSopr, SpSopr.NRec, coSpSopr, SpSopr2.NRec);
+
+  // копирование сметы
+  RunInterface('CopySpDocSmeta', word(coSpSopr), SpSopr.NRec, word(coSpSopr), SpSopr2.NRec);
+
+  // Копирование ДЕИ
+  if (SpSopr2.PrMC = 1)
+  {
+    CopyDEI(word(1), SpSopr.KolFact, SpSopr2.KolFact);
+    CopyDEI(word(2), SpSopr.Kol    , SpSopr2.Kol);
+    CopyDEI(word(3), SpSopr.KolOpl , SpSopr2.KolOpl);
+  }
+
+  // копирование ТТИ по позиции
+  oSDFuns.TTNDoc_Copy(coSpSopr, SpSopr.NRec, coSpSopr, SpSopr2.NRec);
+
+  // Копирую связь со внешними атрибутами
+  _LOOP AttrVal where (( coSpSopr     ==  AttrVal.wTable and
+                         SpSopr.NRec  ==  AttrVal.cRec ))
+    if (GetFirst AttrVal2 where (( AttrVal.NRec  ==  AttrVal2.NRec )) = tsOk)
+    {
+      AttrVal2.NRec := 0;
+      AttrVal2.cRec := SpSopr2.NRec;
+
+      Insert Current AttrVal2;
+    }
+
+  // Копирую связь со внешней классификацией
+  _LOOP ExClassVal where (( coSpSopr     ==  ExClassVal.wTable  and
+                            SpSopr.NRec  ==  ExClassVal.cRec ))
+
+    if (GetFirst ExClassVal2 where (( ExClassVal.NRec ==  ExClassVal2.NRec )) = tsOk)
+    {
+      ExClassVal2.NRec := 0;
+      ExClassVal2.cRec := SpSopr2.NRec;
+      Insert Current ExClassVal2;
+    }
+}
+
+//******************************************************************************
+//Кол-во МЦ, доступное к списанию по текущей позиции SpSopr
+Function GetKolOst(cPodr, cMol, cParty: comp): Double;
+var
+  Nal, ResNal: Double;
+
+{
+  //сальдовый остаток
+  Nal := NalT (KatSopr.dSopr, SpSopr.cMCUsl, cPodr, cMol, cParty);
+
+  //резерв
+  ResNal := oSDfuns.MakeRes_CheckRes (KatSopr.VidSopr, KatSopr.NRec, SpSopr.cMCUsl, cPodr, cMol, cParty, 0);
+  Nal       := Nal - ResNal;
+  GetKolOst := Nal;
+}
+
+//******************************************************************************
+// Формирование записи таблицы в памяти
+Procedure FillMemSpSopr;
+{
+  if (NOT isValid (#KatParty))
+    EXIT;
+
+  ClearBuffer(#MemSpSopr);
+  MemSpSopr.cMCUSL         := SpSopr.cMCUSL;
+  MemSpSopr.TekSaldocParty := TekSaldo.cParty;
+  MemSpSopr.KodParty       := KatParty.Kod;
+  MemSpSopr.dGodnParty     := KatParty.dGodn;
+  MemSpSopr.ccPodr         := if (TekSaldo.cPodr = 0, comp(-1), TekSaldo.cPodr);
+  MemSpSopr.ccMOL          := if (TekSaldo.cMOL  = 0, comp(-1), TekSaldo.cMOL);
+  MemSpSopr.ccParty        := if (TekSaldo.cParty = 0, comp(-1), TekSaldo.cParty);
+
+  if (wNal = 0)
+  {
+    if (TekSaldo.Kol - TekSaldo.Res > dPrKol)
+      MemSpSopr.TekSaldoOst := (TekSaldo.Kol - TekSaldo.Res) / if(KatOtpEd.Koef = 0, 1, KatOtpEd.Koef);
+  }
+  else
+  {
+    var tKolOst: double;
+    tKolOst := GetKolOst (if (KatSopr.cPodrFrom = 0, Comp(-1), KatSopr.cPodrFrom),
+                          if (Katsopr.cMolFrom  = 0, Comp(-1), Katsopr.cMolFrom),
+                          if (TekSaldo.cParty   = 0, Comp(-1), TekSaldo.cParty));
+
+    tKolOst := if ((TekSaldo.Kol - TekSaldo.Res) > dPrKol, tKolOst , tKolOst);
+
+    if (tKolOst > TekSaldo.Kol - TekSaldo.Res)
+      tKolOst := TekSaldo.Kol - TekSaldo.Res; // не превышать текущее наличие
+
+    if (tKolOst > dPrKol)
+      MemSpSopr.TekSaldoOst := tKolOst / if(KatOtpEd.Koef = 0, 1, KatOtpEd.Koef);
+  }
+
+  if (KatOtpEd.Diskret = 1)
+    MemSpSopr.TekSaldoOst := Trunc(MemSpSopr.TekSaldoOst);
+
+  MemSpSopr.SpSoprKolOpl := SpSopr.KolOpl;
+  MemSpSopr.ManualTax    := SpSopr.ManualTax;
+  MemSpSopr.SpSoprNRec   := SpSopr.NRec;
+  MemSpSopr.wNpp         := SpSopr.Npp;
+
+  if (Insert Current MemSpSopr = tsOk)
+    MakeMemSpDocNal;
+}
+
+//******************************************************************************
+// формирование таблицы в памяти
+Procedure MakeMemSpSopr;
+{
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm,'Формирую временную таблицу.', 1);
+
+  _LOOP SpSopr
+  {
+    //Одинаковые МЦ
+    //обрабатывает только первую МЦ остальные игнорирует(в такой ситуации придется вручную)
+    //заносит в отчет как нераспределенные
+    if GetFirst MemSpSopr where ((SpSopr.cMCUSL == MemSpSopr.cMCUSL)) <> tsOK
+    {
+      _LOOP TekSaldo
+      {
+        // если фильтр по контрагенту из партии не определен
+        if (_ParamKatOrg = 0)
+        {
+          FillMemSpSopr;
+        }
+        else // иначе берем только партии с нужным контрагентом
+          if (_ParamKatOrg = KatParty.cOrgPar)
+          {
+            FillMemSpSopr;
+          }
+
+          if (NOT NextVisual)
+            Break;
+      }
+    }
+    else
+      if GetFirst KatMC where((SpSopr.cMCUSL == KatMC.NRec)) = tsOk
+      {
+        SpSopr.Npp := 9999;
+
+        Update Current SpSopr;
+        WriteERRRMessage(string(SpSopr.KolOpl));
+      }
+
+    if not NextVisual
+      Break;
+  }
+
+  StopVisual('', 0);
+
+  _LOOP SpSopr
+    if GetFirst MemSpSopr where ((SpSopr.cMCUSL == MemSpSopr.cMCUSL)) <> tsOK
+      if GetFirst KatMC where ((SpSopr.cMCUSL == KatMC.NRec)) = tsOk
+        if (RecordExists KatPartyMC = tsOk)//только МЦ с партиями
+        {
+          SpSopr.Npp := 9999;
+          Update Current SpSopr;
+          WriteERRRMessage(string(SpSopr.KolOpl));
+        }
+}
+
+
+//******************************************************************************
+Procedure MakeOstatok(_d: double; _SpSoprNRec: comp; _MEMTabNRec: comp);
+var
+  TmpKolOpl: double;
+{
+  //на нераспределенное количество создаю запись чтобы общая сумма документа не изменилась
+  if GetFirst SpSopr2 where((_SpSoprNRec == SpSopr2.NRec)) <> tsOk
+    Exit;
+
+  TmpKolOpl := SpSopr2.KolOpl;
+
+  SpSopr2.NRec    := 0;
+  SpSopr2.npp     := 9999; // нераспределенные позиции последние в спецификации док-та
+  SpSopr2.cParty  := 0;    // обнуляю чтобы отличалась МЦ от уже распределенных позиций
+  SpSopr2.KolOpl  := _d;
+  SpSopr2.KolFact := _d;
+
+  if (Insert Current SpSopr2 = tsOk)
+    MakeSpDocNal(if(SpSopr2.ManualTax <> 0, _d / TmpKolOpl, 1), _MEMTabNRec);
+
+  // копирование связанных элементов
+  CopyRelSpSopr(_SpSoprNRec);
+}
+
+
+//******************************************************************************
+Procedure CLCReMakeMemSpSopr (  _SpSoprKolOpl: double;
+                                var _d: double;
+                                var _cMC: comp;
+                                var _SpSoprNRec: comp;
+                                var _MEMTabNRec: comp   );
+{
+  _SpSoprKolOpl := MemSpSopr.SpSoprKolOpl;
+
+  if (_cMC <> MemSpSopr.cMCUSL)
+  {
+    if (_d > dPrKol)
+      if GetFirst KatMC where((_cMC == KatMC.NRec)) = tsOk
+      {
+        MakeOstatok(_d, _SpSoprNRec, _MEMTabNRec);
+        WriteERRRMessage(string(_d));
+      }
+
+      _MEMTabNRec := MemSpSopr.NRec;
+      _SpSoprNRec := MemSpSopr.SpSoprNRec;
+      _cMC        := MemSpSopr.cMCUSL;
+      _d          := MemSpSopr.SpSoprKolOpl;
+  }
+
+  if (_d > MemSpSopr.TekSaldoOst)
+  {
+    _d := _d-MemSpSopr.TekSaldoOst;
+    MemSpSopr.SpSoprKolOpl := 0;
+  }
+  else
+  {
+    MemSpSopr.TekSaldoOst  := _d;
+    MemSpSopr.SpSoprKolOpl := 0;
+    _d := 0;
+  }
+
+  update Current MemSpSopr;
+}
+
+
+//******************************************************************************
+Procedure ReMakeMemSpSopr;
+var
+ _d, _SpSoprKolOpl: double;
+ _cMC, _SpSoprNRec, _MEMTabNRec: comp;
+{
+  _d := 0; _cMC := 0; _SpSoprNRec := 0; _MEMTabNRec := 0;
+
+  case _Param of
+    0:
+     _LOOP MemSpSopr ordered by wNpp, cMCUSL, KodParty
+       CLCReMakeMemSpSopr(_SpSoprKolOpl, _d, _cMC, _SpSoprNRec, _MEMTabNRec);
+    1:
+     _LOOP MemSpSopr ordered by wNpp, cMCUSL, KodParty (Desc)
+       CLCReMakeMemSpSopr(_SpSoprKolOpl, _d, _cMC, _SpSoprNRec, _MEMTabNRec);
+    2:
+     _LOOP MemSpSopr ordered by wNpp, cMCUSL, dGodnParty
+       CLCReMakeMemSpSopr(_SpSoprKolOpl, _d, _cMC, _SpSoprNRec, _MEMTabNRec);
+    3:
+     _LOOP MemSpSopr ordered by wNpp, cMCUSL, dGodnParty (Desc)
+       CLCReMakeMemSpSopr(_SpSoprKolOpl, _d, _cMC, _SpSoprNRec, _MEMTabNRec);
+  end;
+
+  if (_d > dPrKol)
+    if GetFirst KatMC where((_cMC == KatMC.NRec)) = tsOk
+    {
+      MakeOstatok(_d, _SpSoprNRec, _MEMTabNRec);
+      WriteERRRMessage(string(_d));
+    }
+}
+
+
+
+//******************************************************************************
+Procedure CLCMakeNewSpSopr(var NPP: word; _MEMTabNRec: comp);
+Var
+  TmpKolOpl  : double;
+  ccVal      : comp;
+{
+  if ( (MemSpSopr.SpSoprKolOpl = 0) and (MemSpSopr.TekSaldoOst <> 0) )
+    if GetFirst SpSopr2 where ((MemSpSopr.SpSoprNRec == SpSopr2.NRec)) = tsOk
+    {
+      TmpKolOpl       := SpSopr2.KolOpl;
+      SpSopr2.NRec    := 0;
+      NPP             := NPP + 1;
+      SpSopr2.NPP     := NPP;
+      SpSopr2.cParty  := MemSpSopr.TekSaldocParty;
+      SpSopr2.KolOpl  := MemSpSopr.TekSaldoOst;
+      SpSopr2.KolFact := MemSpSopr.TekSaldoOst;
+
+      if ( (wMode and 4) <> 0 )
+        {
+          ccVal := StepMCInfo(SpSopr2.cMCUSL, 0, MemSpSopr.ccPodr, MemSpSopr.ccMol, MemSpSopr.ccParty);
+
+          if ( ccVal <> 0 )
+            {
+              SpSopr2.Price   := oValFunc.CurrencyExchange(ccVal, AverageVPrice, KatSopr.cVal, KatSopr.dSopr);
+              SpSopr2.rPrice  := oValFunc.CurrencyExchange(ccVal, AverageVPrice, KatSopr.cVal, KatSopr.dSopr);
+              SpSopr2.VPrice  := oValFunc.CurrencyExchange(ccVal, AverageVPrice, SpSopr2.cVal, KatSopr.dSopr);
+              SpSopr2.rVPrice := oValFunc.CurrencyExchange(ccVal, AverageVPrice, SpSopr2.cVal, KatSopr.dSopr);
+            }
+          else
+            {
+              SpSopr2.Price   := oValFunc.CurrencyExchange(ccVal, AveragePrice, KatSopr.cVal, KatSopr.dSopr);
+              SpSopr2.rPrice  := oValFunc.CurrencyExchange(ccVal, AveragePrice, KatSopr.cVal, KatSopr.dSopr);
+              SpSopr2.VPrice  := oValFunc.CurrencyExchange(ccVal, AveragePrice, SpSopr2.cVal, KatSopr.dSopr);
+              SpSopr2.rVPrice := oValFunc.CurrencyExchange(ccVal, AveragePrice, SpSopr2.cVal, KatSopr.dSopr);
+            }
+        }
+
+      if (Insert Current SpSopr2 = tsOk)
+        MakeSpDocNal(if(SpSopr2.Manualtax <> 0, MemSpSopr.TekSaldoOst / TmpKolOpl, 1), _MEMTabNRec);
+
+      // копирование связанных элементов
+      CopyRelSpSopr(MemSpSopr.SpSoprNRec);
+    }
+}
+
+
+//******************************************************************************
+Procedure MakeNewSpSopr;
+var
+  NPP: word;
+{
+  NPP := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+    'Формирую новую спецификацию документа.', 1);
+  case _Param of
+    0:
+      _LOOP MemSpSopr ordered by wNpp, cMCUSL, KodParty
+      {
+        CLCMakeNewSpSopr(NPP, MemSpSopr.NRec);
+        if not NextVisual Break;
+      }
+    1:
+      _LOOP MemSpSopr ordered by wNpp, cMCUSL, KodParty (Desc)
+      {
+        CLCMakeNewSpSopr(NPP, MemSpSopr.NRec);
+        if not NextVisual Break;
+      }
+    2:
+      _LOOP MemSpSopr ordered by wNpp, cMCUSL, dGodnParty
+      {
+        CLCMakeNewSpSopr(NPP, MemSpSopr.NRec);
+        if not NextVisual Break;
+      }
+    3:
+      _LOOP MemSpSopr ordered by wNpp, cMCUSL, dGodnParty (Desc)
+      {
+        CLCMakeNewSpSopr(NPP, MemSpSopr.NRec);
+        if not NextVisual Break;
+      }
+  end;
+
+  SetVisualHeader('Удаляю старую спецификацию документа');
+
+  _LOOP MemSpSopr
+    if (NOT NextVisual)
+    {
+      StopVisual('', 0);
+      Exit;
+    }
+    else
+      if GetFirst SpSopr where((MemSpSopr.SpSoprNRec == SpSopr.NRec)) = tsOk
+        oSDfuns.SpSopr_Delete (SpSopr.NRec);
+
+  if ( GetFirst SpSopr where (( c1 == SpSopr.cSopr and word(9999) == SpSopr.Npp )) = tsOk )
+    do
+      {
+        NPP++;
+        update current SpSopr set SpSopr.Npp := NPP;
+      }
+    while ( GetFirst SpSopr where (( c1 == SpSopr.cSopr and word(9999) == SpSopr.Npp )) = tsOk );
+
+  StopVisual('', 0);
+}
+
+
+#doc
+  Параметры автоформирования партий
+#end
+
+//******************************************************************************
+Window WinRemakeSpSoprOnTeksaldo 'Формирование по текущему наличию МЦ'
+                                  EscClose DoAccept Gray;
+  Show at (27, 7, 99, 17);
+
+Panel PN
+  Table  KatOrg;
+
+Screen SC ('', hci_nakl_avtorasped_razrez, );
+Bevel b1 {1, 4, 71, 8, bsLowered, bsFrame};
+Fields
+  _Param ('Параметр, который необходимо учитывать при распределении МЦ'):
+   [LIST  'Код партии по возрастанию'
+         , 'Код партии по убыванию'
+         , 'Дата годности партии по возрастанию'
+         , 'Дата годности партии по убыванию.'], protect;
+  FKatOrgName ('Будет установлен фильтр на партии по полю "Привязка к контрагенту" каталога партий',,sci13Esc) : protect;
+  wNal ('контролировать наличие на дату создания документа'): NoProtect;
+  KatPodr.Name: skip, {Font = {Bold   = TRUE}};
+  KatMol.Name: skip, {Font = {Bold   = TRUE}};
+Buttons
+  cmOk, Default, , 'Ввод - принять выбор', , sci1Esc;
+  cmCancel, , , 'Отмена', , sci1Esc;
+<<
+
+ `Учитывать при формировании документа`.@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Фильтр по поставщику партии`         .@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] контролировать наличие на дату выписки документа`
+  Разрез хранения
+   `Склад: `  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   `МОЛ: `    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+          <.~ Продолжить  .>           <.   Отмена    .>
+>>
+End; // Screen
+
+HandleEvent
+cmDelOnProtect:
+{
+  case CurField of
+    #FKatOrgName : set _ParamKatOrg := 0;
+  end;
+}
+End;
+End;// Panel
+
+HandleEvent
+cmInit:
+{
+  if (not ReadMyDsk(_Param, '_Param_RemakeSpSoprOnTeksaldo_', FALSE))
+    _Param := 0;
+  if (not ReadMyDsk(wNal, 'wNal_RemakeSpSoprOnTeksaldo_', FALSE))
+    wNal := 0;
+  if (not ReadMyDsk(_ParamKatOrg, '_ParamKatOrg_RemakeSpSoprOnTeksaldo_', FALSE))
+    _ParamKatOrg := 0;
+}
+
+cmOk:
+{
+  SaveMyDsk(_Param, '_Param_RemakeSpSoprOnTeksaldo_');
+  SaveMyDsk(_ParamKatOrg, '_ParamKatOrg_RemakeSpSoprOnTeksaldo_');
+  SaveMyDsk(wNal, 'wNal_RemakeSpSoprOnTeksaldo_');
+
+  if ( (wNal = 1) or ((wMode and 4) <> 0) )
+    InitMCInfo(KatSopr.dSopr);
+
+  MakeMemSpSopr;
+  ReMakeMemSpSopr;
+  MakeNewSpSopr;
+
+  if ( (wNal = 1) or ((wMode and 4) <> 0) )
+    DoneMCInfo;
+
+  PutCommand(cmDefault);
+}
+
+cmPick:
+{
+   case CurField of
+    #FKatOrgName: RunInterface(GetKatOr, _ParamKatOrg, comp(0), FALSE, comp(0), comp(0));
+  end;
+}
+
+End;// HandleEvent;
+end // Win
+
+
+//******************************************************************************
+HandleEvent
+cmInit:
+{
+  if ( GetFirst KatSopr <> tsOk )
+    {
+      Abort;
+      Exit;
+    }
+
+  if ( KatSopr.VidSopr = 629 )
+    PushBounds(tbTekSaldoMC);
+  else
+    PushBounds(tbTekSaldoMol);
+
+  delete all MemSpDocNal;
+  delete all MemSpSopr;
+
+  ShowRep := FALSE;
+  dPrKol  := doGetTune('Oper.MinKolMC');
+
+  // автоматическое распределение
+  if ( (wMode and 1) = 1 )
+    {
+      if ( (wMode and 2) <> 0 )
+        {
+          _Param       := 0;
+          wNal         := 0;
+          _ParamKatOrg := 0;
+        }
+      else
+        {
+          if (not ReadMyDsk(_Param, '_Param_RemakeSpSoprOnTeksaldo_', FALSE))
+            _Param := 0;
+
+          if (not ReadMyDsk(wNal, 'wNal_RemakeSpSoprOnTeksaldo_', FALSE))
+            wNal := 0;
+
+          if (not ReadMyDsk(_ParamKatOrg, '_ParamKatOrg_RemakeSpSoprOnTeksaldo_', FALSE))
+            _ParamKatOrg := 0;
+        }
+
+      if ( (wNal = 1) or ((wMode and 4) <> 0) )
+        InitMCInfo(KatSopr.dSopr);
+
+      MakeMemSpSopr;
+      ReMakeMemSpSopr;
+      MakeNewSpSopr;
+
+      if ( (wNal = 1) or ((wMode and 4) <> 0) )
+        DoneMCInfo;
+
+      errr.AbortForm;
+      Abort;
+      Exit;
+    }
+
+  RunWindowModal(WinRemakeSpSoprOnTeksaldo);
+
+  if ShowRep
+  {
+    errr.PutEvent(feBreak);
+    errr.ShowFile('Реестр МЦ, по которым осталось не распределенное количество.');
+  }
+  else
+     errr.AbortForm;
+
+  Abort;
+}
+end;
+
+End.

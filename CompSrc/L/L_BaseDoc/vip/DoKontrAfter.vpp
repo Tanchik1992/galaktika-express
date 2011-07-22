@@ -1,0 +1,181 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - документы-основания
+// Выбор контрагента в ДО . Часть 2 - постобработка изменения организации
+//******************************************************************************
+
+  var BalR
+    , BalV
+    , MaxBalR
+    , MaxBalV
+        : double;
+
+  var IsMax
+        : boolean;
+
+  #ifdef __vschet__
+  // контроль задолженности по договорам контрагента
+  if ( not iDolg_DG.ControlDolg_DG_4BaseDoc(BaseDoc.cOrg, comp(0), BaseDoc.Total, BaseDoc.cVal, word(1)) )
+    {
+      set BaseDoc.cOrg  := NRecOld;
+      set BaseDoc.cBank := NRecBank
+
+      Exit;
+    }
+  #end
+
+  #ifdef __vschetb__
+  if ( BaseDoc.VidDoc = word(101) OR BaseDoc.VidDoc = word(1410))
+    {
+      if ( NOT TestNoDoUnique )
+        {
+          set BaseDoc.cOrg := NRecOld;
+          set BaseDoc.cBank := NRecBank
+
+          Exit;
+        }
+    }
+  #end
+
+  //Форма расчета между филиалами по умолчанию
+  case BaseDoc.VidDoc of
+  //--------------------
+    101: // закупка
+      {
+        if ( KatOrg.CorpoIn = 1 )
+          if ( coGetTune('Doc.Buy.cPaymentFilial') <> 0 )
+            set BaseDoc.cPayment := coGetTune('Doc.Buy.cPaymentFilial');
+      }
+  //--------------------
+    111: // закупка по предоплате
+      {
+        if ( KatOrg.CorpoIn = 1 )
+          if ( coGetTune('Doc.Buy.cPaymentFilialPO') <> 0 )
+            set BaseDoc.cPayment := coGetTune('Doc.Buy.cPaymentFilialPO');
+      }
+  //--------------------
+    201: // продажа
+      {
+        if ( KatOrg.CorpoIn = 1 )
+          if ( coGetTune('Doc.Sell.cPaymentFilial') <> 0 )
+            set BaseDoc.cPayment := coGetTune('Doc.Sell.cPaymentFilial');
+      }
+  //--------------------
+    211: // продажа по предоплате
+      {
+        if ( KatOrg.CorpoIn = 1 )
+          if ( coGetTune('Doc.Sell.cPaymentFilialPO') <> 0 )
+            set BaseDoc.cPayment := coGetTune('Doc.Sell.cPaymentFilialPO');
+      }
+    1410: // УЛХ. наряд-акт
+      {
+        if ( KatOrg.CorpoIn = 1 )
+          if ( coGetTune('Doc.Wood.NarAkt.cPaymentFilial') <> 0 )
+            set BaseDoc.cPayment := coGetTune('Doc.Wood.NarAkt.cPaymentFilial');
+      }
+  //--------------------
+    1420: // счет лесопользователя
+      {
+        if ( KatOrg.CorpoIn = 1 )
+          if ( coGetTune('Doc.Wood.Schet.cPaymentFilial') <> 0 )
+            set BaseDoc.cPayment := coGetTune('Doc.Wood.Schet.cPaymentFilial');
+      }
+  //--------------------
+  end; //case
+
+   //проверка на учет таможенных налогов
+  if (
+      ( BaseDoc.Direct    = 2 ) AND  // только для закупки
+      ( KatOrg.NeedCustom = 1 ) AND
+      ( BaseDoc.VhodNal  <> 2 )
+     )  // ДО импорта/экспорта
+    if ( Message('По данному контрагенту учитываются таможенные налоги!'#13
+               + 'Установить цены без налогов?', Information + YesNo) = cmYes )
+      if ( not IsValid(#SpStep) )
+        set BaseDoc.VhodNal := 2  //для импорта/экспорта налоги не входят
+      else
+        if ( BaseDoc.VhodNal = 1 )
+          {
+            Message('Удалите спецификацию: цены должны быть без налогов!', Information);
+            set BaseDoc.cOrg := NRecOld;
+            Exit;
+          }
+
+  przap := TRUE;
+
+  if ( BaseDoc.Direct <> 1 )
+    {
+      if ( ( BaseDoc.cGrOtpr = NRecOld ) OR ( BaseDoc.cGrOtpr = 0 ) )
+        set BaseDoc.cGrOtpr := BaseDoc.cOrg;
+    }
+  else
+    {
+      // проверка возможности отпуска контрагенту
+      if ( wGetTune('Doc.DolgKontr') <> 0 )
+        {
+          if NullVipRef(oCheckKon)
+            GetVipRef(oCheckKon, 'KatOrg');
+
+          if ( not oCheckKon.CheckDolgKon(BaseDoc.cOrg, BaseDoc.dDoc, BaseDoc.Total, BaseDoc.cVal) )
+            {
+              set BaseDoc.cOrg   := 0;
+              set BaseDoc.cGrPol := BaseDoc.cOrg;
+              set BaseDoc.cBank  := 0;
+
+              Exit;
+            }
+        }
+
+      // скидка для контрагента
+      if ( BaseDoc.cNalog = 2 )
+        {
+          set BaseDoc.VhSkid   := 1;
+          set BaseDoc.Skidka   := 0;
+          set BaseDoc.KolKompl := 0;
+
+          if ( KatOrg.Skid <> 0 )
+            BaseDoc.KolKompl := KatOrg.Skid
+          else
+            _LOOP KatOrgDescr where (( BaseDoc.cOrg == KatOrgDescr.cRec ))
+              if ( GetFirst KatOrgDescr1 where (( KatOrgDescr.cGroup == KatOrgDescr1.nRec )) = tsOk )
+                if ( ABS(KatOrgDescr1.Skid) > 0.000001 )
+                  {
+                    BaseDoc.KolKompl := KatOrgDescr1.Skid;
+                    Break;
+                  }
+        }
+
+      if ( ( BaseDoc.cGrPol = NRecOld ) OR ( BaseDoc.cGrPol = 0 ) )
+        set BaseDoc.cGrPol := BaseDoc.cOrg;
+    }
+
+  if ( GetFirst fastfirstrow PickBank where (( NRecBank == PickBank.nRec )) = tsOk )
+    set BaseDoc.cBank := NRecBank
+  else
+    SetBankDef;
+
+//---------пересчет налогов----------------------------------
+  if IsValid(#SpStep)
+    {
+      ResetBounds(#SpDocNal);
+
+      _LOOP SpDocNal where (( BaseDoc.Nrec == SpDocNal.cDoc AND
+                              naltype == SpDocNal.TipDoc
+                           )) ordered by SpDocNal.cNalog
+        if ( NrecOld = SpDocNal.cOrg )
+          {
+            set SpDocNal.cOrg := BaseDoc.cOrg;
+
+            if ( update current SpDocNal <> tsOk )
+              Break;
+          }
+
+      SetBounds(#SpDocNal);
+
+      GetTotalSkid(False);
+
+      RereadRecord(#SpDocNal);
+    }
+
+  UpdateTable;
+//******************************************************************************

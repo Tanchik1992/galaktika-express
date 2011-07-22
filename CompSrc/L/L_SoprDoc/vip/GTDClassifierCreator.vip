@@ -1,0 +1,156 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║ Назначение    : создание классификаторов ГТД для печати СФ и              ║
+ ║                 книг покупок продаж                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+#include GTDClassifierCreator.vih
+#include oKatMC.vih
+#include ExtAttr.Vih
+#include ExtClass.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  создание классификаторов ГТД для печати СФ и книг покупок продаж
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+interface GTDClassifierCreator;
+
+const
+  cwParty_Spec: word := 1;
+  cwParty_Doc : word := 2;
+  csCountryClassifier : string := 'Страна происхождения';
+  csGTDNumberAttribute: string := 'ГТД';
+end;
+
+table struct GTDParty
+(
+  cProducer: comp
+, cParty   : comp
+)
+with index
+(
+  GTDParty0 = cProducer (Unique)
+);
+
+create view vGTDClassifierCreator
+var
+  // interfaces
+  iKatMC: OKatMC;
+  iClass: IExtClass;
+  iAttr: IExtAttr;
+  // global variables
+  g_classCountry: word;
+  g_producer: comp;
+  // tunes
+  tuneParty_AvtoForm: word;
+  tuneNalog_Rus_GTD_ProducerAnalytics: word;
+  tuneNalog_Rus_GTD_ProducerRole: comp;
+from
+  KatSopr
+, GTDParty
+, KatOrg
+, KatState
+, ExClassVal
+where
+((
+    g_producer    == KatOrg.nRec
+and KatOrg.cState == KatState.nRec
+))
+;
+
+// конструктор
+function initGTD(cGTD: comp): boolean;
+{
+  tuneParty_AvtoForm := wGetTune('Party.AvtoForm');
+  tuneNalog_Rus_GTD_ProducerAnalytics := word(coGetTune('Nalog.Rus.GTD.ProducerAnalytics'));
+  tuneNalog_Rus_GTD_ProducerRole := coGetTune('Nalog.Rus.GTD.ProducerRole');
+  g_classCountry := iClass.CreateClass(coKatParty, csCountryClassifier, 1);
+
+  if (delete all GTDParty <> tsOk) { initGTD := false; exit; }
+  initGTD := GetFirst KatSopr where (( cGTD == KatSopr.nRec )) = tsOk;
+}
+// проверить, есть ли аналитика "Производидель" для МЦ
+function findProducer(cMC: comp; var cProducer: comp): boolean;
+{
+  findProducer :=
+    iKatMC.GetAnMC(cMC, tuneNalog_Rus_GTD_ProducerAnalytics,
+                   tuneNalog_Rus_GTD_ProducerRole, cProducer) and (cProducer <> 0);
+}
+// сформирована ли уже партия для данного производителя
+function retrieveParty(cProducer: comp): comp;
+{
+  retrieveParty := 0;
+  if (tuneParty_AvtoForm = cwParty_Spec)
+    exit;
+  if (GetFirst GTDParty
+                where (( cProducer == GTDParty.cProducer )) <> tsOk)
+    exit;
+  retrieveParty := GTDParty.cParty;
+}
+// запомнить созданную партию во временной таблице
+// для использования позже в функции retrieveParty
+function storeParty(cProducer: comp; cParty: comp): boolean;
+{
+  if (GetFirst GTDParty where (( cProducer == GTDParty.cProducer )) = tsOk)
+  {
+      storeParty := true;
+      exit;
+    }
+  ClearBuffer(tnGTDParty);
+  GTDParty.cProducer := cProducer;
+  GTDParty.cParty := cParty;
+  storeParty := insert current GTDParty = tsOk;
+}
+
+
+// прверить, создана ли классификация "Страна проихождения"
+// для заданной партии
+function existCountryClassifier(cParty: comp): boolean;
+{
+  existCountryClassifier :=
+    GetFirst ExClassVal where ((  g_classCountry == ExClassVal.ClassCode
+                              and coKatParty     == ExClassVal.wTable
+                              and cParty         == ExClassVal.cRec)) = tsOk;
+}
+
+
+// создать внешние классификаторы "Страна происхождения" и "ГТД" для партии
+function makeClassifiers(cProducer: comp; cParty: comp): boolean;
+{
+  makeClassifiers := false;
+
+  var res: boolean;
+  res := false;
+  iAttr.sSetAttr(coKatParty, cParty, csGTDNumberAttribute, KatSopr.nSopr);
+  if (not existCountryClassifier(cParty))
+    {
+      // создать классификацию 'Страна происхождения'
+      g_producer := cProducer;
+      if (GetFirst KatOrg <> tsOk)
+        exit;
+      if (GetFirst KatState <> tsOk)
+        exit;
+      var cSegment: comp;
+      cSegment := iClass.AddSegClass(g_classCountry, KatState.Name, KatState.Kod, 0);
+      if (cSegment = 0)
+        exit;
+
+      ClearBuffer(tnExClassVal);
+      ExClassVal.ClassCode := g_classCountry;
+      ExClassVal.wTable := coKatParty;
+      ExClassVal.cRec := cParty;
+      ExClassVal.cClassSeg := cSegment;
+      res := insert current ExClassVal = tsOk;
+    }
+  makeClassifiers := res;
+}
+
+end.

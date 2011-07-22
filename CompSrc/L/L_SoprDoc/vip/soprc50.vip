@@ -1,0 +1,156 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Сервисный интерфейс, используется для расчета             ║
+!║               : количества грузовых мест.                                 ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#include ExtAttrClass.vih
+#include oEdIzm.vih
+
+//********************************************************************************
+
+#doc
+Назначение:
+   Расчет кол-ва грузовых мест
+
+Параметры:
+  pNRec     - ссылка на позицию сопроводительного документа
+  pMcUsl    - ссылка на МЦ/услугу
+  pKolFact  - количество по позиции сопроводительного документа
+  pKolGrM   - количество грузовых мест (возвращаемый)
+  pOtpEdGrM - ссылка на ед.измерения грузовых мест
+  pOtpEd    - ссылка на отпускную единицу
+#end
+
+//********************************************************************************
+
+Interface iKolGrM AlwaysReturn;
+
+#include oEdIzm.var
+
+Create View
+Var
+  pNRec                    // ссылка на позицию спецификации
+, pMcUsl                   // cMCUSL
+, pOtpEd                   // ссылка на отпускную единицу
+, pOtpEdGrM    : comp;     // ед.измерения грузовых мест
+
+  pKolFact                 // количество по тек.позиции документа
+, pKolGrM      : double;   // количество грузовых мест
+
+  piExAttr     : iExtAttr;
+
+From
+  SpSopr
+, KatOtpEd
+
+where
+((
+   pNRec   ==  SpSopr.NRec   AND
+   pMcUsl  ==  KatOtpEd.cMCUSL
+))
+;
+
+Parameters
+  pNRec
+, pMcUsl
+, pKolFact
+, pKolGrM
+, pOtpEdGrM
+, pOtpEd
+;
+
+#include soprc16.vpp
+
+
+Function GetAttrDouble(nRecTable: comp; str: string): double;
+{
+  GetAttrDouble := piExAttr.doGetAttr(coKatOtpEd,nRecTable,str);
+}
+
+Procedure SetAttrDouble(nRecTable : comp; str : string; Value : double);
+{
+  piExAttr.doSetAttr(coKatOtpEd,nRecTable,str,Value);
+}
+
+// Чтение атрибутов
+Function ReadGrM: boolean;
+var
+  tKolGrM: double;
+  tKoef  : double;
+{
+  ReadGrM := FALSE;
+
+  tKolGrM := GetAttrDouble(KatOtpEd.NRec, 'ГРУЗОВЫЕ МЕСТА, ФИКСИРОВАННОЕ КОЛИЧЕСТВО');
+  tkoef   := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+  if (tKolGrM = 0)
+    tKolGrM := pKolFact * tkoef / GetAttrDouble(KatOtpEd.NRec, 'ГРУЗОВЫЕ МЕСТА, КОЭФФИЦИЕНТ');
+
+  if (tKolGrM <> 0)
+  {
+    pKolGrM   := tKolGrM;
+    pOtpEdGrM := KatOtpEd.NRec;
+
+    //округление до большего целого количества грузовых мест
+    if (Trunc(pKolGrM) <> pKolGrM)
+      pKolGrM := Trunc(pKolGrM) + 1;
+
+    ReadGrM := TRUE;
+  }
+}
+
+HandleEvent
+cmInit:
+{
+  Abort;
+
+  // если МЦ является тарой и не заполнена единица измерения гр.мест - грузовых мест МЦ быть не должно
+  if (SpSopr.cOwner <> comp(0))
+    if (pOtpEdGrM = comp(0))
+    {
+      pKolGrM := double(0);
+      Exit;
+    }
+
+  // сначала пытаемся перечитать из единицы грузовых мест
+  if (pOtpEdGrM <> comp(0))
+  {
+    if GetFirst KatOtpEd where (( pOtpEdGrM == KatOtpEd.NRec )) = tsOk
+    {
+      if (ReadGrM)
+        Exit;
+    }
+    // если ничего не перечитано - значит был ручной ввод - сохраним его
+    // при ручном вводе оставим пока неокругленные значения
+    EXIT;
+  }
+  // затем пытаемся перечитать из отпускной единицы спецификации
+  if (pOtpEd <> comp(0))
+    if GetFirst KatOtpEd where (( pOtpEd == KatOtpEd.NRec )) = tsOk
+    {
+      if (ReadGrM)
+        Exit;
+    }
+
+  // ищем по всем отпускным единицам
+  _LOOP KatOtpEd
+  {
+    if (ReadGrM)
+      Exit;
+  }
+
+  // если кол-во нулевое - оставляем "старые значения"
+  if (pKolFact = 0)
+    EXIT;
+
+  // если значения для кол-ва грузовых мест не задано - берем фактическое
+  pOtpEdGrM := pOtpEd;
+  pKolGrM   := pKolFact;
+
+  //округление до большего целого количества грузовых мест
+  if (Trunc(pKolGrM) <> pKolGrM)
+    pKolGrM := Trunc(pKolGrM) + 1;
+}
+
+End; // HandleEvent
+End. // interface

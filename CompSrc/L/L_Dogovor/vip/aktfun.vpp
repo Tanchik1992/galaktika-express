@@ -1,0 +1,899 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Управление договорами
+// Сервисные функции для актов сверки
+//********************************************************************************
+
+#ifNdef _AktFun_vpp
+
+#define _AktFun_vpp
+
+#include direct.vpp
+
+Table struct SoprV
+(
+  cSoprHoz: comp   "Cсылка на SoprHoz",
+  TiDkSver: word   "Раздел акта сверки",
+  Summa    : double "Сумма, отнесенная на акт сверки",
+  SumVal   : double "Сумма в валюте"
+)
+With index
+(
+  SoprV01 = cSoprHoz
+);
+
+create view loAktSver
+var
+  pAktSver: comp;
+  pDogovor: comp;
+  pAppDogovor: comp;
+  d1, d2: Date;
+
+select
+  AktSver.* ,
+  DocSver.* ,
+  SoprHoz.*
+from
+  Dogovor ,
+  IerDog  ,
+  AktSver (Normal),
+  synonym AktSver AktSverOld ,
+  DocSver (Normal),
+  SoprHoz ,
+  synonym SoprHoz SoprHoz70  ,
+  synonym SoprHoz SoprHozRet ,
+  SpSopHoz ,
+  SchFact ,
+  KatSopr ,
+  synonym KatSopr  ReklNakl  ,
+  SpSopr  ,
+  synonym SpSopr  ReklSpS    ,
+  BaseFin ,
+  SoprV,
+  SpOrder
+where
+  ((
+      pAktSver         == AktSver.nRec
+  AND AktSver.cDogovor == Dogovor.nRec
+  AND pDogovor         == SoprHoz.cDogovor
+  AND SoprHoz.cSoprDoc == KatSopr.nRec
+  ))
+
+Bounds DateSoprHoz  = d1 <<= SoprHoz.DatOb AND
+                      d2 >>= SoprHoz.DatOb
+
+;
+
+!----------- формирование спецификации акта сверки ---------------------------
+
+Procedure InsertUpdateDocSver( pTiDkSver          : word;
+                               cSoprHoz_nRec      : comp;
+                               cSoprHoz_KodValut  : comp;
+                               cSoprHoz_Summa     : double;
+                               cSoprHoz_SumValut  : double;
+                               cSoprHoz_dValCurse: Date;
+                               cSoprHoz_DatOb     : Date
+                             );
+var ret, newDocSver: word;
+var dCurse: Date;
+{
+  if (pTiDkSver > 0)
+    {
+      newDocSver := 1; // insert DocSver
+
+      if (loAktSver.GetFirst DocSver
+                    where ((cSoprHoz_nRec == DocSver.cSoprHoz)) = tsOk)
+        {
+          loAktSver._LOOP DocSver
+                 where ((cSoprHoz_nRec == DocSver.cSoprHoz))
+            {
+              if (loAktSver.GetFirst AktSverOld
+                    where ((loAktSver.DocSver.cAktSver == AktSverOld.nRec)) = tsOk)
+                {
+                  if (loAktSver.AktSverOld.Status = 1) //аннулированный
+                    continue;
+
+                  if (loAktSver.GetFirst FastFirstRow IerDog
+                           where ((loAktSver.AktSver.cDogovor    == IerDog.cUpRec AND
+                                   loAktSver.AktSverOld.cDogovor == IerDog.cRec)) <> tsOk)
+                    {
+                      if (loAktSver.GetFirst FastFirstRow IerDog
+                           where ((loAktSver.AktSverOld.cDogovor == IerDog.cUpRec AND
+                                   loAktSver.AktSver.cDogovor    == IerDog.cRec)) <> tsOk)
+                        { // найденный акт сверки не находится на одной
+                          // ветке с формируемым актом
+                          // (имеется в виду дерево договоров)
+                          if (loAktSver.AktSverOld.Status = 2)
+                            { // проведенный
+                              newDocSver := 2; // пропустить эту запись
+                              loAktSver.ClearBuffer(loAktSver.tnDocSver);
+                              Break;
+                            }
+                          else
+                            { // оформляемый
+                              newDocSver := 0; // update DocSver
+                              Break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+      if (newDocSver < 2)
+        {
+          if (newDocSver = 1)
+            loAktSver.ClearBuffer(loAktSver.tnDocSver);
+
+          loAktSver.DocSver.cAktSver := loAktSver.pAktSver;
+          loAktSver.DocSver.TiDkSver := pTiDkSver;
+          loAktSver.DocSver.cSoprHoz := cSoprHoz_nRec;
+          loAktSver.DocSver.cVal     := cSoprHoz_KodValut;
+          loAktSver.DocSver.Summa    := if (cSoprHoz_KodValut = 0,
+                                            cSoprHoz_Summa,
+                                            cSoprHoz_SumValut);
+
+          if (loAktSver.Dogovor.dValCurse <> Date(0, 0, 0))
+            {
+              dCurse := loAktSver.Dogovor.dValCurse;
+            }
+          else
+            {
+              if (cSoprHoz_dValCurse <> Date(0, 0, 0))
+                {
+                  dCurse := cSoprHoz_dValCurse;
+                }
+              else
+                {
+                  if (cSoprHoz_DatOb <> Date(0, 0, 0))
+                    {
+                      dCurse := cSoprHoz_DatOb;
+                    }
+                  else
+                    {
+                      dCurse := loAktSver.Dogovor.dInput;
+                    }
+                }
+            }
+
+          loAktSver.DocSver.SumVal := oValFunc.GetAnyCurrency(loAktSver.DocSver.cVal,
+                                                              loAktSver.DocSver.Summa,
+                                                              dCurse,
+                                                              loAktSver.Dogovor.cValRas);
+
+          case newDocSver of
+          0: ret := loAktSver.update current DocSver;
+          1: ret := loAktSver.insert current DocSver;
+          end; // case
+        }
+    }
+}
+
+Procedure CalcReklSopr (d1: Date; d2: Date; pTiDkGal: word; cKatSopr: comp);
+{
+  var pTiDkSver: word;
+  var Summa1: double;
+  var Summa2: double;
+
+  loAktSver._LOOP SpSopr where (( cKatSopr == SpSopr.cSopr ))
+    loAktSver._LOOP SpOrder where (( loAktSver.SpSopr.NRec == SpOrder.cSpSopr ))
+      loAktSver._LOOP ReklSpS where (( loAktSver.SpOrder.NRec  == ReklSpS.cSpOrder ))
+        {
+          if (loAktSver.GetFirst SoprHozRet
+                where ((pTiDkGal                == SoprHozRet.TipDoc AND
+                        loAktSver.ReklSpS.cSopr == SoprHozRet.cSoprDoc)) = tsOk)
+            {
+              pTiDkSver := 0;
+              if (wGetTune('Oper.SoprInBalans') = 0)
+                { // по всем накладным на дату накладной
+                  if ((d1 <= loAktSver.SoprHozRet.DatOb) AND
+                      (loAktSver.SoprHozRet.DatOb <= d2))
+                    {
+                      case loAktSver.SoprHozRet.TiDkGal of
+                        103, 106: pTiDkSver := 21;
+                        203, 206: pTiDkSver := 11;
+                      end;
+                    }
+                }
+              else
+                { // по только проведенным накладным на дату проведения
+                  if (loAktSver.GetFirst KatSopr
+                      where ((loAktSver.SoprHozRet.cSoprDoc == KatSopr.nRec)) = tsOk)
+                    {
+                      if ((d1 <= loAktSver.KatSopr.dOpr) AND
+                          (loAktSver.KatSopr.dOpr <= d2))
+                        {
+                          case loAktSver.SoprHozRet.TiDkGal of
+                            103, 106: pTiDkSver := 21;
+                            203, 206: pTiDkSver := 11;
+                          end;
+                        }
+                    }
+                }
+
+              if (pTiDkSver > 0)
+                {
+                  if (loAktSver.GetFirst ReklNakl
+                      where ((loAktSver.ReklSpS.cSopr == ReklNakl.nRec)) = tsOk)
+                    {
+                      if (loAktSver.ReklNakl.VhodNal = 1)
+                        {
+                          Summa1 := loAktSver.ReklSpS.Price*loAktSver.ReklSpS.KolFact;
+                          Summa2 := loAktSver.ReklSpS.VPrice*loAktSver.ReklSpS.KolFact;
+                        }
+                      else
+                        {
+                          Summa1 := loAktSver.ReklSpS.Price*loAktSver.ReklSpS.KolFact +
+                                    loAktSver.ReklSpS.SumNDS;
+                          Summa2 := loAktSver.ReklSpS.VPrice*loAktSver.ReklSpS.KolFact +
+                                    loAktSver.ReklSpS.SumVNDS;
+                        }
+
+                      if (loAktSver.GetFirst SoprV
+                          where ((loAktSver.SoprHozRet.nRec == SoprV.cSoprHoz)) = tsOk)
+                        {
+                          loAktSver.SoprV.Summa  := loAktSver.SoprV.Summa  + Summa1;
+                          loAktSver.SoprV.SumVal := loAktSver.SoprV.SumVal + Summa2;
+
+                          if (loAktSver.update current SoprV <> tsOk) {}
+                        }
+                      else
+                        {
+                          loAktSver.SoprV.cSoprHoz := loAktSver.SoprHozRet.nRec;
+                          loAktSver.SoprV.TiDkSver := pTiDkSver;
+                          loAktSver.SoprV.Summa    := Summa1;
+                          loAktSver.SoprV.SumVal   := Summa2;
+
+                          if (loAktSver.insert current SoprV <> tsOk) {}
+                        }
+                    }
+                }
+
+
+            }
+        }
+}
+
+!----------- автоформирование актов сверки -----------------------------------
+
+Procedure AutoFormAktSver ( cAkt: comp;
+                            wDoc: word; // 0бит - ДО, 1бит - накладные, 2бит - платежи
+                            DO_d1   : Date; DO_d2   : Date;
+                            Sopr_d1: Date; Sopr_d2: Date;
+                            Plat_d1: Date; Plat_d2: Date );
+{
+  var ret         : word;
+  var i           : word;
+  var j           : word;
+  var dStatus     : word;
+  var pTiDkSver   : word;
+  var pTiDkSverRet: word;
+  var Direct      : word;
+  var newDocSver  : word;
+  var Marker      : longint;
+  var MarkerV     : longint;
+  var MarkerCount: longint;
+  var IndNo       : longint;
+  var cRec        : comp;
+  var SumR        : double;
+  var SumV        : double;
+  var SumR1       : double;
+  var SumV1       : double;
+  var SumR2       : double;
+  var SumV2       : double;
+  var NotFormDO   : boolean;
+  var NotFormNakl: boolean;
+  var NotFormPlat: boolean;
+  var vbOK        : boolean;
+  var SoprHoz_dValCurse: Date;
+
+  oValFunc.InitVal;
+
+  loAktSver.delete all SoprV;
+
+  Marker := InitMarker('MVzachet',  8, 100, 10);
+  ClearMarker(Marker);
+
+  MarkerV := InitMarker('MVozvrat',  8, 100, 10);
+  ClearMarker(MarkerV);
+
+  if ((wDoc AND 1) = 1)
+    NotFormDO := FALSE
+  else
+    NotFormDO := TRUE;
+
+  if ((wDoc AND 2) = 2)
+    NotFormNakl := FALSE
+  else
+    NotFormNakl := TRUE;
+
+  if ((wDoc AND 4) = 4)
+    NotFormPlat := FALSE
+  else
+    NotFormPlat := TRUE;
+
+  loAktSver.d1 := DO_d1;
+  loAktSver.d2 := DO_d2;
+
+  if (Sopr_d1 < loAktSver.d1)
+    loAktSver.d1 := Sopr_d1;
+  if (Sopr_d2 > loAktSver.d2)
+    loAktSver.d2 := Sopr_d2;
+
+  if (Plat_d1 < loAktSver.d1)
+    loAktSver.d1 := Plat_d1;
+  if (Plat_d2 > loAktSver.d2)
+    loAktSver.d2 := Plat_d2;
+
+  loAktSver.pAktSver := cAkt;
+  if (loAktSver.GetFirst AktSver <> tsOk)
+    {
+      DoneMarker(Marker, 'MVzachet');
+      DoneMarker(MarkerV, 'MVozvrat');
+
+      Exit;
+    }
+
+  if (loAktSver.Dogovor.cDogovor = comp(0))
+    {
+      loAktSver.pDogovor    := loAktSver.Dogovor.nRec;
+      loAktSver.pAppDogovor := comp(0);
+    }
+  else
+    {
+      loAktSver.pAppDogovor := loAktSver.Dogovor.nRec;
+
+      if (loAktSver.GetFirst FastFirstRow IerDog
+             where ((loAktSver.pAppDogovor == IerDog.cRec)) = tsOk)
+        {
+          loAktSver.pDogovor := loAktSver.IerDog.cDogovor;
+        }
+      else
+        {
+          DoneMarker(Marker, 'MVzachet');
+          DoneMarker(MarkerV, 'MVozvrat');
+
+          Exit;
+        }
+    }
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm,
+                 ''#3'Отбор документов для акта сверки', 1);
+
+  if (not loAktSver.BoundActive(loAktSver.tbDateSoprHoz))
+    loAktSver.AddBounds(loAktSver.tbDateSoprHoz);
+
+  loAktSver.Delete NoVisual DocSver where ((loAktSver.pAktSver == DocSver.cAktSver));
+
+  loAktSver._LOOP SoprHoz
+    {
+      if (Not NextVisual)
+        {
+          DoneMarker(Marker, 'MVzachet');
+          DoneMarker(MarkerV, 'MVozvrat');
+
+          Exit;
+        }
+
+      if ((loAktSver.pAppDogovor <> comp(0)) AND
+          (loAktSver.SoprHoz.cAppDogovor <> loAktSver.pAppDogovor))
+        {
+          if (loAktSver.GetFirst FastFirstRow IerDog
+                where ((loAktSver.pAppDogovor         == IerDog.cUpRec AND
+                        loAktSver.SoprHoz.cAppDogovor == IerDog.cRec)) <> tsOk)
+            continue;
+        }
+
+      if (loAktSver.SoprHoz.VhSumHoz = '-') or
+         isNotBaseFin(loAktSver.SoprHoz.ModeDoc)
+        continue;
+
+      SoprHoz_dValCurse := loAktSver.SoprHoz.dValCurse;
+
+      pTiDkSver := 0;
+      case loAktSver.SoprHoz.TiDkGal of
+       1, 8, 9, 11, 18, 21, 22, 31, 81, 83, 85, 87:             // исходящие платежи
+         {
+           if NotFormPlat continue;
+
+           vbOK := FALSE;
+
+           SoprHoz_dValCurse := loAktSver.SoprHoz.DatOb;
+
+           if ((Plat_d1 <= loAktSver.SoprHoz.DatOb) AND
+               (loAktSver.SoprHoz.DatOb <= Plat_d2))
+             vbOK := TRUE;
+
+           if ((wDoc AND 16) = 16)
+             {
+               if (loAktSver.GetFirst FastFirstRow SpSopHoz
+                     where ((loAktSver.SoprHoz.nRec == SpSopHoz.cSoprHoz)) <> tsOk)
+                 {
+                   if ((loAktSver.BaseFin.prShtraf <> 2) AND
+                       (loAktSver.BaseFin.prShtraf <> 3))
+                     vbOK := FALSE;
+                 }
+             }
+
+           if vbOK
+             case loAktSver.SoprHoz.TiDkGal of
+               21, 22:
+                 {
+                   case loAktSver.SoprHoz.Direct of
+                     1: pTiDkSver := 13;
+                     2: pTiDkSver := 23;
+                   end; // case
+                 }
+             else
+               pTiDkSver := 13;
+             end;
+         }
+       2, 3, 4, 5, 6, 7, 17, 21, 22, 32, 33, 82, 84, 86, 88: // входящие платежи
+         {
+           if NotFormPlat continue;
+
+           vbOK := FALSE;
+
+           SoprHoz_dValCurse := loAktSver.SoprHoz.DatOb;
+
+           if ((Plat_d1 <= loAktSver.SoprHoz.DatOb) AND
+               (loAktSver.SoprHoz.DatOb <= Plat_d2))
+             vbOK := TRUE;
+
+           if ((wDoc AND 16) = 16)
+             {
+               if (loAktSver.GetFirst FastFirstRow SpSopHoz
+                     where ((loAktSver.SoprHoz.nRec == SpSopHoz.cSoprHoz)) <> tsOk)
+                 {
+                   if (loAktSver.GetFirst FastFirstRow SchFact
+                         where ((loAktSver.SoprHoz.cSchFact  == SchFact.nRec)) = tsOk)
+                     {
+                       if (loAktSver.SchFact.SubTip <> 16) // авансовая СФ
+                         vbOK := FALSE;
+                     }
+                   else
+                     vbOK := FALSE;
+                 }
+             }
+
+           if vbOK
+             case loAktSver.SoprHoz.TiDkGal of
+               21, 22:
+                 {
+                   case loAktSver.SoprHoz.Direct of
+                     1: pTiDkSver := 23;
+                     2: pTiDkSver := 13;
+                   end; // case
+                 }
+             else
+               pTiDkSver := 23;
+             end;
+         }
+       201, 202, 211:      // исходящие сопроводительные документы
+         {
+           if NotFormNakl continue;
+
+           vbOK := FALSE;
+
+           if (wGetTune('Oper.SoprInBalans') = 0)
+             { // по всем накладным на дату накладной
+               if ((Sopr_d1 <= loAktSver.SoprHoz.DatOb) AND
+                   (loAktSver.SoprHoz.DatOb <= Sopr_d2))
+                 vbOK := TRUE;
+             }
+           else
+             { // по только проведенным накладным на дату проведения
+               if (loAktSver.GetFirst KatSopr
+                   where ((loAktSver.SoprHoz.cSoprDoc == KatSopr.nRec)) = tsOk)
+                 {
+                   if ((Sopr_d1 <= loAktSver.KatSopr.dOpr) AND
+                       (loAktSver.KatSopr.dOpr <= Sopr_d2))
+                     vbOK := TRUE;
+                 }
+             }
+
+           if (((wDoc AND 8) = 8) AND
+               (loAktSver.GetFirst FastFirstRow KatSopr = tsOk))
+             {
+               if (loAktSver.KatSopr.cSchFact = comp(0))
+                 vbOK := FALSE;
+             }
+
+           if vbOK
+             pTiDkSver := 11;
+         }
+       101, 102, 108, 111:      // входящие сопроводительные документы
+         {
+           if NotFormNakl continue;
+
+           vbOK := FALSE;
+
+           if (wGetTune('Oper.SoprInBalans') = 0)
+             { // по всем накладным на дату накладной
+               if ((Sopr_d1 <= loAktSver.SoprHoz.DatOb) AND
+                   (loAktSver.SoprHoz.DatOb <= Sopr_d2))
+                 vbOK := TRUE;
+             }
+           else
+             { // по только проведенным накладным на дату проведения
+               if (loAktSver.GetFirst KatSopr
+                   where ((loAktSver.SoprHoz.cSoprDoc == KatSopr.nRec)) = tsOk)
+                 {
+                   if ((Sopr_d1 <= loAktSver.KatSopr.dOpr) AND
+                       (loAktSver.KatSopr.dOpr <= Sopr_d2))
+                     vbOK := TRUE;
+                 }
+             }
+
+           if (((wDoc AND 8) = 8) AND
+               (loAktSver.GetFirst FastFirstRow KatSopr = tsOk))
+             {
+               if (loAktSver.KatSopr.cSchFact = comp(0))
+                 vbOK := FALSE;
+             }
+
+           if vbOK
+             pTiDkSver := 21;
+         }
+       110:  // акты выполненных работ
+         {
+           if NotFormNakl continue;
+
+           vbOK := FALSE;
+
+           if (wGetTune('Oper.SoprInBalans') = 0)
+             { // по всем накладным на дату накладной
+               if ((Sopr_d1 <= loAktSver.SoprHoz.DatOb) AND
+                   (loAktSver.SoprHoz.DatOb <= Sopr_d2))
+                 vbOK := TRUE;
+             }
+           else
+             { // по только проведенным накладным на дату проведения
+               if (loAktSver.GetFirst KatSopr
+                   where ((loAktSver.SoprHoz.cSoprDoc == KatSopr.nRec)) = tsOk)
+                 {
+                   if ((Sopr_d1 <= loAktSver.KatSopr.dOpr) AND
+                       (loAktSver.KatSopr.dOpr <= Sopr_d2))
+                     vbOK := TRUE;
+                 }
+             }
+
+           if (((wDoc AND 8) = 8) AND
+               (loAktSver.GetFirst FastFirstRow KatSopr = tsOk))
+             {
+               if (loAktSver.KatSopr.cSchFact = comp(0))
+                 vbOK := FALSE;
+             }
+
+           if vbOK
+             {
+               case loAktSver.KatSopr.TipSopr of
+                 1: pTiDkSver := 21; // акты подрядчика
+                 2: pTiDkSver := 11; // собственные акты
+               end; // case
+             }
+         }
+       553, 557:  // акты выполненных работ
+         {
+           if NotFormNakl continue;
+
+           vbOK := FALSE;
+
+           if (wGetTune('Oper.SoprInBalans') = 0)
+             { // по всем накладным на дату накладной
+               if ((Sopr_d1 <= loAktSver.SoprHoz.DatOb) AND
+                   (loAktSver.SoprHoz.DatOb <= Sopr_d2))
+                 vbOK := TRUE;
+             }
+           else
+             { // по только проведенным накладным на дату проведения
+               if (loAktSver.GetFirst KatSopr
+                   where ((loAktSver.SoprHoz.cSoprDoc == KatSopr.nRec)) = tsOk)
+                 {
+                   if ((Sopr_d1 <= loAktSver.KatSopr.dOpr) AND
+                       (loAktSver.KatSopr.dOpr <= Sopr_d2))
+                     vbOK := TRUE;
+                 }
+             }
+
+           if (((wDoc AND 8) = 8) AND
+               (loAktSver.GetFirst FastFirstRow KatSopr = tsOk))
+             {
+               if (loAktSver.KatSopr.cSchFact = comp(0))
+                 vbOK := FALSE;
+             }
+
+           if vbOK
+             {
+               case loAktSver.KatSopr.VidSopr of
+                 553: pTiDkSver := 21; // акты подрядчика
+                 557: pTiDkSver := 11; // акты на заказ
+               end; // case
+             }
+         }
+       51, 52:                       // исходящие документы-основания
+         {
+           if NotFormDO continue;
+
+           if ((DO_d1 <= loAktSver.SoprHoz.DatOb) AND
+               (loAktSver.SoprHoz.DatOb <= DO_d2))
+             pTiDkSver := 12;
+         }
+       41, 42:                       // входящие документы-основания
+         {
+           if NotFormDO continue;
+
+           if ((DO_d1 <= loAktSver.SoprHoz.DatOb) AND
+               (loAktSver.SoprHoz.DatOb <= DO_d2))
+             pTiDkSver := 22;
+         }
+       10:                           // бухгалтерская справка
+         {
+           if NotFormPlat continue;
+
+           SoprHoz_dValCurse := loAktSver.SoprHoz.DatOb;
+
+           if ((Plat_d1 <= loAktSver.SoprHoz.DatOb) AND
+               (loAktSver.SoprHoz.DatOb <= Plat_d2))
+             {
+               case loAktSver.SoprHoz.Direct of
+                 1: pTiDkSver := 23;
+                 2: pTiDkSver := 13;
+               end; // case
+             }
+         }
+       71:                           // акт взаимозачетов
+         {
+           if NotFormPlat continue;
+
+           SoprHoz_dValCurse := loAktSver.SoprHoz.DatOb;
+
+           if ((Plat_d1 <= loAktSver.SoprHoz.DatOb) AND
+               (loAktSver.SoprHoz.DatOb <= Plat_d2))
+             {
+               if (loAktSver.GetFirst BaseFin
+                             where ((loAktSver.SoprHoz.cSoprDoc == BaseFin.nRec)) = tsOk)
+                 {
+                   if (loAktSver.GetFirst SoprHoz70
+                         where (( word(70)       == SoprHoz70.TipDoc AND
+                        loAktSver.BaseFin.cPlPor == SoprHoz70.cSoprDoc )) = tsOk)
+                     {
+                       if (not SearchMarker(Marker, loAktSver.SoprHoz70.nRec, IndNo))
+                         InsertMarker(Marker, loAktSver.SoprHoz70.nRec);
+                     }
+                 }
+             }
+         }
+      end; // case
+
+      InsertUpdateDocSver(pTiDkSver,
+                          loAktSver.SoprHoz.nRec,
+                          loAktSver.SoprHoz.KodValut,
+                          loAktSver.SoprHoz.Summa,
+                          loAktSver.SoprHoz.SumValut,
+                          SoprHoz_dValCurse,
+                          loAktSver.SoprHoz.DatOb
+                         );
+    }
+
+!----------- обработка возвратов по накладным --------------------------------
+
+  if (not NotFormNakl)
+    {
+      if (loAktSver.BoundActive(loAktSver.tbDateSoprHoz))
+        loAktSver.SubBounds(loAktSver.tbDateSoprHoz);
+
+      loAktSver._LOOP SoprHoz
+        {
+          if (Not NextVisual)
+            {
+              DoneMarker(Marker, 'MVzachet');
+              DoneMarker(MarkerV, 'MVozvrat');
+
+              Exit;
+            }
+
+          case loAktSver.SoprHoz.TiDkGal of
+            201: pTiDkSverRet := 106;
+            202: pTiDkSverRet := 103;
+            101
+          , 108: pTiDkSverRet := 206;
+            102: pTiDkSverRet := 203;
+            else pTiDkSverRet := 0;
+          end;
+
+          if (pTiDkSverRet > 0)
+             {
+               CalcReklSopr (Sopr_d1, Sopr_d2, pTiDkSverRet, loAktSver.SoprHoz.cSoprDoc);
+             }
+        }
+
+
+      loAktSver._LOOP SoprV
+        {
+          if (Not NextVisual)
+            {
+              DoneMarker(Marker, 'MVzachet');
+              DoneMarker(MarkerV, 'MVozvrat');
+
+              Exit;
+            }
+
+          if (loAktSver.GetFirst SoprHoz
+                   where ((loAktSver.SoprV.cSoprHoz == SoprHoz.nRec)) = tsOk)
+            {
+              InsertUpdateDocSver(loAktSver.SoprV.TiDkSver,
+                                  loAktSver.SoprHoz.nRec,
+                                  loAktSver.SoprHoz.KodValut,
+                                  loAktSver.SoprV.Summa,
+                                  loAktSver.SoprV.SumVal,
+                                  loAktSver.SoprHoz.dValCurse,
+                                  loAktSver.SoprHoz.DatOb
+                                 );
+            }
+        }
+    }
+
+!----------- обработка взаимозачетов -----------------------------------------
+
+  if (not NotFormPlat)
+    {
+      MarkerCount := GetMarkerCount(Marker);
+      For( i := 0; i < MarkerCount; i := i + 1 )
+        {
+          if (Not NextVisual)
+            {
+              DoneMarker(Marker, 'MVzachet');
+              DoneMarker(MarkerV, 'MVozvrat');
+
+              Exit;
+            }
+
+          if GetMarker(Marker, i, cRec)
+            {
+              if (loAktSver.GetFirst SoprHoz
+                            where ((cRec == SoprHoz.nRec)) = tsOk)
+                {
+                  SumR1 := 0;
+                  SumR2 := 0;
+                  SumV1 := 0;
+                  SumV2 := 0;
+
+                  loAktSver._LOOP BaseFin
+                            where ((loAktSver.SoprHoz.cSoprDoc == BaseFin.cPlPor))
+                    {
+                      if (loAktSver.BaseFin.cDogovor <> loAktSver.pDogovor)
+                        continue;
+
+                      if (loAktSver.pAppDogovor <> comp(0))
+                        if (loAktSver.BaseFin.cAppDogovor <> loAktSver.pAppDogovor)
+                          continue;
+
+                      SumR := 0;
+                      SumV := 0;
+
+                      if (loAktSver.BaseFin.cVal = 0)
+                        SumR := loAktSver.BaseFin.Summa
+                      else
+                        SumR := oValFunc.GetNatCurrency(loAktSver.BaseFin.cVal,
+                                                        loAktSver.BaseFin.Summa,
+                                                        loAktSver.BaseFin.dDoc);
+
+                      if (loAktSver.Dogovor.dValCurse <> Date(0, 0, 0))
+                        SumV := oValFunc.GetAnyCurrency(loAktSver.DocSver.cVal,
+                                                        SumR,
+                                                        loAktSver.Dogovor.dValCurse,
+                                                        loAktSver.Dogovor.cValRas)
+                      else
+                        SumV := oValFunc.GetAnyCurrency(loAktSver.DocSver.cVal,
+                                                        SumR,
+                                                        loAktSver.Dogovor.dInput,
+                                                        loAktSver.Dogovor.cValRas);
+
+                      case loAktSver.BaseFin.Direct of
+                      1: {
+                            SumR1 := SumR1 + SumR;
+                            SumV1 := SumV1 + SumV;
+                          }
+                      2: {
+                            SumR2 := SumR2 + SumR;
+                            SumV2 := SumV2 + SumV;
+                          }
+                      end; // case
+                    }
+
+                  For( j := 0; j < 2; j := j + 1 )
+                    {
+                      if (j = 0)
+                        {
+                          pTiDkSver := 13;   // исходящие платежи
+                          SumR := SumR2;
+                          SumV := SumV2;
+                        }
+                      else
+                        {
+                          pTiDkSver := 23;   // входящие платежи
+                          SumR := SumR1;
+                          SumV := SumV1;
+                        }
+
+                      if (ABS(SumR) < 0.0000001) AND (ABS(SumV) < 0.0000001)
+                        continue;
+
+                      newDocSver := 1; // insert DocSver
+                    /*
+                      if (loAktSver.GetFirst DocSver
+                            where ((loAktSver.SoprHoz.nRec == DocSver.cSoprHoz)) = tsOk)
+                        {
+                          loAktSver._LOOP DocSver
+                                    where ((loAktSver.SoprHoz.nRec == DocSver.cSoprHoz))
+                            {
+                              if (loAktSver.DocSver.TiDkSver <> pTiDkSver)
+                                continue;
+
+                              if (loAktSver.GetFirst AktSverOld
+                                    where ((loAktSver.DocSver.cAktSver == AktSverOld.nRec)) = tsOk)
+                                {
+                                  if (loAktSver.AktSverOld.Status = 1) // аннулированный
+                                    continue;
+
+                                  if (loAktSver.GetFirst FastFirstRow IerDog
+                                           where ((loAktSver.AktSver.cDogovor    == IerDog.cUpRec AND
+                                                   loAktSver.AktSverOld.cDogovor == IerDog.cRec)) <> tsOk)
+                                    {
+                                      if (loAktSver.GetFirst FastFirstRow IerDog
+                                           where ((loAktSver.AktSverOld.cDogovor == IerDog.cUpRec AND
+                                                   loAktSver.AktSver.cDogovor    == IerDog.cRec)) <> tsOk)
+                                        { // найденный акт сверки не находится на одной
+                                          // ветке с формируемым актом
+                                          // (имеется в виду дерево договоров)
+                                          if (loAktSver.AktSverOld.Status = 2)
+                                            { // проведенный
+                                              newDocSver := 2; // пропустить эту запись
+                                              loAktSver.ClearBuffer(loAktSver.tnDocSver);
+                                              Break;
+                                            }
+                                          else
+                                            { // оформляемый
+                                              newDocSver := 0; // update DocSver
+                                              Break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    */
+                      if (newDocSver < 2)
+                        {
+                          if (newDocSver = 1)
+                            loAktSver.ClearBuffer(loAktSver.tnDocSver);
+
+                          loAktSver.DocSver.cAktSver := loAktSver.pAktSver;
+                          loAktSver.DocSver.TiDkSver := pTiDkSver;
+                          loAktSver.DocSver.cSoprHoz := loAktSver.SoprHoz.nRec;
+                          loAktSver.DocSver.cVal     := loAktSver.SoprHoz.KodValut;
+                          loAktSver.DocSver.Summa    := SumR;
+                          loAktSver.DocSver.SumVal   := SumV;
+
+                          case newDocSver of
+                          0: ret := loAktSver.update current DocSver;
+                          1: ret := loAktSver.insert current DocSver;
+                          end; // case
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+  StopVisual('', 0);
+
+  if (loAktSver.BoundActive(loAktSver.tbDateSoprHoz))
+    loAktSver.SubBounds(loAktSver.tbDateSoprHoz);
+
+  DoneMarker(Marker, 'MVzachet');
+  DoneMarker(MarkerV, 'MVozvrat');
+}
+
+#end //_AktFun_vpp

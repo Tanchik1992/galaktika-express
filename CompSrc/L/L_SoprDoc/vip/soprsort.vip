@@ -1,0 +1,343 @@
+//╔═════════════════════════════════════════════════════════════════════╗
+//║          Галактика (с) 1995, TOP SOFT Ltd., Новый АТЛАНТ            ║
+//║  Версия    :  5.70                                                  ║
+//║  Разработал:  Крахотко А.В. (kroxa)                                 ║
+//║  Назначение:  Пересортировка накладной по МЦ                        ║
+//║  Изменения :                                                        ║
+//╚═════════════════════════════════════════════════════════════════════╝
+
+#doc
+Назначение:
+   Пересортировка накладной по МЦ
+
+Параметры:
+  pKatSopr - ссылка на сопроводительный документ
+#end
+
+//********************************************************************************
+
+Interface KatSopr_SortMC 'Сортировка спецификации накладной' EscClose, DoAccept;
+
+// для сортировки
+Table STRUCT TmpSpSort ""
+(
+  cSpSopr: comp       "ссылка на спецификацию",
+  Name   : string     "предмет сортировки"
+)
+With Index
+(
+  TmpSpSort01 = Name
+);
+
+create view
+var
+  pKatSopr: comp; //параметр
+  wSortFld, wSortMC : word; //поля и таблицы сортировки
+  sClassFld1, sClassFld2, sClassVal2, sClassFld3: string;      //
+  wperesort, wClassVal1, wClassTable, wClassVal3: word;  // для работы с внешней классификацией
+
+from
+  SpSopr,
+  KatMC,
+  KatUsl,
+  GroupMC,
+  GroupUSL,
+  TmpSpSort,
+  ExClassName,
+  ExClassVal,
+  ExClassSeg,
+  synonym SpSopr SSpSopr,
+  synonym ExClassName ExClassPick
+
+where
+((
+   pKatSopr          ==  SpSopr.cSopr        and
+   SpSopr.cMCUsl     ==  KatMC.NRec          and
+   KatMC.cGroupMC    ==  GroupMC.NRec        and
+   SpSopr.cMCUsl     ==  KatUsl.NRec         and
+   KatUSL.cGroupUSL  ==  GroupUSL.NRec       and
+
+   TmpSpSort.cSpSopr ==  SSpSopr.NRec        and
+
+   wClassTable       ==  ExClassName.wTable  and
+   sClassVal2        ==  ExClassName.Name    and
+   wClassTable       ==  ExClassPick.wTable
+))
+;
+
+Parameters
+  pKatSopr
+;
+
+//установка видимых элементов
+Procedure SetVisualEmel;
+{
+  case wSortMC of
+    0, 1: {
+      ClearFieldState(#sClassFld1,       sfVisible);
+      ClearFieldState(#wClassVal1,       sfVisible);
+      ClearFieldState(#sClassFld2,       sfVisible);
+      ClearFieldState(#ExClassName.Name, sfVisible);
+      ClearFieldState(#sClassFld3,       sfVisible);
+      ClearFieldState(#wClassVal3,       sfVisible);
+    }
+    2: {
+      SetFieldState(#sClassFld1,       sfVisible);
+      SetFieldState(#wClassVal1,       sfVisible);
+      SetFieldState(#sClassFld2,       sfVisible);
+      SetFieldState(#ExClassName.Name, sfVisible);
+      SetFieldState(#sClassFld3,       sfVisible);
+      SetFieldState(#wClassVal3,       sfVisible);
+    }
+  end;
+}
+
+// Установка таблицы для классификации
+Procedure SetClassTable;
+{
+  case wClassVal1 of
+    0: set wClassTable := coKatMc;
+    1: set wClassTable := coSpSopr;
+    2: set wClassTable := coKatUsl;
+  end;
+  ReScanPanel(#ExClassName);
+}
+// сортировка МЦ
+Procedure RunSortMC;
+var
+  iNpp: word;
+  cRec: comp;
+
+{
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm, 'Подготовка данных для сортировки...', 1);
+
+  delete all TmpSpSort;
+
+  _Loop SpSopr
+  {
+    ClearBuffer(#TmpSpSort);
+    TmpSpSort.cSpSopr := SpSopr.NRec;
+
+    if wperesort = 1
+      {
+        if SpSopr.PrMc = 1
+          continue;
+
+        SpSopr.PrMc := 1;
+      }
+
+    if wperesort = 2
+      if SpSopr.PrMc <> 1
+        continue;
+
+
+    case wSortMC of
+      0: {
+        case wSortFld of
+          0: TmpSpSort.Name := if(SpSopr.PrMc = 1, KatMC.Name,   KatUsl.Name);
+          1: TmpSpSort.Name := if(SpSopr.PrMc = 1, KatMC.BarKod, KatUsl.KOD);
+        end;
+      }
+
+      1: {
+        case wSortFld of
+          0: TmpSpSort.Name := if(SpSopr.PrMc = 1, GroupMC.Name, GroupUSL.Name);
+          1: TmpSpSort.Name := if(SpSopr.PrMc = 1, GroupMC.Kod,  GroupUSL.Kod);
+        end;
+      }
+
+      2: {
+        case wClassVal1 of
+          0: cRec := KatMc.NRec;
+          1: cRec := SpSopr.NRec;
+          2: cRec := KatUsl.NRec;
+        end;
+
+        //неклассифицированные записи
+        TmpSpSort.Name := if(wClassVal3 = 0, '1', '3');
+
+        if GetFirst ExClassVal where (( cRec                  == ExClassVal.cRec      and
+                                        ExClassName.ClassCode == ExClassVal.ClassCode ))  = tsOk
+          if GetFirst ExClassSeg where (( ExClassVal.cClassSeg  == ExClassSeg.NRec )) = tsOk
+          {
+            case wSortFld of
+              0: TmpSpSort.Name := '2' + ExClassSeg.Name;
+              1: TmpSpSort.Name := '2' + ExClassSeg.Value;
+            end;
+          }
+      }
+    end;
+
+    insert current TmpSpSort;
+  }
+  SaveMyDsk(wSortMC ,   'KatSopr_SortMC_wSortMC');
+  SaveMyDsk(wSortFld,   'KatSopr_SortMC_wSortFld');
+  SaveMyDsk(wClassVal1, 'KatSopr_SortMC_wClassVal1');
+  SaveMyDsk(sClassVal2, 'KatSopr_SortMC_sClassVal2');
+  SaveMyDsk(wClassVal3, 'KatSopr_SortMC_wClassVal3');
+
+  StopVisual ('', 0);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm, 'Сортировка спецификации документа...', RecordsInTable(#TmpSpSort));
+
+  iNpp := 1;
+  _loop TmpSpSort
+  {
+    if (not NextVisual) BREAK;
+    SSpSopr.Npp := iNpp;
+    update current SSpSopr;
+    iNpp := iNpp + 1;
+  }
+
+  StopVisual ('', 0);
+}
+
+#doc
+  Выбор внешнего классификатора
+#end
+
+window winExClassPick 'Выбор внешнего классификатора' escClose, doAccept, Cyan;
+  show at (10,5,70,20);
+browse brExClassPick ('',,sci1EnEsc);
+table ExClassPick;
+  Fields
+    ExClassPick.Name  'Наименование' ('Наименование классификатора'): [60], Protect;
+end;
+end; //window
+
+Panel panParamSort;
+
+//окно параметров сортировки
+
+#doc
+  Параметры сортировки
+#end
+
+window winParamSort 'Параметры сортировки' escClose, doAccept, Gray;
+  show at (,,81,11);
+Screen scrScalesReg  ('', hcD_InvNalParams, sci1EnEsc);
+ Bevel b1 {33, 0, 80,  11, bsLowered, bsFrame};
+ Bevel b1 {34, 3, 80,   3, bsLowered, bsFrame};
+ Fields
+   wSortMC          ('Параметры сортировки',, sci13Esc): noProtect, {Font = {Bold   = True}};
+   wSortFld         ('Поля для сортировки',, sci13Esc) : [LIST 'Наименование', 'Код'], Protect;
+   sClassFld1: skip;
+   wClassVal1       ('Выберите таблицу',, sci13Esc)    : [LIST 'Каталог МЦ', 'Спецификация', 'Каталог услуг'], Protect;
+   sClassFld2: skip;
+   ExClassName.Name ('Выберите классификатор',, sci13Esc): Protect;
+   sClassFld3: skip;
+   wClassVal3       ('Расположение неклассифицированных записей'): [LIST 'В начале', 'В конце'], Protect;
+ Buttons
+   cmOk,Default,,'Ввод',hcD_InvNalParams,scGalDial;
+   cmCancel,,,'Отмена',hcD_InvNalParams,scGalDial;
+<<
+  `Сортировать по каталогу:`          Детализация
+   (.) МЦ/Услуг               `   `Сортировать по полям:`.@@@@@@@@@@@@@@@@@@@@
+   (.) Групп МЦ/Услуг         `
+   (.) Внешней классификации  `
+                                   .@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@
+                                   .@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@
+                                   .@@@@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@
+
+   <.~П~родолжить.>  <. Отмена .>
+>>
+end;
+Handleevent
+cmOk:
+{
+  if (wSortMC = 2)
+    if (not isValid(#ExClassName))
+    {
+      message('Незадано название классификатора.');
+      Exit;
+    }
+
+  if wperesort = 3
+    {
+      wperesort := 1;
+      RunSortMC;
+      wperesort := 2;
+    }
+
+  RunSortMC;
+  SaveMyDsk(0, 'KatSopr_SortMC_Peresort');
+  PutCommand(cmDefault);
+}
+
+cmPick:
+{
+  case CurField of
+    #ExClassName.Name:
+    {
+      if (GetFirst ExClassPick <> tsOk)
+      {
+        message('У выбранной таблицы отсутствует внешняя классификация...');
+        Exit;
+      }
+
+      if (RunWindowModal(winExClassPick) <> cmCancel)
+      {
+        set sClassVal2 := ExClassPick.Name;
+        ReScanPanel(#ExClassName);
+      }
+    }
+  end;
+}
+
+end;//handleevent
+end;//window
+
+Handleevent
+cmCheckField:
+{
+  case CurField of
+    #wSortMC   : SetVisualEmel;
+    #wClassVal1:
+    {
+      SetClassTable;
+      if not isValid(#ExClassName)
+      {
+        SelectField(#ExClassName.Name);
+        PutCommand(cmPick);
+      }
+    }
+  end;
+}
+
+end;//handleevent
+end;//Panel
+
+HandleEvent
+cmInit :
+{
+  if (RecordExists SpSopr <> tsOk)
+  {
+    Message ('В документе нет спецификации ...');
+    EXIT;
+  }
+
+#ifdef __SKYSHOP__
+  var Flag: boolean;
+  Flag := false;
+  ReadMyDsk(Flag,  'SKY_SORT_ON_NAME', true);
+  SaveMyDsk(false, 'SKY_SORT_ON_NAME');
+  if not Flag
+#end
+
+  sClassFld1 := 'Таблица:';
+  sClassFld2 := 'Классификатор:';
+  sClassFld3 := 'Неклассифицированные записи:';
+  ReadMyDsk(wSortMC   , 'KatSopr_SortMC_wSortMC'   , false);
+  ReadMyDsk(wSortFld  , 'KatSopr_SortMC_wSortFld'  , false);
+  ReadMyDsk(wClassVal1, 'KatSopr_SortMC_wClassVal1', false);
+  ReadMyDsk(sClassVal2, 'KatSopr_SortMC_sClassVal2', false);
+  ReadMyDsk(wClassVal3, 'KatSopr_SortMC_wClassVal3', false);
+  if not ReadMyDsk(wperesort,  'KatSopr_SortMC_Peresort', false) wperesort := 0;
+  SetVisualEmel;
+  SetClassTable;
+  RunWindowModal(winParamSort);
+
+  Abort;
+}
+end; // HandleEvent
+end. // interface

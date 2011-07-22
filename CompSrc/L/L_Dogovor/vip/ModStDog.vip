@@ -1,0 +1,591 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.85                                                      ║
+ ║ Назначение    : Пакетное изменение статусов договоров                     ║
+ ║ Ответственный : Шукан А.Л..                                               ║
+ ║ Параметры     : Есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include notes.vih
+#include statlog.vih
+#include iercp.vih
+#include dolg_dg.vih
+
+#doc
+Интерфейс пакетного изменения статусов договоров
+#end
+Interface ModStatusDog 'Изменение статусов договоров'
+                  (, hcm_dog_OknoIzmen_Stat,) EscClose, Gray;
+
+create view
+
+var
+  wParam, wDog : word;
+  cOldNotes, cNewNotes, cNewNotesSogl, cNewNotesCP, cRec : comp;
+  bFormir, bRes : boolean;
+  MarkerDog   : longint;
+  i, MarkerCount : word;
+  str : string;
+
+  oNotes   : iNotes;
+  oStatlog : vipStatlog;
+
+from
+  Dogovor,
+  Dogovor AppDogovor,
+  CalPlan,
+  CalPlan OwnerCP,
+  AktSver,
+  IerDog,
+  KatNotes,
+  KatNotes KatNotesOld,
+  StatLog
+
+where
+((
+  cOldNotes == KatNotesOld.nRec  and
+  cNewNotes == KatNotes.nRec
+))
+
+;
+
+Form frmErr('Errr.out','Errr2') with novisual;
+
+#include dolg_dg.var
+
+procedure ChangeStatusCalPlan;
+var
+   iIerCP : IerCP;
+{
+  if (CalPlan.DirectMC = 100)
+    exit;
+
+  if ((cOldNotes <> comp(0)) and (CalPlan.Status <> KatNotesOld.Status))
+    exit;
+
+  if (CalPlan.cCalPlan <> 0)
+    {
+      if (GetFirst fastfirstrow OwnerCP
+             where ((CalPlan.cCalPlan == OwnerCP.nRec)) = tsOk)
+        {
+          if (OwnerCP.DirectMC <> 100)
+            exit;
+        }
+    }
+
+  if (KatNotes.Status = 4) // перевод ПКП в статус "закрытый"
+    {
+      if boGetTune('Dog.CloseIspPKP') // разрешается закрытие только исполненных ПКП
+        {
+          var SumDolg : double; SumDolg := 0;
+
+          // расчет суммы отгрузок по ПКП на дату
+          if (CalPlan.DirectMC <> 0)
+            {
+              if iDolg_DG.GetSumOtgr_Plan(CalPLan.cDogovor,
+                                          CalPlan.NRec,
+                                          Cur_Date,
+                                          double(0),
+                                          SumDolg)
+                {
+                  if (SumDolg > 0.01)
+                    {
+                      frmErr.Write(if(CalPlan.DirectMC <> 0, 'Товарный ', 'Финансовый ')+
+                                   'ПКП № '+CalPlan.NoDoc+' от '+DateToStr(CalPlan.dInput,'DD/MM/YYYY')+
+                                   str+'. Изменение статуса невозможно. ПКП не исполнен!');
+
+                      Exit;
+                    }
+                }
+            }
+
+           // расчет сумм поступивших платежей по ПКП
+           if (CalPlan.DirectPlat <> 0)
+            {
+              if iDolg_DG.GetSumOpl_Plan(CalPLan.cDogovor,
+                                         CalPlan.NRec,
+                                         Cur_Date,
+                                         double(0),
+                                         double(0),
+                                         double(0),
+                                         SumDolg)
+                {
+                  if (SumDolg > 0.01)
+                    {
+                      frmErr.Write(if(CalPlan.DirectMC <> 0, 'Товарный ', 'Финансовый ')+
+                                   'ПКП № '+CalPlan.NoDoc+' от '+DateToStr(CalPlan.dInput,'DD/MM/YYYY')+
+                                   str+'. Изменение статуса невозможно. ПКП не исполнен!');
+
+                      Exit;
+                    }
+                }
+            }
+        }
+    }
+
+  if (oStatlog.StatLog_InsNewStat(word(403),
+                                  CalPlan.nRec,
+                                  CalPlan.Status,
+                                  CalPlan.cNote,
+                                  KatNotes.Status,
+                                  cNewNotesCP,
+                                  '') = tsOk)
+    {
+      update current CalPlan
+         set CalPlan.Status := KatNotes.Status,
+             CalPlan.cNote  := cNewNotes;
+
+      iIerCP.DoSynchr_PKP_Status(CalPlan.cDogovor, CalPlan.nRec, CalPlan.Status);
+
+      frmErr.Write(if(CalPlan.DirectMC <> 0, 'Товарный ', 'Финансовый ')+
+                   'ПКП № '+CalPlan.NoDoc+' от '+DateToStr(CalPlan.dInput,'DD/MM/YYYY')+str+'.');
+      bRes := true;
+    }
+}
+
+procedure ChangeStatusAppDogovor;
+var
+  DateEnd : date;
+  str0 : string;
+{
+  str0 := str;
+
+  if ((cOldNotes <> comp(0)) and (AppDogovor.Status <> KatNotesOld.Status))
+    exit;
+
+  if ((wParam and 2) = 2)
+    {
+      str := ' по соглашению № ' + AppDogovor.NoDoc + ' от ' + DateToStr(AppDogovor.dDoc,'DD/MM/YYYY');
+
+      _loop CalPlan where ((AppDogovor.nRec == CalPlan.cDogovor))
+        ChangeStatusCalPlan;
+    }
+
+  if (KatNotes.Status = 1) // попытка перевести соглашение в статус "исполняемый"
+    {
+      if ((AppDogovor.NoDoc  = '')              or
+          (AppDogovor.dDoc   = date(0,0,0))     or
+          (AppDogovor.dBeg   = date(0,0,0))     or
+          (AppDogovor.dEnd   = date(0,0,0))     or
+          (AppDogovor.dBeg   > AppDogovor.dEnd) or
+          (AppDogovor.cMyOrg = 0)               or
+          (AppDogovor.cOrg   = 0)               or
+          (AppDogovor.cMyOrg = AppDogovor.cOrg))
+        {
+          frmErr.Write('Соглашение № '+AppDogovor.NoDoc+' от '+
+                       DateToStr(AppDogovor.dDoc,'DD/MM/YYYY')+str0+
+                       '. Изменение статуса невозможно. Соглашение не заполнено!');
+
+          exit;
+        }
+    }
+
+  // при закрытии соглашения сначала должны быть закрыты ПКП
+  if (KatNotes.Status = 4)
+    {
+      if (modifier getfirst CalPlan
+          where ((AppDogovor.nRec == CalPlan.cDogovor and
+                  word(1)         == CalPlan.Status)) = tsOk)
+        {
+          frmErr.Write('Соглашение № '+AppDogovor.NoDoc+' от '+
+                       DateToStr(AppDogovor.dDoc,'DD/MM/YYYY')+str0+'. Изменение статуса невозможно!');
+
+          exit;
+        }
+
+      if (not boGetTune('Dog.CloseNotAktSver')) // не разрешается закрытие договора без наличия актов сверки
+        {
+          DateEnd := AppDogovor.dBeg;
+          _loop AktSver where ((AppDogovor.nRec == AktSver.cDogovor))
+            {
+              if (AktSver.dBeg > DateEnd)
+                {
+                  frmErr.Write('Соглашение № '+AppDogovor.NoDoc+' от '+
+                             DateToStr(AppDogovor.dDoc,'DD/MM/YYYY')+str0+'. Изменение статуса невозможно!');
+
+                  exit;
+                }
+              else
+                {
+                  if (AktSver.dEnd > DateEnd)
+                    DateEnd := AktSver.dEnd;
+                }
+            }
+          if (DateEnd < AppDogovor.dEnd)
+            {
+              frmErr.Write('Соглашение № '+AppDogovor.NoDoc+' от '+
+                           DateToStr(AppDogovor.dDoc,'DD/MM/YYYY')+str0+'. Изменение статуса невозможно!');
+
+              exit;
+            }
+        }
+    }
+
+  if (oStatlog.StatLog_InsNewStat(AppDogovor.TiDk,
+                                  AppDogovor.nRec,
+                                  AppDogovor.Status,
+                                  AppDogovor.cNote,
+                                  KatNotes.Status,
+                                  cNewNotesSogl,
+                                  '') = tsOk)
+    {
+      update current AppDogovor
+         set AppDogovor.Status := KatNotes.Status,
+             AppDogovor.cNote  := cNewNotes;
+
+      frmErr.Write('Соглашение № '+AppDogovor.NoDoc+' от '+
+                   DateToStr(AppDogovor.dDoc,'DD/MM/YYYY')+str0+'.');
+
+      bRes := true;
+    }
+
+  str := str0;
+}
+
+
+procedure ChangeStatusDogovor;
+var
+  DateEnd : date;
+
+{
+  if ((cOldNotes <> comp(0)) and (Dogovor.cNote <> cOldNotes))
+    exit;
+
+  str := ' по договору № ' + Dogovor.NoDoc + ' от ' + DateToStr(Dogovor.dDoc,'DD/MM/YYYY');
+
+  if ((wParam and 1) = 1)
+    {
+      _loop IerDog where ((Dogovor.nRec == IerDog.cUpRec))
+        _loop AppDogovor where ((IerDog.cRec == AppDogovor.nRec))
+          {
+            if (Dogovor.nRec <> AppDogovor.nRec)
+              ChangeStatusAppDogovor;
+          }
+    }
+
+  if ((wParam and 2) = 2)
+    {
+      _loop CalPlan where ((Dogovor.nRec == CalPlan.cDogovor))
+        ChangeStatusCalPlan;
+    }
+
+  if (KatNotes.Status = 1) // попытка перевести договор в статус "исполняемый"
+    {
+      if ((Dogovor.NoDoc  = '')           or
+          (Dogovor.dDoc   = date(0,0,0))  or
+          (Dogovor.dBeg   = date(0,0,0))  or
+          (Dogovor.dEnd   = date(0,0,0))  or
+          (Dogovor.dBeg   > Dogovor.dEnd) or
+          (Dogovor.cMyOrg = 0)            or
+          (Dogovor.cOrg   = 0)            or
+          (Dogovor.cMyOrg = Dogovor.cOrg))
+        {
+          frmErr.Write('Договор № '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY')+
+                       '. Изменение статуса невозможно. Договор не заполнен!');
+
+          exit;
+        }
+    }
+
+  // проверка на возможность закрытия договора
+  if (KatNotes.Status = 4)
+    {
+      if (Getfirst AppDogovor
+          where ((Dogovor.nRec == AppDogovor.cDogovor and
+                  word(1)      == AppDogovor.Status)) = tsOk)
+        {
+          frmErr.Write('Договор № '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY')+
+                       '. Изменение статуса невозможно!');
+
+          exit;
+        }
+
+      if (modifier getfirst CalPlan
+          where ((Dogovor.nRec == CalPlan.cDogovor and
+                  word(1)      == CalPlan.Status)) = tsOk)
+        {
+          frmErr.Write('Договор № '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY')+
+                       '. Изменение статуса невозможно!');
+
+          exit;
+        }
+
+      // не разрешается закрытие договора без наличия актов сверки
+      if ( Not boGetTune('Dog.CloseNotAktSver') AND ( Dogovor.VidDog <> 14 ) )
+        {
+          DateEnd := Dogovor.dBeg;
+          _loop AktSver where ((Dogovor.nRec == AktSver.cDogovor))
+            {
+              if (AktSver.dBeg > DateEnd)
+                {
+                  frmErr.Write('Договор № '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY')+
+                               '. Изменение статуса невозможно!');
+
+                  exit;
+                }
+              else
+                {
+                  if (AktSver.dEnd > DateEnd)
+                    DateEnd := AktSver.dEnd;
+                }
+            }
+
+          if (DateEnd < Dogovor.dEnd)
+            {
+              frmErr.Write('Договор № '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY')+
+                           '. Изменение статуса невозможно!');
+
+              exit;
+            }
+        }
+    }
+
+  if (oStatlog.StatLog_InsNewStat(Dogovor.TiDk,
+                                  Dogovor.nRec,
+                                  Dogovor.Status,
+                                  Dogovor.cNote,
+                                  KatNotes.Status,
+                                  cNewNotes,
+                                  '') = tsOk)
+    {
+      update current Dogovor
+         set Dogovor.Status := KatNotes.Status,
+             Dogovor.cNote  := cNewNotes;
+
+      frmErr.Write('Договор № '+Dogovor.NoDoc+' от '+DateToStr(Dogovor.dDoc,'DD/MM/YYYY')+'.');
+
+      bRes := true;
+    }
+}
+
+
+//-----------------------------------------------------------------------
+Window winParam 'Изменение статусов договоров' (, hcm_dog_OknoIzmen_Stat,) EscClose, Gray;
+  Show at (15,3,65,15);
+Panel panParam;
+Screen scrParam (,,sci1Esc);
+Fields
+  KatNotesOld.Name ('Установите фильтр по статусу',,sci13Esc) : PickButton, Protect;
+  KatNotes.Name    ('Выберите новый статус',,sci13Esc) : PickButton, Protect;
+  wDog             ('Изменять статусы всех договоров или нет',,sci13Esc) : NoProtect;
+  wParam           ('Изменять статусы соглашений и календарных планов или нет',,sci13Esc) : NoProtect;
+Buttons
+  cmValue1,,,'Выполнить',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+
+ `Текущий статус` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Новый статус`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+    [.] изменять статусы всех договоров`
+
+ `При изменении статусов договоров:`
+    [.] изменять статусы соглашений        `
+    [.] изменять статусы календарных планов`
+
+    <. Продолжить .>           <.   Отмена   .>
+
+>>
+end; //screen
+
+HandleEvent
+
+cmPick :
+  {
+    case CurField of
+    #KatNotesOld.Name :
+      {
+        if (RunInterface('GetSomKatNotes', word(400),
+                                           word(0),
+                                           word(0),
+                                           false,
+                                           cOldNotes) <> cmCancel)
+          {
+            set cOldNotes := cOldNotes;
+          }
+      }
+    #KatNotes.Name :
+      {
+        if (RunInterface('GetSomKatNotes', word(400),
+                                           word(0),
+                                           word(0),
+                                           false,
+                                           cNewNotes) <> cmCancel)
+          {
+            set cNewNotes := cNewNotes;
+          }
+      }
+    end; // case
+  }
+
+end; // HandleEvent
+
+end; // panel
+
+HandleEvent
+
+cmValue1 :
+  {
+    if (cNewNotes = comp(0))
+      {
+        Message('Не указан новый статус для документов!');
+        exit;
+      }
+
+
+    bFormir := true;
+    CloseWindow(winParam);
+  }
+
+end; // HandleEvent
+
+end; // window
+
+HandleEvent
+
+cmInit :
+  {
+    wParam := 0;
+    wDog   := 0;
+    cOldNotes   := 0;
+    cNewNotes   := 0;
+    cNewNotesCP := 0;
+    cNewNotesSogl := 0;
+
+    bFormir := false;
+
+    RunWindowModal(winParam);
+
+    cNewNotesCP   := oNotes.GetFirstNote(word(403), KatNotes.Status);
+    cNewNotesSogl := oNotes.GetFirstNote(word(401), KatNotes.Status);
+
+    if (bFormir)
+      {
+        if (wDog = 0)
+          {
+            MarkerDog := InitMarker('MDogovor', 8, 100, 10);
+            ClearMarker(MarkerDog);
+            DoneMarker(MarkerDog, 'MDogovor');
+
+            var maskDog  : word;
+            var cDog : comp;
+
+            cDog := 0;
+            if (cOldNotes <> comp(0))
+              {
+                case KatNotesOld.Status of
+                0 : maskDog := 1;  // оформляемый
+                1 : maskDog := 2;  // исполняемый
+                2 : maskDog := 4;  // приостановленный
+                3 : maskDog := 8;  // расторгнутый
+                4 : maskDog := 16; // закрытый
+                end; //case
+              }
+            else
+              maskDog := 0FFFFh;
+
+            SaveMyDsk(true,'GetSDog_NotSelectStat');
+            if (RunInterface(GetSomeDogovor, word(0),
+                                             maskDog,
+                                             word(0),
+                                             word(0),
+                                             true,
+                                             cDog,
+                                             true,
+                                             comp(0)) <> cmCancel)
+              {
+                StartNewVisual(vtRotateVisual, vfTimer,
+                               ''#3'Изменение статусов договоров ...'#13#3,1);
+
+                bRes := false;
+                frmErr.Write('Протокол пакетного изменения статусов договоров');
+                frmErr.SkipFormat(1);
+
+                MarkerDog   := InitMarker('MDogovor',  8, 100, 10);
+                MarkerCount := GetMarkerCount(MarkerDog);
+                for ( i := 0; i < MarkerCount; i := i+1 )
+                  {
+                    if GetMarker(MarkerDog, i, cRec)
+                      {
+                        if (not NextVisual)
+                          break;
+
+                        if (GetFirst Dogovor
+                               where ((cRec == Dogovor.nRec)) = tsOk)
+                          {
+                            ChangeStatusDogovor;
+                          }
+                      }
+                  }
+                DoneMarker(MarkerDog, 'MDogovor');
+
+                StopVisual('', 0);
+
+                if (not bRes)
+                  {
+                    frmErr.Write('Ни один документ не удовлетворяет заданным условиям!');
+                  }
+
+                if (not frmErr.Error)
+                  frmErr.ShowFile('');
+                else
+                  frmErr.AbortForm;
+              }
+
+          }
+        else
+          {
+            StartNewVisual(vtRotateVisual, vfTimer,
+                           ''#3'Изменение статусов договоров ...'#13#3,1);
+
+            bRes := false;
+            frmErr.Write('Протокол пакетного изменения статусов договоров');
+            frmErr.SkipFormat(1);
+
+            if (cOldNotes = comp(0))
+              {
+                _loop Dogovor where ((comp(0) == Dogovor.cDogovor))
+                  {
+                    if (not NextVisual)
+                      break;
+
+                    ChangeStatusDogovor;
+                  }
+              }
+            else
+              {
+                _loop Dogovor where ((comp(0)   == Dogovor.cDogovor and
+                                      cOldNotes == Dogovor.Status))
+                  {
+                    if (not NextVisual)
+                      break;
+
+                    ChangeStatusDogovor;
+                  }
+              }
+
+            if (not bRes)
+              {
+                frmErr.Write('Ни один документ не удовлетворяет заданным условиям!');
+              }
+
+            StopVisual('', 0);
+
+            if (not frmErr.Error)
+              frmErr.ShowFile('');
+            else
+              frmErr.AbortForm;
+          }
+      }
+
+    abort;
+    exit;
+  }
+
+end; // HandleEvent
+
+end. // interface

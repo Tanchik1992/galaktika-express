@@ -1,0 +1,585 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 2000 корпорация ГАЛАКТИКА                         ║
+ ║ Проект        : Галактика                                                 ║
+ ║ Версия        : 5.72                                                      ║
+ ║ Назначение    : Печать договора/соглашения                                ║
+ ║ Ответственный : Жданович Ю.Г.                                             ║
+ ║ Параметры     :                                                           ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+form frmDogovor('DogPrn2.out','DogPrn2') with NoVisual;
+form frmDogSpravka('DogSpr.out','DogSpravka') with NoVisual;
+
+procedure PrintDogovor;
+{
+  if (UpDateInsertDogovor <> tsOk) Exit;
+  ReReadRecord(#Dogovor1);
+  if (Dogovor.Direct = 2)
+    frmDogovor.SetGroup('Закупка')
+  else
+    frmDogovor.SetGroup('Продажа');
+  frmDogovor.Write(Dogovor.NRec);
+  frmDogovor.Write(Dogovor.cDogovor);
+  frmDogovor.Write(Dogovor.NoDoc);
+  frmDogovor.Write(DateToStr(Dogovor.dBeg,'DD/MM/YYYY'));
+  frmDogovor.Write(DateToStr(Dogovor.dEnd,'DD/MM/YYYY'));
+  frmDogovor.Write(DoubleToStr(Dogovor.Summa,'\2p[|-]3666`666`666`666.88'));
+  frmDogovor.Write(ValDogovor);
+  frmDogovor.Write(KatOrg.Name);
+  frmDogovor.Write(KatOrg1.Name);
+  frmDogovor.Write(GrPol.Name);
+  frmDogovor.Write(GrOtp.Name);
+  frmDogovor.Write(KatNazna.Name);
+  frmDogovor.Write(KatNotes.Name);
+  _loop SpGrSch {
+    frmDogovor.PutEventById(feDoLoop,fcDogGroup);
+    frmDogovor.Write(GroupSch.Name);
+  }
+  _loop SpDocs {
+    frmDogovor.PutEventById(feDoLoop,fcSpec);
+    frmDogovor.Write(SpDocs.NRec);
+    case SpDocs.PrMC of 
+#ifdef __TVEL__
+    4,5,
+#end
+    1:
+    {
+      frmDogovor.Write(GroupMC.Name);
+      frmDogovor.Write(KatMC.Name);
+    }
+    2,3:
+    {
+      frmDogovor.Write(GroupUsl.Name);
+      frmDogovor.Write(KatUSL.Name);
+    }
+    else
+      frmDogovor.SkipFormat(2);
+    end;
+
+    frmDogovor.Write(KatOtpEd.Name);
+    frmDogovor.Write(SpDocs.Kol);
+    frmDogovor.Write(SpDocs.Price);
+    frmDogovor.Write(SpDocs.Summa);
+  }
+
+  if (not frmDogovor.Error)
+    frmDogovor.ShowFile('')
+  else 
+    frmDogovor.AbortForm;
+}
+//------------------------------------------------------------------------------
+procedure PrintDogovorxl;
+{
+var CurGrPrice, CurKlPrice, TekGrPrice, TekKlPrice: comp;
+
+#ifdef Gal8_1
+  ID := 'L_Dogovor\dogovor';
+#else
+  ID := 'oper\dogovor';
+#end
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+   #ifdef Atl51
+     set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+   #else
+     Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+   #endif
+
+  if not pxlrepsetup.checkParam(0,ID,sXLTFileName)
+    runinterface('xlrepsetup',1,ID,sXLTFileName);
+
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  if (UpDateInsertDogovor <> tsOk) Exit;
+  ReReadRecord(#Dogovor1);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);                           
+  pXL.SetNumberVar('toc1',toc1);
+
+  label1 := '';
+   _loop SpGrSch 
+       label1 := label1 + GroupSch.Name + ' ';
+
+  pXL.SetStringVar('group',label1);
+
+  pXL.SetStringVar('cdog' , Dogovor.cDogovor);
+  pXL.SetStringVar('ndoc' , 'Договор № ' + Dogovor.NoDoc);
+  pXL.SetStringVar('date' , 'за период с ' 
+                          + f_DateToStrZ(Dogovor.dBeg)
+                          + '  по '
+                          + f_DateToStrZ(Dogovor.dEnd));
+  pXL.SetstringVar('summa', 'на сумму: ' 
+                          + DoubleToStr(Dogovor.Summa,'\2p[|-]3666 666 666 666 666.88') 
+                          + ' ' + ValDogovor);
+  pXL.SetStringVar('ValDogovor', ValDogovor);
+  pXL.SetStringVar('KatOrg'    , KatOrg.Name );
+  pXL.SetStringVar('KatOrg1'   , KatOrg1.Name);
+  pXL.SetStringVar('GrPol',GrPol.Name);
+  pXL.SetStringVar('GrOtp',GrOtp.Name);
+  pXL.SetStringVar('KatNazna',KatNazna.Name);
+  pXL.SetStringVar('KatNotes',KatNotes.Name);
+  pXL.SetStringVar('tempp',' ');
+  pXL.PublishVar;  // Excel                      
+                                                         
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('Sklad');
+  pXL.CreateTblFld('gr2');
+  pXL.CreateTblFld('Груп');
+  pXL.CreateTblFld('Наим');
+  pXL.CreateTblFld('ЕдИз');
+  pXL.CreateTblFld('Колв');
+  pXL.CreateTblFld('Цена');
+  pXL.CreateTblFld('Стои');
+  pXL.CreateTblFld('temp');
+
+  CurGrPrice := 0;
+  _loop SpDocs 
+  {
+    if toc1 = 2
+      {
+        GetFirst fastfirstrow loSpDocs where (( SpDocs.nRec == loSpDocs.nRec ));
+        if (GetFirst fastfirstrow loKlPrice
+                     where (( loSpDocs.cPriceLs == loKlPrice.nRec )) = tsOK)
+        {
+          TekKlPrice := loSpDocs.cPriceLs;
+          if (GetFirst fastfirstrow loGrPrice
+                       where (( loKlPrice.cGrPrice == loGrPrice.nRec )) = tsOK)
+            TekGrPrice := loKlPrice.cGrPrice
+          else
+            TekGrPrice := -1;
+        }
+        else
+        {
+          TekKlPrice := 0;
+          TekGrPrice := -1;
+        }
+
+        if TekGrPrice <> CurGrPrice
+          {
+            CurGrPrice := TekGrPrice;
+            CurKlPrice := TekKlPrice;
+            pXL.ClearTblBuffer;
+            pXL.SetTblStringFldValue('gr2',if(CurGrPrice = -1, 'Прайс-листы без группы', loGrPrice.Name));
+            pXL.InsTblRow;
+            pXL.ClearTblBuffer;
+            pXL.SetTblStringFldValue('gr2',if(CurKlPrice = 0, '  Без привязки к прайс-листу', '  ' + loKlPrice.Name));
+            pXL.InsTblRow;
+          }
+
+        if (TekGrPrice = CurGrPrice) and (TekKlPrice <> CurKlPrice)
+          {
+            CurKlPrice := TekKlPrice;
+            pXL.ClearTblBuffer;
+            pXL.SetTblStringFldValue('gr2',if(CurKlPrice = 0, '  Без привязки к прайс-листу', '  ' + loKlPrice.Name));
+            pXL.InsTblRow;
+          }
+      }
+
+    pXL.ClearTblBuffer;
+
+    case SpDocs.PrMC of 
+#ifdef __TVEL__
+      4,5,
+#end
+      1:
+      {
+        pXL.SetTblStringFldValue('Груп', GroupMC.Name);
+        pXL.SetTblStringFldValue('Наим', KatMC.Name); 
+      }
+      2,3:
+      {
+        pXL.SetTblStringFldValue('Груп', GroupUsl.Name);
+        pXL.SetTblStringFldValue('Наим', KatUSL.Name); 
+      }
+    end;
+    
+    pXL.SetTblStringFldValue('ЕдИз',KatOtpEd.Name);
+    pXL.SetTblNumberFldValue('Колв',SpDocs.Kol);  
+    pXL.SetTblNumberFldValue('Цена',SpDocs.Price);
+    pXL.SetTblNumberFldValue('Стои',SpDocs.Summa);
+    pXL.InsTblRow;
+  }
+
+  pXL.PublishTbl('Sklad');
+  pXL.LoadReport(sXLSFileName);
+  
+  StopVisual('', 0);
+  
+  pXL.DisConnectExcel;         
+}
+
+//------------------------------------------------------------------------------
+// Печать паспорта сделки
+//
+Procedure PrintPasport;
+{
+  #ifdef Gal8_1
+    ID := 'L_Dogovor\pasport';
+  #else
+    ID := 'oper\pasport';
+  #end
+
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+  #ifdef Atl51
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+  #else
+    Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+  #endif
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  if (UpDateInsertDogovor <> tsOk) 
+    Exit;
+
+  ReReadRecord(#Dogovor1);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);
+  pXL.SetStringVar('NumPasport', oExtAtr.sGetAttr(coDogovor, Dogovor.NRec, 'Паспорт сделки (ПС)'));
+  pXL.SetStringVar('KatOrg'    , KatOrg.Name );
+  pXL.SetStringVar('KatOrgName', KatOrg.TipOrg + ' "' + KatOrg.Name + '"');
+  pXL.SetStringVar('KatOrgCity', KatCityK.Name);
+  pXL.SetStringVar('KatOrgAddr', KatOrg.Addr);
+  pXL.SetStringVar('KatOrgORN' , PodrInfo.OGRN);
+  pXL.SetStringVar('KatOrgDReg', if (PodrInfo.DatKodUchet <> ZeroDate, DateToStr(PodrInfo.DatKodUchet, 'DD/MM/YYYY'), ''));
+  pXL.SetStringVar('KatOrgUNN' , KatOrg.UNN);
+  pXL.SetStringVar('KatOrgKPP' , KatOrg.KodPlatNDS);
+  pXL.SetStringVar('KatOrgUK'  , KatOrg.UNN + '/' + KatOrg.KodPlatNDS);
+
+  pXL.SetStringVar('KatOrg1'    , KatOrg1.Name);
+  pXL.SetStringVar('KatOrg1City', KatCity.Name);
+  pXL.SetStringVar('KatOrg1CKod', KatCity.Kod);
+
+  pXL.SetStringVar('ndoc'    , Dogovor.NoDoc);
+  pXL.SetStringVar('ddoc'    , if (Dogovor.dDoc <> ZeroDate, DateToStr(Dogovor.dDoc, 'DD/MM/YYYY'), ''));
+  pXL.SetStringVar('ValISO'  , if (IsValid(#KlVal), KlVal.ISO   , sGetTune('NDE.RUBLISO')));
+  pXL.SetStringVar('ValName' , if (IsValid(#KlVal), KlVal.DOLLAR, sGetTune('NDE.SIMVRUB')));
+  pXL.SetNumberVar('Summa'   , Dogovor.Summa);
+
+  pXL.SetStringVar('CurDate' , DateToStr(Cur_Date, 'DD/MM/YYYY'));
+  pXL.SetStringVar('Boss'    , sGetTune('Boss'));
+  pXL.SetStringVar('MainBuh' , sGetTune('MainBuh'));
+  pXL.SetStringVar('DataPC'  , oExtAtr.sGetAttr(coDogovor, Dogovor.NRec, 'Дата (ПС)'));
+  pXL.SetStringVar('dEnd'    , if (Dogovor.dEnd <> ZeroDate, DateToStr(Dogovor.dEnd, 'DD/MM/YYYY'), ''));
+  pXL.SetStringVar('Bank'    , BankPol.Name);
+
+  var sKod : string;  sKod := '';
+  var lKod : longint; lKod := 4 - Length(oExtAtr.sGetAttr(coDogovor, Dogovor.NRec, 'Срок от даты выпуска'));
+
+  if (lKod > 0)
+    sKod := PadCh(sKod, '0', lKod) + oExtAtr.sGetAttr(coDogovor, Dogovor.NRec, 'Срок от даты выпуска');
+  else
+    sKod := oExtAtr.sGetAttr(coDogovor, Dogovor.NRec, 'Срок от даты выпуска');
+
+  pXL.SetStringVar('SrokV'   , sKod);
+
+  pXL.PublishVar;
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTblFld('ЕдИз');
+  pXL.SetTblStringFldValue('ЕдИз','');
+
+  pXL.PublishTbl('Pasport');
+  pXL.LoadReport(sXLSFileName);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+}
+
+//------------------------------------------------------------------------------
+// Загрузка данных по подтверждающим документам справки во временную таблицу
+procedure LoadTmpSpravka(oExtAtr: iExtAttr; sAttr_KatSopr_Date, sAttr_KatSopr_Code : String;
+                         dSpravkaBeg, dSpravkaEnd : Date);
+var
+  wVidSopr    : Word;
+  aKatSoprSum : Double;
+  aDate       : Date;
+
+  cDog
+, cAppDog     : comp;
+{
+  Delete all TmpSpravka;
+
+  if (Dogovor1.cDogovor <> comp(0))
+    {
+      cDog    := Dogovor1.cDogovor;
+      cAppDog := Dogovor1.NRec;
+    }
+  else
+    {
+      cDog    := Dogovor1.NRec;
+      cAppDog := comp(0);
+    }
+
+  _loop KatSopr where ((   cDog    == KatSopr.cDogovor
+                       AND cAppDog == KatSopr.cAppDogovor ))
+  {
+    wVidSopr := 0;
+    if ((KatSopr.VidSopr = Word(101)) or (KatSopr.VidSopr = Word(108)) or (KatSopr.VidSopr = Word(201))) // Накладная
+      wVidSopr := 1;
+    else
+      if ((KatSopr.VidSopr = Word(111)) or (KatSopr.VidSopr = word(211))) // Акт
+        wVidSopr := 2;
+
+    if (wVidSopr = 0)
+      Continue;
+
+    if (wVidSopr = 1)
+      aDate := oExtAtr.dGetAttr(coKatSopr, KatSopr.NRec, sAttr_KatSopr_Date);
+    else
+      aDate := KatSopr.dSopr;
+
+    // Фильтрация по периоду
+    if (aDate < dSpravkaBeg)       // Начало периода
+      Continue;
+
+    if (LongInt(dSpravkaEnd) <> 0) // Окончание периода
+      if (dSpravkaEnd < aDate)
+        Continue;
+
+    aKatSoprSum := if (KatSopr.cVal = Comp(0), KatSopr.Summa, KatSopr.SumVal);
+
+    ClearBuffer(#TmpSpravka);
+    TmpSpravka.cKatSopr := KatSopr.NRec;
+    TmpSpravka.dDoc     := aDate;
+    TmpSpravka.Code_Doc := oExtAtr.sGetAttr(coKatSopr, KatSopr.NRec, sAttr_KatSopr_Code);
+    TmpSpravka.GTD_Num  := KatSopr.NSopr;
+
+    if (SopKatSopr.cVal = comp(0))
+      TmpSpravka.Val_Sopr := sGetTune('NDE.RUBLISO');
+    else
+      TmpSpravka.Val_Sopr := if (IsValid(#KlVal_Sopr), KlVal_Sopr.ISO, '');
+
+    TmpSpravka.Sum_Sopr := aKatSoprSum;
+
+    if (KatSopr.cVal <> Dogovor.cVal)
+    {
+      if (SopKatSopr.cVal = comp(0))
+        TmpSpravka.Val_Dogovor := sGetTune('NDE.RUBLISO');
+      else
+        TmpSpravka.Val_Dogovor := if (IsValid(#KlVal), KlVal.ISO, '');
+
+      TmpSpravka.Sum_Dogovor := oValFunc.GetAnyCurrency(KatSopr.cVal, aKatSoprSum,
+                                                        KatSopr.dSopr, Dogovor.cVal);
+    }
+
+    Insert current TmpSpravka;
+  }  // _loop KatSopr
+}
+//------------------------------------------------------------------------------
+function GetSpravkaDates(var dSpravkaDate, dSpravkaBeg, dSpravkaEnd : Date) : boolean;
+var
+  DateChanged : boolean;
+  aDate       : date;
+{
+  GetSpravkaDates := false;
+  ReadMyDsk(dSpravkaDate, 'Dogovor_dSpravkaDate', DateChanged);
+  ReadMyDsk(dSpravkaBeg,  'Dogovor_dSpravkaBeg',  DateChanged);
+  ReadMyDsk(dSpravkaEnd,  'Dogovor_dSpravkaEnd',  DateChanged);
+
+  if (LongInt(dSpravkaDate) = 0)
+    dSpravkaDate := Cur_Date;
+
+  if ((LongInt(dSpravkaBeg) = 0) and (LongInt(dSpravkaEnd) = 0))
+  {
+    dSpravkaBeg := Date(1, Month(dSpravkaDate), Year(dSpravkaDate));
+    dSpravkaEnd := Date(Last_Day(dSpravkaDate), Month(dSpravkaDate), Year(dSpravkaDate));
+  }
+
+  if (RunDialog('SpravkaSetup', dSpravkaDate, dSpravkaBeg, dSpravkaEnd) = cmCancel)
+      Exit;
+
+  // Некорретно задан период
+  if ((LongInt(dSpravkaEnd) <> 0) and (dSpravkaBeg > dSpravkaEnd))
+  {
+    aDate       := dSpravkaBeg;
+    dSpravkaBeg := dSpravkaEnd;
+    dSpravkaEnd := aDate;
+  }
+
+  SaveMyDsk(dSpravkaDate, 'Dogovor_dSpravkaDate');
+  SaveMyDsk(dSpravkaBeg,  'Dogovor_dSpravkaBeg');
+  SaveMyDsk(dSpravkaEnd,  'Dogovor_dSpravkaEnd');
+
+  GetSpravkaDates := true;
+}
+
+//------------------------------------------------------------------------------
+// Печать справки
+//
+Procedure PrintSpravka;
+var
+  dSpravkaDate, dSpravkaBeg, dSpravkaEnd      : Date;
+  oExtAttr  : iExtAttr;
+{
+  if not GetSpravkaDates(dSpravkaDate, dSpravkaBeg, dSpravkaEnd)
+    exit;
+
+  ID := 'L_Dogovor\Spravka';
+
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+//  Set sXLSFileName := pXL.CreateXlt(sXLTFileName, True);
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  if (UpDateInsertDogovor <> tsOk)
+    Exit;
+
+  ReReadRecord(#Dogovor1);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);
+  pXL.SetStringVar('NumPasport', oExtAttr.sGetAttr(coDogovor, Dogovor.NRec, 'Паспорт сделки (ПС)'));
+  pXL.SetStringVar('DataPC'    , oExtAttr.sGetAttr(coDogovor, Dogovor.NRec, 'Дата (ПС)'));
+  pXL.SetStringVar('CurDate'   , DateToStr(dSpravkaDate, 'DD/MM/YYYY'));
+
+  pXL.SetStringVar('KatOrg'    , KatOrg.Name );
+  pXL.SetStringVar('KatOrgName', KatOrg.TipOrg + ' "' + KatOrg.Name + '"');
+  pXL.SetStringVar('Bank'      , BankPol.Name);
+
+  pXL.SetStringVar('Boss'      , sGetTune('Boss'));
+  pXL.SetStringVar('MainBuh'   , sGetTune('MainBuh'));
+
+  pXL.PublishVar;
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('Spravka');
+  pXL.CreateTblFld('GTDDate');
+  pXL.CreateTblFld('GTDKod');
+  pXL.CreateTblFld('GTDNum');
+  pXL.CreateTblFld('GTDVKod');
+  pXL.CreateTblFld('GTDSumma');
+  pXL.CreateTblFld('GTDVKodDog');
+  pXL.CreateTblFld('GTDSummaDog');
+
+
+  LoadTmpSpravka(oExtAttr, 'ДАТА ЭКСПОРТА', 'Kод подтверждающего документа', dSpravkaBeg, dSpravkaEnd);
+
+  _LOOP TmpSpravka
+    {
+      pXL.ClearTblBuffer;
+      pXL.SetTblStringFldValue('GTDDate'  , if (TmpSpravka.dDoc <> ZeroDate, DateToStr(TmpSpravka.dDoc, 'DD/MM/YYYY'), ''));
+      pXL.SetTblStringFldValue('GTDKod'   , TmpSpravka.Code_Doc);
+      pXL.SetTblStringFldValue('GTDNum'   , TmpSpravka.GTD_Num);
+
+      pXL.SetTblStringFldValue('GTDVKod'  , TmpSpravka.Val_Sopr);
+      pXL.SetTblStringFldValue('GTDSumma' , TmpSpravka.Sum_Sopr);
+
+      if (TmpSpravka.Val_Dogovor <> '')
+        {
+          pXL.SetTblStringFldValue('GTDVKodDog'  , TmpSpravka.Val_Dogovor);
+          pXL.SetTblStringFldValue('GTDSummaDog' , TmpSpravka.Sum_Dogovor);
+        }
+
+      pXL.InsTblRow;
+    }
+
+  pXL.PublishTbl('Spravka');
+  pXL.LoadReport(sXLSFileName);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+}
+
+// Печать справки о подтверждающих документах
+procedure PrintSpravkaForDogovor;
+var
+  sAttr_Dogovor_Passport, sAttr_KatSopr_Date, sAttr_KatSopr_Code : String;
+  dSpravkaDate, dSpravkaBeg, dSpravkaEnd    : Date;
+  DateChanged : Boolean;
+  oExtAtr     : iExtAttr;
+  LL          : Katorg new;
+{
+
+  if not GetSpravkaDates(dSpravkaDate, dSpravkaBeg, dSpravkaEnd)
+    exit;
+
+
+  sAttr_Dogovor_Passport := 'Паспорт сделки (ПС)';
+  sAttr_KatSopr_Date     := sGetTune('Nalog.Rus.Export.Attr1');
+  if (sAttr_KatSopr_Date = '')
+    sAttr_KatSopr_Date := 'ДАТА ЭКСПОРТА';
+
+  sAttr_KatSopr_Code     := 'Kод подтверждающего документа';
+
+  // Загрузка данных по документам справки во временную таблицу
+  LoadTmpSpravka(oExtAtr, sAttr_KatSopr_Date, sAttr_KatSopr_Code, dSpravkaBeg, dSpravkaEnd);
+
+  // Шапка
+  var strDate
+    , outDate: string;
+
+  strDate := string(dSpravkaDate);
+
+  outDate := '│ ' + strDate[1] + ' │ ' + strDate[2] + ' │ . │ ' +
+             strDate[4] + ' │ ' + strDate[5] + ' │ . │ ' +
+             strDate[7] + ' │ ' + strDate[8] + ' │ ' + strDate[9] + ' │ ' + strDate[10];
+
+  frmDogSpravka.Write(outDate);
+  frmDogSpravka.Write(DateToStr(dSpravkaBeg,  'DD/MM/YYYY'));
+  frmDogSpravka.Write(DateToStr(dSpravkaEnd,  'DD/MM/YYYY'));
+
+  frmDogSpravka.Write(Dogovor.NRec);
+  frmDogSpravka.Write(LL.GetKatorgName(KatOrg.nRec, koOnTune)); // Собственная организация
+
+  if ((Dogovor.Direct and 1) = 1)
+    frmDogSpravka.Write(BankPol.Name);
+  else
+    frmDogSpravka.Write(BankPlat.Name);
+
+  var strPas
+    , outPas : string;
+  var i      : integer;
+
+  outPas := '│';                                              //формирование номера паспорта сделки
+  strPas := oExtAtr.sGetAttr(coDogovor, Dogovor.NRec, sAttr_Dogovor_Passport);
+
+  for (i := 1; i <= 22; i++)
+    if ( i <= length(strPas) )
+      outPas += strPas[i] + '│';
+    else
+      outPas += ' │';
+
+  frmDogSpravka.Write(outPas);
+
+  // Информация о подтверждающих документах
+  _loop TmpSpravka
+  {
+    frmDogSpravka.PutEventById(feDoLoop, fcDogSpravkaLoop);
+    frmDogSpravka.Write(TmpSpravka.cKatSopr);
+    frmDogSpravka.Write(if (LongInt(TmpSpravka.dDoc) <> 0, DateToStr(TmpSpravka.dDoc, 'DD/MM/YYYY'), ''));
+    frmDogSpravka.Write(TmpSpravka.Code_Doc);
+    frmDogSpravka.Write(TmpSpravka.GTD_Num);
+
+    frmDogSpravka.Write(TmpSpravka.Val_Sopr);
+    frmDogSpravka.Write(TmpSpravka.Sum_Sopr);
+    frmDogSpravka.Write(TmpSpravka.Val_Dogovor);
+    if (Abs(TmpSpravka.Sum_Dogovor) > 0.001)
+      frmDogSpravka.Write(TmpSpravka.Sum_Dogovor);
+    else
+      frmDogSpravka.SkipFormat(1);
+
+    frmDogSpravka.SkipFormat(1);
+  }
+
+  // Подписи
+  frmDogSpravka.Write(sGetTune('Boss'));
+  frmDogSpravka.Write(sGetTune('MainBuh'));
+
+  if (not frmDogSpravka.Error)
+    frmDogSpravka.ShowFile('');
+  else
+    frmDogSpravka.AbortForm;
+}

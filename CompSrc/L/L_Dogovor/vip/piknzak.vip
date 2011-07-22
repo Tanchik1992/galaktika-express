@@ -1,0 +1,106 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Перегон выбора из маркера в Pick для GetSomNZakaz         ║
+ ║ Ответственный : Сидоров Владимир Геннадьевич (Volod)                      ║
+ ║ Параметры     : есть                                                      ║
+ ║    pStatus   // 0 - выбирать все, иначе битовая маска запрещенных         ║
+ ║    pTypeDoc  // 0 - выбирать все, иначе битовая маска запрещенных         ║
+ ║    OkOne     // TRUE - груповой выбор, FALSE-только один (+возвращаемый)  ║
+ ║    prmNZakaz // возвращаемый указатель на наряд-заказ                     ║
+ ║    OneLevel  // показывать записи одного уровня - true, false - нет       ║
+ ║    pOwn      // ссылка на влдельца уровня(действует если OneLevel = true) ║
+ ║    pPunktP   // если не ноль, то фильтр по пункту погрузки                ║
+ ║    pKontr2   // если не ноль, то фильтр по контрагенту                    ║
+ ║    pGruzTo   // если не ноль, то фильтр по грузополучателю                ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Интерфейс сохранения выбора наряд-заказов из маркера в Pick
+#end
+Interface PickNZak 'Выбор наряд-заказа' DoAccept,EscClose,cyan;
+  show at (4,2,76,23);
+Create View
+var
+//--параметры
+  pStatus,
+  pTypeDoc       : word;
+  OkOne          : boolean ;
+  prmNZakaz      : comp;
+  OneLevel       : boolean;
+  pOwn,
+  pPunktP,
+  pKontr2,
+  pGruzTo        : Comp;
+//--
+  Marker : longint;         // указатель на маркер
+  MarkerCount, i : longint; // счетчики записей в маркере
+  pickrec : comp;
+As select
+  Pick.wList
+from
+  Pick
+where
+  ((
+    word(440) == Pick.wList
+  ))
+;
+Parameters
+  pStatus,   // 0 - выбирать все документы, иначе битовая маска запрещенных статусов документов
+             // если 1000+status, то bounds только по этому статусу (status == NZakaz.Status)
+  pTypeDoc,  // 0 - выбирать все документы, иначе битовая маска запрещенных типов документов
+  OkOne,     // TRUE - груповой выбор FALSE - только один/ ЕСЛИ возвращает TRUE-помечены все распоряжения!
+  prmNZakaz, // возвращаемый указатель на наряд-заказ
+  OneLevel,  // показывать записи одного уровня - true, false - нет
+  pOwn,      // ссылка на влдельца уровня(действует если OneLevel = true)
+  pPunktP,   // если не ноль, то фильтр по пункту погрузки
+  pKontr2,   // если не ноль, то фильтр по контрагенту
+  pGruzTo    // если не ноль, то фильтр по грузополучателю
+  ;
+
+HandleEvent
+cmInit:
+{
+  Marker := InitMarker('NZakaz',8,100,10);
+  ClearMarker(Marker);
+  DoneMarker(Marker,'NZakaz');
+  delete novisual Pick;
+  if RunInterface('GetSomNZakaz',
+                  pStatus,   // 0 - выбирать все документы, иначе битовая маска запрещенных статусов документов
+                  pTypeDoc,  // 0 - выбирать все документы, иначе битовая маска запрещенных типов документов
+                  OkOne,     // TRUE - груповой выбор FALSE - только один/ ЕСЛИ возвращает TRUE-помечены все распоряжения!
+                  prmNZakaz, // возвражаемый указатель на наряд-заказ
+                  OneLevel,  // показывать записи одного уровня-true, false- нет
+                  pOwn,      // ссылка на влдельца уровня(действует если OneLevel = true)
+                  pPunktP,   // если не ноль, то фильтр по пункту погрузки
+                  pKontr2,   // если не ноль, то фильтр по контрагенту
+                  pGruzTo    // если не ноль, то фильтр по грузополучателю
+                  ) = cmCancel  // если там Cancel - то и здесь Cancel
+    {
+    Abort;
+    Exit;
+    }
+  delete safe Pick;
+  StartNewVisual(vtRotateVisual, vfTimer,
+               ''#3'Формирование элементов выбора ...'#13#3, 1);
+  Marker:=InitMarker('NZakaz',8,100,10);
+  MarkerCount:=GetMarkerCount(Marker);
+  for(i:=0;i<MarkerCount;i:=i+1)
+  { if GetMarker(Marker,i,pickrec)
+    { Pick.wList := 440;
+      Pick.PickKol:=i;
+      Pick.cRec:=pickrec;
+      insert current Pick;
+    }
+    NextVisual;
+  }
+  DoneMarker(Marker,'NZakaz');
+  StopVisual('',0);
+  PutCommand(cmDefault);
+}
+end;  // HandleEvent
+end.  // interface

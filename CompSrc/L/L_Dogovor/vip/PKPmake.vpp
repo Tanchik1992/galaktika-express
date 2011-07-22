@@ -1,0 +1,520 @@
+!-------- Заполнение позиции спецификации по умолчанию -------------------
+
+Procedure SetDefaultSpDog(var SpBuf: #TSpDocs; PlanBuf: #TCalPlan);
+var
+  NSpecif : string;
+{
+  SpBuf.cDoc := PlanBuf.nRec;
+  SpBuf.Code := oSpDocs.GetSpDocsCodeNext(PlanBuf.nRec, word(403));
+
+  case SpBuf.PrMC of
+  1 :
+    {
+      if ( GetFirst FastFirstRow KatMC where (( SpBuf.cMCUsl == KatMC.nRec )) = tsOK )
+        {
+          NSpecif := KatMC.Name;
+
+          SpBuf.cGrMCUsl := KatMC.cGroupMC;
+          SpBuf.cGrNal   := KatMC.cGrNal;
+        }
+    }
+  2 :
+    {
+      if ( GetFirst FastFirstRow KatUsl where (( SpBuf.cMCUsl == KatUsl.nRec )) = tsOK )
+        {
+          NSpecif := KatUsl.Name;
+
+          SpBuf.cGrMCUsl := KatUsl.cGroupUsl;
+          SpBuf.cGrNal   := KatUsl.cGrNal;
+
+          if ( SpBuf.Kol = 0 )
+            SpBuf.Kol := KatUsl.KolAkt;
+        }
+    }
+  end; // case
+
+  if ( SpBuf.cOtpEd = 0 )
+    if ( GetFirst FastFirstRow KatOtpEd where (( word(1)      == KatOtpEd.Akt  AND
+                                                 SpBuf.PrMC   == KatOtpEd.PrMC AND
+                                                 SpBuf.cMCUsl == KatOtpEd.cMCUSL )) = tsOK )
+      SpBuf.cOtpEd := KatOtpEd.nRec
+    else
+      {
+        Message('Не задана активная отпускная единица измерения для ' + NSpecif + '!', Warning);
+        SpBuf.cOtpEd := 0;
+      }
+
+  SpBuf.ShipAddTerms := PlanBuf.AddTerms;
+  SpBuf.cShipment    := PlanBuf.cShipment;
+  SpBuf.cTipOtg      := PlanBuf.cTipOtg;
+  SpBuf.cWayMove     := PlanBuf.cWayMove;
+  SpBuf.cVal         := PlanBuf.cVal;
+  SpBuf.Empty        := 1;
+  SpBuf.Ostatok      := fEdIzm.ConvertToUchEd(SpBuf.Kol, SpBuf.cOtpEd);
+  SpBuf.TiDk         := 403;
+  SpBuf.Direct       := PlanBuf.DirectMC;
+  SpBuf.FilialNo     := oNotes.Notes_InUseStatus(PlanBuf.cNote);
+  SpBuf.Price        := DogRound_P(SpBuf.cVal <> 0, SpBuf.Price);
+  SpBuf.Summa        := DogRound(SpBuf.cVal <> 0, SpBuf.Price * SpBuf.Kol);
+}
+
+Function SumDiscount(FromSum : double) : double;
+{
+  case Dogovor.IsExtra of
+    0: SumDiscount := if(Dogovor.IsSum = 0, FromSum * Dogovor.Discount / 100
+                       , FromSum / (Dogovor.Summa + Dogovor.Discount) * Dogovor.Discount);
+    1: SumDiscount := - if(Dogovor.IsSum = 0, FromSum * Dogovor.Discount / 100
+                         , FromSum / (Dogovor.Summa - Dogovor.Discount) * Dogovor.Discount);
+  end;
+}
+
+!Автоформирование ПКП (пунктов календарного плана)
+procedure MakePlanPaysOnOwner(OwnerCP: comp);
+{
+  RereadRecord(#CalPlan);
+  var NewNRec: comp;
+  if getFirst PlanPaysAvan = tsOK {
+    NewNRec := GetNextNRec(#PlanPaysAvan, 0);
+    _loop AvanScheme {
+      AvanScheme.nRec := 0;
+      AvanScheme.cPlanPays := NewNRec;
+      if insert current AvanScheme <> tsOK {};
+    }
+    PlanPaysAvan.nRec := NewNRec;
+    PlanPaysAvan.Summa := 0;
+    PlanPaysAvan.cCalPlan := OwnerCP;
+    if insert current PlanPaysAvan = tsOK {};
+  }
+  else {
+    NewNRec := GetNextNRec(#PlanPaysAdd, 0);
+    _loop AddScheme {
+      AddScheme.nRec := 0;
+      AddScheme.cPlanPays := NewNRec;
+      if insert current AddScheme <> tsOK {};
+    }
+    PlanPaysAdd.nRec := NewNRec;
+    PlanPaysAdd.Summa := 0;
+    PlanPaysAdd.nDays := 0;
+    PlanPaysAdd.cCalPlan := OwnerCP;
+    if insert current PlanPaysAdd = tsOK {};
+  }
+}
+
+Procedure SetDefaultCalPlan;
+var Date4PKP : date;
+{
+case wGetTune('Dog.PKPdInputDef') of
+  0 : Date4PKP := Cur_Date;
+  1 : Date4PKP := Dogovor.dInput;
+  2 : Date4PKP := Dogovor.dDoc;
+  3 : Date4PKP := Date(0,0,0);
+else
+      Date4PKP := Cur_Date;
+end;
+if (DirectMCNewCP = 100)
+{
+  ClearBuffer(#CalPlan);
+  CalPlan.cCalPlan   := CalPlanRef;
+  CalPlan.dInput     := Date4PKP;
+  CalPlan.cDogovor   := prmDogovor;
+  CalPlan.Descr      := sGetTune('User.Descr');
+  CalPlan.DesGr      := sGetTune('User.DesGr');
+  CalPlan.DirectMC   := 100;
+  CalPlan.DirectPlat := 100;
+  Exit;
+}
+if CalPlanRef <> 0 {
+  CalPlan.dInput    := Date4PKP;
+  CalPlan.Descr     := sGetTune('User.Descr');
+  CalPlan.DesGr     := sGetTune('User.DesGr');
+  CalPlan.cNote     := oNotes.GetFirstNote(word(403), CalPlan.Status);
+  CalPlan.cDogovor  := prmDogovor;
+  CalPlan.cCalPlan  := CalPlanRef;
+  CalPlan.Summa     := 0.0;
+  CalPlan.SummaSpec := 0.0;
+  CalPlan.SumNDS    := 0.0;
+}
+else {
+  ClearBuffer(#CalPlan);
+  CalPlan.dInput    := Date4PKP;
+  CalPlan.dValCurse := Dogovor.dValCurse;
+  CalPlan.cDogovor  := prmDogovor;
+  CalPlan.Descr     := sGetTune('User.Descr');
+  CalPlan.DesGr     := sGetTune('User.DesGr');
+  CalPlan.cOrg      := Dogovor.cOrg;
+  CalPlan.cVal      := Dogovor.cVal;
+  CalPlan.cShipment := Dogovor.cShipment;
+  CalPlan.cTipOtg   := Dogovor.cTipOtg;
+  CalPlan.cWayMove  := Dogovor.cWayMove;
+  CalPlan.VhodNal   := Dogovor.VhodNal;
+  CalPlan.dFrom     := Dogovor.dBeg; //cur_date;
+  CalPlan.dTo       := Dogovor.dEnd; //cur_date;
+  CalPlan.AddTerms  := Dogovor.ShipAddTerms;
+
+  if oStatUser.Descr_Stat_U(true, word(403), CurDescr, CalPlan.cNote)
+    {
+      CalPlan.Status := KatNotes.Status;
+    }
+  else
+    {
+      CalPlan.cNote  := oNotes.GetFirstNote(word(403),0);
+    }
+
+  if (GetFirst Dog_AttrDog = tsOk)
+    CalPlan.cOtvPodr := Dog_AttrDog.cPodr;
+  if (CalPlan.cOtvPodr=0)
+    CalPlan.cOtvPodr := DefaultBaseCO;
+
+  CalPlan.cNazna    := Dogovor.cProg;
+  CalPlan.cCalPlan  := 0;
+  if (DirectMCNewCP > 2) CalPlan.DirectMC := 0
+  else CalPlan.DirectMC := DirectMCNewCP;
+  if (DirectPlatNewCP > 2) CalPlan.DirectPlat := 0
+  else CalPlan.DirectPlat := DirectPlatNewCP;
+
+  if (CalPlan.DirectMC = 0) CalPlan.RunOK := wGetTune('Dog.PKPRunOKDef');
+
+  if ((CalPlan.DirectMC = (2 - (Dogovor.Direct and 1))) or (CalPlan.DirectMC = 0))
+  {
+    CalPlan.cPol      := Dogovor.cPol;
+    CalPlan.cPolBank  := Dogovor.cBankPol;
+    CalPlan.cPlat     := Dogovor.cPlat;
+    CalPlan.cPlatBank := Dogovor.cBankPlat;
+    CalPlan.cGrOtp    := Dogovor.cGrOtp;
+    CalPlan.cGrPol    := Dogovor.cGrPol;
+  }
+  else
+  {
+    CalPlan.cPol      := Dogovor.cPlat;
+    CalPlan.cPolBank  := Dogovor.cBankPlat;
+    CalPlan.cPlat     := Dogovor.cPol;
+    CalPlan.cPlatBank := Dogovor.cBankPol;
+    CalPlan.cGrOtp    := Dogovor.cGrPol;
+    CalPlan.cGrPol    := Dogovor.cGrOtp;
+  }
+  if (GetFirst MarAvt
+         where ((  word(1) == Maravt.TipMar_avt        and
+                   CalPlan.cGrOtp == MarAvt.cOrgAvt)) = tsOk)
+    {
+      if (GetLast MarRel
+             where (( MarAvt.nRec == MarRel.cMarAvt))
+             ordered by index MarRel03 = tsOk)
+        {
+          if (GetFirst MarPunkt
+                 where (( MarRel.cMarPunkt == MarPunkt.Nrec )) = tsOk)
+            {
+              CalPlan.cPunktP := MarPunkt.nRec;
+            }
+        }
+    }
+
+  if (GetFirst MarAvt
+       where ((   word(1)        == Maravt.TipMar    and
+                  CalPlan.cGrPol == MarAvt.cOrg)) = tsOk)
+    {
+      if (GetLast MarRel
+             where (( MarAvt.nRec == MarRel.cMarAvt))
+             ordered by index MarRel03 = tsOk)
+        {
+          if (GetFirst MarPunkt
+                 where (( MarRel.cMarPunkt == MarPunkt.Nrec )) = tsOk)
+            {
+              CalPlan.cPunktR := MarPunkt.nRec;
+            }
+        }
+    }
+
+}
+  var tmpS : string;
+
+  if (CalPlan.cCalPlan = 0)
+    {
+      if (coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP') = 0)
+        if ( GetLast CalPlan_s where (( CalPlan.cDogovor == CalPlan_s.cDogovor
+                                    AND CalPlan.cCalPlan == CalPlan_s.cCalPlan ))
+                       ordered by index CalPlan12 = tsOK )
+          {
+            tmpS := CalPlan_s.NoDoc;
+
+            if ( trim(tmpS) = '' )
+              tmpS := '0001';
+
+            CalPlan.NoDoc := NextNumStr(tmpS);
+          }
+        else
+          CalPlan.NoDoc := '0001';
+    }
+  else
+    if ( GetLast CalPlan_S where (( CalPlan.cDogovor == CalPlan_s.cDogovor
+                                AND CalPlan.cCalPlan == CalPlan_s.cCalPlan ))
+                   ordered by index CalPlan12 = tsOK )
+      {
+        tmpS := CalPlan_s.NoDoc;
+
+        if ( trim(tmpS) = '' )
+          tmpS := '0001';
+
+        CalPlan.NoDoc := NextNumStr(tmpS);
+      }
+    else
+      CalPlan.NoDoc := CalPlan1.NoDoc+'_'+'0001'
+}
+
+Procedure MakeSpGrSch;
+var
+  VidList: word;
+  pDoc: comp;
+{
+  if (RecordExists SpGrSch
+            where (( word(2)      == SpGrSch.wList and
+                     CalPlan.nRec == SpGrSch.cBaseDoc )) = tsOK) Exit;
+  VidList := if(CalPlan.cCalPlan = 0, 1, 2);
+  pDoc    := if(CalPlan.cCalPlan = 0, CalPlan.cDogovor, CalPlan.cCalPlan);
+  _loop SpGrSch2 where (( VidList == SpGrSch2.wList and
+                          pDoc    == SpGrSch2.cBaseDoc ))
+   if (GetFirst fastfirstrow GroupSch
+          where (( SpGrSch2.cGroupSch == GroupSch.Nrec )) = tsOK)
+     if ((GroupSch.cOrg = 0) or (GroupSch.cOrg = CalPlan.cOrg))
+     {
+       insert SpGrSch set
+         SpGrSch.nRec      := 0,
+         SpGrSch.wList     := 2,
+         SpGrSch.cGroupSch := SpGrSch2.cGroupSch,
+         SpGrSch.cBaseDoc  := CalPlan.nRec;
+     }
+}
+
+Function InsertCalPlan(NeedNewNrec: boolean): boolean;
+{
+  InsertCalPlan := false;
+  if NeedNewNrec
+    CalPlan.nRec := GetNextNRec(#CalPlan, 0);
+  if ( InsertCalPlanSoprHoz )
+    if (insert current calplan) = tsOK
+     {
+       if boGetTune('Oper.ExClassPlan')
+         {
+           oExtAtr.CopyAllAttrEx    (word(coDogovor), CalPlan.cDogovor, word(coCalPlan), CalPlan.nRec);
+           oExtCls.CopyAllClassValEx(word(coDogovor), CalPlan.cDogovor, word(coCalPlan), CalPlan.nRec);
+         }
+
+       if (coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP') <> 0)
+         if (Trim(CalPlan.NoDoc) = '')
+            RunInterface('SimpleWayToRunAlgorithm'
+                      , coGetTune('Oper.Dogovor.AutoIntrNumAlgPKP')
+                      , word(0)
+                      , CalPlan.nRec
+                      , comp(0));
+
+      InsertCalPlan := true;
+      iIerCP.CreateIerCalPlanOnDoc(CalPlan.cDogovor, CalPlan.cCalPlan, CalPlan.nRec);
+      MakeSpGrSch;
+    }
+}
+
+Function UpdateCalPlan: boolean;
+{
+  UpdateCalPlan := false;
+
+  if ( UpdateCalPlanSoprHoz )
+    if (update current calplan) = tsOK
+      {
+        UpdateCalPlan := true;
+
+        if ( RecordExists SpDocs_s where (( word(403)    == SpDocs_s.TiDk AND
+                                            CalPlan.nRec == SpDocs_s.cDoc AND
+                                            (
+                                             ( SpDocs_s.cOtvPodr <> CalPlan.cOtvPodr )
+                                              OR
+                                             ( SpDocs_s.cPlatPodr <> CalPlan.cPlatPodr )
+                                            )
+                                         )) = tsOK )
+          {
+            update SpDocs_s where (( word(403) == SpDocs_s.TiDk AND CalPlan.nRec == SpDocs_s.cDoc ))
+              set SpDocs_s.cOtvPodr  := CalPlan.cOtvPodr
+                , SpDocs_s.cPlatPodr := CalPlan.cPlatPodr;
+          }
+      }
+}
+
+Function MakeNewSpDocs(pCalPlan: comp; pDirect: word; pSpDocs: comp;
+  pKol: double) : comp;
+var
+  pShipment, pTipOtgr, pWayMove: comp;
+  pFilialNo: longint;
+{
+  MakeNewSpDocs := 0;
+  if GetFirst SpDocs where (( pSpDocs == SpDocs.nRec )) = tsOK {
+    oSpDocs.GetDocInfoOtgr(pCalPlan, 403, pShipment, pTipOtgr, pWayMove, pFilialNo);
+    fEdIzm.CheckKolDiskret(pKol, SpDocs.cOtpEd, true, false);
+    if (oSpDocs.SpDocs_InsCurentFromUpDoc
+                            (pSpDocs, pCalPlan, 403, false, pKol,
+                                  pShipment, pTipOtgr, pWayMove, pFilialNo,
+                                  pDirect, true) = tsOK)
+    {
+      MakeNewSpDocs := oSpDocs.GetCurrentPosition.nRec;
+    }
+  }
+}
+
+Function MakeNewMCCalPLan(pDogovor: comp; pDirect: word): comp;
+{
+  MakeNewMCCalPLan := 0;
+
+  set prmDogovor := pDogovor;
+
+  if ( GetFirst fastfirstrow Dogovor <> tsOK )
+    {
+      message('Не найден договор (Dogovor.nRec = )' + string(pDogovor), Error);
+      Exit;
+    }
+
+  CalPlanRef      := 0;
+  DirectMCNewCP   := pDirect;
+  DirectPlatNewCP := 0;
+
+  SetDefaultCalPlan;
+
+  if InsertCalPlan(true)
+    MakeNewMCCalPLan := CalPlan.nRec;
+}
+
+Function MakeNewPlatCalPLan(pDogovor: comp; wVidPlat, wDirect: word; PlanSum, PlanNDS: double): comp;
+{
+  MakeNewPlatCalPLan := 0;
+
+  set prmDogovor := pDogovor;
+
+  if ( GetFirst fastfirstrow Dogovor <> tsOK )
+    {
+      message('Не найден договор (Dogovor.nRec = )' + string(pDogovor), Error);
+      Exit;
+    }
+
+  CalPlanRef      := 0;
+  DirectMCNewCP   := 0;
+  DirectPlatNewCP := wDirect;
+
+  SetDefaultCalPlan;
+
+  CalPlan.SumNDS    := PlanNDS;
+  CalPlan.Summa     := PlanSum;
+  CalPlan.TermDefBy := wVidPlat;
+
+  if not InsertCalPlan(true)
+    Exit;
+
+  MakeNewPlatCalPLan := CalPlan.nRec;
+
+  CurPayType := wVidPlat;
+
+  if ( CurPayType = 0 )
+    {
+      OnSetDefaultPlanPaysAvan;
+
+      if ( insert current PlanPaysAvan = tsOK )
+        {}
+    }
+  else
+    {
+      OnSetDefaultPlanPaysAdd;
+
+      if ( insert current PlanPaysAdd = tsOK )
+        {}
+    }
+}
+
+Procedure UpdateCurrentPlatCalPlan(PlanSum, PlanNDS: double);
+{
+  if ( CalPlan.DirectPlat = 0 )
+    Exit;
+
+  CalPlan.SumNDS := PlanNDS;
+  CalPlan.Summa  := PlanSum;
+
+  update PlanPays where (( CalPlan.nRec == PlanPays.cCalPlan ))
+    set PlanPays.Summa := CalPlan.Summa;
+
+  UpdateCalPlan;
+}
+
+Function SetPosition(pCalPlan : comp): boolean;
+{
+  if (GetFirst fastfirstrow CalPlan1 where (( pCalPlan == CalPlan1.nRec )) = tsOK)
+  {
+    var c1, c2 : comp;
+    c1 := CalPlan1.cCalPlan;
+    c2 := CalPlan1.cDogovor;
+    set CurGroup   := c1;
+    set prmDogovor := c2;
+
+    if (GetFirst fastfirstrow CalPlan1 where (( pCalPlan == CalPlan1.nRec )) = tsOK)
+      {}
+
+    if (GetFirst fastfirstrow CalPlan where (( pCalPlan == CalPlan.nRec )) = tsOK)
+      {}
+
+    SetPosition := true;
+    RereadRecord(#CalPlan1);
+    RereadRecord(#CalPlan);
+  }
+  else
+    SetPosition := false;
+}
+
+Function DeleteCalPlan: boolean;
+var
+  gldt  : GlobData;
+  insTbl: InsertTblMnpl;
+{
+  DeleteCalplan := false;
+  if oSpDocs.SpDocs_Delete(CalPlan.nRec,word(403),true) <> tsOK Exit;
+  if (NullVipRef(iSHoz)) GetVipRef(iSHoz,'SHmanager');
+  iSHoz.DeleteDoc(CalPlan.Nrec,word(403));
+
+#ifdef __NIOKR__
+  if (Delete NoVisual DogMail where ((CalPlan.cDogovor    == DogMail.cDogovor
+                                  AND CalPlan.NRec        == DogMail.cCalPlan)) <> tsOk)
+    { }
+
+  if (Delete NoVisual UrgentM where ((CalPlan.NRec == UrgentM.cCalPlan)) <> tsOk)
+    { }
+#end
+
+  delete safe CheckPln;
+  delete safe PayScheme;
+  update PaySchem where (( CalPlan.nRec == PaySchem.cMcPlan ))
+    set PaySchem.cMcPlan := 0;
+  delete safe PlanPaysMain;
+  _loop AvanScheme
+    delete PlanPays where (( AvanScheme.nRec == PlanPays.cCalPlan and
+                             word(99)        == PlanPays.VidPlat ));
+  delete safe AvanScheme;
+  delete safe PlanPaysAvan;
+  delete safe AddScheme;
+  delete safe PlanPaysAdd;
+  delete safe SpGrSch;
+
+  if GetVipRef(gldt, 'GlobDataSource')
+    {
+      insTbl := gldt.GetInsertTblMnpl;
+      insTbl.DeleteEnviroment(toCalPlan, CalPlan.nRec);
+
+      FreeVipInterface(gldt);
+
+      if ( Not NullVipRef(insTbl) )
+        FreeVipInterface(insTbl);
+    }
+
+  var Save_c1, Save_c2, Save_c3: comp;
+  Save_c1 := CalPlan.cCalPlan;
+  Save_c2 := CalPlan.nRec;
+  Save_c3 := CalPlan.cDogovor;
+  var Res : word;
+  Res := delete current calplan;
+  DeleteCalplan := (Res = tsOK);
+  iIerCP.DeleteIerCalPlanOnDoc(Save_c3, Save_c1, Save_c2);
+  oChkSchem.RemoveDocFromSpSchem(Save_c2, word(403));
+}
+
+#include AutoMaker.vpp

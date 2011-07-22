@@ -1,0 +1,1230 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 5.85 - TXO API
+// Расчет суммы и извлечение циклической аналитики накладных актов
+//******************************************************************************
+
+#include TxoApi.vih // Базовая функциональность TXO API
+#include ExtAttr.vih // работа с внешними атрибутами
+
+VipInterface Txo_VipNP
+  Implements ObjTxoIdentPlugin
+  #ifdef Atl51
+  Licensed(Free)
+  #end
+;
+
+#doc
+TXO API: Расчет суммы и извлечение циклической аналитики накладных/актов
+#end
+Interface Txo_VipNP;
+
+Create view
+var
+  CurHTxo     : longint; // ссылка на текущий сервис ТХО
+  CurTiDkGal  : word;    // тип документа
+  CurSoprDoc  : comp;    // документ
+  CurSoprHoz  : comp;    // журнал хозопераций
+  CurDatOb    : Date;    // дата проводки
+  CurValut    : comp;    // валюта проводки
+
+  Param_Result        : word;    // 0-Сумма по спецификации, 1-сумма по спецификации без налогов, 2-Налоги
+  Param_KolMode       : word;       // количество из спецификации: фактическое, оплаченное, номинальное, из распределения
+  Param_GrNalMask     : string;  // Название группы налога
+  Param_AllStakes     : word;    // Флаг ставки налога, если установлен то по всем ставкам
+  Param_Stake         : double;  // Ставка налога
+  Param_NrecNal       : comp;    // NRec налога
+  Param_CountModeDop  : string;  // Дополнительные параметры результата (Название налога)
+  Param_AttrNrec      : comp;    // Внешний атрибут
+  Param_AttrName      : string;    // Внешний атрибут
+
+
+As select
+  *
+from
+   SoprHoz,
+   KatSopr,
+   SpSopr,
+   SpSopr SpSopr1,
+   SpSopr SpSopr2,
+   SklOrder,
+   SpOrder,
+   KatMC,
+   KatUsl,
+   KatParty,
+   KatMol,
+   KatMC KatMC1,
+   KatParty KatParty1,
+   KatMC KatMC2,
+   KatParty KatParty2,
+   KatOrgDescr,
+
+   synonym KatMol KatMol_S (readonly),
+   GrNal,
+   KatNalog,
+   SpDocNal,
+   synonym SpDocNal SpDocNal_S (readonly),
+   synonym SpDocNal SpDocNal1 (readonly),
+   synonym SpDocNal SpDocNal_S1 (readonly),
+   SpStep,
+   synonym KatSopr KatSoprPrih (readonly),
+   SpecMTR,
+   SaldTune,
+   SpecMTR SpecMTR1,
+   SaldTune SaldTune1,
+   SpecMTR SpecMTR2,
+   SaldTune SaldTune2,
+   AttrNam,
+   AttrVal,
+   AttrVal AttrValSp
+
+where
+((
+  comp(CurSoprDoc)     == KatSopr.NRec
+  AND comp(CurSoprDoc) == SpSopr.cSopr
+  AND SpSopr.VidSopr   == SpDocNal.TipDoc
+  AND SpSopr.NRec      == SpDocNal.cSpDoc
+  AND SpSopr.cSpDocs   == SpStep.Nrec
+  AND SpSopr.Nrec      == AttrValSp.cRec
+  AND coSpSopr         == AttrValSp.wTable
+  AND KatSopr.Nrec     == AttrVal.cRec
+  AND coKatSopr        == AttrVal.wTable
+
+
+  AND SpSopr.VidSopr   == SpDocNal_S.TipDoc
+  AND SpSopr.NRec      == SpDocNal_S.cSpDoc
+  AND Param_NrecNal    == SpDocNal_S.cNalog
+
+  AND SpDocNal.cGrNal  == GrNal.NRec
+
+  AND SpSopr.cMcUsl    == KatMC.NRec
+  AND SpSopr.cMcUsl    == KatUsl.NRec
+  AND SpSopr.cParty    == KatParty.NRec
+
+  AND KatSopr.cMolTo   == KatMol.NRec
+  AND KatSopr.cMolFrom == KatMol_S.NRec
+
+  AND word(0)           == SpOrder.SP
+  AND SpSopr.cMCUsl     == SpOrder.cMC
+  AND SpSopr.cParty     == SpOrder.cParty
+  AND word(0)           == SpOrder.VidOrder (NoIndex)
+  AND SpOrder.cSklOrder == SklOrder.Nrec
+  AND SklOrder.cSopr    == KatSoprPrih.NRec
+
+  AND coSpSopr          == SpecMTR.coTable
+  AND SpSopr.nRec       == SpecMTR.cSpec
+  AND SpecMTR.cSaldTune == SaldTune.nRec
+
+  AND coSpSopr          == SpecMTR1.coTable
+  AND SpSopr1.nRec       == SpecMTR1.cSpec
+  AND SpecMTR1.cSaldTune == SaldTune1.nRec
+
+  AND coSpSopr          == SpecMTR2.coTable
+  AND SpSopr2.nRec       == SpecMTR2.cSpec
+  AND SpecMTR2.cSaldTune == SaldTune2.nRec
+
+  AND Param_AttrNrec    == AttrNam.NRec
+
+  AND  comp(CurSoprDoc) ==  SpSopr1.cSopr
+  AND  word(0)          ==  SpSopr1.prMC
+
+  AND  comp(CurSoprDoc) ==  SpSopr2.cSopr
+  AND  word(1)          ==  SpSopr2.prMC
+  AND  SpSopr1.NRec     ==  SpSopr2.cSpSopr (noindex)
+
+  AND SpSopr1.cMcUsl    == KatMC1.NRec
+  AND SpSopr1.cParty    == KatParty1.NRec
+
+  AND SpSopr2.cMcUsl    == KatMC2.NRec
+  AND SpSopr2.cParty    == KatParty2.NRec
+
+  AND SpSopr1.VidSopr   == SpDocNal1.TipDoc
+  AND SpSopr1.NRec      == SpDocNal1.cSpDoc
+
+  AND SpSopr1.VidSopr   == SpDocNal_S1.TipDoc
+  AND SpSopr1.NRec      == SpDocNal_S1.cSpDoc
+  AND Param_NrecNal    == SpDocNal_S1.cNalog
+))
+  bounds KatSoprOnSpSpr = KatSopr.NRec    == SpSopr.cSopr
+  bounds KatSoprOnAktOnPer = KatSopr.NRec    == SpSopr1.cSopr
+;
+
+//******************************************************************************
+const
+  idVipInfo = '&VIP[Obj: "VipNP"]';
+  idVipTag  = 'VipNP';
+end;
+
+var itExtAttr : iExtAttr;
+
+//******************************************************************************
+
+Function GetInfo: string;
+{
+  GetInfo := 'Обработка спецификации накладных/актов';
+}
+
+//******************************************************************************
+
+Function ParamGen: string;
+{
+   var s: string;
+   s := '';
+   PackFields;
+
+
+   case Param_KolMode of
+     //0: s := s + 'Расчет:Оплаченное]';
+     1: s := s + '[Расчет:Фактическое]';
+   end;
+
+   case Param_Result of
+   //0: s := s+'[Рез: СумСпец]';    // по умолчанию будет сумма по спецификации
+     1: s := s + '[Рез:БезНалогов]';
+     2: s := s + '[Рез:Налоги]';
+     3: s := s + '[Рез:Кол]';
+   end;
+
+   if ( trim(Param_CountModeDop) <> '' AND Param_AllStakes = 1 AND (Param_Result = 2 or Param_Result = 5)  )
+     s := s + '[Налог:' + '"' + trim(Param_CountModeDop) + '"]';
+
+   if(Param_CountModeDop <> '' AND Param_AllStakes = 0 AND (Param_Result = 2 or Param_Result = 5))
+     s := s + '[Налог:' + '"' + trim(Param_CountModeDop) + '_' + trim(to_char(Param_Stake, 5, 2)) +'"]';
+
+   if ( trim(Param_GrNalMask)<>'' )
+     s := s + '[ГрНал:"'+ trim(Param_GrNalMask) + '"]';
+
+   if ( trim(Param_AttrNrec)<>0 )
+     s := s + '[Атр:"'+ trim(AttrNam.Name) + '"]';
+
+   ParamGen := s;
+}
+
+//******************************************************************************
+
+Procedure ParamParser;
+{
+   var s: string;
+   var i: longint;
+
+   TxoDebugMsg(CurhTxo, idVipTag, ' =============================================================================== ');
+
+   // Значения параметров по умолчанию
+   Param_Result        := 0;
+   Param_KolMode       := 0;
+   Param_GrNalMask     := '';
+   Param_AllStakes     := 1;       // по всем ставкам данного налога
+   Param_Stake         := 0;       // процентная ставка налога
+   Param_CountModeDop  := '';
+   Param_NrecNal       := 0;
+
+   // 2 разбор параметров
+   For(i := 1; i<= TxoParamCount(CurHTxo); i := i+1)
+   {
+     case TxoParamName(CurHTxo, i) of
+      'РАСЧЕТ':
+        {
+          case TxoParamValue(CurHTxo, i) of
+            'ОПЛАЧЕННЫЕ': Param_KolMode := 0;
+            'ФАКТИЧЕСКОЕ' : Param_KolMode := 1;
+          end;
+        }
+
+      'РЕЗ':
+        {
+          case TxoParamValue(CurHTxo, i) of
+            'СУМСПЕЦ'    : Param_Result := 0;
+            'БЕЗНАЛОГОВ' : Param_Result := 1;
+            'НАЛОГИ'     : Param_Result := 2;
+            'КОЛ'        : Param_Result := 3;
+          end;
+        }
+
+      'ГРНАЛ'  :
+        {
+          Param_GrNalMask := TxoParamValue(CurHTxo, i);
+        }
+
+      'НАЛОГ':
+        {
+          // Сделан такой разбор потому, что может быть указан только один налог и ставка в фильтре
+          if (instr('_', TxoParamValue(CurHTxo, i)) = 0)
+          {
+            Param_AllStakes := 1;
+            Param_CountModeDop := SubStr(TxoParamValue(CurHTxo, i), 1, Length(TxoParamValue(CurHTxo, i)));
+
+            if (GetFirst KatNalog where ((Param_CountModeDop == KatNalog.Name)) = tsOk)
+              Param_NrecNal := KatNalog.NRec;
+          }
+          else
+          {
+            Param_AllStakes := 0;
+            Param_Stake := Double(SubStr(TxoParamValue(CurHTxo, i), instr('_', TxoParamValue(CurHTxo, i)) + 1, Length(TxoParamValue(CurHTxo, i))));
+            Param_CountModeDop := SubStr(TxoParamValue(CurHTxo, i), 1, instr('_', TxoParamValue(CurHTxo, i)) - 1);
+
+            if (GetFirst KatNalog where ((Param_CountModeDop == KatNalog.Name)) = tsOk)
+              Param_NrecNal := KatNalog.NRec;
+
+          }
+
+        }
+        'АТР' :
+        {
+          Param_AttrName := TxoParamValue(CurHTxo, i);
+          Param_AttrNrec := itExtAttr.AttrID(coSpSopr,  Param_AttrName);
+        }
+      end;
+
+      TxoDebugMsg(CurHTxo, idVipTag, 'Param '+string(i)+' of '+string(TxoParamCount(CurHTxo))+' ['+TxoParamName(CurHTxo,i)+':'+TxoParamValue(CurHTxo,i)+']');
+   }
+}
+//**************************************************************************
+
+Window winParam 'Параметры идентификатора' EscClose, DoAccept;
+  Show at (10, 5, 80, 20);
+TabbedSheet tbParam;
+
+Screen scParam 'Параметры';
+
+  Fields
+    ParamGen: Skip, {Font = {Bold = TRUE}}, Centered;
+    Param_KolMode   ('Количество - из спецификации накладной/ордера или согласно разноски накладной',,sci13EnEsc) :
+    [LIST 0 'оплаченное',
+          1 'фактическое'], protect;
+    Param_Result ('Результат', , sci13EnEsc):
+      [LIST 0 'Сумма по спецификации', 1 'Сумма по спецификации без налогов',
+      2 'Сумма налога(ов) по спецификации', 3 'Количество'], Protect;
+    Param_CountModeDop ('Дополнительный параметр результата', , sci13EnEsc):  nostatic, Protect, pickButton;
+    Param_AllStakes  ('[x] - расчет по всем ставкам данного налога', , sci1EnEsc): NoProtect;
+    Param_Stake      ('Процентная ставка налога', , sci1EnEsc): [5.2], nostatic, NoProtect;
+    Param_GrNalMask ('Маска на код группы налогов (#, ?, [abc], [!xyz])', , sci13EnEsc):
+      nostatic, NoProtect, pickButton;
+    [_AttrName]  if(isValid(#AttrNam),AttrNam.Name,'<атрибут>')    ('Название атрибута',,sci13EnEsc) : protect, pickbutton;
+
+<<
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Рассчитывать количество `.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Результат`           .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Налог`               .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  [.] по всем ставкам данного налога`           Ставка налога .@@@@@@@
+
+ `Группа налогов`      .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Обрабатывать атрибут`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+End;
+
+Screen scInfo 'Информация';
+  Table SoprHoz;
+<<
+  VipNP - Обработка спецификации накладных/актов
+
+  Назначение алгоритма:
+
+  Алгоритм "VipNP" позволяет получить суммы по спецификации накладной.
+
+  Параметры алгоритма:
+
+  "Рассчитывать количество" - устанавливает исходя из какого количества
+  рассчитывать суммы по параметру "Результат".
+
+  Форма записи [Кол: КодРеквизита]. Перечень
+  возможных значений параметра результат приведен ниже:
+
+  без параметра - суммы рассчитываются исходя из оплаченного количества
+  [Кол: Фактическое] - суммы рассчитываются исходя из фактического количества
+
+  "Результат" - выдает один из числовых реквизитов спецификации.
+  Форма записи [Рез: КодРеквизита]. Перечень
+  возможных значений параметра результат приведен ниже:
+
+  без параметра - выдает сумму по спецификации акта
+  [Рез: БезНалогов] - выдает сумму по спецификации акта без налогов
+  [Рез: Кол]    - выдает количество из спецификации накладной/акта
+  [Рез: Налоги] - выдает налоги (если указан данный параметр, то доступен
+  фильтр по коду и по ставке налога. Форма записи:
+    [Налог: Код_Ставка] - означает фильтр и по коду и по ставке.
+    [Налог: Код] - означает фильтр только по коду (выдает все ставки).
+
+  Параметр "Группа налогов" - означает фильтр по группе налогов с которой
+  связана позиция спецификации. При проверке фильтра маска сопоставляется
+  с кодом группы налога. Синтаксис масок ТХО см. в документации.
+
+  Форма записи: [ГрНал: "маска"]
+
+  "Обрабатывать атрибут" - указывает наименование внешнего атрибута,
+  аналитику из которого необходимо получить в режиме "Аналитика из внешнего атрибута"
+
+  Форма записи: [Атр: "Наименование внешнего атрибута"]
+
+  Режимы формирования аналитики:
+
+  1. Циклическая обработка
+  Режим <авто - "аналитика"> - выдает значения аналитики из спецификации:
+  - Материальные ценности
+  - Услуги
+  - Группы МЦ
+  - Группы услуг
+  - Партии МЦ
+  - Группы партий МЦ
+  - Объекты строительства
+  - Статьи затрат объектов стороительства
+
+  "Режим 0" выдает значения аналитики "Организации" и "Группы оргазнизаций"
+  из приходной накладной
+  
+  При обработке спецификации Акта на перемещение между объектами
+  аналитика извлекается либо в режиме <авто - "аналитика">, либо:
+  для аналитики "Откуда" - в пользовательском режиме 1
+  для аналитики "Куда"   - в пользовательском режиме 2
+
+  Режимы работают, если указан циклический алгоритм VipNP и соответствующая
+  аналитика указана для циклической обработки:
+
+  2. Нециклическая обработка
+  Режим <авто - "аналитика"> - Выдает значения соответствующей аналитики
+  из документа без необходимости указывать алгоритм и признаки циклической
+  обработки.
+  Действует для каталогов аналитики:
+  - Организации
+>>
+End;
+End;
+
+//******************************************************************************
+
+Procedure MyCheckField;
+{
+  if( Param_Result = 2)
+  {
+    SetFieldOption(#Param_CountModeDop, ofSelectable);
+    ParamGen;
+  }
+  else
+  {
+    Param_CountModeDop := '';
+    Param_AllStakes := 1;
+    ClearFieldOption(#Param_CountModeDop, ofSelectable);
+    ParamGen;
+  }
+
+  if (Param_CountModeDop<>'' AND (Param_Result = 2))
+  {
+    SetFieldOption(#Param_AllStakes, ofSelectable);
+  }
+  else
+  {
+    Param_AllStakes := 1;
+    ClearFieldOption(#Param_AllStakes, ofSelectable);
+  }
+
+  // ставка налога доступна, если не стоит птичка "по всем ставкам"
+  if (Param_AllStakes = 1)
+  {
+    Param_Stake := 0;
+    ClearFieldOption(#Param_Stake, ofSelectable);
+  }
+  else
+    SetFieldOption(#Param_Stake, ofSelectable);
+
+  SetFieldOption(#Param_GrNalMask, ofSelectable);
+
+}
+
+//******************************************************************************
+
+TableEvent table SoprHoz
+cmCheckField:
+{
+  MyCheckField;
+}
+
+cmDelOnProtect:
+{
+  case CurField of
+    #Param_CountModeDop   : set Param_CountModeDop  := '';
+    #Param_Result         : set Param_Result        := 0;
+    #_AttrName            :
+    {
+      set Param_AttrNrec  := 0;
+      set Param_AttrName  := '';
+    }
+  end;
+
+  MyCheckField;
+  RereadRecord;
+}
+
+cmPick:
+{
+  case CurField of
+
+    #Param_GrNalMask:
+    {
+      var tmpCGrNal: comp;
+      RunInterface('GetGrNal', tmpCGrNal, word(0)); // word(0) - для товаров, услуг
+      if (GetFirst GrNal where ((tmpCGrNal == GrNal.NRec)) = tsOk)
+        {
+          Param_GrNalMask := GrNal.Kod;
+        }
+      RereadRecord;
+    }
+
+    #Param_CountModeDop:
+    {
+      var tmpNalNrec: comp;
+      tmpNalNrec := 0; // чтобы не открывался для редактирования
+      RunInterface('GetNalog', tmpNalNrec);
+
+      if ( tmpNalNrec <> 0 )
+      {
+        if (GetFirst KatNalog where ((tmpNalNrec == KatNalog.NRec)) = tsOk)
+        {
+          Param_CountModeDop := KatNalog.Name;
+          RereadRecord;
+        }
+      }
+
+    }
+
+    #_AttrName:
+    {
+      Runinterface('PickAttrNam',Param_AttrNrec,coSpSopr);
+      Param_AttrName := AttrNam.Name;
+    }
+  end;
+
+  MyCheckField;
+}
+End;
+
+HandleEvent
+cmCheckField:
+{
+  MyCheckField;
+}
+
+cmInit:
+{
+  SetWindowTitle(winParam, 'Параметры ' + idVipInfo);
+  MyCheckField;
+}
+End;
+End;
+
+//******************************************************************************
+
+Function ParamMaster: string;
+{
+  ParamMaster := '';
+
+  if( RunWindowModal(winParam) = cmDefault )
+  {
+    PackFields;
+    ParamMaster := ParamGen;
+  }
+}
+
+//******************************************************************************
+// Вспомогательные функции
+
+//Извлечение аналитики по объектам строительства
+function GetObjZatrUKS: boolean;
+{
+  var i: integer;
+
+  GetObjZatrUKS := false;
+
+  if (GetFirst SpecMTR <> tsOk)
+    Exit;
+  else
+   if (GetFirst SaldTune  = tsOk)
+   {
+     For(i := 1; i<= 9; i := i+1)
+     {
+       if (SaldTune.wType = 1) and ((cgKau_ObjBuild = SaldTune.wKau[i]) or  (cgKau_StZatr = SaldTune.wKau[i]))
+       {
+         TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_ObjBuild, SpecMTR.cObj);
+         TxoBodyAddKau(CurHTxo, wFlKau_MTR, cgKau_ObjBuild, SpecMTR.cObj);
+
+         if (SpecMTR.cKau[i] <> 0)
+         {
+           TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_StZatr, SpecMTR.cKau[i]);
+           TxoBodyAddKau(CurHTxo, wFlKau_MTR, cgKau_StZatr, SpecMTR.cKau[i]);
+         }
+
+         GetObjZatrUKS := true;
+       }
+       else
+       {
+         if (SpecMTR.cKau[i] <> 0)
+           TxoBodyAddKau(CurHTxo, wFlKau_MTR, SaldTune.wKau[i], SpecMTR.cKau[i]);
+
+         if (not GetObjZatrUKS)
+           TxoBodyAddKau(CurHTxo, wFlKau_MTR, SaldTune.wObj, SpecMTR.cObj);
+       }
+     }
+
+     GetObjZatrUKS := true;
+   }
+}
+
+//Извлечение аналитики по объектам строительства
+function GetObjZatrUKSAktOnPer: boolean;
+{
+  var i: integer;
+
+  GetObjZatrUKSAktOnPer := false;
+
+  if (GetFirst SpecMTR1 = tsOk)
+   if (GetFirst SaldTune1  = tsOk)
+   {
+     For(i := 1; i<= 9; i := i+1)
+     {
+       if (SaldTune1.wType = 1) and ((cgKau_ObjBuild = SaldTune1.wKau[i]) or  (cgKau_StZatr = SaldTune1.wKau[i]))
+       {
+         TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_ObjBuild, SpecMTR1.cObj);
+         TxoBodyAddKau(CurHTxo, wFlKau_Mode1, cgKau_ObjBuild, SpecMTR1.cObj);
+
+         if (SpecMTR1.cKau[i] <> 0)
+         {
+           TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_StZatr, SpecMTR1.cKau[i]);
+           TxoBodyAddKau(CurHTxo, wFlKau_Mode1, cgKau_StZatr, SpecMTR1.cKau[i]);
+         }
+
+         GetObjZatrUKSAktOnPer := true;
+       }
+       else
+       {
+         if (SpecMTR1.cKau[i] <> 0)
+           TxoBodyAddKau(CurHTxo, wFlKau_Mode1, SaldTune1.wKau[i], SpecMTR1.cKau[i]);
+
+         if (not GetObjZatrUKSAktOnPer)
+           TxoBodyAddKau(CurHTxo, wFlKau_Mode1, SaldTune1.wObj, SpecMTR1.cObj);
+       }
+     }
+
+   }
+
+  if (GetFirst SpecMTR2 <> tsOk)
+    Exit;
+  else
+   if (GetFirst SaldTune2  = tsOk)
+   {
+     For(i := 1; i<= 9; i := i+1)
+     {
+       if (SaldTune2.wType = 1) and ((cgKau_ObjBuild = SaldTune2.wKau[i]) or  (cgKau_StZatr = SaldTune2.wKau[i]))
+       {
+         TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_ObjBuild, SpecMTR2.cObj);
+         TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_ObjBuild, SpecMTR2.cObj);
+
+         if (SpecMTR2.cKau[i] <> 0)
+         {
+           TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_StZatr, SpecMTR2.cKau[i]);
+           TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_StZatr, SpecMTR2.cKau[i]);
+         }
+
+         GetObjZatrUKSAktOnPer := true;
+       }
+       else
+       {
+         if (SpecMTR2.cKau[i] <> 0)
+           TxoBodyAddKau(CurHTxo, wFlKau_Mode2, SaldTune2.wKau[i], SpecMTR2.cKau[i]);
+
+         if (not GetObjZatrUKSAktOnPer)
+           TxoBodyAddKau(CurHTxo, wFlKau_Mode2, SaldTune2.wObj, SpecMTR2.cObj);
+       }
+     }
+
+   }
+
+   GetObjZatrUKSAktOnPer := true;
+}
+
+
+Function fSumSpDocNal(var _SumNalR, _SumNalV: double ): boolean;
+{
+  fSumSpDocNal := FALSE;
+  _SumNalR     := 0;
+  _SumNalV     := 0;
+
+  if (Param_NrecNal = 0 )
+  {
+    _LOOP SpDocNal
+    {
+      _SumNalR := _SumNalR + SpDocNal.Summa;
+      _SumNalV := _SumNalV + SpDocNal.SumVal;
+    }
+  }
+  else
+  {
+    _LOOP SpDocNal_S
+    {
+      if  (Param_AllStakes = 1)
+      {
+        _SumNalR := _SumNalR + SpDocNal_S.Summa;
+        _SumNalV := _SumNalV + SpDocNal_S.SumVal;
+      }
+      else
+      {
+        if( Param_Stake = SpDocNal.Nalog)
+        {
+          _SumNalR := _SumNalR + SpDocNal_S.Summa;
+          _SumNalV := _SumNalV + SpDocNal_S.SumVal;
+        }
+      }
+    }
+  }
+
+  fSumSpDocNal := TRUE;
+}
+
+//******************************************************************************
+Function fSumSpDocNalAktPer(var _SumNalR, _SumNalV: double ): boolean;
+{
+  fSumSpDocNalAktPer := FALSE;
+  _SumNalR     := 0;
+  _SumNalV     := 0;
+
+  if (Param_NrecNal = 0 )
+  {
+    _LOOP SpDocNal1
+    {
+      _SumNalR := _SumNalR + SpDocNal1.Summa;
+      _SumNalV := _SumNalV + SpDocNal1.SumVal;
+    }
+  }
+  else
+  {
+    _LOOP SpDocNal_S1
+    {
+      if  (Param_AllStakes = 1)
+      {
+        _SumNalR := _SumNalR + SpDocNal_S1.Summa;
+        _SumNalV := _SumNalV + SpDocNal_S1.SumVal;
+      }
+      else
+      {
+        if( Param_Stake = SpDocNal1.Nalog)
+        {
+          _SumNalR := _SumNalR + SpDocNal_S1.Summa;
+          _SumNalV := _SumNalV + SpDocNal_S1.SumVal;
+        }
+      }
+    }
+  }
+
+  fSumSpDocNalAktPer := TRUE;
+}
+
+//******************************************************************************
+Function fGetCycleAnalitSpSopr: boolean;
+{
+  fGetCycleAnalitSpSopr := FALSE;
+  TxoBodyClear(CurHTxo);
+
+  // Заполнение аналитики по внешним атрибутам
+
+  _loop AttrVal
+  {
+    if (Getfirst AttrNam where (( AttrVal.cAttrNam == AttrNam.nRec)) = tsOk )
+    {
+      if (AttrNam.AttrType = 5 and AttrNam.rObject <> 0)
+        TxoBodyAddKau(CurHTxo, wFlKau_AnVneshAttr, AttrNam.rObject, AttrVal.vComp);
+    }
+  }
+
+  _loop AttrValSp
+  {
+    if (Getfirst AttrNam where (( AttrValSp.cAttrNam == AttrNam.nRec)) = tsOk )
+    {
+      if (AttrNam.AttrType = 5 and AttrNam.rObject <> 0)
+        TxoBodyAddKau(CurHTxo, wFlKau_AnVneshAttr, AttrNam.rObject, AttrValSp.vComp);
+    }
+  }
+
+  if( GetFirst AttrNam where (( Param_AttrNrec == AttrNam.nRec)) = tsOk )
+  {
+    TxoBodyAddKau(CurHTxo, wFlKau_AnVneshAttr, AttrNam.rObject, itExtAttr.coGetAttr(coSpSopr, SpSopr.Nrec,Param_AttrName));
+  }
+
+  if(SpSopr.prMC = 1)
+   {
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMC, SpSopr.cMcUsl); // Материальные ценности
+
+     if( GetFirst FastFirstRow KatMc = tsOk )
+     {
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_GroupMC, KatMc.cGroupMC); //Группы МЦ
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_TypeMC, KatMc.cType); //Типы МЦ
+     }
+   }
+   else
+   {
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatUsl, SpSopr.cMcUsl); // Услуги
+
+     if( GetFirst FastFirstRow KatUsl = tsOk )
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_GroupUsl, KatUsl.cGroupUsl); // Группы услуг
+   }
+
+   //Заполнение аналитики по объектам строительства
+   GetObjZatrUKS;
+
+   TxoBodyAddKau(CurHTxo, wFlKau_Mode0, cgKau_KatOrg, KatSoprPrih.cOrg);
+
+   _loop KatOrgDescr where ((KatSoprPrih.cOrg == KatOrgDescr.cRec))
+     if (KatOrgDescr.cGroup <> 0)
+     {
+       TxoBodyAddKau(CurHTxo, wFlKau_Mode0, cgKau_GrOrg, KatOrgDescr.cGroup);
+       break;
+     }
+
+   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatParty, SpSopr.cParty); // Партии МЦ
+   TxoBodyAddKau(CurHTxo, wFlKau_Auto, wFlCycle_SpSopr, SpSopr.NRec); // Для извлечения SpSopr.Nrec при помощи SoprDoc
+
+   if( GetFirst FastFirstRow KatParty = tsOk )
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_GroupParty, KatParty.cGroupParty); // Группы партий МЦ
+
+   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KlVal, SpSopr.cVal); // Валюты
+
+   if ( KatSopr.cPodrFrom = 0 ) then
+   {
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatPodr, KatSopr.cPodrTo);
+
+     if (IsValid(#KatMol))
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_Persons, KatMol.cPersons); // Сотрудник
+
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMOL, KatSopr.cMolTo);
+   }
+   else if ( KatSopr.cPodrTo = 0 ) then
+   {
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatPodr, KatSopr.cPodrFrom);
+
+     if (IsValid(#KatMol_S))
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_Persons, KatMol_S.cPersons); // Сотрудник
+
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMOL, KatSopr.cMolFrom); // МОЛ
+   }
+
+   fGetCycleAnalitSpSopr := TRUE;
+}
+
+//******************************************************************************
+Function fGetCycleAnAktOnPerem: boolean;
+{
+  fGetCycleAnAktOnPerem := FALSE;
+  TxoBodyClear(CurHTxo);
+
+  if( GetFirst FastFirstRow KatMc1 = tsOk )
+  {
+    TxoBodyAddKau(CurHTxo, wFlKau_Mode1, cgKau_GroupMC, KatMc1.cGroupMC); //Группы МЦ
+    TxoBodyAddKau(CurHTxo, wFlKau_Mode1, cgKau_TypeMC, KatMc1.cType); //Типы МЦ
+  }
+
+  TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMC, SpSopr1.cMcUsl); // МЦ
+
+  if( GetFirst FastFirstRow KatMc2 = tsOk )
+  {
+    TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_GroupMC, KatMc2.cGroupMC); //Группы МЦ
+    TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_TypeMC, KatMc2.cType); //Типы МЦ
+    TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_KatMC, SpSopr2.cMcUsl); // МЦ
+  }
+
+   //Заполнение аналитики по объектам строительства
+   GetObjZatrUKSAktOnPer;
+
+   TxoBodyAddKau(CurHTxo, wFlKau_Mode1, cgKau_KatParty, SpSopr1.cParty); // Партии МЦ
+   TxoBodyAddKau(CurHTxo, wFlKau_Mode1, wFlCycle_SpSopr, SpSopr1.NRec); // Для извлечения SpSopr.Nrec при помощи SoprDoc
+
+   TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_KatParty, SpSopr2.cParty); // Партии МЦ
+
+   if( GetFirst FastFirstRow KatParty1 = tsOk )
+     TxoBodyAddKau(CurHTxo, wFlKau_Mode1, cgKau_GroupParty, KatParty1.cGroupParty); // Группы партий МЦ
+
+   if( GetFirst FastFirstRow KatParty2 = tsOk )
+     TxoBodyAddKau(CurHTxo, wFlKau_Mode2, cgKau_GroupParty, KatParty2.cGroupParty); // Группы партий МЦ
+
+   TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KlVal, SpSopr1.cVal); // Валюты
+
+   if ( KatSopr.cPodrFrom = 0 ) then
+   {
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatPodr, KatSopr.cPodrTo);
+
+     if (IsValid(#KatMol))
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_Persons, KatMol.cPersons); // Сотрудник
+
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMOL, KatSopr.cMolTo);
+   }
+   else if ( KatSopr.cPodrTo = 0 ) then
+   {
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatPodr, KatSopr.cPodrFrom);
+
+     if (IsValid(#KatMol_S))
+       TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_Persons, KatMol_S.cPersons); // Сотрудник
+
+     TxoBodyAddKau(CurHTxo, wFlKau_Auto, cgKau_KatMOL, KatSopr.cMolFrom); // МОЛ
+   }
+
+   fGetCycleAnAktOnPerem := TRUE;
+}
+
+//******************************************************************************
+// Функции расчета суммы
+
+Function fSumSpSopr(var GetSumR, GetSumV, GetKolvo: double; var cVal: comp): boolean;
+{
+    var Kolvo    : double;
+    var koef     : double;
+
+    var SumNalR  : double;
+    var SumNalV  : double;
+    var SumNalVV : double;
+
+    fSumSpSopr := FALSE;
+
+    case Param_KolMode of
+      1:
+      {
+        Kolvo := SpSopr.KolFact;
+        koef := SpSopr.KolFact/SpSopr.KolOpl;
+      }
+
+      0:
+      {
+        Kolvo := SpSopr.KolOpl;
+        koef := 1;
+      }
+    end;
+
+    case Param_Result of
+
+    0: // Сумма спецификации с налогами
+    {
+      cVal    := KatSopr.cVAL;
+      GetSumR := 0;
+      GetSumV := 0;
+      GetKolvo:= 0;
+
+      if ( KatSopr.VhodNal <> 1 ) then // Если налоги не входят
+      {
+        GetSumR := (SpSopr.Price  + (SpSopr.SumNDS  / SpSopr.KolOpl))*Kolvo;
+        GetSumV := (SpSopr.VPrice + (SpSopr.SumVNDS / SpSopr.KolOpl))*Kolvo;
+        GetKolvo:= Kolvo;
+      }
+      else
+      {
+        GetSumR := SpSopr.Price  * Kolvo;
+        GetSumV := SpSopr.VPrice * Kolvo;
+        GetKolvo:= Kolvo;
+      }
+
+      fSumSpSopr := TRUE;
+    }
+
+    1: // Сумма без налогов
+    {
+      cVal   := KatSopr.cVAL;
+
+      if ( KatSopr.VhodNal <> 1 ) then
+      {
+        GetSumR := SpSopr.Price * Kolvo;
+        GetSumV := SpSopr.VPrice * Kolvo;
+        GetKolvo:= Kolvo;
+      }
+      else
+      {
+        GetSumR := (SpSopr.Price - (SpSopr.SumNDS  / SpSopr.KolOpl))* Kolvo;
+        GetSumV := (SpSopr.VPrice - (SpSopr.SumVNDS / SpSopr.KolOpl))* Kolvo;
+        GetKolvo:= Kolvo;
+      }
+    }
+
+    2:   // налоги
+    {
+      cVal   := KatSopr.cVAL;
+      GetSumR  := 0;
+      GetSumV  := 0;
+      GetKolvo := Kolvo;
+
+      if(Param_NrecNal  = 0) // Если нет фильтра по налогам
+      {
+        GetSumR := SpSopr.SumNDS * koef;
+        GetSumV := SpSopr.SumVNDS * koef;
+      }
+      else   // Если есть фильтр по коду налога
+      {
+        if(Param_AllStakes = 1) // Если нет фильтра по ставке налога
+          fSumspDocNal(GetSumR, GetSumV);
+        else // Если есть фильтр и по коду налога и по ставке налога
+          fSumspDocNal(GetSumR, GetSumV);
+
+        GetSumR := GetSumR * koef;
+        GetSumV := GetSumV * koef;
+      }
+
+      if (GetSumR <> 0 OR GetSumV <> 0)
+        GetKolvo := Kolvo;
+      else
+        GetKolvo := 0;
+
+    }
+
+    3:
+    {
+      cVal     := KatSopr.cVAL;
+      GetSumR  := Kolvo;
+      GetSumV  := Kolvo;
+      GetKolvo := Kolvo;
+    }
+
+    end;
+}
+
+// Функции расчета суммы по акту на переоценку
+Function fSumSpSoprAktOnPer(var GetSumR, GetSumV, GetKolvo: double; var cVal: comp): boolean;
+{
+    var Kolvo    : double;
+    var koef     : double;
+
+    var SumNalR  : double;
+    var SumNalV  : double;
+    var SumNalVV : double;
+
+    fSumSpSoprAktOnPer := FALSE;
+
+    case Param_KolMode of
+      1:
+      {
+        Kolvo := SpSopr1.KolFact;
+        koef := SpSopr1.KolFact/SpSopr1.KolOpl;
+      }
+
+      0:
+      {
+        Kolvo := SpSopr1.KolOpl;
+        koef := 1;
+      }
+    end;
+
+    case Param_Result of
+
+    0: // Сумма спецификации с налогами
+    {
+      cVal    := KatSopr.cVAL;
+      GetSumR := 0;
+      GetSumV := 0;
+      GetKolvo:= 0;
+
+      if ( KatSopr.VhodNal <> 1 ) then // Если налоги не входят
+      {
+        GetSumR := (SpSopr1.Price  + (SpSopr1.SumNDS  / SpSopr1.KolOpl))*Kolvo;
+        GetSumV := (SpSopr1.VPrice + (SpSopr1.SumVNDS / SpSopr1.KolOpl))*Kolvo;
+        GetKolvo:= Kolvo;
+      }
+      else
+      {
+        GetSumR := SpSopr1.Price  * Kolvo;
+        GetSumV := SpSopr1.VPrice * Kolvo;
+        GetKolvo:= Kolvo;
+      }
+
+      fSumSpSoprAktOnPer := TRUE;
+    }
+
+    1: // Сумма без налогов
+    {
+      cVal   := KatSopr.cVAL;
+
+      if ( KatSopr.VhodNal <> 1 ) then
+      {
+        GetSumR := SpSopr1.Price * Kolvo;
+        GetSumV := SpSopr1.VPrice * Kolvo;
+        GetKolvo:= Kolvo;
+      }
+      else
+      {
+        GetSumR := (SpSopr1.Price - (SpSopr1.SumNDS  / SpSopr1.KolOpl))* Kolvo;
+        GetSumV := (SpSopr1.VPrice - (SpSopr1.SumVNDS / SpSopr1.KolOpl))* Kolvo;
+        GetKolvo:= Kolvo;
+      }
+
+      fSumSpSoprAktOnPer := TRUE;
+    }
+
+    2:   // налоги
+    {
+      cVal   := KatSopr.cVAL;
+      GetSumR  := 0;
+      GetSumV  := 0;
+      GetKolvo := Kolvo;
+
+      if(Param_NrecNal  = 0) // Если нет фильтра по налогам
+      {
+        GetSumR := SpSopr1.SumNDS * koef;
+        GetSumV := SpSopr1.SumVNDS * koef;
+      }
+      else   // Если есть фильтр по коду налога
+      {
+        if(Param_AllStakes = 1) // Если нет фильтра по ставке налога
+          fSumSpDocNalAktPer(GetSumR, GetSumV);
+        else // Если есть фильтр и по коду налога и по ставке налога
+          fSumSpDocNalAktPer(GetSumR, GetSumV);
+
+        GetSumR := GetSumR * koef;
+        GetSumV := GetSumV * koef;
+      }
+
+      if (GetSumR <> 0 OR GetSumV <> 0)
+        GetKolvo := Kolvo;
+      else
+        GetKolvo := 0;
+
+      fSumSpSoprAktOnPer := TRUE;
+
+    }
+
+    3:
+    {
+      cVal     := KatSopr.cVAL;
+      GetSumR  := Kolvo;
+      GetSumV  := Kolvo;
+      GetKolvo := Kolvo;
+
+      fSumSpSoprAktOnPer := TRUE;
+    }
+
+    end;
+}
+
+//******************************************************************************
+// Функции циклов по таблицам
+Function fCycleSpSopr: boolean;  // Цикл по SpSopr
+{
+  var SumR, SumV, Kol: double;
+  var Val: comp;
+
+  SumR := 0;
+  SumV := 0;
+  Kol  := 0;
+  Val  := 0;
+
+  PushBounds (tbKatSoprOnSpSpr);
+
+  _LOOP SpSopr
+  {
+    fGetCycleAnalitSpSopr;
+
+    if ( if(Param_GrNalMask = '', TRUE, matchesmask(if(IsValid(#GrNal), GrNal.Kod, ''), Param_GrNalMask)) )//GetKodGrNal(SpSopr.VidSopr, SpSopr.NRec)
+    {
+      fSumSpSopr(SumR, SumV, Kol, Val);
+
+      // Добавление суммы
+      TxoBodySetSum(CurHTxo, SumR, 0, 0);
+      TxoBodySetSumVal(CurHTxo, SumV, Val);
+      TxoBodySetSumKol (CurHTxo, Kol, SpSopr.cOtpEd);
+
+      TxoBodyInsert(CurHTxo);
+
+      TxoDebugMsg(CurhTxo, idVipTag, '');
+      TxoDebugMsg(CurhTxo, idVipTag, '  Начисленная сумма оплаты в НДЕ   : '+String(SumR) );
+      TxoDebugMsg(CurhTxo, idVipTag, '  Начисленная сумма оплаты в валюте: '+String(PGetAnyCurrency(Val, SumV, CurDatOb, CurValut)) );
+      TxoDebugMsg(CurhTxo, idVipTag, '');
+    }
+
+  }
+
+  PopBounds (tbKatSoprOnSpSpr);
+  fCycleSpSopr := TRUE;
+}
+
+//******************************************************************************
+// Функции циклов по таблицам
+Function fCycleAktOnPer: boolean;  // Цикл по SpSopr Акта на перемещение между объектами
+{
+  var SumR, SumV, Kol: double;
+  var Val: comp;
+
+  SumR := 0;
+  SumV := 0;
+  Kol  := 0;
+  Val  := 0;
+
+  PushBounds (tbKatSoprOnAktOnPer);
+
+  _LOOP SpSopr1
+  {
+    fGetCycleAnAktOnPerem;
+
+    fSumSpSoprAktOnPer(SumR, SumV, Kol, Val);
+
+    // Добавление суммы
+    TxoBodySetSum(CurHTxo, SumR, 0, 0);
+    TxoBodySetSumVal(CurHTxo, SumV, Val);
+    TxoBodySetSumKol (CurHTxo, Kol, SpSopr1.cOtpEd);
+
+    TxoBodyInsert(CurHTxo);
+
+    TxoDebugMsg(CurhTxo, idVipTag, '');
+    TxoDebugMsg(CurhTxo, idVipTag, '  Начисленная сумма оплаты в НДЕ   : '+String(SumR) );
+    TxoDebugMsg(CurhTxo, idVipTag, '  Начисленная сумма оплаты в валюте: '+String(PGetAnyCurrency(Val, SumV, CurDatOb, CurValut)) );
+    TxoDebugMsg(CurhTxo, idVipTag, '');
+
+  }
+
+  PopBounds (tbKatSoprOnAktOnPer);
+  fCycleAktOnPer := TRUE;
+}
+
+//******************************************************************************
+Procedure MainProc;
+{
+   var wTableSource    : word;
+
+   // перед началом расчета востановить оригинальные огарничения на SpSopr
+   PopBounds(tnSpSopr);
+
+   TxoBodyClear(CurHTxo);
+
+   if (GetFirst KatSopr <> tsOk)
+   {
+     TxoDebugMsg(CurhTxo, idVipTag, '  Документ не найден...');
+     Exit;
+   }
+
+   case Param_Result of
+     0, 1, 2, 3: // Обработка спецификации накладных
+     {
+       case CurTiDkGal of
+         632:
+           fCycleAktOnPer; // Цикл по SpSopr Акта на перемещение между объектами
+         else
+           fCycleSpSopr; // Цикл по SpSopr
+       end;
+
+     }
+   end;
+}
+
+//******************************************************************************
+
+Procedure StoreCycles(hTxo: longint; buf: TTxoApiInfoDoc);
+{
+  TxoAllowRecallStoreCycles(hTxo);
+
+  CurHTxo    := hTxo;
+  CurTiDkGal := buf.TiDkGal;
+  CurSoprDoc := buf.cSoprDoc;
+  CurSoprHoz := buf.cSoprHoz;
+  CurDatOb   := buf.DatOb;
+  CurValut   := buf.cValut;
+
+  ParamParser;
+  InitGetCur;
+  MainProc;
+  DoneGetCur;
+}
+
+End.

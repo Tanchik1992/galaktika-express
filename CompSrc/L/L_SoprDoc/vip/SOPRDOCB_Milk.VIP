@@ -1,0 +1,1048 @@
+
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 8.1 - Логистика - снабжение
+// Накладная на прием молочного сырья
+//********************************************************************************
+
+#define _SOPRDOCB_VIP
+
+#include SoprDocB.Vih
+#include SoprDocB_Milk.vih
+#include oEdIzm.vih
+
+//******************************************************************************
+
+Interface SoprDocB_Milk 'Список накладных на прием молочного сырья' EscClose, Cyan;
+
+#include mlyako.inc
+
+//******************************************************************************
+HideFormats scrHeader, scrExtendetInfo, brbyName, brSopUsl, brSelect;
+//******************************************************************************
+#include oEdIzm.var
+
+Var
+  dPokaz
+          : array [1..8] of double;
+  RefPokaz
+          : array [1..8] of comp;
+
+Create view
+
+Var
+  Driver
+          : string[80];
+  pMarRel
+          : comp;
+
+As select
+//------------------------------------------------------------------------------
+  _DateTime1( TTNDoc.dPunRBeg, TTNDoc.tPunRBeg )
+    ( FieldName = dtPunRBeg )
+//------------------------------------------------------------------------------
+, _DateTime1( TTNDoc.dPunREnd, TTNDoc.tPunREnd )
+    ( FieldName = dtPunREnd )
+//------------------------------------------------------------------------------
+, if ( IsValid(tnPrKachvo), 'проба сформирована', 'не сформирована')
+    ( FieldName = fProbKach )
+//------------------------------------------------------------------------------
+, if ( KatSopr.cPayment = coGetTune('Oper.Buy.NaklPrMS.FormPhys'),  Trim(sGetTune('Oper.Buy.NaklPrMS.QualityPhys')),
+    if ( KatSopr.cPayment = coGetTune('Oper.Buy.NaklPrMS.FormHoz'), Trim(sGetTune('Oper.Buy.NaklPrMS.QualityHoz')), ''))
+      ( FieldName = sTestName )
+//------------------------------------------------------------------------------
+, dPokaz[1]
+    ( FieldName = fPokaz1 )
+//------------------------------------------------------------------------------
+, dPokaz[2]
+    ( FieldName = fPokaz2 )
+//------------------------------------------------------------------------------
+, dPokaz[3]
+    ( FieldName = fPokaz3 )
+//------------------------------------------------------------------------------
+, dPokaz[4]
+    ( FieldName = fPokaz4 )
+//------------------------------------------------------------------------------
+, dPokaz[5]
+    ( FieldName = fPokaz5 )
+//------------------------------------------------------------------------------
+, dPokaz[6]
+    ( FieldName = fPokaz6 )
+//------------------------------------------------------------------------------
+, dPokaz[7]
+    ( FieldName = fPokaz7 )
+//------------------------------------------------------------------------------
+, dPokaz[8]
+    ( FieldName = fPokaz8 )
+//------------------------------------------------------------------------------
+From
+   GrPrice
+,  KachvoEx
+,  KatPayment KatPaymentF
+,  KatPokaz
+,  KatSort
+,  KatSort    KatSortPr
+,  KlPrice
+,  KnDriver
+,  MarRel
+,  MarPunkt   MarPunktR
+,  InfoPK
+,  Prices
+,  PrKachvo
+,  RezKontr
+,  SpProbe
+,  SpSortMC
+,  TsKachvo
+,  ValTest
+,  ValKontr
+,  ValKontr   ValKontr2
+
+where
+((
+      TTNDoc.cPunktR    ==  MarPunktR.NRec   //пункт разгрузки
+  AND TTNDoc.cDriver    ==  KnDriver.NRec    //код водителя
+
+  And word(2)           ==  PrKachvo.TipProba
+  And coKatMc           ==  PrKachvo.wTable
+  And SpSopr.cMcUsl     ==  PrKachvo.cOwner
+  And if(SpSopr.cParty = 0,
+         comp(1),
+         SpSopr.cParty) ==  PrKachvo.cAnVal3   (noindex)
+
+  // для проб
+  And word(0)           ==  KachvoEx.VidAtt
+  And toSpSopr          ==  KachvoEx.wTable
+  And SpSopr.nRec       ==  KachvoEx.cOwner
+  And toQualProbe       ==  KachvoEx.TypeObj
+
+  And PrKachvo.nRec     ==  SpProbe.cPrKach
+
+  And word(2)           ==  TsKachvo.TipTest
+  And coKatMc           ==  TsKachvo.wTable
+  And sTestName         ==  TsKachvo.Name
+  And SpSopr.cMcUsl     ==  TsKachvo.cOwner    (noindex)
+
+  And PrKachvo.nRec     ==  RezKontr.cKachvoPr
+  And SpSopr.cParty     ==  RezKontr.cParty    (noindex)
+  And SpSopr.cMcUsl     ==  RezKontr.cMc       (noindex)
+  And coKatMc           ==  RezKontr.wTable    (noindex)
+
+  And PrKachvo.cWork1   ==  KatSort.nRec
+
+  And GrPrice.nRec      ==  KlPrice.cGrPrice
+  And word(1)           ==  KlPrice.Status
+  And KatSopr.VhodNal   ==  KlPrice.VhodNal
+  And KatSopr.dSopr     >>= KlPrice.dBeg      (noindex)
+  And KatSopr.dSopr     <<= KlPrice.dEnd      (noindex)
+
+  And KlPrice.nRec      ==  Prices.cKlPrice
+  And SpSopr.cMcUsl     ==  Prices.cThing
+
+  And coPrices          ==  InfoPK.wTable
+  And Prices.nRec       ==  InfoPK.cOwner
+
+  And InfoPK.cwork1     ==  SpSortMC.nRec
+))
+;
+
+//*****************************************************************************
+// считываение показателей качества из теста
+Procedure GetValPokaz;
+Var
+  cPokaz: comp;
+  strPokaz: array [1..8] of tName;
+  i : word;
+{
+  strPokaz[1] := strPokaz1;
+  strPokaz[2] := strPokaz2;
+  strPokaz[3] := strPokaz3;
+  strPokaz[4] := strPokaz4;
+  strPokaz[5] := strPokaz5;
+  strPokaz[6] := strPokaz6;
+  strPokaz[7] := strPokaz7;
+  strPokaz[8] := strPokaz8;
+
+  if ( GetFirst RezKontr <> tsOk )
+    {
+      For (i := 1; i <= 8 ; i++)
+        {
+          set dPokaz[i] := 0;
+          RefPokaz[i]  := 0;
+        }
+
+      RescanPanel(#ValKontr);
+      Exit;
+    }
+
+  For (i := 1; i <= 8 ; i++)
+    {
+      cPokaz      := 0;
+      dPokaz[i]   := 0;
+      RefPokaz[i] := 0;
+
+      if ( GetFirst KatPokaz where (( strPokaz[i] == KatPokaz.Name )) = tsOk )
+        {
+          cPokaz := KatPokaz.nRec;
+
+          if ( GetFirst ValKontr where ((  RezKontr.nRec == ValKontr.cRezKontr
+                                       and cPokaz        == ValKontr.cKatPokaz (noindex)
+                                       )) = tsOk )
+            {
+              set dPokaz[i] := ValKontr.Value;
+              RefPokaz[i]   := ValKontr.NRec;
+            }
+        }
+    }
+
+  set SpSopr.KolOpl := SpSopr.KolFact*dPokaz[1]/3.4;
+
+  Update Current SpSopr;
+
+  CheckSumma(true);
+  procDocAutoCalcUsl;
+}
+
+//*****************************************************************************
+Procedure SetValPokaz(iNum: word);
+{
+  if ( GetFirst ValKontr where (( RefPokaz[iNum]  ==  ValKontr.nRec )) = tsOk )
+    {
+      set dPokaz[iNum]   := ExprFieldValue;
+      set ValKontr.Value := ExprFieldValue;
+
+      Update Current ValKontr;
+    }
+  else
+   {
+     Message('В пробе качества нет этого показателя.'#13 + 'Изменение показателя не допустимо.');
+     Exit;
+   }
+
+  if ( iNum = 1 )
+    {
+      if (isValid(#SpSopr))
+        {
+          set SpSopr.KolOpl  := SpSopr.KolFact * dPokaz[1] / 3.4;
+
+          SpSopr.ProcUb := 100 * (1 - SpSopr.KolOpl / SpSopr.KolFact);
+          Update current SpSopr;
+        }
+    }
+
+}
+//*****************************************************************************
+// функция пересчета цен по прайс-листу
+Function GetPriceMilk;
+{
+  var nRecGrPrice: comp;
+
+  nRecGrPrice  := coGetTune('Price.cGrPrice');
+
+  if ( SpSopr.cParty = comp(0) )
+    Exit;
+
+  if ( GetFirst GrPrice where (( nRecGrPrice == GrPrice.nRec )) = tsOk )
+    if ( GetFirst KlPrice = tsOk )
+      if ( GetFirst Prices = tsOk )
+        {
+          var Koef : double;
+          Koef := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+          _loop InfoPK
+            {
+              if ( PrKachvo.cWork1 = comp(0) )
+                Break;
+
+              if (PrKachvo.cWork1  =  SpSortMC.cKatSort)
+                {
+                  set SpSopr.Price  := ( Prices.Price + InfoPK.dbWork1 ) * Koef;
+                  SpSopr.VPrice  := ( Prices.SumVal + InfoPK.dbWork2) * Koef;
+                  SpSopr.rPrice  := SpSopr.Price;
+                  SpSopr.rVPrice := SpSopr.VPrice;
+
+                  Break;
+                }
+            }
+        }
+
+  CheckSumma(true);
+  procDocAutoCalcUsl;
+}
+//*****************************************************************************
+#doc
+  Редактирование накладной
+#end
+
+Window EditSopr EscClose;
+
+Panel pnHeader
+  Table KatSopr;
+
+Screen scrHeader_Milk ('',, sci178Esc);
+  Show (, , , 12);
+
+Fields
+//------------------------------------------------------------------------------
+  KatSopr.NSopr   ('Номер накладной. Вводится путем набора');
+//------------------------------------------------------------------------------
+  KatSopr.DSopr   ('Дата выписки накладной. Вводится путем набора'): [10, 'DD/MM/YYYY'];
+//------------------------------------------------------------------------------
+  KatNotesName    ('Статус документа', , sci1378Esc): protect, QuickChoice;
+//------------------------------------------------------------------------------
+  if (KatSopr.DOpr = Date(0, 0, 0), 'МЦ не оприходованы', DateToStr(KatSopr.DOpr, 'DD/MM/YYYY'))
+                ('Дата оприходования МЦ по накладной'): [10, 'DD/MM/YYYY'], skip, protect, Centered,
+                {font = {bold = TRUE}};
+//------------------------------------------------------------------------------
+  KatOrg.Name     ('Организация-контрагент. Выбирается по <F3>', , sci1378Esc): QuickChoice, Protect,
+                        {Font = {BackColor = if (KatSopr.cOrgBase = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  KatOrg.Code     ('Внутренний учетный номер контрагента.', , sci1378Esc): Protect, QuickChoice,
+                        {Font = {BackColor = if (KatSopr.cOrgBase = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  KatOrg.UNN      ('УНН/ИНН контрагента.', , sci1378Esc): protect, QuickChoice,
+                        {Font = {BackColor = if (KatSopr.cOrgBase = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  KatSopr.TypeDoc ('Тип транспортировки по документу', , sci1378Esc):  [LIST 'центровывоз', 'транспорт хозяйства'], protect;
+//------------------------------------------------------------------------------
+  KnDriver.Name   ('Водитель'  , , sci138Esc):  noProtect;
+//------------------------------------------------------------------------------
+  MarPunktR.Name  ('Пункт разгрузки'                          , , sci138Esc): Protect;
+//------------------------------------------------------------------------------
+  TTNDoc.dPunRBeg ('Дата начала разгрузки'                    , , sci138Esc): [, 'DD/MM/YYYY'],
+    {Font = {BackColor = if ( dtPunRBeg > dtPunREnd, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  TTNDoc.tPunRBeg ('Время начала разгрузки'                   , , sci138Esc): [, 'HH: MM'], noProtect,
+    {Font = {BackColor = if ( dtPunRBeg > dtPunREnd, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  TTNDoc.dPunREnd ('Дата окончания разгрузки'                 , , sci138Esc): [, 'DD/MM/YYYY'],
+    {Font = {BackColor = if ( dtPunRBeg > dtPunREnd, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  TTNDoc.tPunREnd ('Время окончания разгрузки'                , , sci138Esc): [, 'HH: MM'], noProtect,
+    {Font = {BackColor = if ( dtPunRBeg > dtPunREnd, ColorError, 0)}};
+//------------------------------------------------------------------------------
+  Sum             ('Сумма по документу'): [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], skip;
+//------------------------------------------------------------------------------
+  Valut           ('Валюта, в которой производилась оплата. Выбирается из классификатора.', , sci1378Esc): protect;
+//------------------------------------------------------------------------------
+  KatSopr.DPrice  ('Дата оплаты по накладной', , sci1378Esc): [10, 'DD/MM/YYYY'], skip;
+//------------------------------------------------------------------------------
+  KatPayment.Name ('Форма расчета', , sci1378Esc): protect, QuickChoice,
+                        {Font = {BackColor = if (KatSopr.cPayment = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  DocNalSumma     ('Сумма налогов по документу', , sci1378Esc): [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], skip;
+//------------------------------------------------------------------------------
+  VhNal           ('Входимость налогов в цену позиций', , sci1378Esc): protect, Centered;
+//------------------------------------------------------------------------------
+  KatSopr.TaraVoz ('Тара', , sci1378Esc): [LIST 1 'возвратная', 'невозвратная'], protect;
+//------------------------------------------------------------------------------
+Buttons
+<<
+ &Номер накладной   &Выписана       &Статус        & Дата оприходования
+ .@@@@@@@@@@@@@@@  .@@@@@@@@@@  .@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@
+ Контрагент  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@.@@@@@@@@@@
+ Транспортировка  .@@@@@@@@@@@@@@@@@@@@@@  Водитель .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Пункт разгрузки  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Начало разгрузки .@@@@@@@@@@@@@@  Время .@@@@@@
+ Конец разгрузки  .@@@@@@@@@@@@@@  Время .@@@@@@
+                                      &Дата цен           &Форма расчета
+ На сумму .@@@@@@@@@@@@@@@@ .@@@@@  .@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Налоги   .@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@   Тара.@@@@@@@@@@@@@@@
+>>
+end; // Screen scrHeader_Milk
+
+HandleEvent
+
+cmSetDefault:
+{
+  if (inherited :: HandleEvent(cmSetDefault) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  SetModified(true);
+
+  KatSopr.nRec   := GetNextNRec(#KatSopr, 0);
+  KatSopr.cPodrTo:= coGetTune('Oper.Buy.NaklPrMS.GetSklad');
+  KatSopr.cMolTo := coGetTune('Oper.Buy.NaklPrMS.GetMOL');
+
+  GetValPokaz;
+
+  // вставка TTNDoc
+  TTNDoc.wTable := coKatSopr;
+  TTNDoc.cDoc   := KatSopr.nRec;
+
+  set TTNDoc.dPunRBeg := Cur_Date;
+  set TTNDoc.tPunRBeg := Cur_Time;
+  set TTNDoc.dPunREnd := Cur_Date;
+  set TTNDoc.tPunREnd := Cur_Time;
+  set TTNDoc.cPunktR  := coGetTune('Oper.Buy.NaklPrMS.DischargePoint');
+
+  Insert Current TTNDoc;
+
+  // вставка SpSopr
+  ClearBuffer(#SpSopr);
+
+  SpSopr.LastDate := Cur_Date;
+  SpSopr.LastTime := Cur_Time;
+  SpSopr.cSopr    := KatSopr.Nrec;
+  SpSopr.dSopr    := KatSopr.dSopr;
+  SpSopr.VidSopr  := KatSopr.VidSopr;
+  SpSopr.dOprTTN  := KatSopr.dOpr;
+  SpSopr.cVal     := KatSopr.cValut;
+  SpSopr.cParty   := KatParty.NRec;
+  SpSopr.Npp      := 1;
+  SpSopr.PrMc     := 1;
+  SpSopr.cMCUsl   := coGetTune('Oper.Buy.NaklPrMS.MCMilk');
+  SpSopr.cOtpEd   := fEdIzm.GetAktOtpEdNRec(SpSopr.cMcUsl, 1);
+
+  if (GetFirst KatMC = tsOk)
+    {
+      SpSopr.Netto  := KatMC.Massa;
+      SpSopr.mTara  := KatMC.mTara;
+    }
+
+  Insert Current SpSopr;
+
+  // вставка SpSopUsl
+  Var i : word;
+
+  For (i := 0; i < 4 ; i := i + 1)
+    {
+      ClearBuffer(#SpSopUsl);
+      SpSopUsl.LastDate := Cur_Date;
+      SpSopUsl.LastTime := Cur_Time;
+      SpSopUsl.cSopr    := KatSopr.Nrec;
+      SpSopUsl.dSopr    := KatSopr.dSopr;
+      SpSopUsl.VidSopr  := KatSopr.VidSopr;
+      SpSopUsl.dOprTTN  := KatSopr.dOpr;
+      SpSopUsl.cVal     := KatSopr.cValut;
+      SpSopUsl.Npp      := 1;
+
+      case i of
+        0:
+        {
+          SpSopUsl.PrMc     := 4;
+          SpSopUsl.cMCUsl   := coGetTune('Oper.Buy.NaklPrMS.UslDelivery');
+          SpSopUsl.cOtpEd   := fEdIzm.GetAktOtpEdNRec(SpSopUsl.cMcUsl, SpSopUsl.PrMC);
+        }
+        1:
+        {
+          SpSopUsl.PrMc     := 4;
+          SpSopUsl.cMCUsl   := coGetTune('Oper.Buy.NaklPrMS.UslStorage');
+          SpSopUsl.cOtpEd   := fEdIzm.GetAktOtpEdNRec(SpSopUsl.cMcUsl, SpSopUsl.PrMC);
+        }
+        2:
+        {
+          SpSopUsl.PrMc     := 4;
+          SpSopUsl.cMCUsl   := coGetTune('Oper.Buy.NaklPrMS.UslOtkl');
+          SpSopUsl.cOtpEd   := fEdIzm.GetAktOtpEdNRec(SpSopUsl.cMcUsl, SpSopUsl.PrMC);
+        }
+        3:
+        {
+          SpSopUsl.PrMc     := 4;
+          SpSopUsl.cMCUsl   := coGetTune('Oper.Buy.NaklPrMS.UslDiscount');
+          SpSopUsl.cOtpEd   := fEdIzm.GetAktOtpEdNRec(SpSopUsl.cMcUsl, SpSopUsl.PrMC);
+        }
+
+      end;
+
+      Insert Current SpSopUsl;
+    }
+
+  PutCommand(cmEdit);
+}
+
+cmAbortInsert:
+{
+  Delete TTNDoc where (( coKatSopr     ==  TTNDoc.wTable  and
+                         KatSopr.NRec  ==  TTNDOC.cDoc  ));
+  Delete SpSopr where (( KatSopr.NRec  ==  SpSopr.cSopr ));
+
+  Delete SpSopUsl where (( KatSopr.Nrec  == SpSopUsl.cSopr));
+}
+
+cmPositionChanged:
+{
+  if (inherited :: HandleEvent(cmPositionChanged) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  GetValPokaz;
+
+  ReReadRecord(#ValKontr);
+}
+
+end;
+
+end; //panel
+
+//******************************************************************************
+
+Panel pnSpecif
+  Show (, 13, , 23)
+  Table SpSopr;
+
+Screen scrbyName_Milk ('', , sci1Esc)
+
+bevel b01 {1, 3, 86, 9, bsLowered, bsFrame};
+bevel b02 {1, 9, 86, 13, bsLowered, bsFrame};
+
+Fields
+//------------------------------------------------------------------------------
+  fProbKach      ('Проба качества', , sci13Esc): skip;
+//------------------------------------------------------------------------------
+  KatMC.Name     ('Название матценности', , sci1Esc): skip, {Font = {Bold = true}};
+//------------------------------------------------------------------------------
+  SpSopr.KolFact ('Количество', , sci1Esc): [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], noprotect, NoDel;
+//------------------------------------------------------------------------------
+  SpSopr.KolOpl  ('Количество оплаченного', , sci1Esc): [prKolOplMilk, '\3p[|-]36`666`666`666`666.888'], noprotect, NoDel;
+//------------------------------------------------------------------------------
+  OtpEd          ('ЕдИзм', , sci13Esc): protect, NoDel;
+//------------------------------------------------------------------------------
+  Prv            ('Цена', , sci1Esc): [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], noprotect;
+//------------------------------------------------------------------------------
+  SumPrice       ('Стоимость', , sci1Esc): [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], skip;
+//------------------------------------------------------------------------------
+  StrSumNal      ('Сумма налогов по позиции', , sci1378Esc): [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], skip;
+//------------------------------------------------------------------------------
+  KatSort.Name   ('Наименование сорта',,sci1378Esc): protect;
+//------------------------------------------------------------------------------
+  KatParty.Name  ('Партия матценности', , sci13Esc): protect;
+//------------------------------------------------------------------------------
+  strPokaz1      ('% жирности'      , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz8      ('МДБ'             , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz3      ('температура'     , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz2      ('кислотноcть'     , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz4      ('степень чистоты' , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz5      ('плотность'       , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz6      ('бактер. обсемен.', , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  strPokaz7      ('СОМ'             , , sci1Esc): skip;
+//---------------------------------------------------------------------------
+  fPokaz1        ('% жирности'      , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz8        ('МДБ'             , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz3        ('температура'     , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz2        ('кислотноcть'     , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz4        ('степень чистоты' , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz5        ('плотность'       , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz6        ('бактер. обсемен.', , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+  fPokaz7        ('СОМ'             , , sci1Esc): ['\1p[|-]36`666`666`666`666.8'], noprotect;
+//---------------------------------------------------------------------------
+
+Buttons
+  cmValue37  , , , 'Формирование пробы качества', , sci1Esc;
+  cmMakePrih , , , 'Оприходование молочного сырья';
+<<
+                                                         .@@@@@@@@@@@@@@@@
+   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  <.  Формирование пробы качества  .>
+
+
+    &Количество   &Кол-во опл.  &ЕдИзм      &Цена      &Стоимость       &Налоги
+   .@@@@@@@@@@@@ .@@@@@@@@@@@@ .@@@@@@@ .@@@@@@@@@@@@ .@@@@@@@@@@@@ .@@@@@@@@@@@@@@@
+             &Сорт                                 &Партия
+   .@@@@@@@@@@@@@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   Показатели качества
+  .@@@@@@@@@ .@@@@ .@@@@@@@@@ .@@@@@@@@@ .@@@@@@@@@@@@ .@@@@@@@@ .@@@@@@@@@@@@ .@@@@
+  .@@@@@@@@@ .@@@@ .@@@@@@@@@ .@@@@@@@@@ .@@@@@@@@@@@@ .@@@@@@@@ .@@@@@@@@@@@@ .@@@@
+
+                                                  <.         Оприходование         .>
+>>
+
+end; // scrByName_Milk
+
+Handleevent
+
+cmPick:
+{
+  if (inherited :: HandleEvent(cmPick) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  var cPick: comp;
+
+  Case CurField of
+
+    #KatSort.Name:
+      {
+        if ( GetFirst PrKachvo <> tsOk )
+          {
+            Message('Не сформирована проба качества.');
+            Exit;
+          }
+
+        cPick := PrKachvo.cWork1;
+
+        if ( RunInterface('GetSortMC', KatMc.cGroupMc, KatMc.nRec, cgiPick, comp(0), cPick) <> cmCancel )
+          {
+            set PrKachvo.cWork1 := cPick;
+            Update Current PrKachVo;
+
+            GetPriceMilk;
+          }
+
+      } // #KatSort.Name
+
+    #KatParty.Name:
+      {
+        Var tParty, tMc : comp;
+        tParty := SpSopr.cParty;
+        tMC    := SpSopr.cMCUsl;
+
+        RunInterface('GetPar__', tParty, tMC);
+      }
+
+  end;
+}
+
+cmDelOnProtect:
+{
+  if (inherited :: HandleEvent(cmDelOnProtect) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  Case CurField of
+
+    #KatSort.Name:
+      {
+        set PrKachvo.cWork1 := 0;
+      } // #KatSort.Name
+
+    #KatParty.Name:
+      {
+        oDel.DelMilk(KatSopr.nRec);
+      }
+
+  end;
+
+  PrKachvo.cWork1 := 0;
+
+  GetValPokaz;
+
+  ReReadRecord(#TsKachvo);
+}
+
+cmExprFieldChanged:
+{
+  case CurField of
+    #fPokaz1  : SetValPokaz(1);
+    #fPokaz2  : SetValPokaz(2);
+    #fPokaz3  : SetValPokaz(3);
+    #fPokaz4  : SetValPokaz(4);
+    #fPokaz5  : SetValPokaz(5);
+    #fPokaz6  : SetValPokaz(6);
+    #fPokaz7  : SetValPokaz(7);
+    #fPokaz8  : SetValPokaz(8);
+  end;
+
+  ReReadRecord(#ValKontr);
+
+  if (inherited :: HandleEvent(cmExprFieldChanged) = heAbort)
+  {
+    Abort; Exit
+  }
+}
+
+end; // Handleevent
+
+end; // pnSpecif
+
+//******************************************************************************
+Panel pnSopUsl
+  Show (, 24, , )
+  Table SpSopUsl;
+
+Browse brSopUsl_Milk ('',, sci1478Esc)
+
+Fields
+//--------------------------------------------------------------------------
+  prSopusl          #3'П'                    ('Признак сопутствующей услуги', , sci1378Esc)
+                   : [ 3], protect, NoAutoSize, Centered;
+//--------------------------------------------------------------------------
+  KatUsl.Name       #3'Название услуги'      ('Название сопутствующей услуги', , sci1378Esc)
+                   : [26], protect, NoDel, QuickChoice;
+//--------------------------------------------------------------------------
+  KatUsl.Kod        #3'Код'#13#3'услуги'     ('Код сопутствующей услуги', , sci1378Esc)
+                   : [12], protect, NoDel, QuickChoice, NoAutoSize;
+//--------------------------------------------------------------------------
+  SpSopUsl.Kol      #3'Процент'              ('Процент сопутствующей услуги')
+                   : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], NoAutoSize;
+//--------------------------------------------------------------------------
+  SpSopUsl.Price    #3'Сумма'#13#3'в НДЕ'    ('Сумма сопутствующей услуги в НДЕ')
+                   : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], NoAutoSize;
+//--------------------------------------------------------------------------
+  SpSopUsl.VPrice   #3'Сумма'#13#3'в валюте' ('Сумма сопутствующей услуги в валюте')
+                   : [17], [brForSopr_VPrice, '\2p[|-]36`666`666`666`666.88'], NoAutoSize;
+//--------------------------------------------------------------------------
+  KlVal.SimvolV     #3'Валюта'               ('Символ валюты', , sci1378Esc)
+                   : [ 6], protect, QuickChoice, NoAutoSize;
+//------------------------------------------------------------------------------
+  SumSpUslNalog     #3'Налоги'               ('Налоги в валюте документа', , sci178Esc)
+                   : [14], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], protect, NoAutoSize;
+//--------------------------------------------------------------------------
+end;
+end;
+//******************************************************************************
+
+Handleevent  // Window
+
+cmInit:
+{
+  if (inherited :: HandleEvent(cmInit) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  SetFormat(scrHeader_Milk);
+  SetFormat(scrByName_Milk);
+  SetFormat(brSopUsl_Milk);
+
+  cfsSetCurrentContainer('EditSopr');
+  cfsSetProp('EditSopr'  , 'RectB_X', 90);
+  cfsSetProp('EditSopr'  , 'RectB_Y', 32);
+
+  cfsSetProp('scrHeader_Milk' , 'RectB_Y', 10);
+  cfsSetProp('scrByName_Milk' , 'RectA_Y', 11);
+  cfsSetProp('scrByName_Milk' , 'RectB_Y', 25);
+  cfsSetProp('brSopUsl_Milk'  , 'RectA_Y', 26);
+}
+
+cmPick:
+{
+  if (inherited :: HandleEvent(cmPick) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  case CurField of
+
+    #KnDriver.Name:
+      {
+        if ( RunInterface('Get_Vod', TTNDoc.cDriver, 0, Cur_Date, TTNDoc.cOrgAvt, Comp(0)) <> cmCancel )
+          set Driver := KnDriver.Name;
+      }
+    #MarPunktR.Name:
+      {
+        if ( RunInterface('Get_Itws', TTNDoc.cMarAvt, pMarRel, word(1)) <> cmCancel )
+          if ( GetFirst MarRel where (( pMarRel == MarRel.NRec )) = tsOk )
+            set TTNDoc.cPunktR := MarRel.cMarPunkt;
+      }
+
+  end;
+}
+
+cmCheckField:
+{
+  if (inherited :: HandleEvent(cmCheckField) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  if (( dtPunRBeg > dtPunREnd ) AND
+      ( dtPunRBeg <> _DateTime(0, 0, 0, 0, 0, 0, 0)) AND
+      ( dtPunREnd <> _DateTime(0, 0, 0, 0, 0, 0, 0)))
+    {
+      Message('Дата начала pазгрузки больше даты окончания pазгрузки...', Warning+CancelButton);
+      Abort;
+    }
+}
+
+cmGeneratePartys:
+{
+  if ( CurTable = #SpSopr )
+    {
+      Message('Партии можно создавать только из верхней панели.');
+      Exit;
+    }
+
+  if ( KatSopr.cOrgBase <> comp(0) )
+    {
+      Update_Record_KatSopr;
+      oMakeParty.CheckPartys(KatSopr.NRec, ProtParty, AutoSetParty);
+
+      ReReadRecord(#SpSopr);
+    }
+}
+
+cmExprFieldChanged:
+{
+  if (inherited :: HandleEvent(cmExprFieldChanged) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  case CurField of
+    #fPokaz1  : SetValPokaz(1);
+    #fPokaz2  : SetValPokaz(2);
+    #fPokaz3  : SetValPokaz(3);
+    #fPokaz4  : SetValPokaz(4);
+    #fPokaz5  : SetValPokaz(5);
+    #fPokaz6  : SetValPokaz(6);
+    #fPokaz7  : SetValPokaz(7);
+    #fPokaz8  : SetValPokaz(8);
+  end;
+
+  ReReadRecord(#ValKontr);
+
+  CheckSumma(true);
+  procDocAutoCalcUsl;
+}
+
+cmValue9:
+{
+  Message('Документ может содержать только одну пазицию.');
+}
+
+cmValue37:
+{
+  if ( KatSopr.cOrgBase <> comp(0) )
+    {
+      Update_Record_KatSopr;
+      oMakeParty.CheckPartys(KatSopr.NRec, ProtParty, AutoSetParty);
+
+      ReReadRecord(#SpSopr);
+    }
+
+  if ( KatSopr.Status <> 1 )
+    {
+      Message('Пробу качества можно сформировать только в статусе "исполняемый".');
+      Exit;
+    }
+
+  if ( KatSopr.cOrgBase = comp(0) )
+    {
+      Message('Укажите правильное наименования теста качества.');
+      Exit;
+    }
+
+  if ( SpSopr.cParty = comp(0) )
+    {
+      Message('Не сформирована партия.');
+      Exit;
+    }
+
+  if ( not isValid(#KatPayment) )
+    {
+      Message('Установите форму расчета.');
+      Exit;
+    }
+
+  if ( sTestName = '' )
+    {
+      Message('Не найдено наименование теста качества.');
+      Exit;
+    }
+
+  // привязка качества
+  var cTestKachvo: comp;
+  cTestKachvo := comp(0);
+
+  if ( GetFirst TsKachvo = tsOk )
+    cTestKachvo := TsKachvo.nRec;
+
+  if ( cTestKachvo <> comp(0) )
+    {
+      var bExistsProb : boolean;
+
+      bExistsProb := GetFirst PrKachvo = tsOk;
+
+      if ( bExistsProb )
+        if ( Message('Проба качества уже создана. Создать новую?', YesNo) <> cmYes )
+          Exit;
+
+      if ( not bExistsProb )
+        ClearBuffer(#PrKachvo);
+
+      PrKachvo.cTsKachvo:= cTestKachvo;
+      PrKachvo.TipProba := word(2);           // Тип пробы
+      PrKachvo.wTable   := coKatMc;           // тип таблицы
+      PrKachvo.cOwner   := SpSopr.cMcUsl;     // Мц/усл
+      PrKachvo.cAnVal1  := KatSopr.cOrgBase;  // Значения аналитики 1
+      PrKachvo.cAnVal2  := KatSopr.cPodrTo;   // Значения аналитики 2
+      PrKachvo.cAnVal3  := SpSopr.cParty;     // Значения аналитики 3
+      PrKachvo.cAnVal5  := KatMol.nRec;       // Значения аналитики 5
+      PrKachvo.Descr    := KatSopr.Descr;     // дескриптор пользователя
+      PrKachvo.CodeProbe:= '000001';          // код пробы
+      PrKachvo.Name     := KatMc.Name;        // Наименование
+      PrKachvo.DatePl   := Cur_Date;          // дата плановая
+      PrKachvo.DateFakt := Cur_Date;          // дата завершения
+      PrKachvo.dtProbe  := _CurDateTime;      // Дата/время взятия
+      PrKachvo.dbQty    := SpSopr.KolFact;    // Кол-во для пробы
+      PrKachvo.cOtpEd   := SpSopr.cOtpEd;     // Отп. ед.
+      PrKachvo.cPerson  := KatSopr.cPerson;   // Ответственный
+      PrKachvo.KolTime  := word(1);           // Кол-во дней
+
+      if ( bExistsProb )
+        Update Current PrKachvo
+      else
+        Insert Current PrKachvo;
+
+      bExistsProb := GetFirst KachvoEx = tsOk;
+
+      if ( not bExistsProb )
+        ClearBuffer(#KachvoEx);
+
+      KachvoEx.VidAtt  := word(0);
+      KachvoEx.wTable  := toSpSopr;
+      KachvoEx.cOwner  := SpSopr.nRec;
+      KachvoEx.TypeObj := toQualProbe;
+      KachvoEx.cObject := PrKachvo.nRec;
+
+      if ( bExistsProb )
+        Update Current KachvoEx
+      else
+        Insert Current KachvoEx;
+
+      bExistsProb := GetFirst SpProbe = tsOk;
+
+      if ( not bExistsProb )
+        ClearBuffer(#SpProbe);
+
+      SpProbe.cPrKach := PrKachvo.nRec;       // ссылка на пробу
+      SpProbe.cTsKach := TsKachvo.nRec;       // ссылка на тест
+      SpProbe.wCnt    := 1;                   // количество
+
+      if ( bExistsProb )
+        Update Current SpProbe
+      else
+        Insert Current SpProbe;
+
+      bExistsProb := GetFirst RezKontr = tsOk;
+
+      if ( not bExistsProb )
+        ClearBuffer(#RezKontr);
+
+      RezKontr.cKachvoPr:= PrKachvo.nRec;
+      RezKontr.cMc      := SpSopr.cMcUsl;
+      RezKontr.cParty   := SpSopr.cParty;
+      RezKontr.wTable   := coKatMc;
+      RezKontr.cTsKachvo:= cTestKachvo;
+      RezKontr.cAnVal1  := PrKachvo.cAnVal1;  // Значения аналитики1
+      RezKontr.cAnVal2  := PrKachvo.cAnVal2;  // Значения аналитики2
+      RezKontr.cAnVal3  := PrKachvo.cAnVal3;  // Значения аналитики3
+      RezKontr.cAnVal5  := PrKachvo.cAnVal5;  // Значения аналитики5
+      RezKontr.Descr    := PrKachvo.Descr;    // дескриптор пользователя
+      RezKontr.NDoc     := '000001';          // номер замера
+      RezKontr.dtDoc    := _CurDateTime;      // дата и время замера
+      RezKontr.cOwner   := PrKachvo.cOwner;   // владелец
+      RezKontr.cMC      := SpSopr.cMcUsl;     // матценность
+      RezKontr.cParty   := SpSopr.cParty;     // партия
+      RezKontr.cPodr    := KatSopr.cPodrTo;   // подразделение
+      RezKontr.cKachvoPr:= PrKachvo.nRec;     // проба
+      RezKontr.cTsKachvo:= TsKachvo.nRec;     // ссылка на тест
+      RezKontr.cOtpEd   := PrKachvo.cOtpEd;   // единица измерения
+      RezKontr.DefRez   := PrKachvo.Name;     // Описание результата
+      RezKontr.Status   := word(1);           // статус
+      RezKontr.TipTest  := word(2);           // тип теста
+
+      if ( bExistsProb )
+        Update Current RezKontr
+      else
+        Insert Current RezKontr;
+
+      Delete ValKontr2 where ((  RezKontr.nRec == ValKontr2.cRezKontr ));
+
+      _LOOP ValTest where (( TsKachvo.nRec == ValTest.cTsKachvo ))
+        {
+          ClearBuffer(#ValKontr2);
+
+          ValKontr2.cAnVal1   := KatSopr.cOrgBase;  // Значения аналитики 1
+          ValKontr2.cAnVal2   := KatSopr.cPodrTo;   // Значения аналитики 2
+          ValKontr2.cAnVal3   := SpSopr.cParty;     // Значения аналитики 3
+          ValKontr2.cAnVal5   := KatSopr.cMolTo;    // Значения аналитики 5
+          ValKontr2.cRezKontr := RezKontr.nRec;     // ссылка на замер
+          ValKontr2.cKatPokaz := ValTest.cKatPokaz; // Показатель качества
+          ValKontr2.Value     := ValTest.Value;     // Значение
+          ValKontr2.dtDoc     := _CurDateTime;      // дата замера
+          ValKontr2.wTable    := RezKontr.wTable;   // тип таблицы
+          ValKontr2.cOwner    := RezKontr.cOwner;   // владелец
+          ValKontr2.cMC       := RezKontr.cMc;      // матценность
+          ValKontr2.cParty    := RezKontr.cParty;   // партия
+          ValKontr2.cPodr     := RezKontr.cPodr;    // подразделение
+          ValKontr2.cEd       := KatMc.cEd;         // единица измерения
+
+          Insert Current ValKontr2;
+        }
+    }
+
+  GetValPokaz;
+
+  GetPriceMilk;
+
+  ReReadRecord(#ValKontr);
+  Message('Проба качества сформирована.');
+}
+
+end; // Handleevent Window
+
+end; // Window
+
+//******************************************************************************
+
+Panel pnSelect
+  Table KatSopr
+
+Browse brSelect_Milk ('Для редактирования накладной нажмите <Enter>', , sci178InsPM);
+
+Fields {Font = {Color = if (isPicked, ColorMark, 0)}};
+//------------------------------------------------------------------------------
+  picked            #13#3'V'                 : [ 1], skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  ''+KatNotesName   #3'Статус'               : [14], skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatSopr.dSopr     #3'Дата'#13#3'выписки'   : [10], protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatSopr.Descr     #3'Дескр.'               : [ 5], protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatSopr.NSopr     #3'Номер'#13#3'накладной': [10], protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  ''+KatOrg.Name    #3'Контрагент'           : [25], protect;
+//------------------------------------------------------------------------------
+  Sum               #3'Сумма'                : [17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], protect, LessNull, NoAutoSize;
+//------------------------------------------------------------------------------
+  ''+Valut          #3'Вал.'                 : [ 3], skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//------------------------------------------------------------------------------
+  ''+PrOrd          #3'О'                    : [ 1], skip, NoAutoSize, Centered, {font = {bold = (PrOrd = '+')}};
+//------------------------------------------------------------------------------
+end; // Browse
+
+end; // Panel
+
+//******************************************************************************
+
+Handleevent  // interface
+
+cmInit:
+{
+  if (inherited :: HandleEvent(cmInit) = heAbort)
+  {
+    Abort; Exit
+  }
+
+  SetPrecisionGroup('prKolOplMilk', wGetTune('Oper.Buy.NaklPrMS.Kolsymbol'));
+  SetFormat(brSelect_Milk);
+}
+
+end;  // Handleevent interface
+
+End.
+
+//******************************************************************************
+//******************************************************************************
+//******************************************************************************

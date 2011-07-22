@@ -1,0 +1,134 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Фильтрация договоров по статусам
+//********************************************************************************
+
+var pCantSelectNotes : word;
+
+Function GetfiStatName(_pStatus  : word;           // (in) выбранные статусы
+                   var count_bit                   // возвращает количество выбранных статусов
+                     , posStatus : word) : string; // если count_bit=1,
+                                                   // posStatus=этот статус (для баундса)
+var
+  ii : word;
+{
+  count_bit := 0;
+
+  for(ii := 0; ii <= 4; inc(ii))
+    {
+      if ( _pStatus = 0 )
+        Break;
+
+      if ( (_pStatus and 1) <> 0 )
+        {
+          inc(count_bit);
+          posStatus := ii;
+        }
+
+      _pStatus := _pStatus shr 1;
+    }
+
+  if ( count_bit = 0 )
+    {
+      GetfiStatName := '';
+      set optView := (optView or 64) xor 64; // сняли пометку
+    }
+  else
+    if ( count_bit = 1 )
+      {
+        if ( Getfirst KatNotes2 where (( word(400) == KatNotes2.VidDoc and
+                                         comp(0)   == KatNotes2.cOwner and
+                                         posStatus == KatNotes2.Status (NoIndex) )) = tsOk )
+          GetfiStatName := KatNotes2.Name
+        else
+          GetfiStatName := '';
+      }
+    else
+      GetfiStatName := 'Множественный выбор (' + string(count_bit) + ')';
+}
+
+Procedure SelectAll_Status;
+{
+  PushPos(#KatNotes2);
+
+  _loop KatNotes2
+    if ( (pCantSelectNotes AND KatNotes2.Status) = 0 )
+      workStatus := workStatus  or (1 shl KatNotes2.Status);
+
+  PopPos(#KatNotes2);
+}
+
+#doc
+Окно выбора статусов документов
+#end
+Window winRootDogNotes 'Выберите статусы документов' (,,sci1EnIns) EscClose, DoAccept, Cyan;
+  Show at (,, 62, 7);
+
+Browse br1
+  Table KatNotes2
+
+Fields { Font = { Color = if(picked2 = 'V', ColorMark,
+                            if( (pCantSelectNotes AND (1 shl KatNotes2.Status)) > 0, ColorGray, 0))} };
+  picked2         #3'√'                   : [ 1], Skip;
+  KatNotes2.Name  #3'Наименование' ('',,) : [20], Protect;
+  KatNotes2.sName #3'Кратко'       ('',,) : [ 6], Protect;
+  KatNotes2.Code  #3'Код'          ('',,) : [ 6], Protect;
+  if (KatNotes2.FilialNo = 1,'Да' ,'Нет')  // Контроль (0-нет, 1-да, 2-нет всегда)
+                  #3'Контроль'     ('Контролировать или нет количество при создании подчиненных документов',,) : [8], Protect;
+end; // Browse
+
+HandleEvent
+
+cmInit:
+  {
+    GetfiStatName(workStatus, count_bit, _pos_Status);
+
+    var dateChanged : boolean;
+
+    ReadMyDsk(pCantSelectNotes, 'GetDogs_CantSelectNotes', dateChanged);
+  }
+
+cmDefault:
+  {
+    GetfiStatName(workStatus, count_bit, _pos_Status);
+
+    if ( count_bit = 0 )
+      if ( (pCantSelectNotes AND (1 shl KatNotes2.Status)) = 0 )
+        set workStatus := workStatus or (1 shl KatNotes2.Status);
+      else
+        stop;
+  }
+
+cmMarkUnMark:
+  {
+   if ( (pCantSelectNotes AND (1 shl KatNotes2.Status)) > 0 )
+     exit;
+
+   if ( (workStatus and (1 shl KatNotes2.Status)) = 0 )
+     workStatus := workStatus or (1 shl KatNotes2.Status)
+   else
+     workStatus := workStatus xor (1 shl KatNotes2.Status);
+#ifdef ATL51
+   RedrawCurrentAndGo(GetCurrentFormat, true);
+#else
+   if ( GetNext KatNotes2 = tsOk )
+     CallToNeighBours(cmPosDown, #KatNotes2);
+   RescanPanel(#KatNotes2);
+#end
+  }
+
+cmSelectAll:
+  {
+    SelectAll_Status;
+    RescanPanel(#KatNotes2);
+  }
+
+cmUnSelectAll:
+  {
+    set workStatus := 0;
+    RescanPanel(#KatNotes2);
+  }
+
+end; // HandleEvent
+end; // Window

@@ -1,0 +1,63 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Обработка события переключения между панелями в
+//******************************************************************************
+
+cmSetCurTable:
+  case Target of
+  //------------
+    #SpStep: // переходим на спецификацию
+      if (if ((basedoc.viddoc = 201) OR (basedoc.viddoc = 202) OR (basedoc.viddoc = 1420), BaseDoc.cParty, BaseDoc.cSklad) = 0)
+       // склад не указан
+        {
+          if wGetTune('Reserv.PrSchSklad') = 1  // резервирование по складу
+            {
+              Message('Введите склад отгрузки!', Warning);
+              SelectField(#KatPodr.Name);
+              Abort;
+              Exit;
+            }
+
+          if (wGetTune('Reserv.PrSchSklad') = 2) AND ExistTune('Reserv.DO_Sklad_Enabled')
+            if ( wGetTune('Reserv.DO_Sklad_Enabled') = 2 ) // обязательное заполнение склада
+              {
+                Message('Введите склад отгрузки!', Warning);
+                SelectField(#KatPodr.Name);
+                Abort;
+                Exit;
+              }
+        }
+  //------------
+    #BaseDoc: // переходим в шапку
+      if  (CurTable = #SpStep )                 // переходим со спецификации
+       AND (BaseDoc.Status = 2)                  // в исполняемом ДО
+        AND (wGetTune('Reserv.PrSchSklad') = 2)   // при резервировании по полному складскому разрезу
+         AND (boGetTune('Reserv.SchReserv'))       // установлена настройка "автоматическое резервирование"
+          AND (not IsValid(tnKatSopr))              // нет связанных накладных
+        {
+          PushPos(#SpStep);
+          var IsNeRes: boolean;    IsNeRes := FALSE;
+
+          _LOOP spstep    // ищем незарезервированные позиции в спецификации
+            if (SpStep.PrMC = 1) AND (SpStep.KolSkl > 0) AND (SpStep.Reserv = 0)
+              {
+                IsNeRes := TRUE;
+                Break;
+              }
+
+          PopPos(#SpStep);
+
+          if (IsNeRes)
+            {
+              if (Message('Не допускается регистрация ДО без резерва!'#13'Зарезервировать?', YesNo) = cmYes)
+                IsNeRes := not ProcSklRes;
+
+              if IsNeRes  // резервирование не прошло
+                Abort;    // не отпускаем со спецификации!
+            }
+        }
+  //------------
+  end;
+
+//******************************************************************************

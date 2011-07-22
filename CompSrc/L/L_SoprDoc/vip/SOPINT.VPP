@@ -1,0 +1,327 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+// Общая обработка событий интерфейсов накладных и актов
+//********************************************************************************
+
+
+#ifNdef _SOPINT_VPP
+#define _SOPINT_VPP
+
+//********************************************************************************
+
+cmPrintDoc:
+  if (CurTable = #KatSopr)
+    {
+      UpdateTable;
+
+      Case TypeSopr of
+      //--------------
+        #ifdef _AKTUSLB_VIP
+        110:
+          {
+            var VidKS: word; VidKS := 0;
+
+            if (RunDialog('GetVidKS', VidKS) <> cmCancel)
+              case VidKS of
+                0:
+                {
+                  if (RunInterface('FormaKS3', KatSopr.NRec, MarkerNZ)) = cmDefault
+                  {
+                    var wFormKS, wSmet: word;
+
+                    if (not ReadMyDsk(wFormKS, 'KS_3_wFormKS', FALSE))
+                      wFormKS := 0;
+
+                    if (not ReadMyDsk(wSmet, 'KS_3_wType', FALSE))
+                      wSmet := 0;
+
+                    // КС-2 с группировкой по объектам строительства
+                    if ((wSmet AND 1) = 0)
+                      if (wFormKS = 0)
+                      PrintDocument_110
+                    else
+                      if (wFormKS = 2)
+                        Runinterface('Print_KS_With_KAU3', KatSopr.NRec, MarkerNZ, 0)
+                  }
+                }
+                1:
+                {
+                  PrintAktPIW;
+                }
+                2:
+                {
+                  RunInterface(Print_M29, KatSopr.NRec, MarkerNZ, 0);
+                }
+              end;
+          }
+        #end
+      //--------------
+        629:
+          RunInterface(Print_M29, KatSopr.NRec, MarKerNZ, word(0));
+      //--------------
+        1610:
+          RunInterface(PrnVedNachalo, KatSopr.NRec);
+      //--------------
+        else
+          PrintDocument
+      //--------------
+      end;
+
+      RereadRecord(#KatSopr);
+      RescanPanel(#KatSopr);
+    }
+
+//********************************************************************************
+
+cmValue13: // Печать отчетов агента по договору НИОКР
+  {
+    var bPath        : boolean;
+    var bMes         : boolean;
+    var Marker_flag  : boolean;
+    var MarkerCount2 : longint;
+    var i2           : longint;
+    var pickrec2     : comp;
+
+    MarkerCount2 := GetMarkerCount(MarkerNZ);
+
+    Marker_flag := False;
+
+    if (MarkerCount2 = 0)
+      {
+        InsertMarker(MarkerNZ, KatSopr.NRec);
+        MarkerCount2 := 1;
+        Marker_flag  := True;
+      }
+
+    bPath := True;
+    bMes  := if (MarkerCount2 = 1, True, False);
+
+    for (i2 := 0; i2 < MarkerCount2; i2 := i2 + 1)
+      {
+        if (GetMarker(MarkerNZ, i2, pickrec2))
+          {
+            RunInterface('RepAgent', pickrec2, bPath, bMes);
+            bPath := False;
+          }
+      }
+
+    if Marker_flag
+      DeleteMarker(MarkerNZ, KatSopr.NRec);
+  }
+
+//********************************************************************************
+
+
+cmPlansNo:
+  if ( CurTable = #KatSopr )
+    {
+      if (   (KatSopr.VidSopr <> 101)
+         and (KatSopr.VidSopr <> 108)
+         and (KatSopr.VidSopr <> 111)
+         and (KatSopr.VidSopr <> 110)
+         and (KatSopr.VidSopr <> 1411)
+         and (KatSopr.VidSopr <> 1421)
+         and (KatSopr.VidSopr <> 201)
+         and (KatSopr.VidSopr <> 211)
+         and (KatSopr.VidSopr <> 106)
+         and (KatSopr.VidSopr <> 206)
+         )
+        exit;
+
+      Var tmpKM : longint;
+
+      tmpKM := InitMarker('ReestrNakl_KatSopr', 8, 100, 10, false);
+
+      ClearMarker(tmpKM);
+      CopyMarker(tmpKM, MarkerNZ);
+
+      if ( GetMarkerCount(tmpKM) = 0 )
+        {
+          InsertMarker(tmpKM, KatSopr.NRec);
+/*          PushPos ( #KatSopr );
+        _loop KatSopr
+          InsertMarker(tmpKM, KatSopr.NRec);
+          PopPos ( #KatSopr );*/
+        }
+
+      RunInterface('ReestrNakl', tmpKM, KatSopr.VidSopr);
+      DoneMarker(tmpKM, '');
+    }
+
+//********************************************************************************
+#ifndef inv_prih
+#ifndef INV_RASH_VIP
+#ifndef _SOPINMOV_
+#ifndef AKT_SPIS_VIP
+#ifndef _SOPRDOC_VIP
+cmFilterSave:
+  if (CurTable = #KatSopr)
+    SetSoprFlt;
+#end
+#end
+#end
+#end
+#end
+
+//********************************************************************************
+
+cmSaveDoc    :
+  {
+#ifdef _AKTREMONT_
+    if (fncNastrUpdate(TRUE))
+    {
+      Abort;
+      Exit;
+    }
+#endif
+
+    if (TypeSopr <> 629 and TypeSopr <> 610  and TypeSopr <> 1610)
+      SaveCurrentDoc;
+  }
+//********************************************************************************
+
+cmRestoreDoc:
+  {
+#ifdef _AKTREMONT_
+    if (fncNastrUpdate(TRUE))
+    {
+      Abort;
+      Exit;
+    }
+#endif
+
+    if (TypeSopr <> 629 and TypeSopr <> 610 and TypeSopr <> 1610)
+      CopyDocument;
+  }
+//********************************************************************************
+//просмотр ТХО для документа;
+cmHozOper:
+{
+#ifdef _AKTREMONT_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#endif
+
+  if IsModified
+    if not UpDateTable
+      Exit;
+
+  if GetFirst FastFirstRow SoprHoz
+     where ((KatSopr.VidSopr  == SoprHoz.TipDoc AND
+             KatSopr.NRec == SoprHoz.cSoprDoc)) <> tsOk
+    Message('Хозоперации по документу отсутствуют', Information);
+  else
+    {
+      RunInterface('SoprHoz', 1, KatSopr.VidSopr, 0, SoprHoz.nRec);
+      ReReadRecord; //пир 102.54807
+
+      //пир 102.41342
+      SaveMyDsk(comp(0), '_KatSoprnRec_');
+    }
+}
+
+//******************************************************************************
+
+cmValue59:
+{
+  RunInterface('ChKAUbyAttr', longint(MarkerNZ), word(0), word(coSpSopr));
+}
+
+//********************************************************************************
+
+cmHotKeys:
+{
+  case (TypeSopr) of
+    110, 114, 102, 103, 106, 111, 202, 203, 204, 206, 211:
+    {
+      DisableCommand(cmVal1);    // дата формирования документа
+      DisableCommand(cmLegend);  // просмотр схемы связей
+    }
+
+    210, 229, 110:
+    {
+      DisableCommand(cmValue1); // группы платежных средств
+    }
+
+    204: // акты на списание МЦ
+    {
+      if (sGetTune('Sklad.Akt_Spis.DopFunc01') = '')
+        DisableCommand(cmValue21);
+
+      if (sGetTune('Sklad.Akt_Spis.DopFunc02') = '')
+        DisableCommand(cmValue22);
+
+      if (sGetTune('Sklad.Akt_Spis.DopFunc03') = '')
+        DisableCommand(cmValue23);
+
+      if (sGetTune('Sklad.Akt_Spis.DopFunc04') = '')
+        DisableCommand(cmValue24);
+    }
+  end;
+
+  // Вызов контекстного меню
+  var sDynMenu : string;
+  var pExtParam: comp;//битовый параметр для доп. пунктов меню
+  sDynMenu  := '';
+  pExtParam := 0;
+
+#ifdef _AKTUSLB_VIP
+  if (_KatSoprNrec <> 0)
+    pExtParam := pExtParam + 1;
+#end
+  if (KatSopr.wADoc = adSoprDocKN)
+    pExtParam := pExtParam + 2;
+
+  if ((KatSopr.wADoc = cgCustomAkt) or
+      ((wGetTune('Country') = ccBel) and
+       (KatSopr.VidSopr = 111) and (KatSopr.cNote = coGetTune('Nalog.Bel.GTD_Status'))))
+    pExtParam := pExtParam + 4;
+
+  sDynMenu := oSoprMenu.MakeSoprMenu(KatSopr.VidSopr, pExtParam);
+
+  PutHotCommand(RunDynMenu(sDynMenu));
+
+  case (TypeSopr) of
+    110, 114, 102, 103, 106, 111, 202, 203, 204, 206, 211:
+    {
+      EnableCommand(cmVal1);
+      EnableCommand(cmLegend);
+    }
+
+    210, 229:
+    {
+      EnableCommand(cmValue1); // группы платежных средств
+    }
+  end;
+
+}
+
+//********************************************************************************
+
+cmCalcKol:
+  {
+    var CK: CalcKolObj;
+    if (not GetVipRef(CK, 'CalcKol'))
+      {
+        Message('Ошибка при загрузке интерфейса с функциями подсчета общего количества.', Error);
+        Exit;
+      }
+
+    Message('Итого количество по документу: ' + Trim(String(CK.GetKolForKatSopr(KatSopr.NRec), 15+prSignsInKol, prSignsInKol)));
+    FreeVipInterface(CK);
+  }
+
+//********************************************************************************
+
+#ifNdef _dssoprou_
+cmDoRedakt:
+  Stop;// пир 102.16933
+#end /// _dssoprou_
+
+//********************************************************************************
+
+#end //_SOPINT_VPP

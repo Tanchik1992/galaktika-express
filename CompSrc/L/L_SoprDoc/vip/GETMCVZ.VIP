@@ -1,0 +1,1014 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Выбор матценностей из накладых для возврата               ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#include GETMCVZ.tbl
+#include oEdIzm.vih
+#include AktRecFun.vih
+#include LinkMTR2Spec.vih       // функции целевого учета
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор матценностей из накладых для возврата
+
+Параметры:
+  TypeSopr   - вид сопроводительного документа
+  OrgParam   - для установки ограничений по организации
+  dForm_nakl - дата создания сопр.документа
+#end
+
+//******************************************************************************
+
+Interface GetMCVz 'Выбор матценностей для возврата' EscClose, doAccept, Cyan;
+Show at (,1,,21);
+
+#include oEdIzm.var
+
+Function CheckStatusDO: boolean; forward;
+
+Create View
+var
+  TypeSopr                 // для установки ограничений по типу документа
+, Mont       : word;       // для отображения актов в монтаж 210 и 229
+
+
+  orgparam   : comp;       // Для установки ограничений по организации
+
+  tmpkol     : double;
+  DSK_VhodNal: word;
+  DSK_cVal   : comp;
+
+  begdate
+, enddate
+, dForm_nakl : date;
+
+  isFilter   : boolean;    // Признак устаноки фильтров
+  isCheckStateDO: boolean; // Формирование по закрытым ДО
+  isPick600   : boolean;   // Заказная доработка. Выбор из спецификации накладных на вн.перемещение
+
+  s_SimvRub  : string;
+
+  oAktRecFun : iAktRecFun; // сервисные функции рекламационных накладных
+
+as Select
+  if (NOT isValid(tntblGetMcVz), '',
+    if (tblGetMcVz.PickKol = 0, '    +', String(tblGetMcVz.PickKol,10,3)))
+            (FieldName = isPick)
+//------------------------------------------------------------------------------
+, if (SpSopr.cOtpEd = 0, KatEd.Name, KatOtpEd.Name)
+            (FieldName = otped)
+//------------------------------------------------------------------------------
+, if (SpSopr.cOtpEd = 0, SpOrder.Kol,
+    if (KatOtpEd.koef = 0, SpOrder.Kol, SpOrder.kol / KatOtpEd.koef))
+            (FieldName = aktkol)
+//------------------------------------------------------------------------------
+, if (KatSopr.cVal = 0,
+    if (s_SimvRub <> '', s_SimvRub, 'Руб.'), KlVal.SimvolV)
+            (FieldName = Valut)
+//------------------------------------------------------------------------------
+, if (KatSopr.VhodNal = 1, 'входят', 'не входят')
+//------------------------------------------------------------------------------
+            (FieldName = VhNal)
+, if (IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ' : ' + SmetaStroy.Name, '')
+            (FieldName = SmetaMy)
+//------------------------------------------------------------------------------
+, if (IsValid(tnSmetaSpec), String(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') ' + SmetaSpec.Name, '')
+            (FieldName = SmetaSpMy)
+//------------------------------------------------------------------------------
+, fEdIzm.ConvertToUchEd(tblGetMcVz.PickKol, SpSopr.cOtpEd)
+            (FieldName = PickKolUchEd)
+
+From
+  KatSopr
+, SpSopr
+, KatOrg
+, SklORder
+, SpOrder
+, KatPodr
+, KatMol
+, KatParty
+, KatEd
+, KatOtpEd
+, KatSopr KatSopr_KN
+, KatStroy
+, SpecZatr
+, AddSumTune
+, SpDocSmeta
+, SmetaStroy
+, SmetaSpec
+, KLVAL
+, tblGetMcVz
+, tblGetMcVz tblGetMcVz2
+, KatOtpEd KatOtpEdUth
+, StepDoc
+, BaseDoc
+, AttrNam
+
+Where
+((
+       if (Mont = 600, 0, orgparam)
+                            ==  KatSopr.cOrgBase
+  AND  Mont                 ==  KatSopr.VidSopr
+  AND  dForm_nakl          >>=  KatSopr.dOpr
+
+  AND  KatSopr.VidSopr      ==  KatDoc.TiDkGal
+  AND  KatSopr.cOrgBase     ==  KatOrg.NRec
+
+  AND  KatSopr.NRec        /==  SklOrder.cSopr
+  AND  (
+         (SklOrder.Sp      = if (((Mont = 210) OR (Mont = 229)), 3, 0))
+  AND  (SklOrder.TipOrd <>  6)
+  AND  (SklOrder.TipOrd  < 10)
+  AND    (if (Mont = 600, SklOrder.VidOrder = 0, TRUE))
+  AND  CheckStatusDO
+       )
+
+  AND  KatSopr.cValut       ==  KlVal.NRec
+  AND  KatSopr.cStepDoc     ==  StepDoc.NRec
+  AND  StepDoc.cBaseDoc     ==  BaseDoc.NRec
+
+  AND  SklOrder.NRec        ==  SpOrder.cSklOrder
+  AND  SklOrder.cPodr       ==  KatPodr.NRec
+  AND  SklOrder.cMol        ==  KatMol.NRec
+  AND  SpOrder.NRec         ==  tblGetMcVz.cSpOrder
+
+  AND  SpOrder.cMC          ==  KatMC.NRec
+  AND  SpOrder.cParty       ==  KatParty.NRec
+  AND  SpOrder.cSpSopr      ==  SpSopr.NRec
+
+  AND  SpSopr.cOtpED        ==  KatOtpEd.NRec
+  AND  KatMc.cEd            ==  KatEd.NRec
+
+  AND  word(1)              ==  KatOtpEdUth.PrMc
+  AND  SpSopr.cMcUsl        ==  KatOtpEdUth.cMcUsl
+  AND  KatEd.NRec           ==  KatOtpEdUth.cKatEd
+
+  AND  KatSopr.nRec         ==  KatSopr_KN.cADoc
+  AND  SpSopr.cUKS          ==  KatStroy.Nrec
+  AND  SpSopr.nRec          ==  SpecZatr.cSpec
+  AND  coSpSopr             ==  SpecZatr.coTable
+  AND  SpecZatr.cAddSumTune ==  AddSumTune.nRec
+  AND  coSpSopr             ==  SpDocSmeta.coTable
+  AND  SpSopr.nRec          ==  SpDocSmeta.cSpec
+  AND  SpDocSmeta.cSmeta    ==  SmetaStroy.NRec
+  AND  SpDocSmeta.cPosition ==  SmetaSpec.NRec
+))
+// спрятать сторнирующие накдадные и накладные, для которых существует корректирующая накладная
+condition No_SN_KatSopr = (adSoprDocSN <> KatSopr.wADoc) AND
+                          (not isValid(tnKatSopr_KN))
+
+!condition FromAktRec=(DSK_cStepDoc=KatSopr.cStepDoc) and (DSK_VhodNal=KatSopr.VhodNal) and (DSK_cVal=KatSopr.cVal)
+condition FromAktRec    = (DSK_VhodNal = KatSopr.VhodNal) AND
+                          (DSK_cVal    = KatSopr.cVal)
+
+bounds dMainBound       = Mont      == KatSopr.VidSopr  AND
+                          begdate  <<= KatSopr.dSopr    AND
+                          enddate  >>= KatSopr.dSopr    AND
+                          orgparam  == KatSopr.cOrgBase (NoIndex)
+                          ordered by KatSopr.dSopr, KatSopr.NSopr
+
+bounds MainBound        = Mont     == KatSopr.VidSopr  AND
+                          orgparam == KatSopr.cOrgBase (NoIndex)
+                          ordered by KatSopr.dSopr, KatSopr.NSopr
+;
+
+Parameters
+  TypeSopr
+, OrgParam
+, dForm_nakl
+;
+
+//******************************************************************************
+procedure RunMyMenu;
+{
+ var MyMenu : string;
+
+  MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz';
+
+  case Mont of
+//------------------------------------------------------------------------------
+    201: MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz;Separator;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt229'
+                 + if (isPick600, ';'+ #AddComp('L_SOPRDOC')'mnuFromNakl600', '');
+//------------------------------------------------------------------------------
+    210: MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz;Separator;'
+                 + #AddComp('L_SOPRDOC')'mnuFromNakl;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt229'
+                 + if (isPick600, ';'+ #AddComp('L_SOPRDOC')'mnuFromNakl600', '');
+//------------------------------------------------------------------------------
+    229: MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz;Separator;'
+                 + #AddComp('L_SOPRDOC')'mnuFromNakl;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt';
+//------------------------------------------------------------------------------
+    101: MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz;Separator;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt115';
+//------------------------------------------------------------------------------
+    115: MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz;Separator;'
+                 + #AddComp('L_SOPRDOC')'mnuFromNakl101';
+//------------------------------------------------------------------------------
+    600: MyMenu := #AddComp('L_SOPRDOC')'mnuGetMCVz;Separator;'
+                 + #AddComp('L_SOPRDOC')'mnuFromNakl;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt;'
+                 + #AddComp('L_SOPRDOC')'mnuFromAkt229';
+//------------------------------------------------------------------------------
+   end;
+
+ MyMenu := MyMenu + ';Separator;' + #AddComp('L_SOPRDOC')'mnuCelUch';
+ if (CurTable = #KatSopr)
+   DisableCommand(cmIerarchy);
+
+ PutHotCommand(RunDynMenu(MyMenu));
+
+ EnableCommand(cmIerarchy);
+}
+
+procedure SetTitleName;
+{
+  case TypeSopr of
+  //------------------------------------------------------------------------------
+  106: {
+         case Mont of
+         201 : SetTitle('Выбор матценностей для возврата из накладных на отпуск')
+         210 : SetTitle('Выбор матценностей для возврата из актов передачи оборудования в монтаж')
+         229 : SetTitle('Выбор матценностей для возврата из актов передачи материалов на строительство');
+         end;
+       }
+  //------------------------------------------------------------------------------
+  629: {
+         if (wGetTune('Country') = 1) // Беларусь
+           SetTitle('Выбор матценностей для справки об использованных материалах заказчика')
+         else
+           SetTitle('Выбор матценностей для Отчета по форме М-29 (Ведомости переработки давальческих материалов)');
+       }
+  //------------------------------------------------------------------------------
+  610: {
+         SetTitle('Выбор матценностей для реестра смонтированного оборудования');
+       }
+  //------------------------------------------------------------------------------
+  1610: {
+          SetTitle('Выбор матценностей для ведомости оборудования, монтаж которого начат');
+        }
+  //------------------------------------------------------------------------------
+  206: {
+         case Mont of
+         101 : SetTitle('Выбор матценностей для возврата из накладных на прием')
+         115 : SetTitle('Выбор матценностей для возврата из актов о приемке материалов')
+         end;
+       }
+  //------------------------------------------------------------------------------
+  end; // case
+}
+
+Procedure MakePickTable555(KOL:double);
+{
+  tblGetMcVz.PickKol    := KOL;
+  tblGetMcVz.cSpSopr    := SpSopr.NRec;
+  tblGetMcVz.cOtpEd     := SpSopr.cOtpEd;
+  tblGetMcVz.PickKolUth := fEdIzm.ConvertToUchEd(KOL, SpSopr.cOtpEd);
+
+  if (GetFirst KatOtpEdUth = tsOk)
+    tblGetMcVz.cUthEd := KatOtpEdUth.NRec;
+
+  if (NOT isValid(tntblGetMcVz))
+  {
+    if ( tblGetMcVz.PickKol <> 0 )
+    {
+      if ( GetLast tblGetMcVz2 ordered by tblGetMcVz2.PickNum = tsOk )
+        tblGetMcVz.PickNum := tblGetMcVz2.PickNum + 1;
+
+       tblGetMcVz.cSpOrder := SpOrder.NRec;
+
+       Insert Current tblGetMcVz;
+    }
+  }
+  else
+    if (tblGetMcVz.PickKol <> 0)
+      Update Current tblGetMcVz
+    else
+      Delete Current tblGetMcVz;
+}
+
+! Установка фильтров на документ в заданном диапазоне
+Procedure SetSoprFlt;
+var aBegDate, aEndDate: date;
+{
+  ReadMyDsk(aBEGdate,'aBEGdate_Getmcvz',false);
+  ReadMyDsk(aENDdate,'aENDdate_Getmcvz',false);
+
+  if (RunDialog(GetInterval,abegdate,aenddate) <> cmCancel)
+    {
+      if (abegdate > aenddate)
+        {
+          Message(''#3'Начальная дата фильтра больше конечной. Фильтр не изменен...',Information);
+          Exit;
+        }
+      begdate := abegdate;
+      enddate := aenddate;
+      PushBounds(tbdMainBound);
+      isFilter:=true;
+    }
+  else
+    if (not isFilter)
+      Exit
+    else
+      if (Message(''#3'Снять установленный фильтр ?',YesNo) = cmYes)
+        {
+          PushBounds(tbMainBound);
+          isFilter := false;
+        }
+
+  SaveMyDSK(aBEGdate,'aBEGdate_Getmcvz');
+  SaveMyDSK(aENDdate,'aENDdate_Getmcvz');
+
+  RereadRecord(#KatSopr);
+  RereadRecord(#Sklorder);
+}
+
+
+Procedure KillPick;
+{
+  delete all tblGetMcVz2;
+
+  ReReadRecord;
+}
+
+Procedure AllPick;
+{
+ tmpkol := 0;
+ if (RunDialog(GetPickKolAll,tmpkol) = cmCancel) Exit;
+   StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,
+    ''#3'Помечаю позиции документа.',1);
+ _loop SpOrder
+  {
+   if not NextVisual break;
+
+   case CurField of
+     #PickKolUchEd, #KatEd.Name: {
+       tblGetMcVz.InOtpEd := 0;
+     }
+   else
+     tblGetMcVz.InOtpEd := 1;
+   end;
+
+   MakePickTable555(tmpkol);
+  }
+ StopVisual('',0);
+ rereadrecord;
+}
+
+//******************************************************************************
+// Формирование накладной по закрытым ДО
+Function CheckStatusDO: boolean;
+{
+  CheckStatusDO := TRUE;
+
+  if (isCheckStateDO)
+    if (GetFirst StepDoc = tsOk)
+      if (GetFirst BaseDoc = tsOk)
+        if (BaseDoc.Status = 3)
+          CheckStatusDO := FALSE;
+}
+
+//******************************************************************************
+Panel NklList show at (,,,9)
+Table KatSopr;
+Screen scrOrgName show at (,,,2) fields
+ KatOrg.Name : skip;
+<<
+ Контрагент .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen scrOrgName
+
+Browse brNklList ('',hcGetMCVz,sci1EnEsc) show at (,3,,)
+table KatSopr;
+fields
+ KatDoc.Name   #3'Тип документа' ('Тип документа'): [22], Protect, NoAutosize;
+ KatSopr.dSopr #3'Дата' ('Дата формирования накладной',,):[10], protect, NoAutoSize, Centered;
+ KatSopr.NSopr #3'Номер' ('Номер накладной',,) : [21], protect;
+ KatSopr.Name  #3'Примечание'('Примечание',,) : [40], protect;
+ VhNal         #3'Вх.налога' ('Входимость налогов в цену позиций матценностей',,):[6], protect, NoAutoSize, Centered;
+ Valut         #3'Вал' ('Валюта документа',,):[4], Skip, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+end; // browse brNklList
+
+HandleEvent
+cmMarkUnMark : AllPick;
+cmPositionChanged : KillPick;
+cmDelOnProtect : Abort;
+cmSetCurTable: ReReadRecord;//визуализация на последнем документе
+end;
+end; // Panel NklList
+
+Panel MCList show at (,10,,)
+table SklOrder, Cartesian;
+
+Browse brMC1 ('',hcGetMCVz,sci1EnIns) show at (,10,,16)
+Table
+  Sklorder;
+Fields {Font = {Color = if (tblGetMcVz.PickKol <> 0, ColorMark, 0)}};
+  tblGetMcVz.InOtpEd #3'Ед'             ('Выбор в единице измерения. ОтпЕд - отпускной, УчЕд - учетной',,):
+                        [LIST 'УчЕд', 'ОтпЕд'],                               [ 5  ], Protect;
+  tblGetMcVz.PickKol #3'Выбор в отп.ед' ('Укажите количество МЦ'         ,,): [ 9.3], NoProtect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 1}};
+  Aktkol             #3'Количество'     ('Количество в ордере в отп.ед.' ,,): [10.3], Protect;
+  OtpEd              #3'ОтпЕд'          ('Отпускная единица измерения МЦ',,): [ 6  ], Protect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 1}};
+  PickKolUchEd       #3'Выбор в уч.ед'  ('Укажите количество МЦ'         ,,): [ 9.3], NoProtect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 0}};
+  fEdIzm.ConvertToUchEd(Aktkol, SpSopr.cOtpEd)
+                     #3'Количество'     ('Количество в ордере в уч.ед.'  ,,): [10.3], Protect;
+  KatEd.Name         #3'УчЕд'           ('Учетная единица измерения МЦ'  ,,): [ 6  ], Protect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 0}};
+  KatMC.BarKod       #3'Код'            ('Код МЦ'                        ,,): [14  ], Protect;
+  KatMC.Name         #3'Название'       ('Название МЦ'                   ,,): [20  ], Protect;
+  SpSopr.rPrice      #3'Цена'           ('Цена по накладной'             ,,): [12.2], Protect;
+  SmetaMy            #3'Смета'          ('Локальная смета: "Номер" : "Наименование"'            ): [20], Protect;
+  SmetaSpMy          #3'Спецификация сметы'('Спецификация сметы: "№ п/п" ("Код") "Наименование"'): [20], Protect;
+end;
+
+Browse brMC2 ('',hcGetMCVz,sci1EnIns) show at (,10,,16)
+Table
+  Sklorder;
+Fields {Font = {Color = if (tblGetMcVz.PickKol <> 0, ColorMark, 0)}};
+  tblGetMcVz.InOtpEd #3'Ед'             ('Выбор в единице измерения. ОтпЕд - отпускной, УчЕд - учетной',,):
+                        [LIST 'УчЕд', 'ОтпЕд'],                               [ 5  ], Protect;
+  tblGetMcVz.PickKol #3'Выбор в отп.ед' ('Укажите количество МЦ'         ,,): [ 9.3], NoProtect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 1}};
+  Aktkol             #3'Количество'     ('Количество в ордерев отп.ед.'  ,,): [10.3], Protect;
+  OtpEd              #3'ОтпЕд'          ('Отпускная единица измерения МЦ',,): [ 6  ], Protect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 1}};
+  PickKolUchEd       #3'Выбор в уч.ед'  ('Укажите количество МЦ'         ,,): [ 9.3], NoProtect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 0}};
+  fEdIzm.ConvertToUchEd(Aktkol, SpSopr.cOtpEd)
+                     #3'Количество'     ('Количество в ордере в уч.ед.'  ,,): [10.3], Protect;
+  KatEd.Name         #3'УчЕд'           ('Учетная единица измерения МЦ'  ,,): [ 6  ], Protect,
+    {Font = {Bold = tblGetMcVz.InOtpEd = 0}};
+  KatMC.Name         #3'Название'       ('Название МЦ'                   ,,): [20  ], Protect;
+  KatMC.BarKod       #3'Код'            ('Код МЦ'                        ,,): [14  ], Protect;
+  SpSopr.rPrice      #3'Цена'           ('Цена по накладной'             ,,): [12.2], Protect;
+  SmetaMy            #3'Смета'          ('Локальная смета: "Номер" : "Наименование"'           ): [20], Protect;
+  SmetaSpMy          #3'Спецификация сметы'('Спецификация сметы: "№ п/п" ("Код") "Наименование"'): [20], Protect;
+end;
+
+screen InfoMC show at (,17,,) fields
+ SklOrder.NOrder : skip;
+ KatPodr.Name    : skip;
+ KatMol.Name     : skip;
+ KatParty.Name   : skip;
+<<
+ По ордеру .@@@@@@@@@@@@@ На складе .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ МОЛ .@@@@@@@@@@@@@@@@@@@ Партия .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+HandleEvent
+cmhotkeys:
+{
+ RunMyMenu;
+ stop;
+}
+
+cmAlt1:
+{
+  MakePickTable555(oAktRecFun.MaxKolInAkt(TypeSopr, SpOrder.NRec, comp(0), SpSopr.cOtpEd));
+
+  if not isValid(#tblGetMcVz)
+    message('Нет доступного для выбора кол-ва.');
+
+  RereadRecord;
+  stop;
+}
+
+cmPositionChanged : ReScanPanel (#KatSopr);
+
+cmDefault:
+{
+  ProcessCommand(cmPosDown);
+}
+
+cmExprFieldChanged:
+{
+  case CurField of
+    #PickKolUchEd:
+    {
+      tblGetMcVz.PickKol := double(ExprFieldValue);
+
+      if (GetFirst KatOtpEdUth = tsOk)
+        if (NOT fEdIzm.CheckKolDiskretAll(tblGetMcVz.PickKol, KatOtpEdUth.NRec, KatEd.nRec, TRUE, TRUE))
+        {
+          Stop;
+          Abort;
+        }
+
+      tblGetMcVz.InOtpEd := 0;
+      tblGetMcVz.PickKol := tblGetMcVz.PickKol / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+      MakePickTable555(tblGetMcVz.PickKol);
+      RereadRecord;
+    }
+  end;
+}
+
+cmCheckField:
+{
+  case CurField of
+    #tblGetMcVz.PickKol:
+    {
+      if (NOT fEdIzm.CheckKolDiskret(tblGetMcVz.PickKol, SpSopr.cOtpEd, TRUE, TRUE))
+      {
+        Stop;
+        Abort;
+      }
+
+      tblGetMcVz.InOtpEd := 1;
+
+      MakePickTable555(tblGetMcVz.PickKol);
+      RereadRecord;
+    }
+  end;
+}
+
+cmMarkUnMark :
+{
+  if (isValid(#tblGetMcVz))
+    Delete Current tblGetMcVz
+  else
+  {
+    tblGetMcVz.cSpSopr  := SpSopr.NRec;
+    tblGetMcVz.cOtpEd   := SpSopr.cOtpEd;
+    tblGetMcVz.cSpOrder := SpOrder.NRec;
+    tblGetMcVz.PickKol  := 1;
+
+    case CurField of
+      #PickKolUchEd, #KatEd.Name: {
+        tblGetMcVz.InOtpEd := 0;
+      }
+    else
+      tblGetMcVz.InOtpEd := 1;
+    end;
+
+    if (wGetTune('Pick.ChkGrpIns') = 1)
+      RunDialog(GetPickKolAll, tblGetMcVz.PickKol);
+
+    if ( GetLast tblGetMcVz2 ordered by tblGetMcVz2.PickNum = tsOk )
+      tblGetMcVz.PickNum := tblGetMcVz2.PickNum + 1;
+
+    Insert Current tblGetMcVz;
+  }
+
+  RedrawCurrentAndGo (GetCurrentFormat,true);
+}
+
+cmSelectAll :
+  AllPick;
+
+cmUnSelectAll :
+  KillPick;
+
+cmDelOnProtect :
+  Abort;
+
+end; // hanldeEvent MCList;
+end;
+
+HandleEvent
+cmInit :
+{
+  isPick600 := GetFirst AttrNam where (( coKatSopr  == AttrNam.wTable  AND
+                                         'PICK600'  == AttrNam.Name )) = tsOk;
+
+  s_SimvRub  := sGetTune('NDE.SimvRub');
+  begdate    := dGetTune('User.dFilter1');
+  endDate    := dGetTune('User.dFilter2');
+  isFilter   := false;
+  isCheckStateDO := boGetTune('Doc.StatusDoForReklNakl');
+
+  ReadMyDsk(DSK_VhodNal,'VhodNalFromAktRec',TRUE);
+
+  if ( Lic_ItemExists('SmetaDocs') )
+    {
+      SetFieldState(#SmetaMy,   sfVisible);
+      SetFieldState(#SmetaSpMy, sfVisible);
+    }
+  else
+    {
+      ClearFieldState(#SmetaMy,   sfVisible);
+      ClearFieldState(#SmetaSpMy, sfVisible);
+    }
+
+  Delete all tblGetMcVz2;
+
+  if ReadMyDsk(DSK_cVal,'cValFromAktRec',TRUE)
+    if (DSK_cVal<>-1)
+      PushCondition(tcFromAktRec);
+
+  PushCondition(tcNo_SN_KatSopr);
+
+  case TypeSopr of
+  //---------------------------
+  106: Mont := 201;
+  610, 1610: Mont := 210;
+  //---------------------------
+  629: Mont := 229;
+  //---------------------------
+  206: Mont := 101;
+  //---------------------------
+  end; // case
+
+  SetTitleName;
+
+  if (GetLast KatSopr <> tsOk)
+    {
+      case TypeSopr of
+      //-----------------------------------------------------------------
+       629 :
+         {
+           Message(''#3'Нет актов передачи материалов на строительство данному контрагенту',CancelButton);
+           Abort;
+         }
+      //-----------------------------------------------------------------
+       1610, 610 :
+         {
+           Message(''#3'Нет актов передачи оборудования в монтаж данному контрагенту',CancelButton);
+           Abort;
+         }
+      //-----------------------------------------------------------------
+       206 :
+         {
+           if (Mont = 101)
+             {
+               Mont := 115;
+
+               if (GetLast KatSopr <> tsOk)
+                 {
+                   Message('Нет накладных на прием матценностей и' + chr(13) +
+                           'актов о приемке материалов от данного контрагента.', CancelButton);
+                   Abort;
+                 }
+               else
+                 {
+                   Message('Нет накладных на прием матценностей от данного контрагента.' + chr(13) +
+                           'Выберите из актов о приемке материалов.', Information);
+
+                   SetTitle('Выбор матценностей для возврата из актов о приемке материалов');
+                 }
+             }
+         }
+      //-----------------------------------------------------------------
+       106 :
+         {
+           var msg201, msg210, msg229 : boolean;
+
+           msg201 := false;
+           msg210 := false;
+           msg229 := false;
+
+           if (Mont = 201)
+             {
+               msg201 := true;
+
+               Mont := 210;
+
+               if (GetLast KatSopr <> tsOk)
+                 {
+                   msg210 := true;
+
+                   Mont := 229;
+
+                   if (GetLast KatSopr <> tsOk)
+                     msg229 := true
+                   else
+                     {
+                       Message('Нет накладных на отпуск матценностей и' + chr(13) +
+                               'актов передачи оборудования в монтаж данному контрагенту.' + chr(13) +
+                               'Выберите из актов передачи материалов на строительство.', Information);
+
+                       SetTitle('Выбор матценностей для возврата из актов передачи материалов на строительство');
+                     }
+                 }
+               else
+                 {
+                   Message('Нет накладных на отпуск матценностей данному контрагенту.' + chr(13) +
+                           'Выберите из актов передачи оборудования в монтаж.', Information);
+
+                   SetTitle('Выбор матценностей для возврата из актов передачи оборудования в монтаж');
+                 }
+             }
+
+           if (msg201 and msg210 and msg229)
+             {
+               Message('Нет накладных на отпуск матценностей,' + chr(13) +
+                       'актов передачи оборудования в монтаж и' + chr(13) +
+                       'актов передачи материалов на строительство данному контрагенту.', CancelButton);
+               Abort;
+             }
+         }
+      //-----------------------------------------------------------------
+      end;
+    }
+
+  ReReadRecord(#KatSopr);
+}
+
+cmCancel : KillPick;
+
+cmDefault :
+  if (CurTable = #KatSopr)
+     {
+       stop;
+       if (Message(''#3'Отметить все позиции накладной?',YesNo) = cmYes)
+         AllPick;
+     }
+!------------- Alt+b
+cmFilterSave :
+  SetSoprFlt;
+
+cmValue1 :
+  {
+    Mont := 201;
+
+    if (GetLast KatSopr = tsOk)
+      {
+        SetTitle('Выбор матценностей для возврата из накладных на отпуск');
+      }
+    else
+      {
+        Mont := 210;
+
+        if (GetLast KatSopr = tsOk)
+          {
+            Message('Нет накладных на отпуск матценностей данному контрагенту.' + chr(13) +
+                    'Выберите из актов передачи оборудования в монтаж.', Information);
+
+            SetTitle('Выбор матценностей для возврата из актов передачи оборудования в монтаж');
+          }
+        else
+          {
+            Mont := 229;
+
+            if (GetLast KatSopr = tsOk)
+              {
+                Message('Нет накладных на отпуск матценностей и' + chr(13) +
+                        'актов передачи оборудования в монтаж данному контрагенту.' + chr(13) +
+                        'Выберите из актов передачи материалов на строительство.', Information);
+
+                SetTitle('Выбор матценностей для возврата из актов передачи материалов на строительство');
+              }
+          }
+      }
+
+    ReReadRecord(#KatSopr);
+    ReReadRecord(#Sklorder);
+  }
+
+cmValue2 :
+  {
+    Mont := 210;
+
+    if (GetLast KatSopr = tsOk)
+      {
+        SetTitle('Выбор матценностей для возврата из актов передачи оборудования в монтаж');
+      }
+    else
+      {
+        Mont := 229;
+
+        if (GetLast KatSopr = tsOk)
+          {
+            Message('Нет актов передачи оборудования в монтаж данному контрагенту.' + chr(13) +
+                    'Выберите из актов передачи материалов на строительство.', Information);
+
+            SetTitle('Выбор матценностей для возврата из актов передачи материалов на строительство');
+          }
+        else
+          {
+            Mont := 201;
+
+            if (GetLast KatSopr = tsOk)
+              {
+                Message('Нет актов передачи оборудования в монтаж и' + chr(13) +
+                        'актов передачи материалов на строительство данному контрагенту.' + chr(13) +
+                        'Выберите из накладных на отпуск.', Information);
+
+                SetTitle('Выбор матценностей для возврата из накладных на отпуск');
+              }
+          }
+      }
+
+    ReReadRecord(#KatSopr);
+    ReReadRecord(#Sklorder);
+  }
+
+cmValue3 :
+  {
+    Mont := 229;
+
+    if (GetLast KatSopr = tsOk)
+      {
+        SetTitle('Выбор матценностей для возврата из актов передачи материалов на строительство');
+      }
+    else
+      {
+        Mont := 201;
+
+        if (GetLast KatSopr = tsOk)
+          {
+            Message('Нет актов передачи материалов на строительство данному контрагенту.' + chr(13) +
+                    'Выберите из накладных на отпуск.', Information);
+
+            SetTitle('Выбор матценностей для возврата из накладных на отпуск');
+          }
+        else
+          {
+            Mont := 210;
+
+            if (GetLast KatSopr = tsOk)
+              {
+                Message('Нет накладных на отпуск матценностей и' + chr(13) +
+                        'актов передачи материалов на строительство данному контрагенту.' + chr(13) +
+                        'Выберите из актов передачи оборудования в монтаж.', Information);
+
+                SetTitle('Выбор матценностей для возврата из актов передачи оборудования в монтаж');
+              }
+          }
+      }
+
+    ReReadRecord(#KatSopr);
+    ReReadRecord(#Sklorder);
+  }
+
+cmValue4 :
+  {
+    Mont := 101;
+
+    if (GetLast KatSopr = tsOk)
+      {
+        SetTitle('Выбор матценностей для возврата из накладных на прием');
+      }
+    else
+      {
+        Message('Нет накладных на прием матценностей от данного контрагента.' + chr(13) +
+                'Выберите из актов о приемке материалов.', Information);
+
+        SetTitle('Выбор матценностей для возврата из актов о приемке материалов');
+      }
+
+    ReReadRecord(#KatSopr);
+    ReReadRecord(#Sklorder);
+  }
+
+cmValue5 :
+  {
+    Mont := 115;
+
+    if (GetLast KatSopr = tsOk)
+      {
+        SetTitle('Выбор матценностей для возврата из актов о приемке материалов');
+      }
+    else
+      {
+        Message('Нет актов о приемке материалов от данного контрагента.' + chr(13) +
+                'Выберите из накладных на прием матценностей.', Information);
+
+        SetTitle('Выбор матценностей для возврата из накладных на прием');
+      }
+
+    ReReadRecord(#KatSopr);
+    ReReadRecord(#Sklorder);
+  }
+
+cmValue7:
+  {
+    Mont := 600;
+
+    if (GetLast KatSopr = tsOk)
+      {
+        SetTitle('Выбор матценностей для возврата из накладных на внутреннее перемещение');
+      }
+    else
+      {
+        Mont := 210;
+
+        if (GetLast KatSopr = tsOk)
+          {
+            Message('Нет накладных на внутреннее перемещение' + chr(13) +
+                    'актов передачи материалов на строительство данному контрагенту.' + chr(13) +
+                    'Выберите из актов передачи оборудования в монтаж.', Information);
+
+            SetTitle('Выбор матценностей для возврата из актов передачи оборудования в монтаж');
+          }
+
+        else
+          {
+            Mont := 201;
+
+            if (GetLast KatSopr = tsOk)
+              {
+                Message('Нет актов передачи оборудования в монтаж и' + chr(13) +
+                        'актов передачи материалов на строительство данному контрагенту.' + chr(13) +
+                        'Выберите из накладных на отпуск.', Information);
+
+                SetTitle('Выбор матценностей для возврата из накладных на отпуск');
+              }
+          }
+      }
+
+    ReReadRecord(#KatSopr);
+    ReReadRecord(#Sklorder);
+  }
+
+cmHotKeys:
+  RunMyMenu;
+
+cmAlt1:
+  {
+    StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,
+     ''#3'Расчет доступного количества.',1);
+    _loop SpOrder
+      if not NextVisual
+        break;
+      else
+       MakePickTable555(oAktRecFun.MaxKolInAkt(TypeSopr, SpOrder.NRec, comp(0), SpSopr.cOtpEd));
+    StopVisual('',0);
+    RereadRecord;
+  }
+
+cmIerarchy :
+{
+  if (CurTable = #SklOrder and IsValid(#SpSopr))
+    RunInterface('EditMtr2Spec', 1, 0, word(coSpSopr), SpSopr.nRec);
+}
+
+end; // handleEvent Interface
+end.
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+
+mnuGetMCVz Menu
+{
+-'Фильтр по датам',cmFilterSave,'Установить/снять фильтр по датам',hci_sell_LokVbMatVozvrat,'Alt+B',kbAltB,sci1Esc;
+-'Расчет доcтупного для выбора кол-ва',cmAlt1,'Расчет доступного для выбора кол-ва для всего документа/текущей позиции',hci_sell_LokVbMatVozvrat,'Alt+1',kbAlt1,sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+
+mnuFromNakl Menu
+{
+-'Выбирать из накладных на отпуск матценностей', cmValue1, 'Изменить вид документа для выбора', hci_sell_LokVbMatVozvrat, '',,sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+
+mnuFromAkt Menu
+{
+-'Выбирать из актов передачи оборудования в монтаж', cmValue2, 'Изменить вид документа для выбора', hci_sell_LokVbMatVozvrat, '',,sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+
+mnuFromAkt229 Menu
+{
+-'Выбирать из актов передачи материалов на строительство', cmValue3, 'Изменить вид документа для выбора', hci_sell_LokVbMatVozvrat, '',,sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+
+mnuFromNakl101 Menu
+{
+-'Выбирать из накладных на прием матценностей', cmValue4, 'Изменить вид документа для выбора', hci_sell_LokVbMatVozvrat, '',,sci1Esc;
+}
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+
+mnuFromAkt115 Menu
+{
+-'Выбирать из актов о приемке материалов', cmValue5, 'Изменить вид документа для выбора', hci_sell_LokVbMatVozvrat, '',,sci1Esc;
+}
+
+
+#doc
+Целевой учет <link Interface L_SOPRDOC::GETMCVZ>L_SOPRDOC::GETMCVZ - Выбор матценностей для возврата</link>
+#end
+mnuCelUch Menu
+{
+-'Целевой учет', cmIerarchy, '', hcUKS_LokM_Chelev, 'Сtrl+U', kbCtrlU, sci1Esc;
+}
+
+mnuFromNakl600 Menu
+{
+-'Выбирать из накладных на внутреннее перемещение', cmValue7, 'Выбирать из накладных на внутреннее перемещение', hci_sell_LokVbMatVozvrat, '',,sci1Esc;
+}

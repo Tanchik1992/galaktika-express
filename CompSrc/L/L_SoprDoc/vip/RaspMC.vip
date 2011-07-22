@@ -1,0 +1,752 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║ Назначение    : автоматическое распределения по складам                   ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+//автоматическое распределение МЦ по складам для приходной накладной
+//согласно ПКП для группы VIP-договоров
+//ПИР 101.21713
+
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.vih           // функции целевого учета
+#end
+
+//******************************************************************************
+
+#doc
+Назначение:
+  автоматическое распределение МЦ по складам для приходной накладной
+
+Параметры:
+  pNRec - ссылка на сопр.документ
+#end
+
+//******************************************************************************
+
+Interface RaspVIPMC;
+
+Table STRUCT TmpMCRasp "Распределение МЦ по складам"
+(
+  cSpSopr     : comp   "ссылка на спецификацию",
+  cPodr       : comp   "ссылка на подразделение",
+  cMC         : comp   "ссылка на матценность",
+  KolUth      : double "Количество в учетных единицах",
+  KolPlan     : double "Суммарное кол-во по ПКП, уч.ед.",
+  KolOrd      : double "Суммарное кол-во по ордерам, уч.ед.",
+  KolRasp     : double "Потребность в кол-ве, уч.ед.",
+  Kol         : double "К-во в отп.ед., с учетом округления",
+  dMin        : date   "Нач. дата отгрузки по всем ПКП",
+  dMax        : date   "Кон. дата отгрузки по всем ПКП"
+)
+With Index
+(
+  TmpMCRasp01 = cSpSopr + cPodr,
+  TmpMCRasp02 = cPodr + cSpSopr
+);
+
+
+Table STRUCT TmpMCKol "Количество МЦ"
+(
+  cMC         : comp   "ссылка на матценность",
+  cPodr       : comp   "ccылка на склад",
+  KolRasp     : double "Распред. кол-во  по МЦ"
+)
+With Index
+(
+  TmpMCKol01 = cMC + cPodr
+);
+
+
+Table STRUCT TmpListDog "распределенные договора,согл."
+(
+  cDog    : comp "ссылка на договор",
+  cSpSopr : comp "ссыкла на спецификацию"
+)
+With Index
+(
+  TmpListDog01 = cDog + cSpSopr
+);
+
+Table STRUCT TmpListPlan "распределенные ПКП"
+(
+  cPlan   : comp "ссылка на ПКП",
+  cSpSopr : comp "ссыкла на спецификацию"
+)
+With Index
+(
+  TmpListPlan01 = cPlan + cSpSopr
+);
+
+create view
+var
+   pNRec    : comp;    //накладная
+   pGrDog   : comp;    //ссылка на группу договоров
+   pMC      : comp;    //ссылка на матценность
+   pSpSopr  : comp;
+
+   _dRasp   : date;    //дата проверки периода договора(ПКП)
+   e        : double;  //точность в количестве
+
+from
+   KatSopr, SpSopr(SpSopr11), SoprOrdB,
+
+   SpGrSch,
+   Dogovor,
+   Synonym Dogovor Dogovor2,
+   CalPlan,
+   IerDog,
+   IerCalPl,
+
+   SpDocs,
+   Synonym SpDocs SpDocs2,
+   KatOtpEd,
+   Synonym KatOtpEd KatOtpEd2,
+   Synonym KatOtpEd KatOtpEdDocs,
+
+   KatPodr,
+   SklOrder,
+   SpOrder,
+   GroupSch,
+
+   TmpMCRasp,
+   TmpMCKol,
+   TmpListPlan,
+   TmpListDog
+
+where
+((
+   pNRec             ==  KatSopr.NRec       and
+   KatSopr.NRec      ==  SpSopr.cSopr       and
+   word(1)           ==  SpSopr.PrMC        and
+   SpSopr.NRec       ==  SoprOrdB.cSpSopr   and
+   SpSopr.cOtpEd     ==  KatOtpEd.NRec      and
+   SpSopr.cMCUsl     ==  KatMC.NRec         and
+   KatMC.cEd         ==  KatEd.NRec         and
+
+
+   pGrDog            ==  SpGrSch.cGroupSch  and
+   word(1)           ==  SpGrSch.wList      and
+   SpGrSch.cBaseDoc  ==  Dogovor2.nRec      and
+
+   Dogovor2.nRec     ==  IerDog.cUpRec      and
+   word(1)           ==  IerDog.IsLeaf      and
+   IerDog.cRec       ==  Dogovor.NRec       and
+   Dogovor.NRec      ==  IerCalPl.cDogovor  and
+   word(1)           ==  IerCalPl.IsLeaf    and
+   IerCalPl.cRec     ==  CalPlan.nRec       and
+
+
+   CalPlan.cOrg      ==  KatOrg.nRec        and
+   word(403)         ==  SpDocs.TiDk        and //ПКП
+   CalPlan.nRec      ==  SpDocs.cDoc        and
+   SpDocs.cOtpEd     ==  KatOtpEdDocs.Nrec  and
+
+   Dogovor2.cDopKlas ==  KatPodr.NRec       and //привязка склада к верхнему уровню договоров
+   word(0)           ==  SklOrder.SP        and //склад
+   word(0)           ==  SklOrder.VidOrder  and //приходный ордер
+   KatPodr.Nrec      ==  SklOrder.cPodr
+
+))
+
+bounds  SpecifOrder = SklOrder.Nrec  ==  SpOrder.cSklOrder  and
+                      pMC            ==  SpOrder.cMC
+
+bounds  SpecifDog   = Dogovor.TiDk   ==  SpDocs2.TiDk  and
+                      Dogovor.Nrec   ==  SpDocs2.cDoc
+
+bounds  SpecifDog2  = SpDocs2.cOtpEd  ==  KatOtpEd2.NRec
+
+bounds  _TmpMCRasp  = pSpSopr        ==  TmpMCRasp.cSpSopr  and
+                      KatPodr.NRec   ==  TmpMCRasp.cPodr
+
+;
+
+Parameters
+  pNrec;
+
+Form frmProt('rasp_err.out','ERRR') with novisual;
+Form frmRasp('raspmc.out','RaspMC') with novisual;
+
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+#end
+
+//проверка привязки подразделений
+function CheckPodrInDg (aGrDog : comp) : boolean;
+begin
+
+  pGrDog := aGrDog;
+  CheckPodrInDg := true;
+  if GetFirst GroupSch = tsOk
+   _Loop SpGrSch
+     if (Dogovor2.Status = 1) and (Dogovor2.cDogovor = 0)
+       if GetFirst KatPodr <> tsOk
+       {
+         frmProt.write('Для договора ' + Dogovor2.Descr + '\' + Dogovor2.NoDoc +
+                       ' от ' + string(Dogovor2.dDoc) + ' не задано подразделение ' +
+                       '(Расширенная информация -> Назначение)');
+         CheckPodrInDg := false;
+       }
+end;
+
+//расчет общего кол-ва для каждой МЦ спецификации в учетных единицах
+function PreparKolSpecif : integer;
+var
+  i : integer;
+begin
+
+  ResetBounds(tnTmpMCRasp);
+  delete all  TmpMCRasp;
+  SetBounds  (tnTmpMCRasp);
+
+  ResetBounds(tnTmpMCKol);
+  delete all  TmpMCKol;
+  SetBounds  (tnTmpMCKol);
+  i := 0;
+
+  _Loop SpSopr
+  {
+    i := i + 1;
+  }//_Loop
+
+  PreparKolSpecif := i;
+
+end;
+
+//распределенные планы
+function CheckPlan(aPlan,aRec: comp): boolean;
+{
+  if GetFirst TmpListPlan where ((aPlan == TmpListPlan.cPlan and
+                                  aRec  == TmpListPlan.cSpSopr )) = tsOk
+    CheckPlan := false
+  else
+  {
+    CheckPlan := true;
+    TmpListPlan.cPlan   := aPlan;
+    TmpListPlan.cSpSopr := aRec;
+    insert current TmpListPlan;
+  }
+}
+//распределенные договора
+function CheckDog(aDog,aRec: comp): boolean;
+{
+  if GetFirst TmpListDog where ((aDog == TmpListDog.cDog and
+                                 aRec == TmpListDog.cSpSopr)) = tsOk
+    CheckDog := false
+  else
+  {
+    CheckDog := true;
+    TmpListDog.cDog    := aDog;
+    TmpListDog.cSpSopr := aRec;
+    insert current TmpListDog;
+  }
+}
+
+//распределенное кол-во по тек.позиции спецификации (в отпускных единицах)
+function KolSoprOdrB: double;
+var
+  tKol: double;
+{
+  if GetFirst SoprOrdB where ((SpSopr.NRec == SoprOrdB.cSpSopr)) <> tsOk
+    KolSoprOdrB := double(0);
+  else
+  {
+    tKol := double(0);
+
+    _Loop SoprOrdB where ((SpSopr.NRec == SoprOrdB.cSpSopr))
+       tKol := tKol + SoprOrdB.Kol;
+
+    KolSoprOdrB := tKol;
+  }
+}
+
+//расчет оприходованного количества для каждой МЦ спецификации накладной
+//за период действия ПКП
+function CalcKolInOrder (aMC : comp) : boolean;
+var
+  tKol : double;
+begin
+  pMC := aMC;
+  AddBounds(tbSpecifOrder);
+  CalcKolInOrder := true;
+
+  if GetFirst GroupSch = tsOk
+   _Loop SpGrSch
+    if (Dogovor2.Status = 1) and (Dogovor2.cDogovor = 0)
+     {
+       if GetFirst KatPodr = tsOk
+       {
+         tKol := double(0);
+         _Loop SklOrder
+          if (TmpMCRasp.dMin <= SklOrder.dOrd) and
+             (TmpMCRasp.dMax >= SklOrder.dOrd)
+          {
+            _Loop SpOrder
+              tKol := tKol + SpOrder.Kol;
+
+          }
+         TmpMCRasp.KolOrd := tKol;
+         update current TmpMCRasp;
+       }
+       else CalcKolInOrder := false;
+     }
+  SubBounds(tbSpecifOrder);
+//  RereadRecord(tnTmpMCRasp);
+end;
+
+
+//расчет планируемого кол-ва в соответствии с ПКП для текущей МЦ спецификации накладной
+//на период действия ПКП в учетных единицах измерения
+function CalcKolInCalPlan (aMC : comp) : boolean;
+var
+  tKol,koefp : double;
+begin
+
+  CalcKolInCalPlan := true;
+  AddBounds  (tbSpecifDog);
+  AddBounds  (tbSpecifDog2);
+
+  if getfirst GroupSch = tsOk
+  {
+   _Loop SpGrSch
+    if (Dogovor2.Status = 1) and (Dogovor2.cDogovor = 0)
+     if GetFirst KatPodr = tsOk
+     {
+      if GetFirst TmpMCRasp <> tsOk
+      {
+        ClearBuffer(tnTmpMCRasp);
+        TmpMCRasp.cPodr   := KatPodr.NRec;
+        TmpMCRasp.cSpSopr := SpSopr.NRec;
+        TmpMCRasp.cMC     := aMC;
+        TmpMCRasp.KolPlan := double(0);
+        TmpMCRasp.KolOrd  := double(0);
+        TmpMCRasp.dMin    := _dRasp;
+        TmpMCRasp.dMax    := _dRasp;
+
+        koefp := 1;
+        if SpSopr.cOtpEd <> 0 koefp := KatOtpEd.koef;
+
+        TmpMCRasp.KolUth  := (SpSopr.KolFact - KolSoprOdrB) * koefp;
+        TmpMCRasp.Kol     := double(0);
+        insert current TmpMCRasp;
+      }
+
+      tKol := double(0);
+
+      _Loop IerDog
+       if Dogovor.Status = 1
+        if GetFirst IerCalPl = tsOk  //подсчет по ПКП
+        {
+         _Loop IerCalPl
+          if (IerCalPl.cUpRec = IerCalPl.cRec)
+           if CalPlan.Status = 1
+            if (CalPlan.dFrom <= _dRasp)
+             if (CalPlan.DtO  >= _dRasp)
+              if CheckPlan(CalPlan.NRec,TmpMCRasp.cSpSopr)
+              {
+               _Loop SpDocs
+                if SpDocs.Direct = 1
+                 if SpDocs.cMcUsl = aMC
+                 {
+                   koefp := 1;
+                   if SpDocs.cOtpEd <> 0 koefp := KatOtpEdDocs.koef;
+                   tKol := tKol + SpDocs.Kol*koefp;
+                 }
+               if tKol > double(0)
+               {
+                 if CalPlan.dFrom < TmpMCRasp.dMin
+                    TmpMCRasp.dMin := CalPlan.dFrom;
+
+                 if CalPlan.DtO > TmpMCRasp.dMax
+                    TmpMCRasp.dMax := CalPlan.DtO;
+
+                 update current TmpMCRasp;
+               }
+              }
+        }
+        else  //подсчет по договору или соглашению
+        {
+         if (Dogovor.DBEG <= _dRasp)
+          if (Dogovor.DEND >= _dRasp)
+           if CheckDog(Dogovor.NRec,TmpMCRasp.cSpSopr)
+           {
+             _Loop SpDocs2
+              if SpDocs2.Direct = 1
+               if SpDocs2.cMcUsl = aMC
+               {
+                 koefp := 1;
+                 if SpDocs2.cOtpEd <> 0 koefp := KatOtpEd2.koef;
+                 tKol := tKol + SpDocs2.Kol*koefp;
+               }
+
+             if tKol > double(0)
+             {
+               if Dogovor.DBEG < TmpMCRasp.dMin
+                  TmpMCRasp.dMin := Dogovor.DBEG;
+
+               if Dogovor.DEND > TmpMCRasp.dMax
+                  TmpMCRasp.dMax := Dogovor.DEND;
+
+               update current TmpMCRasp;
+             }
+           }
+
+        }
+
+       TmpMCRasp.KolPlan := TmpMCRasp.KolPlan + tKol;
+       update current TmpMCRasp
+     }
+     else CalcKolInCalPlan := false;
+  }
+
+  SubBounds(tbSpecifDog2);
+  SubBounds(tbSpecifDog);
+
+end;
+
+//расчет недопоставленного кол-ва для текущей МЦ спецификации накладной в соответствии с ПКП
+//в учетных единицах измерения
+function CalcKolUth (aGrDog : comp) : boolean;
+begin
+
+    pGrDog := aGrDog;
+    CalcKolUth := true;
+
+    pSpSopr := SpSopr.NRec;
+    AddBounds(tb_TmpMCRasp);
+
+    if not CalcKolInCalPlan(SpSopr.cMCUsl)
+       CalcKolUth := false;
+
+    if not CalcKolInOrder(SpSopr.cMCUsl)
+       CalcKolUth := false;
+
+    SubBounds(tb_TmpMCRasp);
+end;
+
+//сохранение остатка по тек. позиции
+procedure SaveOstKol (aMC,aPodr : comp; aKol : double);
+begin
+    if GetFirst TmpMCKol
+       where (( aMC   ==  TmpMCKol.cMC  and
+                aPodr ==  TmpMCKol.cPodr )) = tsOk
+    {
+       TmpMCKol.KolRasp := TmpMCKol.KolRasp + aKol;
+       update current TmpMCKol;
+    }
+    else
+    {
+      ClearBuffer(tnTmpMCKol);
+      TmpMCKol.cMC   := aMC;
+      TmpMCKol.cPodr := aPodr;
+      TmpMCKol.KolRasp   := aKol;
+      insert current TmpMCKol;
+    }
+
+end;
+
+function GetOstKol (aMC,aPodr : comp) : double;
+begin
+    GetOstKol := comp(0);
+    if GetFirst TmpMCKol
+       where (( aMC   ==  TmpMCKol.cMC  and
+                aPodr ==  TmpMCKol.cPodr )) = tsOk
+    {
+       GetOstKol := TmpMCKol.KolRasp;
+    }
+end;
+
+// Установка значений полей по умолчанию для SoprOrdB
+// из soprordb.vpp - не хотелось всю эту ... ради 1-й ф-ии подинклуживать
+procedure DefaultSoprOrdB;
+{
+  ClearBuffer(#SoprOrdB);
+  SoprOrdB.cSoprDoc := KatSopr.NRec;
+  SoprOrdB.cSpSopr  := SpSopr.NRec;
+  SoprOrdB.cParty   := SpSopr.cParty;
+  SoprOrdB.cVal     := SpSopr.cVal;
+  SoprOrdB.Price    := SpSopr.Price;
+  SoprOrdB.VPrice   := SpSopr.VPrice;
+  SoprOrdB.cUKS     := SpSopr.cUKS;
+  SoprOrdB.Price    := SpSopr.rPrice;
+  SoprOrdB.VPrice   := SpSopr.rVPrice;
+  SoprOrdB.cOtpEd   := SpSopr.cOtpEd;
+  SoprOrdB.cMc      := SpSopr.cMCUsl;
+}
+
+//Распределение по складам в процентном отношении ПКП и спецификации
+procedure  ExecuteRasp;
+var
+  //все в уч.единицах по одной позиции накладной
+  tAllKol, //общее кол-во к распределению по всем складам
+  tKol,    //распределенное кол-во по одному складу
+  tOstKol, //остаток превышения кол-ва по плану
+  tKolUth, //нераспределенное кол-во
+
+  tPart,   //доля по одному складу в общем кол-ве
+  Koefp    //кэффициэнт пересчета из учетных в отпускцые
+  : double;
+
+begin
+  _Loop SpSopr
+  {
+
+    tAllKol := double(0);
+
+    _Loop TmpMCRasp
+    if SpSopr.NRec = TmpMCRasp.cSpSopr
+    {
+      TmpMCRasp.KolOrd := TmpMCRasp.KolOrd +
+                 GetOstKol(TmpMCRasp.cMC,TmpMCRasp.cPodr);//остаток текущего распределения
+
+      TmpMCRasp.KolRasp := TmpMCRasp.KolPlan - TmpMCRasp.KolOrd;
+
+      if TmpMCRasp.KolRasp < 0
+         TmpMCRasp.KolRasp := 0;
+      Update Current TmpMCRasp;
+
+      tAllKol := tAllKol + TmpMCRasp.KolRasp;
+
+    }
+
+    if tAllKol > double(0)
+     if GetFirst TmpMCRasp where ((SpSopr.NRec == TmpMCRasp.cSpSopr)) = tsOk
+     {
+      tKolUth := TmpMCRasp.KolUth;
+      _LOOP TmpMCRasp where ((SpSopr.NRec == TmpMCRasp.cSpSopr))
+      {
+         tPart := TmpMCRasp.KolRasp/tAllKol;
+         tKol  := tKolUth*tPart;
+         if tKol > TmpMCRasp.KolRasp //превышение плана
+         {
+           tOstKol := tKol - TmpMCRasp.KolRasp;
+           tKol    := TmpMCRasp.KolRasp;
+         }
+
+         if KatEd.Diskret = 1   //округление для дискретных уч.единиц
+         {
+            tKol    := Round(tKol);
+         }
+
+         //контроль превышения кол-ва в позиции накладной
+         if tKol > tKolUth
+          if KatEd.Diskret = 1   //округление для дискретных уч.единиц
+             tKol := trunc(tKolUth);
+          else
+             tKol := tKolUth;
+
+         Koefp := 1;
+         if SpSopr.cOtpEd <> comp(0) koefp := KatOtpEd.koef;
+
+         //округление отпускных единиц
+         if KatOtpEd.Diskret = 1
+         {
+           TmpMCRasp.Kol := Round(tKol/koefp);
+           tKol    := TmpMCRasp.Kol*koefp;
+         }
+         else
+         {
+           TmpMCRasp.Kol := tKol/koefp;
+         }
+
+         //вычесть распределеное
+         tAllKol := tAllKol - TmpMCRasp.KolRasp;
+         tKolUth := tKolUth - tKol;
+
+         Update Current TmpMCRasp;
+
+         if TmpMCRasp.Kol > 0
+         {
+            if GetFirst SoprOrdB
+                  where(( SpSopr.NRec     ==  SoprOrdB.cSpSopr  and
+                          TmpMCRasp.cPodr ==  SoprOrdB.cPodr (noindex) )) <> tsOk
+            {
+              DefaultSoprOrdB;
+              SoprOrdB.cPodr   := TmpMCRasp.cPodr;
+              SoprOrdB.Kol     := TmpMCRasp.Kol;
+              insert current SoprOrdB;
+            }
+            else
+            {
+              SoprOrdB.Kol := SoprOrdB.Kol + TmpMCRasp.Kol;
+              update current SoprOrdB;
+            }
+            SaveOstKol (SpSopr.cMCUsl, SoprOrdB.cPodr, tKol+tOstKol);
+#ifdef __MTR_TO_SPEC__
+            oMTRFun.CopySpecMTR(coSpSopr, SpSopr.nRec, coSoprOrdB, SoprOrdB.nRec);
+#end
+         }
+     }
+   }
+  }//_loop
+end;
+
+//Запуск распределения на дату
+Function AddRasp: boolean;
+var
+  iCount : integer;
+  bError : boolean;
+{
+   AddRasp := false;
+   bError  := false;
+
+   iCount := PreparKolSpecif;
+
+   StartNewVisual(vtIndicatorVisual,vfTimer,'Распределение по складам на '+string(_dRasp),iCount);
+   _Loop SpSopr
+   {
+     if not CalcKolUth(coGetTune('Dog.GrVipDog'))
+     {
+       message('Ошибки в расчете количества');
+       bError := true;
+       break;
+     }
+     NextVisual;
+   }
+   if not bError ExecuteRasp;
+   //проверка - все ли распределено
+   var tKol: double;
+   _Loop SpSopr
+   {
+     if abs(SpSopr.KolFact - KolSoprOdrB) > e
+     {
+       AddRasp := true;
+       break;
+     }
+   }
+
+   StopVisual('Распределение завершено.',0);
+}
+
+//печать нереспределенных МЦ
+Procedure PrintNotRasp;
+var
+  tKol: double;
+{
+  frmRasp.write(KatSopr.NRec);
+  frmRasp.write(KatSopr.NSopr);
+  frmRasp.write(KatSopr.dSopr);
+  if GetFirst KatOrg where ((KatSopr.cOrgBase == KatOrg.NRec)) = tsOk
+    frmRasp.write(KatOrg.Name)
+  else
+    frmRasp.SkipFormat(1);
+
+  _Loop SpSopr
+  {
+    tKol := KolSoprOdrB;
+    if abs(SpSopr.KolFact - tKol) < e Continue;
+
+    frmRasp.write(SpSopr.NRec);
+    frmRasp.write(SpSopr.Npp);
+
+    if GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk
+      frmRasp.write(KatMC.Name)
+    else
+      Continue;
+
+    if SpSopr.cOtpEd = 0
+      frmRasp.SkipFormat(1)
+    else
+      frmRasp.write(KatOtpEd.Name);
+
+    frmRasp.write(SpSopr.KolFact);
+    frmRasp.write(tKol);
+    frmRasp.write(SpSopr.KolFact - tKol);
+  }
+
+  frmRasp.PutEvent(feBreak);
+  if (not frmRasp.Error)
+        frmRasp.ShowFile('');
+}
+
+Handleevent
+cmInit:
+{
+  abort;
+  if wGetTune('Dog.DopKlas') <> cgKau_KatPodr
+  {
+      message('Необходимо установить значение настройки'#10#13 +
+              'ОПЕРАТИВНЫЙ КОНТУР -> УПРАВЛЕНИЕ ДОГОВОРАМИ ->'#10#13 +
+              'ДОПОЛНИТЕЛЬНАЯ КЛАССИФИКАЦИЯ ДОГОВОРОВ'#10#13 +
+              'в значение: "Подразделения"!'  ) ;
+      exit;
+  }
+
+  if not CheckPodrInDg (coGetTune('Dog.GrVipDog'))
+  {
+     Message('Не для всех договоров указаны подразделения');
+     if (not frmProt.Error)
+        frmProt.ShowFile('');
+     exit;
+  }
+
+  if GetFirst SpSopr <> tsOk
+  {
+    message('Нет спецификации...');
+    exit;
+  }
+
+  if KatSopr.dOpr > date(0,0,0)
+  {
+     message('По документу сформированы ордера.'#10#13 +
+             'Для правильного распределения нужно их удалить.');
+     exit;
+  }
+
+  var isOst: boolean;
+  e := doGetTune('Oper.MinKolMC');
+  _dRasp := KatSopr.dSopr;
+  delete all TmpListPlan;
+  delete all TmpListDog;
+  _Loop SpSopr
+    _Loop SoprOrdB where ((SpSopr.NRec == SoprOrdB.cSpSopr))
+       delete current SoprOrdB;
+  Rereadrecord(tnSoprOrdB);
+  DO
+  {
+    isOst := AddRasp;
+    if isOst
+    {
+      case wGetTune('Doc.Buy.ReRaspMC') of
+       0: isOst := false; //остаток пойдет на выбранный склад
+       1: if Message('Остались нераспределенные матценности.'#10#13 +
+                     'Распределить остаток на '+
+                     string(Add_Months(_dRasp, 1))+'?', YesNo + Confirmation) = cmYes
+            _dRasp := Add_Months(_dRasp, 1)
+          else
+            isOst := false;
+
+       2: if RunDialog('GetDateRasp',_dRasp) = cmCancel
+            isOst := false
+      end;
+
+      if not isOst
+        PrintNotRasp;
+    }
+  }
+  WHILE isOst;
+
+  message('Распределение по складам завершено');
+
+}
+
+end;
+End.
+
+GetDateRasp DIALOG
+  StatusCtx scGalDial;
+Fields
+  _dRasp ('Дата распределения остатка'):date [,'DD/MM/YYYY'],noProtect;
+Buttons
+  cmOk,Default,,'Распределить остаток';
+  cmCancel   ,,,'Выход';
+
+<< 'Выбор даты'
+ Остались не распределенные матценности.
+ Выберите дату распределения остатка:
+
+ `Дата распределения`  .@@@@@@@@@@@
+
+  <.~П~родолжить.>     <. Отмена .>
+>>

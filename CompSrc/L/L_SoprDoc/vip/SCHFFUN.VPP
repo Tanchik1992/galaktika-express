@@ -1,0 +1,159 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Функции обработки счетов-фактур в накладных
+//******************************************************************************
+
+
+#ifndef _SCHFFUN_VPP
+#define _SCHFFUN_VPP
+
+#include SDfuns.var
+
+! Перед подключением данного модуля к системе должна быть описана
+! функция преобразования суммы func OnSchFactSumm(Value:double):double
+! Для возвратных накладных эта функция должна инвертировать сумму в
+! отрицательное значение
+! Должна быть описана функция CheckDocument : bool, которая
+! проверяет валидность KatSopr
+
+! В данном модуле используется глобальная переменная интерфейса
+! SchFactFlag : boolean;
+
+! Установка флага для модификации счета-фактуры
+procedure SetSchFactFlag;
+begin
+  if (KatSopr.cSchFact <> 0)
+    SchFactFlag := true;
+end;
+
+! Запуск интерфейса SchFact
+! mode - 0 : browse
+!        1 : append
+!        2 : edit
+
+function GetDirectShFact : word;
+{
+  GetDirectShFact := 0;
+  case KatSopr.VidSopr of
+   553, 554:
+    {
+      GetDirectShFact := 2;
+    }
+   557:
+    {
+      GetDirectShFact := 1;
+    }
+   552     : GetDirectShFact := 2;
+   504,513,551: GetDirectShFact := 1;
+   // накладные и акты из KatSopr
+   101..111, 114, 151, 201..211, 251, 1411, 1421:
+    {
+      case KatSopr.VidSopr of
+       102,106,203,206,114: // возвраты
+         GetDirectShFact := KatSopr.TipSopr;
+      else
+        case KatSopr.TipSopr of
+          1: GetDirectShFact := 2;
+          2: GetDirectShFact := 1;
+        end;
+      end;
+    }
+  end;
+  if ( GetDirectShFact = 0)
+    Message('Неизвестный тип документа, по которому формируется '+
+            'документ по учету НДС',Information);
+};
+
+procedure RunSchFact(mode : word);
+var doFlag : boolean;
+var aDirect : word;
+{
+  doFlag := true;
+  if (CurTable = #KatSopr) and (isModified)
+    doFlag := CheckDocument;
+
+  doFlag := (not isNew);
+
+  if (doFlag)
+    doFlag := Update_Current_KatSopr = tsOk;
+
+  if (doFlag)
+    {
+      aDirect := GetDirectShFact;
+
+      case wGetTune('Country') of
+        0, 3, 4, 5:
+          RunInterface('SchFact',KatSopr.cSchFact,aDirect,0,
+            KatSopr.cOrg,BaseDoc.NRec,StepDoc.NRec,
+            KatSopr.cVal,
+            if (wGetTune('Nalog.UchPolicy') = 1,1,4),
+            if (aDirect = 1,0,7200),Mode);
+        1:
+          RunInterface('Doc1Edit',KatSopr.cSchFact, if (aDirect = 1,72,73), comp(0), word(0));
+        2:
+          RunInterface('NalNakl',KatSopr.cSchFact,aDirect,0,
+            KatSopr.cOrg,BaseDoc.NRec,StepDoc.NRec,
+            0,
+            if (aDirect = 1,0,7600),Mode);
+      end;
+
+      RereadRecord;
+    }
+}
+
+! Проверяет корректность счета-фактуры при удалении накладной или
+! изменении сумм по накладной
+! SchFactFlag - глобальная переменная в накладных
+!               устанавливатеся в true при изменении
+!               суммы по накладной или удалении накладной
+!               к которой привязан счет-фактура
+
+function CheckSchFact(wOperation : word): boolean;
+{
+  CheckSchFact := True;
+  if (not SchFactFlag)
+    exit;
+  if (KatSopr.cSchFact = 0)
+    exit;
+
+  var strMess : string;
+  case ( wGetTune('Country') ) of
+    1:
+      strMess := ''#3'Данный документ зарегистрирован в журнале учета первичных документов под №' +
+                SchFact.Num+'.'#13#3'';
+    0,
+    3:
+      strMess := ''#3'Данный документ связан со счетом-фактурой №' +
+                   SchFact.Num+'.'#13#3'';
+    2:
+      strMess := ''#3'Данный документ связан с налоговой накладной №' +
+                SchFact.Num+'.'#13#3'';
+  end;
+
+  var wMode: word;
+  wMode := Warning + YesNo;
+  case (wOperation) of
+    1:
+      {
+        strMess := strMess + 'Вы пытаетесь удалить документ.'#13#3'';
+        wMode := wMode + CancelButton;
+      }
+    2:
+      strMess := strMess + 'Вы отредактировали документ.'#13#3'';
+  end; // case
+
+  strMess := strMess + 'Для корректной работы системы необходимо выполнить '+
+             'корректировку документа для учета НДС.'#13#13#3'Сделать это сейчас ?';
+
+  var wRes: word;
+  wRes := message(strMess, wMode);
+  if (wRes = cmYes)
+    RunSchFact(2);
+  CheckSchFact := not ( (wRes = cmCancel) and (wOperation = 1) );
+  SchFactFlag := False;
+}
+
+#include sopsch.vpp
+
+#end //_SCHFFUN_VPP

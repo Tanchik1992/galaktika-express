@@ -1,0 +1,767 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Приоритеты документов-оснований
+//******************************************************************************
+
+#include PlPorSimple.vih
+#include docs2obj.vih
+#include DOfuns.vih
+#include iSynch.vih      // синхронизация SoprHoz и BaseFin
+#include SchFactFunctions.vih
+#include SHManager.vih
+#include UKSfuns.vih
+
+//******************************************************************************
+
+#doc
+Приоритеты документов-оснований
+#end
+Interface PriorDoc 'Приоритеты документов на закупку' EscClose, Cyan;
+  Show at (,,, 14);
+
+//******************************************************************************
+
+#include DOfuns.var
+#include UKSfuns.var
+
+//******************************************************************************
+
+Create view
+
+Var
+//------------------------------------------------------------------------------
+  myNumBounds  // текущий bounds для PlPor
+, myfilialno
+               : longint;
+//------------------------------------------------------------------------------
+  nzap
+, BaseDocRec
+               : comp;
+//------------------------------------------------------------------------------
+  przap
+, IsDoc
+               : boolean;
+//------------------------------------------------------------------------------
+  myTidkUser
+, myTidkGal
+, myw
+, TipD
+, BNum         : word;
+//------------------------------------------------------------------------------
+  dcurse
+, dformna
+               : date;
+//------------------------------------------------------------------------------
+  myi
+               : integer;
+//------------------------------------------------------------------------------
+  SumPlpor
+, SummaVyp
+, opcurse
+, tmpSum
+               : double;
+//------------------------------------------------------------------------------
+  tmpNalog
+               : string[80];
+//------------------------------------------------------------------------------
+  NoPlatDoc
+               : tDocNumber;
+//------------------------------------------------------------------------------
+  Sim
+               : string[6];
+//------------------------------------------------------------------------------
+  mes1
+, s_SimvRub
+               : string;
+//------------------------------------------------------------------------------
+  piPlPor
+               : PlPorSimple;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if (BaseDoc.cVal = 0, s_SimvRub, KlVal.SimVolV)
+    ( FieldName = SimvolB )
+//------------------------------------------------------------------------------
+, if (SpStep.prMC = 1, KatMC.Name, KatUsl.Name)
+    ( FieldName = NamToVar )
+//------------------------------------------------------------------------------
+, if (SpStep.prMC = 1, 'МЦ', 'Усл')
+    ( FieldName = NamMC )
+//------------------------------------------------------------------------------
+, if (SpStep.cVal = 0, SpStep.Summa, SpStep.SumVal)
+    ( FieldName = SummaTov )
+//------------------------------------------------------------------------------
+, if (IsValid(tnPick2), '+', '')
+    ( FieldName = Picked )
+//------------------------------------------------------------------------------
+, PrintNumber(BaseDoc.Descr, BaseDoc.NoDoc)
+    ( FieldName = NomDes )
+//------------------------------------------------------------------------------
+
+, BaseDoc.NoDoc
+, KatOrg.Name
+, KatOtpEd.Name
+
+From
+  BaseDoc(BaseDoc10)
+, BaseFin
+, CursVal(CursVal04)
+, Filial
+, KatMC
+, KatNalog
+, KatOrg
+, KatOtpEd
+, KatUsl
+, KlVal
+, Pick Pick2
+, PlPor
+, SoprHoz
+, SpStep
+, StepDoc
+
+Where
+((
+    word(101)       == BaseDoc.VidDoc      // ДО на закупку
+and word(2)         == BaseDoc.Status      // только исполняемые
+and BaseDoc.nRec    == StepDoc.cBaseDoc
+and StepDoc.nRec    == SpStep.cStepDoc
+and SpStep.cMCUSL   == KatMC.nRec
+and SpStep.cMCUSL   == KatUsl.nRec
+and SpStep.cOtpEd   == KatOtpEd.nRec
+and BaseDoc.cVal    == KlVal.nRec
+and BaseDoc.cOrg    == KatOrg.nRec
+and BaseDoc.cOrg    == Filial.cOrg
+and BaseDoc.nRec    == BaseFin.cBaseDoc
+and word(15)        == Pick2.wList
+and BaseDoc.nRec    == Pick2.cRec
+
+and coGetTune('Nalog.cNalogNDS')
+                    == KatNalog.nRec
+))
+;
+
+//******************************************************************************
+
+Var
+  iSHoz : ObjSHmanager;
+
+//******************************************************************************
+
+#include iSynch.var      // синхронизация SoprHoz и BaseFin
+
+//******************************************************************************
+
+Procedure KillPick2;
+{
+  ResetBounds(#Pick2);
+  delete Pick2 where (( word(15) == Pick2.wList ));
+  SetBounds(#Pick2);
+}
+
+//******************************************************************************
+
+Procedure Pick2Ins;
+{
+  if ( IsValid(#Pick2) )
+    delete current Pick2;
+  else
+    {
+      Pick2.wList   := 15;
+      Pick2.PickNum := 100;
+      Pick2.PickKol := 0;
+      Pick2.cRec    := BaseDoc.nRec;
+
+      Insert current Pick2;
+    }
+#ifdef ATL51
+  RedrawCurrentAndGo(GetCurrentFormat, true);
+#else
+  if ( GetNext BaseDoc = tsOk )
+    CallToNeighbours(cmPosDown, #BaseDoc);
+
+  RescanPanel(#BaseDoc);
+#end
+}
+
+//******************************************************************************
+
+Procedure Pick2Plus;
+{
+  PushPos(#BaseDoc);
+  KillPick2;
+  StartNewVisual( vtRotateVisual
+                , vfTimer + vfBreak
+                , 'Пометка всех документов...'
+                , 1
+                );
+
+  _loop BaseDoc
+    {
+      if ( not NextVisual )
+        Break;
+      else
+        {
+          Pick2.wList   := 15;
+          Pick2.PickNum := 100;
+          Pick2.cRec    := BaseDoc.nRec;
+          Pick2.PickKol := 0;
+
+          Insert current Pick2;
+        }
+    }
+
+  PopPos(#BaseDoc);
+  ReReadRecord;
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+
+Procedure Pick2Minus;
+{
+  KillPick2;
+  ReReadRecord;
+}
+
+//******************************************************************************
+
+#include serv_str.vpp
+#include pl_step.vpp   // функция для pl_new
+#include pl_new.vpp    // новый номер ПП
+
+//******************************************************************************
+
+Window WSp 'Предметы счета';
+  Show at(, 15,,);
+
+Panel p1;
+  Table SpStep;
+
+Browse brSpSchet; // спецификация счета
+
+Fields
+//------------------------------------------------------------------------------
+  NamMC         #3'Тип'
+                : [3], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  NamToVar      #3'Наименование' ('Наименование МЦ/услуги', hcSkladFOstName, sci1Esc)
+                : [16], Protect;
+//------------------------------------------------------------------------------
+  KatOtpEd.abbr #3'ЕдИзм'
+                : [4], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  Price         #3'Цена за единицу'
+                : [15, 2], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  SimVolB       #3'Вал.'
+                : [4], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  Kol           #3'Количество'
+                : [9], [prSignsInKol], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  SummaTov
+                #3'Стоимость'
+                : [14, 2], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+end; // Browse
+
+end; // Panel
+
+end; //window
+
+//******************************************************************************
+
+Panel pnPriorDoc;
+  Table BaseDoc;
+
+Browse brPriorDoc ('Предметы документа - <Ctrl><Enter>',, sci1EscIns);
+  Show at(,,, 11);
+
+Fields
+//------------------------------------------------------------------------------
+  Picked
+                #3'V'
+                : [1], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.Prior
+                #3'!!' ('Приоритет документа на закупку. Предметы документа - CTRL-ENTER.', hcKouMakePlDocFPrior)
+                : [2], NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.Status
+                #3'Статус' (, hcKouDocFSost, sci13EscIns)
+                : [LIST 1 'Оформляемый'
+                        , 'Исполняемый'
+                        , 'Закрытый'
+                        ], [12], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.dDoc
+                #3'Дата' (, hcKouDocFBegDate)
+                : [10, 'DD/MM/YYYY'], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  NomDes
+                #3'Номер' (, hcKouDocFNum)
+                : [12], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name
+                #3'Поставщик' (, hcKouDocFOrg)
+                : [21], Protect;
+//------------------------------------------------------------------------------
+  Total
+                #3'Сумма по документу' (, hcKouDocFDogSum)
+                : [15, 2], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SimVolB
+                #3'Вал.'
+                : [4], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+end; // Browse
+
+//******************************************************************************
+
+Screen scPriorDoc;
+  Show at (, 12,,) ;
+
+Fields
+  NomDes    : Skip, {font = {bold=true}};
+  SummaVyp  : [15.2], Skip, {font = {bold=true}};
+  SimVolB   : Skip, {font = {bold=true}};
+<<
+
+ Всего выписано по документу.@@@@@@@@@@ на сумму.@@@@@@@@@@@@@@@.@@@@@@
+>>
+end; // screen
+
+//******************************************************************************
+
+HandleEvent
+
+cmAttrib :
+  RunWindow(WSp)
+
+cmValue1 :
+  {
+    set SummaVyp := 0;
+
+    _loop BaseFin
+      {
+        if ( BaseDoc.TipMoney = 3 )
+          {
+            set SummaVyp := if( BaseFin.Direct = 2
+                              , SummaVyp + BaseFin.SumVal
+                              , SummaVyp - BaseFin.SumVal
+                              );
+          }
+        else
+          {
+            if ( BaseDoc.TipMoney <> 2 )
+              {
+                set SummaVyp := if ( BaseFin.Direct = 2
+                                   , SummaVyp + BaseFin.Summa
+                                   , SummaVyp - BaseFin.Summa
+                                   );
+              }
+            else
+              {
+                if ( BaseDoc.ValCurse <> 0 )
+                  OpCurse := BaseDoc.ValCurse * (1 + BaseDoc.DopProc / 100)
+                else
+                  if oValFunc.GetCurse(BaseDoc.cVal, BaseFin.dDoc, OpCurse)
+                    OpCurse := OpCurse * (1 + BaseDoc.DopProc / 100);
+
+                if ( longint(BaseFin.dDoc) = 0 )
+                  set SummaVyp := if ( BaseFin.Direct = 2
+                                     , SummaVyp + BaseFin.SumVal
+                                     , SummaVyp - BaseFin.SumVal
+                                     );
+                else
+                  set SummaVyp := if ( BaseFin.Direct = 2
+                                     , SummaVyp + BaseFin.Summa / OpCurse
+                                     , SummaVyp - BaseFin.Summa / OpCurse
+                                     );
+              }
+          }
+      }
+  }
+
+cmPositionChanged :
+  ProcessCommand(cmValue1);
+
+cmUpdateRecord :
+  {
+    Update current BaseDoc;
+    set StepDoc.Status := BaseDoc.Status;
+
+    if ( Update current StepDoc <> 0 )
+      Message(''#3'not Update step', 0);
+  }
+
+cmCheckField :
+  if ( CurField = #BaseDoc.Status )
+    set StepDoc.Status := BaseDoc.Status;
+
+cmValue3 :  // блок формирования одного ПП
+  {
+    MakeValid(tnPlPor);
+    ClearBuffer(#PlPor);
+    ClearBuffer(#BaseFin);
+
+    PlPor.TiDK      := if ( TipD = 0, 1, 31); // "Тип (код) документа     ",
+    PlPor.TiDKGal   := PlPor.TiDK;
+    PlPor.Direct    := DefDirPlPor(PlPor.TiDkGal);
+    PlPor.FilialNo  := lGetTune('Konsolid.FilialNo');
+    myfilialno      := lGetTune('Konsolid.FilialNo');
+    PlPor.DatVip    := dCurse;
+    PlPor.YEARDOC   := year(dCurse);
+    PlPor.Descr     := BaseDoc.Descr;
+    PlPor.DesGr     := BaseDoc.DesGr;
+    myTidkGal       := PlPor.TiDK;
+    myTidkUser      := PlPor.TiDK;
+    dformna         := dCurse;
+
+    // очередной номер платежного документа
+    PlPor.NoDok     := piPlPor.PlPor_GetNewNumber( PlPor.TiDkGal
+                                                 , PlPor.TiDk
+                                                 , PlPor.Descr
+                                                 , PlPor.DatVip
+                                                 );
+
+    PlPor.DatOB     := 0;
+    PlPor.cPlat     := coGetTune('MyOrg');
+    PlPor.cBankPlat := BaseDoc.cMyBank;
+    PlPor.cPol      := BaseDoc.cOrg;
+    PlPor.cBankPol  := BaseDoc.cBank;
+    PlPor.cGruzOtp  := 0;
+    PlPor.cGruzPol  := 0;
+
+    PlPor.FilialNo  := lGetTune('Konsolid.FilialNo');
+
+    tmpNalog := if ( not IsValid(#KatNalog), 'налогов ', trim(KatNalog.Name) + ' ');
+
+    case BaseDoc.TipMoney of
+    //==============================================================================
+      1 :
+        {
+          PlPor.SUMPLAT  := oDOfuns.doRoundNDE(BaseDoc.VidDoc, SumPlPor);
+          PlPor.SumPlat  := Round(PlPor.SumPlat, 2);
+          PlPor.cVAL     := 0; //нац.единица
+          SumPlatV       := 0;
+          BaseFin.Summa  := PlPor.SumPlat;
+          BaseFin.SumVal := 0;
+          BaseFin.cVal   := 0;
+
+          if ( (PlPor.NamePl3 = '') and (BaseDoc.NDS > 0) )
+            PlPor.NamePl3 := 'Сумма '
+                           + tmpNalog
+                           + GetStrSumma(true, PlPor.SumPlat / BaseDoc.Total * BaseDoc.Nds)
+                           + ' '
+                           + s_SimvRub
+                           ;
+
+        }
+    //==============================================================================
+      2 :
+        {
+          SUMPLAT       := 0;
+          PlPor.cVAL    := 0;
+          BaseFin.Summa := 0;
+          BaseFin.cVal  := 0;
+
+          if ( BaseDoc.ValCurse <> 0 )
+            OpCurse := BaseDoc.ValCurse * (1 + BaseDoc.DopProc / 100);
+          else
+            if oValFunc.GetCurse(BaseDoc.cVal, dcurse, OpCurse)
+              OpCurse := OpCurse * (1 + BaseDoc.DopProc / 100);
+            else
+              {
+                Message('Не найден курс валюты!', InFormation);
+                OpCurse := 1;
+              }
+
+          PlPor.SumPlat := oDOfuns.doRoundNDE(BaseDoc.VidDoc, SumPlPor * OpCurse);
+          PlPor.SumPlat := Round(PlPor.SumPlat, 2);
+          BaseFin.Summa := PlPor.SumPlat;
+
+          if ( (PlPor.NamePl3 = '') and (BaseDoc.NDS > 0) )
+            PlPor.NamePl3 := 'Сумма '
+                           + tmpNalog
+                           + GetStrSumma(true, PlPor.SumPlat / BaseDoc.Total * BaseDoc.Nds)
+                           + ' '
+                           + s_SimvRub
+                           ;
+        }
+    //==============================================================================
+      3 :
+        {
+          SUMPLAT        := 0;
+          PlPor.cVAL     := BaseDoc.cVal;
+          PlPor.SumPlatV := oDOfuns.doRoundVlt(BaseDoc.VidDoc, SumPlPor);
+          PlPor.SumPlatV := Round(PlPor.SumPlatV, 2);
+          BaseFin.Summa  := 0;
+          BaseFin.SumVal := PlPor.SumPlatV;
+          BaseFin.cVal   := BaseDoc.cVaL;
+
+          if ( (PlPor.NamePl3 = '') and (BaseDoc.NDS > 0) )
+            PlPor.NamePl3 := 'Сумма '
+                           + tmpNalog
+                           + GetStrSumma(true, PlPor.SumPlatV / BaseDoc.Total * BaseDoc.Nds)
+                           + ' '
+                           + KlVal.SimvolV
+                           ;
+        }
+    //==============================================================================
+    end; //case
+
+    PlPor.cStepDoc := StepDoc.nRec;
+    Plpor.cHOZOPER := 0;
+    PlPor.nRec     := 0;
+
+    mes1 :=  if( wGetTune('Fin.Doc.Fraza')=0
+               , 'По документу '
+               , if( wGetTune('Fin.Doc.Fraza')=1
+                   , 'По счету '
+                   , if( wGetTune('Fin.Doc.Fraza')=2
+                       , 'По счет-фактуре '
+                       , 'По договору '
+                       )
+                   )
+               )
+           + f_sNumDate(BaseDoc.Nodoc, BaseDoc.dDoc)
+           + ' г. '
+           + BaseDoc.Name;
+
+    PlPor.NamePl1 := SubStr(mes1, 1, 76);
+    PlPor.NamePl2 := SubStr(mes1, 77, 76);
+
+    if ( Insert current plpor <> 0 )
+      {
+        Message('Не удается сформировать запись!', Confirmation);
+        Exit;
+      }
+
+   // формирование BaseFin
+
+    BaseFin.nRec     := 0;
+    BaseFin.FilialNo := PlPor.FilialNo;
+    BaseFin.Descr    := BaseDoc.Descr;
+    BaseFin.DesGr    := BaseDoc.DesGr;
+    BaseFin.cBaseDoc := StepDoc.cBaseDoc; //"для связи с документом-основанием",
+    BaseFin.cStepDoc := StepDoc.nRec;     //"для связи с этапом докум-основан ",
+    BaseFin.TipDoc   := PlPor.TiDK;       //"тип фин.-кассового документа     ",
+    BaseFin.TidkGal  := PlPor.TiDKGal;    //"тип фин.-кассового документа     ",
+    BaseFin.cPlPor   := PlPor.nRec;       //tNrec           "ссылка на платежный документ     ",
+    BaseFin.cVeksl   := 0;                //tNrec           "ссылка на векселя                ",
+    BaseFin.NoDoc    := PlPor.NoDok;      //s20    плат         "номер сопр. расч. документа  ",
+    BaseFin.NamePl   := BaseDoc.Name;     //s80             "назначение платежа из фин.док.   ",
+    BaseFin.dDoc     := 0;                //date            "дата оплаты документа            ",
+    BaseFin.cOrg     := BaseDoc.cOrg;
+    BaseFin.Direct   := 2;                //word            "направление корреспонденции      "
+
+    if ( BaseFin.cSoprHoz = 0 )
+      BaseFin.cSoprHoz := GetNextNrec(#SoprHoz, 0);
+
+    if ( Insert current BaseFin = tsOk )
+      iSynch.SynchSoprHoz(BaseFin.BufferP);
+    else
+      Message('Не удалось добавить запись Basefin', Confirmation);
+
+    set BaseDoc.Status := 2;
+    set StepDoc.Status := 2;
+
+    // формирование SoprHoz
+    ClearBuffer(#SoprHoz);
+
+    SoprHoz.nRec     := 0;
+    SoprHoz.VhSumHoz := '+';
+    SoprHoz.FilialNo := PlPor.FilialNo;
+    SoprHoz.cFilKor  := Filial.nRec;
+    SoprHoz.Descr    := BaseDoc.Descr;
+    SoprHoz.DesGr    := BaseDoc.DesGr;
+
+    SoprHoz.TipDoc   := PlPor.TiDk;
+    SoprHoz.TiDkGal  := SoprHoz.TipDoc;
+    SoprHoz.NoDoc    := PlPor.NoDok;
+    SoprHoz.cSoprDoc := PlPor.nRec;
+    SoprHoz.DatOb    := PlPor.DatOb;
+    SoprHoz.prObor   := 0;
+    SoprHoz.cHozOper := PlPor.cHozOper;
+    SoprHoz.Summa    := PlPor.SumPlat;
+    SoprHoz.SumValut := PlPor.SumPlatV;
+    SoprHoz.KodValut := PlPor.cVal;
+    SoprHoz.Direct   := 2;
+    SoprHoz.NameSHO  := PlPor.NamePL1;
+    SoprHoz.cStepDoc := PlPor.cStepDoc;
+
+    if ( Insert current SoprHoz <> 0 )
+      Message('Не удалось добавить запись SoprHoz', Confirmation);
+  }
+
+//******************************************************************************
+// конец формирования ссылок
+
+cmDefault:  // формирование платежных поручений
+  {
+    if ( not IsValid(#BaseDoc) )
+      Exit;
+
+    ResetBounds(#Pick2);
+
+    if ( GetFirst Pick2 where (( word(15) == Pick2.wList )) = tsOk )
+      {
+        PushPos(#BaseDoc);
+        BNum  := 0;
+        IsDoc := false;
+
+        do
+          {
+            IsDoc      := true;
+            BaseDocRec := Pick2.cRec;
+
+            if ( (GetFirst BaseDoc where (( BaseDocRec == BaseDoc.nRec )) ) = tsOk )
+              {
+                ProcessCommand(cmValue1);
+
+                SumPlpor := Total - SummaVyp;
+                TipD     := 0;
+
+                if ( SumPlPor < 0 )
+                  SumPlPor := 0;
+
+                dCurse := BaseDoc.dDoc;
+                Sim    := SimVolB;
+
+                if ( SumPlPor <> 0 )
+                  {
+                    BNum := BNum + 1;
+                    ProcessCommand(cmValue3);
+                  }
+              }
+          }
+        while ( GetNext Pick2 where (( word(15) == Pick2.wList )) = tsOk );
+
+        SetBounds(#Pick2);
+        PopPos(#BaseDoc);
+        ReReadRecord;
+        ProcessCommand(cmValue1);
+
+        if ( BNum > 0 )
+           Message('Сформировано ' + string(BNum) + ' платежных поручений!', Information)
+        else
+          if ( IsDoc )
+            Message('Все выбранные документы оплачены!', Information);
+          else
+            Message('Документы не выбраны!', Information);
+
+        SelectField(#BaseDoc.Status);
+        KillPick2;
+      }
+    else
+      {
+        SumPlpor := Total - SummaVyp;
+        TipD     := 0;
+
+        if ( SumPlPor < 0 )
+          SumPlPor := 0;
+
+        dCurse := BaseDoc.dDoc;
+        Sim    := SimVolB;
+
+        var TmpS: string[14];
+        TmpS := BaseDoc.NoDoc;
+
+        if ( RunDialog( 'GetSumDoc', TipD, dCurse, TmpS, SumPlPor, Sim) = cmOk )
+          {
+            ProcessCommand(cmValue3);
+            ProcessCommand(cmValue1);
+
+            Message( 'Платежное поручение '
+                   + PrintNumber(PlPor.Descr, PlPor.NoDok)
+                   + '  по документу '
+                   + BaseDoc.Nodoc
+                   + ' сформировано!', Confirmation
+                   );
+
+            if ( BaseDoc.Status <> 2 )
+               Message( 'Статус документа '
+                      + BaseDoc.NoDoc
+                      + ' переведен в <исполняемый>', Confirmation
+                      );
+
+            SelectField(#BaseDoc.Status);
+          }
+
+        SetBounds(#Pick2);
+      }
+  }
+
+cmMarkUnMark :
+  {
+    Pick2Ins;
+    ProcessCommand(cmValue1);
+  }
+
+cmSelectAll :
+  Pick2Plus;
+
+cmUnSelectAll :
+  Pick2Minus;
+
+end; // HandleEvent
+
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit :
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    KillPick2;
+
+    if ( not (GetVipRef(iSHoz, 'SHmanager')) )
+      {
+        Message('Ошибка! Не загружен интерфейс для работы с хозоперациями! ', Error);
+        Abort;
+        Exit;
+      }
+  }
+
+cmDone:
+  FreeVipInterface(iSHoz);
+
+end;
+
+end. // Interface
+
+//******************************************************************************
+
+GetSumDoc DIALOG
+
+Fields
+  tip   ('Тип платежного документа', hcD_GetSumDoc, scGalDial)
+        : word;
+
+  dfor  ('Введите дату выписки платежного поручения', hcD_GetSumDoc, scGalDial)
+        : date [, 'DD/MM/YYYY'];
+
+  ndoc  : string[14], Skip;
+
+  sum   ('Введите сумму для платежного поручения', hcD_GetSumDoc, scGalDial)
+        : double[12.2];
+
+  simv  : string[6], Skip;
+
+Buttons
+  cmOk,Default,, 'Ввод',   hcD_GetSumDoc, scGalDial;
+  cmCancel,,,    'Отмена', hcD_GetSumDoc, scGalDial;
+
+<< 'Формировать...'
+      (.) платежное поручение         `
+      (.) валютное платежное поручение`
+  `на`.@@@@@@@@@@@`по основанию №`.@@@@@@@@@@@@@@
+       `на сумму`.@@@@@@@@@@@@@.@@@@@@
+
+      <.~П~родолжить.>  <. ~О~тмена .>
+>>

@@ -1,0 +1,449 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Ввод входящих долгов контрагентов
+//******************************************************************************
+
+Const
+  TypeSoprIndKontr = 700;
+End;
+
+//******************************************************************************
+
+#include gkonbal.vih
+#include statlog.vih
+#include kontrbal.vih
+#include LinkGrPL.vih  // привязка к группе плат.средств
+#include ofpmacro.vpp
+#include GetDocSpecInfo.vih
+#include SHManager.vih
+#include SpNext.vih
+#include oEdIzm.vih
+#include SDfuns.vih
+#include StatLog.vih          // работа со статусами документов
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Ввод входящих долгов контрагентов
+
+Параметры:
+  Параметров нет
+#end
+
+//******************************************************************************
+
+Interface IndKontr 'Входящие долги контрагентов' EscClose;
+
+#include SpNext.var
+#include oEdIzm.var
+#include SDfuns.var
+#include StatLog.var          // oStatLog       работа со статусами документов
+#include KontrBal.var         // iKB            оперативный расчет сальдо контрагентов
+#include GKonBal.var          // oGKonBal       подсчет баланса взаиморасчетов с контрагентом
+
+Create view
+Var
+  dFor: Date;
+
+
+As select
+  if (KatSopr.cVal = 0, 'в Н.Д.Е.', 'в валюте')
+    ( FieldName = VidDolg )
+, KatSopr.*
+, KatOrg.Name
+, KlVal.SimvolV
+
+From
+  KatSopr
+, KatOrg
+, KatOrg KatOrg2
+, KlVal
+, BASEDOC
+, SPSOPR
+, SoprHoz
+, ActSaldo
+, Oborot
+, CursVal
+, Kontras
+
+Where
+((
+  TypeSoprIndKontr == KatSopr.VidSopr AND
+  KatSopr.cOrgBase == KatOrg.NRec AND
+  KatSopr.cValut == KlVal.NRec
+));
+
+Form frmIndKonD('IndKonD.OUT', 'IndKonD') with novisual;
+
+//******************************************************************************
+// Пересчитывать суммы в валюте в документах по текущему курсу
+// 1 - нет, 0 - да, 2 - по запросу
+Function GetValRubCalc(wTypeSopr: word): word;
+var
+  tRes: word;
+{
+  case wTypeSopr of
+    101, 108, 111, 206:
+    {
+      tRes := wGetTune('Doc.Buy.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    102, 103:
+    {
+      tRes := wGetTune('Doc.PrCons.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    1411:
+    {
+      tRes := wGetTune('Doc.Wood.Journ.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    203, 203:
+    {
+      tRes := wGetTune('Doc.OtpCons.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    106, 114, 201, 211:
+    {
+      tRes := wGetTune('Doc.Sell.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    1421:
+    {
+      tRes := wGetTune('Doc.Wood.Nakl.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    204, 600..625, 630, 632:
+    {
+      tRes := wGetTune('Sklad.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    110, 210, 229, 629, 610, 1610:
+    {
+      tRes := wGetTune('UKS.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    551..553, 554, 557:
+    {
+      tRes := wGetTune('Remont.ValRubCalc');
+      tRes := if (tRes = 1, 0, if (tRes = 0, 1, 2));
+    }
+    else
+    {
+      tRes := wGetTune('Doc.ValRubCalc');
+    }
+  end;
+
+  GetValRubCalc := tRes;
+}
+
+//******************************************************************************
+
+Procedure FillKontrDolg;
+{
+  if (RunDialog(GetFormNa, dFor) = cmCancel)
+    Exit;
+
+  if (IsValid(#KatSopr))
+    if (Message('Внимание!'#13#3+
+              'Вся имеющаяся информация по входящим задолженностям '+
+              'контрагентов будет утеряна.'#13#3'Перед продолжением '+
+              'рекомендуется сохранить базу данных или распечатать '+
+              'входящие долги.'#13#13#3'Отменим расчет?', YesNo) <> cmNo)
+      Exit;
+
+  var Stat: word;
+  var ErrStat: boolean; ErrStat := FALSE;
+
+  _LOOP KatSopr where ((TypeSoprIndKontr == KatSopr.VidSopr ))
+    if (oSDfuns.KatSopr_Delete(KatSopr.NRec) <> tsOk)
+      ErrStat := TRUE;
+
+  if (ErrStat)
+    Message('Не удалились все имеющиеся задолженности на ' +
+        DateToStr(dfor, 'DD/MM/YYYY, расчет невозможен'), Warning + OkButton);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm,
+        'Расчет входящих задолженностей...'#13#3, RecordsInTable(#KatOrg2));
+
+  var wDid: word;   wDid := 0;
+  var wTune_Rep_SoprKontr: word; wTune_Rep_SoprKontr := wGetTune('Rep.SoprKontr');
+  var coTune_BaseCurrency: comp; coTune_BaseCurrency := coGetTune('BaseCurrency');
+
+  oGKonBal.InitTuneParams;
+
+  _LOOP KatOrg2
+    if ((not NextVisual) OR (frmIndKonD.error))
+      Break
+    else
+      {
+        var BalR: double;
+        var BalV: double;
+        var BalB: double;
+
+        if oGKonBal.GetKontrBalance( KatOrg2.NRec
+                                   , dFor
+                                   , wTune_Rep_SoprKontr
+                                   , BalR
+                                   , BalV
+                                   , BalB
+                                   )
+          if (BalR <> 0) OR (BalB <> 0)
+            {
+              ClearBuffer(#KatSopr);
+              KatSopr.VidSopr  := TypeSoprIndKontr;
+              KatSopr.TipSopr  := 2;    // направление "продажа "
+              KatSopr.cOrg     := KatOrg2.NRec;
+              KatSopr.cOrgBase := KatOrg2.NRec;
+              KatSopr.dSopr    := dFor;
+              KatSopr.dOpr     := dFor;
+              KatSopr.YearSopr := year(dFor);
+              KatSopr.Summa    := -BalR;
+              KatSopr.SumVal   := -BalB;
+              KatSopr.cValut   := coTune_BaseCurrency;
+              if (insert Current katSopr <> tsOk)
+                Message('Не вставилась запись с балансом для организации ' + KatOrg2.Name, Error + OkButton);
+
+              RereadRecord(#KatSopr);
+            }
+
+        wDid := wDid + 1;
+      }
+
+  RereadRecord(#Katsopr);
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+
+Procedure PrintKontrDolg;
+{
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+           'Печать входящих задолженностей...'#13#3, 1 );
+  PushPos(#KatSopr);
+  var wDid: word;   wDid := 0;
+
+  _LOOP KatSopr
+    if ((not NextVisual) OR (frmIndKonD.error))
+      Break
+    else
+      {
+        frmIndKonD.write(KatOrg.Name);
+        frmIndKonD.write(KatSopr.dSopr);
+        frmIndKonD.write(KatSopr.Summa);
+        frmIndKonD.write(KatSopr.SumVal);
+        frmIndKonD.write(KlVal.SimvolV);
+        frmIndKonD.write(VidDolg);
+        wDid := wDid + 1;
+      }
+
+  frmIndKonD.PutEvent(feBreak);
+  PopPos(#KatSopr);
+  RereadRecord(#Katsopr);
+  StopVisual('', 0);
+  if (frmIndKonD.error)
+    frmIndKonD.abortForm;
+  else
+    if (wdid > 0)
+      FrmIndKonD.ShowFile('');
+    else
+      FrmIndKonD.AbortForm;
+}
+
+//******************************************************************************
+
+Panel pnKatSopr
+  Table KatSopr;
+
+Browse brKatSopr
+  Table KatSopr
+
+Fields
+//------------------------------------------------------------------------------
+  KatOrg.Name
+                #3'Организация-контрагент' ('Название организации-контрагента', hcIndKontrFOrgName, sci1378Esc)
+                : [25], Protect;
+//------------------------------------------------------------------------------
+  KatSopr.dSopr
+                #3'Дата долга' ('Дата задолженности', hcIndKontrFDSopr, sci1378Esc)
+                : [10, 'DD/MM/YYYY'], NoAutoSize;
+//------------------------------------------------------------------------------
+  KatSopr.Summa
+                #3'Сумма в НДЕ' ('Сумма долга контрагента в Н.Д.Е.', hcIndKontrFSumma, sci178Esc)
+                : [12.2], NoAutoSize;
+//------------------------------------------------------------------------------
+  KatSopr.SumVal
+                #3'Сумма вал.' ('Сумма долга контрагента в валюте', hcIndKontrFSumVal, sci178Esc)
+                : [10.2], NoAutoSize;
+//------------------------------------------------------------------------------
+  KlVal.SimvolV
+                #3'Валюта' ('Валюта долга контрагента', hcIndKontrFValut, sci1378Esc)
+                : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  VidDolg
+                #3'Вид долга' ('Вид задолженности по отношению к валюте', hcIndKontrFVidDolg, sci1378Esc)
+                : [8] , Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+end; // Browse
+
+//******************************************************************************
+
+HandleEvent
+
+cmPick:
+  case CurField of
+  //--------------
+    #KatOrg.Name:
+      if (RunInterface(GetKatOr, KatSopr.cOrgBase, comp(0), FALSE, comp(0), comp(0)) <> cmCancel)
+        KatSopr.cOrg := KatSopr.cOrgBase;
+  //--------------
+    #KlVal.SimvolV:
+      RunInterface(GetValKod, KatSopr.cValut);
+  //--------------
+    #KatSopr.dSopr:
+      {
+        KatSopr.dPrice := Cur_Date;
+        set KatSopr.dSopr := Cur_Date;
+      }
+  //--------------
+    #VidDolg:
+      if (KatSopr.cValut <> 0)
+        set KatSopr.cVal := if (KatSopr.cVal = 0, KatSopr.cValut, 0);
+  //--------------
+  end;
+
+cmCheckField:
+  case CurField of
+  //--------------
+    #KatSopr.dSopr:
+      {
+        KatSopr.dPrice := KatSopr.dSopr;
+        KatSopr.YearSopr :=  Year(Katsopr.dSopr);
+        set KatSopr.dOpr :=  KatSopr.dSopr;
+      }
+  //--------------
+    #KatSopr.Summa:
+       if (KatSopr.cVal = 0) AND (KatSopr.cValut <> 0)
+         {
+           case GetValRubCalc(KatSopr.VidSopr) of
+           //--------------------------------
+            1: if (SpSopr.VPrice <> 0)
+                  Exit;
+           //--------------------------------
+            2: if (SpSopr.VPrice <> 0)
+                  if (Message('Пересчитать долг контрагента в валюте '+
+                                'по курсу', YesNo) <> cmYes)
+                    Exit;
+           //--------------------------------
+           end;
+
+           var res: double;
+           if oValFunc.GetCurse(KatSopr.cValut, KatSopr.dPrice, res)
+             set KatSopr.SumVal := KatSopr.Summa / res
+         }
+  //--------------
+    #KatSopr.SumVal:
+       if (KatSopr.cValut <> 0)
+         {
+           case GetValRubCalc(KatSopr.VidSopr) of
+           //--------------------------------
+            1: if (SpSopr.Price <> 0)
+                  Exit;
+           //--------------------------------
+            2: if (SpSopr.Price <> 0)
+                  if (Message('Пересчитать долг контрагента в Н.Д.Е. '+
+                                'по курсу', YesNo) <> cmYes) Exit;
+           //--------------------------------
+           end;
+
+           var res: double;
+           if oValFunc.GetCurse(KatSopr.cValut, KatSopr.dPrice, res)
+             set KatSopr.Summa := KatSopr.SumVal * res
+         }
+  //--------------
+  end;
+
+cmInsertRecord:
+  insert current KatSopr;
+
+cmUpdateRecord:
+  update current KatSopr;
+
+cmDeleteRecord:
+  if (Message('Удалить задолженность контрагента "' + KatOrg.Name + '"?', YesNo) <> cmYes)
+    Abort;
+  else
+    {
+      oStatlog.StatLog_Delete (100, KatSopr.NRec); //-- удаление статусов
+      oSDfuns.KatSopr_Delete(KatSopr.NRec);
+    }
+
+cmSetDefault:
+  {
+    ClearBuffer(#KatSopr);
+    KatSopr.dPrice := Cur_Date;
+    KatSopr.DSopr := Cur_Date;
+    KatSopr.dOpr := Cur_Date;
+    KatSopr.YearSopr := Year(Cur_Date);
+    KatSopr.VidSopr := TypeSoprIndKontr;
+    KatSopr.TipSopr  := 2;    // направление "продажа "
+    SelectField(#KatOrg.Name);
+    PutCommand(cmPick);
+  }
+
+cmPrintDoc:
+  PrintKontrDolg;
+
+cmCheckRecord:
+  Delete Kontras where
+    ((KatSopr.cOrg == Kontras.cOrg AND KatSopr.dSopr <<= Kontras.dKonSal));
+
+end; // HandleEvent Panel
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmOpenSearch:
+  PutCommand(cmPick);
+
+cmInit:
+  {
+
+    if (boGetTune('Oper.AutoCalcBalance'))
+     {
+       Message('При "Оперативном расчете сальдо контрагентов"'#13'('+
+               GetTuneName('Oper.AutoCalcBalance') +
+               ')'#13'функция "Ввод входящей задолженности контрагентов" НЕДОСТУПНА.'+''#13#13+
+               'Для просмотра/редактирования задолженностей используйте функцию'+''#13+
+               '"Баланс взаиморасчетов с контрагентами"', Information);
+       Abort;
+     };
+
+    dFor := Cur_Date;
+  }
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuIndKontr'));
+
+cmPlansNo:
+  {
+    FillKontrDolg;
+    RescanPanel(#KatSopr);
+  }
+
+end; // HandleEvent
+End.
+
+//******************************************************************************
+
+mnuIndKontr Menu
+{
+- 'Печать', cmPrintDoc, 'Печать документа/каталога', hcPrintKatalog, 'Сtrl+P', kbCtrlP, sci1Esc;
+- 'Расчет задолженностей на дату', cmPlansNo, 'Расчет долгов на дату', hcIindKontr, 'Alt+P', kbAltP, sci1Esc;
+}
+
+//******************************************************************************

@@ -1,0 +1,469 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Синхронизация данных с ДО
+//******************************************************************************
+
+#doc
+Назначение:
+  Синхронизация данных с ДО
+
+Параметры:
+  cStepDoc - ссылка на позицию ДО
+#end
+
+//******************************************************************************
+#include EditDoc.vih
+#include marker.vih
+#include RasNeotg.vih
+//******************************************************************************
+
+Interface GetMCSoprSinhr 'Выбор по документу' (,hcm_sell_Sinxron_DO,)doAccept, EscClose, Cyan;
+  Show at (, 4, 110, 21);
+
+//******************************************************************************
+
+#include EditDoc.var
+#include RasNeotg.var
+
+Table struct TmpMcSinhr "Таблица в памяти"
+(
+  cSpStep   : comp
+, cSpSopr   : comp
+, cOwner    : comp
+, cMcUsl    : comp
+, cOtpEd    : comp
+, cVal      : comp
+, Name      : string[80]
+, Kod       : string[30]
+, Kol       : double
+, KolSkl    : double        // кол-во по ДО
+, KolD      : double        // доступное кол-во
+, Price     : double
+, PriceS    : double
+, ProcUb    : double
+, PartyName : string[80]
+, OtpEdName : string[80]
+)
+with Index
+(
+  TmpMcSinhr01 = cSpStep
+, TmpMcSinhr02 = KolD
+)
+;
+
+//******************************************************************************
+
+Create view
+Var
+  cSopr
+, cStepDoc  : comp;
+
+  wParam
+            : word;
+
+  sTitle
+            : string;
+  pMarker
+            : IMarker(Marker) new;
+
+  iMarker
+, IndexNZ
+            : longint;
+  flagMC
+, flagUsl
+            : boolean;
+
+As select
+  *
+
+From
+  BaseDoc
+, KatMC
+, KatOtpEd
+, KatParty
+, KatSopr
+, KatUsl
+, Pick
+, SpOtpEd
+, SpStep
+, TmpMcSinhr
+
+
+Where
+((
+       SpStep.cMCUSL      ==  KatMC.NRec
+  And  SpStep.cMCUSL      ==  KatUSL.NRec
+  And  SpStep.cOtpEd      ==  KatOtpEd.NRec
+
+  And  cStepDoc           ==  StepDoc.NRec
+  And  StepDoc.cBaseDoc   ==  BaseDoc.NRec
+  And  SpStep.cParty      ==  KatParty.NRec
+  And  BaseDoc.cNalog     ==  KatNalog.NRec
+  And  SpStep.NRec        ==  SpSopr.cSpStep
+
+  And  cSopr              ==  SpSopr.cSopr
+  And  SpSopr.cSopr       ==  KatSopr.NRec
+
+  And  TmpMcSinhr.cSpStep ==  SpStep.nRec
+))
+
+Order Temp01 by TmpMcSinhr.Name
+Order Temp02 by TmpMcSinhr.Kod
+Order Temp03 by TmpMcSinhr.KolSkl
+Order Temp04 by TmpMcSinhr.Price
+Order Temp05 by TmpMcSinhr.PartyName
+Order Temp06 by TmpMcSinhr.OtpEdName
+
+Bounds ByDostup = double(0) << TmpMcSinhr.KolD
+;
+
+Parameters
+  cSopr,
+  cStepDoc
+;
+//******************************************************************************
+// расчет доступного кол-ва
+Function KolSoprBefore(pSpStep: comp; KolSpStep: double): double;
+var
+  tKol: double;
+{
+  tKol := oRasNeotg.RecalcNeotgr(pSpStep, comp(0));
+
+  // вычесть кол-во по тек.позициям
+  tKol := tKol - SpSopr.KolOpl * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd)
+
+  if (tKol > KolSpStep)
+    tKol := KolSpStep;
+
+  KolSoprBefore := tKol;
+}
+//******************************************************************************
+// заполнение таблицы в памяти
+Procedure InsRecInTmp;
+Var
+  iCount: word;
+{
+  delete all TmpMcSinhr;
+
+  iCount := 0;
+
+  _loop SpStep where (( cStepDoc == SpStep.cStepDoc ))
+    Inc(iCount);
+
+  StartNewVisual(vtIndicatorVisual,vfTimer, 'Подготовка данных', iCount);
+
+  _loop SpStep where (( cStepDoc == SpStep.cStepDoc ))
+    if ( Not NextVisual )
+      Exit
+    else
+    {
+      if (GetFirst Spsopr <> tsOk)
+        continue;
+
+      ClearBuffer (#TmpMcSinhr);
+
+      TmpMcSinhr.cSpStep := SpStep.nRec;
+      TmpMcSinhr.cOwner  := SpStep.cOwner;
+      TmpMcSinhr.cOtpEd  := SpStep.cOtpEd;
+      TmpMcSinhr.cMcUsl  := SpStep.cMcUsl;
+      TmpMcSinhr.cSpSopr := SpSopr.nRec;
+      TmpMcSinhr.cVal    := BaseDoc.cVal;
+
+      if ( SpStep.PrMC = 1 )
+        {
+          if ( GetFirst KatMC = tsOk )
+            {
+              TmpMcSinhr.Name  := KatMC.Name;
+              TmpMcSinhr.Kod   := KatMC.BarKod;
+            }
+        }
+      else
+        if ( GetFirst KatUsl = tsOk )
+          {
+            TmpMcSinhr.Name  := KatUSL.Name;
+            TmpMcSinhr.Kod   := KatUSL.Kod;
+          }
+
+      TmpMcSinhr.KolSkl := SpStep.KolSkl;
+      TmpMcSinhr.Kol    := SpStep.Kol;
+      TmpMcSinhr.KolD   := if ((SpStep.PrMC = 1 and flagMC) or (SpStep.prMC <> 1 and flagUsl)
+                              , SpStep.KolSkl - KolSoprBefore(SpStep.NRec, SpStep.KolSkl)
+                              , SpStep.KolSkl);
+      TmpMcSinhr.ProcUb := SpStep.ProcUb;
+      TmpMcSinhr.Price  := SpStep.Price;
+
+      if ( wGetTune('Doc.MethodSkidkaInPrice') = 0 )
+        TmpMcSinhr.PriceS := SpStep.Summa / SpStep.Kol;
+      else
+        TmpMcSinhr.PriceS := SpStep.Price;
+
+      if ( GetFirst KatParty = tsOk )
+        TmpMcSinhr.PartyName := KatParty.Name;
+
+      if ( GetFirst KatOtpEd = tsOk )
+        TmpMcSinhr.OtpEdName := KatOtpEd.Name;
+
+      Insert Current TmpMcSinhr;
+    }
+
+  StopVisual('', 0);
+}
+//******************************************************************************
+// синхронизировать количество
+Function  SetKol;
+Var
+  Koef : double;
+{
+  if ( GetFirst SpSopr = tsOK )
+    if ( TmpMcSinhr.KolSkl <> SpSopr.KolFact )
+      if( TmpMcSinhr.cOtpEd = SpSopr.cOtpEd )
+        {
+          set SpSopr.KolFact := TmpMcSinhr.KolD;
+          set SpSopr.KolOpl  := if ((SpStep.PrMC = 1 and flagMC) or (SpStep.prMC <> 1 and flagUsl)
+                                  , TmpMcSinhr.KolD
+                                  , TmpMcSinhr.Kol) ;
+          set SpSopr.ProcUb  := TmpMcSinhr.ProcUb;
+//          set SpSopr.KolFact := SpSopr.KolOpl * (100 + SpSopr.ProcUb) / 100;
+          Update Current SpSopr;
+        }
+      else
+        {
+          Koef := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(TmpMcSinhr.cOtpEd);
+          set SpSopr.KolFact := TmpMcSinhr.KolD / Koef;
+          set SpSopr.KolOpl  := (if ((SpStep.PrMC = 1 and flagMC) or (SpStep.prMC <> 1 and flagUsl)
+                                  , TmpMcSinhr.KolD, TmpMcSinhr.Kol)) / Koef;
+          set SpSopr.ProcUb  := TmpMcSinhr.ProcUb;
+          Update Current SpSopr;
+        }
+}
+
+//******************************************************************************
+// синхронизировать цены
+Function SetPrice;
+Var
+  KoefPr : double;
+{
+  if ( GetFirst SpSopr = tsOK )
+    {
+      KoefPr := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(TmpMcSinhr.cOtpEd);
+
+      if ( TmpMcSinhr.cVal = KatSopr.cVal )
+        {
+          if ( KatSopr.cVal = comp(0) )
+            {
+              if ( TmpMcSinhr.Price <> SpSopr.Price )
+                {
+                  set SpSopr.rPrice := TmpMcSinhr.PriceS * KoefPr;
+                  set SpSopr.Price  := TmpMcSinhr.PriceS * KoefPr;
+
+                  Update Current SpSopr;
+                }
+            }
+          else
+            if ( TmpMcSinhr.Price <> SpSopr.Price )
+              {
+                set SpSopr.rvPrice := TmpMcSinhr.PriceS * KoefPr;
+                set SpSopr.vPrice  := TmpMcSinhr.PriceS * KoefPr;
+
+                Update Current SpSopr;
+              }
+        }
+      else
+        {
+          set SpSopr.rPrice := oValFunc.GetAnyCurrency(TmpMcSinhr.cVal, TmpMcSinhr.PriceS, KatSopr.dPrice, KatSopr.cVal) * KoefPr;
+          set SpSopr.Price  := oValFunc.GetAnyCurrency(TmpMcSinhr.cVal, TmpMcSinhr.PriceS, KatSopr.dPrice, KatSopr.cVal) * KoefPr;
+
+          Update Current SpSopr;
+        }
+    }
+}
+
+//******************************************************************************
+// синхронизация количества и цены
+Function SetKolPrice;
+  var Koef : double;
+  var iCount, i: longInt;
+  var tRec: comp;
+{
+  ClearMarker(iMarker);
+  pMarker.ExportTo(iMarker);
+
+  iCount := GetMarkerCount(iMarker);
+
+  if ( Message('Синхронизировать данные с ДО?', YesNo) <> cmYes )
+    Exit;
+
+  For (i := 0; i < iCount; Inc(i))
+  {
+    GetMarker(iMarker, i, tRec);
+
+    if ( GetFirst TmpMcSinhr where (( tRec == TmpMcSinhr.cSpStep )) = tsOk )
+      Case wParam of
+        1: SetKol;
+        2: SetPrice;
+        3:
+        {
+          SetKol;
+          SetPrice;
+        }
+
+      end;
+  }
+
+  if ( iCount = 0 )
+    Case wParam of
+      1: SetKol;
+      2: SetPrice;
+      3:
+      {
+        SetKol;
+        SetPrice;
+      }
+
+    end;
+
+  Case KatSopr.VidSopr of
+    101..103, 108:
+      {
+        RunInterface(iChkSumB, KatSopr.NRec, 0, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+      }
+    else
+      RunInterface(iChkSum, KatSopr.NRec, 0, FALSE, if (KatSopr.cVal = 0, 10, 20), TRUE);
+  end;
+
+}
+//******************************************************************************
+Panel panGetMCSoprSinhr
+  Show at (,,,12);
+  Table TmpMcSinhr;
+
+Browse brGetMCSoprSinhr ('Выбор позиции из документа-основания', , sci1EnIns);
+  RecMarker = pMarker;
+Fields
+  TmpMcSinhr.KolD      #3'Доступно'               : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect, NoAutoSize;
+  TmpMcSinhr.Name      #3'Наименование позиции ДО': [38], Protect;
+  TmpMcSinhr.OtpEdName #3'Единица'#13#3'измерения': [10], Protect;
+  TmpMcSinhr.Kod       #3'Код'                    : [14], Protect, NoAutoSize;
+  TmpMcSinhr.KolSkl    #3'Количество'#13#3'по ДО' : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect, NoAutoSize;
+  TmpMcSinhr.Price     #3'Цена'#13#3'по ДО'       : [17], [brForSopr_RVPrice, '\2p[|-]36`666`666`666`666.88'], Protect, NoAutoSize;
+  TmpMcSinhr.PartyName #3'Партия'                 : [15], Protect;
+end;
+
+HandleEvent
+
+cmMarkUnMark:
+{
+  if ( TmpMcSinhr.cSpSopr = comp(0) )
+    {
+      pMarker.UnMark;
+      Stop;
+    }
+}
+
+cmSelectAll:
+{
+  _loop TmpMcSinhr
+    if ( TmpMcSinhr.cSpSopr <> comp(0) )
+      pMarker.Mark;
+
+  RescanPanel(#TmpMcSinhr);
+  Stop;
+}
+
+end;
+end; //panel
+
+//******************************************************************************
+
+Screen scrGetMCSopr ('Дополнительные параметры', hcAllVPick, sci1EnIns);
+  Show at (,13,,);
+Fields
+  wParam ('Синхронизация'): NoProtect;
+<<
+  [.] синхронизировать количество`
+  [.] синхронизировать цену`
+>>
+
+end;
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+{
+  if ( GetFirst BaseDoc <> tsOk )
+    {
+      Message('Не найден документ-основание');
+      Abort;
+      Exit;
+    }
+
+  flagMC := boGetTune('Doc.MakeKol') or (wGetTune('Doc.RasNeotgMC') = 1);
+  flagUsl:= boGetTune('Doc.CtrUslAktDo') or (wGetTune('Doc.RasNeotgUsl') = 1);
+
+  if (not flagMC and not flagUsl)
+    ClearFieldState(#TmpMcSinhr.KolD, sfVisible);
+
+  if ( Not ReadMyDSK(wParam, 'GetMCSoprSinhr_wParam', FALSE) )
+    wParam := 0;
+
+  iMarker := InitMarker('GetMCSoprSinhr', 8, 100, 10, FALSE);
+  pMarker.DeleteRecWoMessage;
+
+  InsRecInTmp;
+
+  sTitle := 'Выбор матценностей/услуг по ДО '
+          + f_sNumDate(PrintNumber(BaseDoc.Descr, BaseDoc.NoDoc), BaseDoc.dDoc);
+
+  SetTitle(sTitle);
+}
+
+cmDefault:
+{
+  SetKolPrice;
+
+  SaveMyDsk(wParam, 'GetMCSoprSinhr_wParam');
+}
+
+cmDone:
+{
+  DoneMarker(iMarker, 'GetMCSoprSinhr');
+}
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuFilter'));
+
+cmFilterSave:
+  {
+    if NOT BoundActive(tbByDostup)
+      {
+        AddBounds(tbByDostup);
+        SetTitle(sTitle + ' = Установлен фильтр по доступным =');
+      }
+    else
+      {
+        SubBounds(tbByDostup);
+        SetTitle(sTitle);
+      }
+
+    ReReadRecord(#TmpMcSinhr);
+  }
+
+
+end; // HandleEvent
+End. // Interface
+
+//******************************************************************************
+#doc
+Локальное меню главного окна интерфейса <link Interface L_SOPRDOC::GetMCSoprSinhr>L_SOPRDOC::GetMCSoprSinhr - Выбор МЦ/Услуги по документу-основанию</link>
+#end
+mnuFilter Menu
+{
+- 'Установить/Снять фильтр', cmFilterSave, 'Установка и снятие фильтра по доступности', , 'Alt+B', kbAltB, sci1Esc;
+}
+
+//******************************************************************************
+//******************************************************************************
+//******************************************************************************

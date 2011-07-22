@@ -1,0 +1,1100 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Функции для переноса спецификации из договора/КП/согл. в ДО
+//******************************************************************************
+
+#include DOfuns.var
+#include DEIfuns.var
+#include PlanDog.var
+
+//******************************************************************************
+
+Function GetSkidka(PlDg: boolean; ProcSum: word): double; //1- %, 2- sum
+{
+  GetSkidka := 0;
+
+  if ( DogApp.Discount = 0 )
+    Exit;
+
+  if ( ProcSum = 1 ) // %
+    {
+      GetSkidka := if (DogApp.IsExtra = 0, DogApp.Discount, -DogApp.Discount);
+      Exit;
+    }
+
+  if not PlDg //по договору/приложению
+    {
+      GetSkidka := if (DogApp.IsExtra = 0, DogApp.Discount, -DogApp.Discount);
+      Exit;
+    }
+
+  //сумма по кал.плану:
+  PushPos(#SpCalPln);
+
+  _LOOP SpCalPln
+    GetSkidka := GetSkidka + SpCalPln.Summa;
+
+  GetSkidka := GetSkidka - CalPlan.SummaSpec;
+
+  PopPos(#SpCalPln);
+}
+
+//******************************************************************************
+
+Function GetDogDirect: word; //1- продажа, 2- закупка
+{
+  GetDogDirect := if ((BaseDoc.VidDoc = 201) OR (BaseDoc.VidDoc = 211) OR (BaseDoc.VidDoc = 1420), 1, 2);
+}
+
+//******************************************************************************
+//-----------------------------------------
+Function GetKontrag4DO(PlDg: boolean; var cKontragBank, cMyBank: comp): comp;
+var
+  vFlagUse_CalPlan : boolean;
+{
+  GetKontrag4DO := 0;
+  cMyBank       := 0;
+  cKontragBank  := 0;
+
+  if ( GetDogDirect = 0 )
+    Exit;
+
+  vFlagUse_CalPlan := PlDg and (DogApp.Direct <> 3);
+
+  if vFlagUse_CalPlan
+    {
+      if ( GetDogDirect = 2 ) // закупка
+        {
+          GetKontrag4DO := CalPlan.cOrg;
+          cKontragBank  := CalPlan.cPolBank;
+          cMyBank       := CalPlan.cPlatBank;
+        }
+
+      if ( GetDogDirect = 1 ) // продажа,
+        {
+          GetKontrag4DO := CalPlan.cPlat;
+          cKontragBank  := CalPlan.cPlatBank;
+          cMyBank       := CalPlan.cPolBank;
+        }
+    }
+  else
+    {
+      if ( GetDogDirect = 2 ) // закупка
+        {
+          GetKontrag4DO := DogApp.cOrg;
+          cKontragBank  := DogApp.cBankPol;
+          cMyBank       := DogApp.cBankPlat;
+        }
+
+      if ( GetDogDirect = 1 ) // продажа,
+        {
+          GetKontrag4DO := DogApp.cPlat;
+          cKontragBank  := DogApp.cBankPlat;
+          cMyBank       := DogApp.cBankPol;
+        }
+    }
+}
+
+function GetKontrag4DO_520(var cKontragBank, cMyBank: comp): comp;
+{
+  GetKontrag4DO_520 := 0;
+  cMyBank           := 0;
+  cKontragBank      := 0;
+
+  if ( DogApp.Direct = 2 ) // закупка
+    {
+      GetKontrag4DO_520 := DogApp.cPol;
+      cKontragBank      := DogApp.cBankPol;
+      cMyBank           := DogApp.cBankPlat;
+    }
+  else // продажа,
+    { GetKontrag4DO_520 := DogApp.cPlat;
+      cKontragBank      := DogApp.cBankPlat;
+      cMyBank           := DogApp.cBankPol;
+    } //продажа
+}
+
+//******************************************************************************
+Function SetRefTPPNorm_for_DVS(prcBaseDoc, prcDsgOtpr : comp; prcTypeNorma : word; prcNormaTPP : comp) : comp;
+var
+  varDSNastr_wVid : word;
+  cRzlt : comp;
+{
+  cRzlt           := 0;
+  varDSNastr_wVid := 5;
+
+  PushPos(#DsNastr);
+
+  if ( GetFirst DsNastr where (( varDSNastr_wVid == DSNASTR.wVid     and
+                                 prcBaseDoc      == DSNASTR.cBaseDoc and
+                                 comp(0)         == DSNASTR.cSopr    and
+                                 prcDSGOtpr      == DSNASTR.cSpSopr )) <> tsOK )
+    {
+      ClearBuffer(#DSNASTR);
+
+      DSNASTR.wVid     := varDSNastr_wVid;
+      DSNASTR.cBaseDoc := prcBaseDoc;
+      DSNASTR.cSopr    := 0;
+      DSNASTR.cSpSopr  := prcDSGOtpr;
+
+      if ( insert current DSNASTR <> tsOK )
+        {}
+    }
+
+  DsNastr.wValue1 := prcTypeNorma;
+  DsNastr.cTabl   := prcNormaTPP;
+
+  if ( update current DSNASTR = tsOK )
+    cRzlt := DSNastr.nRec;
+
+  PopPos(#DsNastr);
+
+  SetRefTPPNorm_for_DVS := cRzlt
+} // function SetRefTPPNorm_for_DVS
+
+//******************************************************************************
+
+Function AddToDocName(var a: string; b: string): boolean;
+begin
+// AddToDocName := f_AddToDocName(a, b);
+  AddToDocName := FALSE;
+
+  if ( Length(a) + Length(b) > 80 ) then
+    Exit;
+
+  a := a + b;
+
+  AddToDocName := TRUE;
+end;
+
+//******************************************************************************
+
+Function MakeBaseDocByCurrentDogApp(PlDg: boolean): boolean;//PlDg- TRUE по дог, плану
+var
+  direct_: word;
+  varRefKatOrg : comp;
+{
+  MakeBaseDocByCurrentDogApp := FALSE;
+
+  direct_ := GetDogDirect;
+
+  if ( direct_ = 0 )
+    Exit;
+
+  if ( BaseDoc.VidDoc <> 520 )
+    varRefKatOrg := GetKontrag4DO(PlDg, BaseDoc.cBank, BaseDoc.cMyBank)
+  else
+    varRefKatOrg := GetKontrag4DO_520(BaseDoc.cBank, BaseDoc.cMyBank);
+
+  if ( varRefKatOrg = 0 )
+    Exit;
+
+  if AddToDocName(BaseDoc.Name, 'дог.' + if(wGetTune('Dog.DogNameInComment') = 0, Dogovor.NoDoc, Dogovor.NoDoc_Ext))
+    if AddToDocName(BaseDoc.Name, ' от ' + DateToStr(if(wGetTune('Dog.DateDogInComment') = 0, Dogovor.dDoc, Dogovor.dInput), 'DD/MM/YY'))
+      {
+        if IsValid(tnAppDogovor)
+          if AddToDocName(BaseDoc.Name, ', согл.' + if(wGetTune('Dog.DogNameInComment') = 0, AppDogovor.NoDoc, AppDogovor.NoDoc_Ext))
+            AddToDocName(BaseDoc.Name, ' от ' + DateToStr(if(wGetTune('Dog.DateDogInComment') = 0, AppDogovor.dDoc, AppDogovor.dInput), 'DD/MM/YY'))
+
+        if PlDg
+          AddToDocName(BaseDoc.Name, ', п.плана ' + CalPlan.NoDoc);
+      }
+
+  BaseDoc.YearDoc := Year(BaseDoc.dDoc);                   // word  "отдельно: год от dDoc",
+  BaseDoc.KolDn   := wGetTune('Oper.SrokSch');             // word  "количество дней действия счета",
+  BaseDoc.dEnd    := Add_Day(BaseDoc.dDoc, BaseDoc.kolDn); // Date  "дата окончания договора",
+  BaseDoc.cOrg    := varRefKatOrg;                         // tNrec  "код контрагента",
+
+  if ( ( BaseDoc.VidDoc = 111 ) OR ( BaseDoc.VidDoc = 211 ) )
+    BaseDoc.SpecYes := if (not PlDg, 1, if(CalPlan.DirectMC = 0, word(0), word(1)));
+
+  BaseDoc.Summa  := 0;               // double  "сумма по договору",
+  BaseDoc.skidka := 0;               // double  "скидка от суммы счета",
+  BaseDoc.NDS    := 0;               // double  "сумма НДС",
+
+  if ( DogApp.TipMoney = 2 )
+    {
+      BaseDoc.DopProc := DogApp.SummaSpec; // double  "доп.процент к курсу для вал-руб ДО",
+
+      if ( BaseDoc.VidDoc <> 520 )
+        BaseDoc.wCursForPlPor := DogApp.ShemaSum;
+    }
+
+  BaseDoc.Total := 0;               // double  "итого",
+
+  if ( BaseDoc.VidDoc <> 520 )
+    {
+      BaseDoc.cGrPol  := if(PlDg, CalPlan.cGrPol, DogApp.cGrPol);
+      BaseDoc.cGrOtpr := if(PlDg, CalPlan.cGrOtp, DogApp.cGrOtp);
+    }
+  else
+    if (DogApp.Direct <> 2)
+      {
+        BaseDoc.cGrPol  := if(PlDg, CalPlan.cGrPol, DogApp.cGrPol);
+        BaseDoc.cGrOtpr := if(PlDg, CalPlan.cGrOtp, DogApp.cGrOtp);
+      }
+    else
+      {
+        BaseDoc.cGrPol  := if(PlDg, CalPlan.cGrOtp, DogApp.cGrOtp);
+        BaseDoc.cGrOtpr := if(PlDg, CalPlan.cGrPol, DogApp.cGrPol);
+      }
+
+  #ifndef __Zrem__
+  BaseDoc.direct  := direct_;           // word   "0-внут операция, 1 - продажа, 2 - закупка",
+  #endif //__Zrem__
+
+  BaseDoc.cVal     := if (PlDg, CalPlan.cVal, DogApp.cVal);// tNrec   "код валюты",
+  BaseDoc.sumVal   := 0;                 // double  "сумма в валюте",
+  BaseDoc.TipMoney := DogApp.TipMoney   // word    "тип документа по отношению к валюте",
+  BaseDoc.Prior    := '99';              // s2      "приоритет оплаты",
+  BaseDoc.cNalog   := 0;                 // tNrec   "код налога",
+                                        // word    "вход в цену налогов: 1-входит",
+  BaseDoc.vhodNal  := if (PlDg, CalPlan.vhodNal, DogApp.vhodNal);
+  BaseDoc.cParty   := 0;                 // tNrec   "партия для учета консигнации",
+
+  if ( ( BaseDoc.VidDoc = 201 ) OR ( BaseDoc.VidDoc = 211 ) OR ( BaseDoc.VidDoc = 1420 ) ) AND ( wGetTune('Reserv.PrSchSklad') = 1 )
+    BaseDoc.cParty := coGetTune('User.cCurSklad');
+
+  BaseDoc.kolKompl := 0;                // double  "кол-во комплектов",
+  BaseDoc.cCompl   := 0;                // tNRec   "комплект ссылка",
+
+  #ifndef __Zrem__
+  BaseDoc.cPodrTo  := 0;                // tNrec   "в подразделение ссылка",
+  #endif //__Zrem__
+
+  BaseDoc.cNazna   := if (PlDg, CalPlan.cNazna, DogApp.cProg); // tNRec   "назначение ссылка",
+  BaseDoc.dOtsroch := 0;                // Date    "дата отсрочки оплаты по закупке",
+  BaseDoc.vhSkid   := if (DogApp.isSum = 0, 1, 2);// word "вариант скидки: 1-%, 2-сумма",
+  BaseDoc.Skidka   := GetSkidka(PlDg, BaseDoc.vhSkid);
+  BaseDoc.dPrice   := DogApp.dValCurse;// Date    "дата цен",
+
+  if ( BaseDoc.TipMoney = 2 )
+    if ( Message('Заполнить дату курса из '
+               + if (PlDg, 'ПКП', if(DogApp.cDogovor = 0, 'договора', 'соглашения'))
+               + '?'
+               , YesNo + Confirmation) = cmYes )
+      {
+        BaseDoc.dValCurse := if (PlDg, CalPlan.dValCurse, DogApp.dValCurse);
+
+        if ( BaseDoc.dValCurse = ZeroDate )
+          BaseDoc.dValCurse := if (PlDg, CalPlan.dInput, DogApp.dInput); // double  "курс валюты для вал-руб ДО",
+
+        oValFunc.GetCurse(BaseDoc.cVal, BaseDoc.dValCurse, BaseDoc.ValCurse);
+      }
+
+  if ( BaseDoc.VidDoc <> 520 )
+    BaseDoc.wCursForPlPor := DogApp.ShemaSum;
+
+  if ( ( BaseDoc.VidDoc = 111 ) OR ( BaseDoc.VidDoc = 211 ) ) AND PlDg
+    if ( CalPlan.DirectMC = 0 )
+      {
+        BaseDoc.vhodNal  := 2;
+        BaseDoc.total    := CalPlan.Summa * BaseDoc.ProcOpl / 100.0;
+        BaseDoc.TotalNDE := oDOfuns.DoRoundNDE(BaseDoc.VidDoc, BaseDoc.Total * _kurs);
+        BaseDoc.NDS      := CalPlan.SumNDS;
+      }
+
+  StrCurse := 'Курс на ' + DateToStr(BaseDoc.dValCurse, 'DD/MM/YYYY') + ' за 1 ' + SimVolB;
+
+  BaseDoc.cSklad  := 0;             // tNRec   "склад отгрузки",
+  BaseDoc.RndR    := 0;             // double  "округление РУБ документа до...",
+  BaseDoc.RndV    := 0;             // double  "округление ВАЛ документа до...",
+  BaseDoc.cDover  := 0;             // tNRec   "ссылка на доверенность",
+  BaseDoc.cZakaz  := 0;             // tNRec   "Ссылка на производственный заказ"
+
+  if boGetTune('Oper.fpCODog2Docs')
+    {
+      if PlDg
+        BaseDoc.cOtvPodr := CalPlan.cOtvPodr
+      else
+        if ( GetFirst FastFirstRow AttrDog where (( DogApp.nRec == AttrDog.cDogovor )) = tsOk )
+          BaseDoc.cOtvPodr := AttrDog.cPodr;
+    }
+
+  #ifndef __Zrem__
+  insert current BaseDoc;
+  #else
+  update current BaseDoc;
+  #end
+
+  if boGetTune('Oper.ExClassHDog2HDocs') // Копировать в ДО внешние атрибуты
+    {
+      var oExtAtr: iExtAttr;
+      var oExtCls: iExtClass;
+
+      var wTbl: word; wTbl := word(if(PlDg, coCalPlan, coDogovor));
+      var pDoc: comp; pDoc := if(PlDg, CalPlan.nRec, DogApp.nRec);
+
+      oExtAtr.CopyAllAttrEx    (wTbl , pDoc, word(coBaseDoc), BaseDoc.nRec);
+      oExtCls.CopyAllClassValEx(wTbl , pDoc, word(coBaseDoc), BaseDoc.nRec);
+    }
+
+  if ( BaseDoc.VidDoc = 520 )
+    {
+      ClearBuffer(#DSNASTR);
+
+      DSNASTR.nRec     := 0;
+      DSNASTR.LastTime := Cur_Time;
+      DSNASTR.LastDate := Cur_Date;
+      DSNASTR.LastUser := UserName;
+      DSNASTR.cBaseDoc := BaseDoc.nRec;
+      DSNASTR.cSopr    := 0;
+      DSNASTR.cSpSopr  := 0;
+      DSNASTR.wVid     := 1;
+      DSNASTR.cTabl    := 0;
+      DSNASTR.wValue1  := 1;
+      DSNASTR.dValue1  := 0;
+
+      insert current DSNASTR;
+    }
+
+  StepDoc.cBaseDoc := BaseDoc.nRec;      //tNrec  "код док-основания из BaseDOc",
+  StepDoc.Name     := '';                //tName  "наименование",
+  StepDoc.NStep    := '1';               //s20    "номер этапа",
+  StepDoc.dStart   := BaseDoc.dDoc;      //date   "дата начала этапа",
+  StepDoc.dEnd     := BaseDoc.dEnd;      //date   "дата завершения этапа",
+  StepDoc.Summa    := 0;                 //double "сумма по этапу",
+  StepDoc.cVal     := BaseDoc.cVal;      //tNrec  "код валюты",
+  StepDoc.SUMVAL   := 0;                 //double "сумма в валюте",
+
+  if (BaseDoc.cVal = 0)
+    {
+      StepDoc.Summa  := BaseDoc.Total;
+      StepDoc.SumVal := 0;
+    }
+  else
+    {
+      StepDoc.Summa  := 0;
+      StepDoc.SumVal := BaseDoc.Total;
+    }
+
+  StepDoc.cStatDoc := BaseDoc.cStatDoc;  //tNrec  "состояние этапа (код STATDOC)",
+  StepDoc.Status   := BaseDoc.status;    //word   "системный статус документа",
+  StepDoc.dIzvMax  := 0;                 //date   "дата, до кот необх известить об оплате",
+  StepDoc.dIzvFact := 0;                 //date   "дата фактич извещ о переч денег",
+  StepDoc.dOplMax  := 0                  //date   "дата, до кот должны поступ деньги",
+  StepDoc.dOtgr    := 0;                 //date   "дата отгр(макс)- в случае несамовывоза",
+
+  // Заполнение "Отгрузить до:" и "Оплатить до:" в ДО
+  oPlanDog.GetStepDocDates(Dogovor.nRec
+                        , DogApp.nRec
+                        , CalPlan.nRec
+                        , BaseDoc.nRec
+                        , StepDoc.dOtgr
+                        , StepDoc.dOplMax
+                         );
+
+  StepDoc.dOplFact := 0;                 //date   "дата выписки из банка(факт)",
+  StepDoc.dZabor   := 0;                 //date   "дата самов(забора товара) макс",
+
+  if ((BaseDoc.VidDoc <> 111) AND (BaseDoc.VidDoc <> 211))
+    {
+      StepDoc.cShtrafP := DogApp.cShtrafPlat;//tNrec  "штрафы за просрочку оплаты",
+      StepDoc.cShtrafG := DogApp.cShtrafShip;//tNrec  "штрафы за просрочку отгрузки",
+    }
+
+  StepDoc.NSert   := '';                //s20    "Номер сертификата",
+  StepDoc.NKont   := '';                //s20    "Номер контракта",
+  StepDoc.KontPri := '';                //tName  "Приложение к контракту"
+  insert current StepDoc;
+
+  if ( StepDoc.cShtrafG <> 0 ) OR ( StepDoc.cShtrafP <> 0 )
+    {
+      BaseDoc.Shtraf := 1;             //word   "1-предусмотрены или 0-нет штрафы",
+      update current BaseDoc;
+    }
+
+  MakeBaseDocByCurrentDogApp := TRUE;
+}
+
+//******************************************************************************
+
+Function MakeSpStepByCurrentDogApp(PlDg: boolean; ostatok_: double; kontrolOstat: longint): boolean;
+var
+  saveKol: double;
+  simple : boolean;
+{
+  if ( ostatok_ <= 0 )
+    Exit;
+
+  Result := FALSE;
+  simple := FALSE;
+
+  delete NoVisual Pick4SpStep where (( word(800) == Pick4SpStep.wList ));
+
+  if ( if(PlDg, SpCalPln.cGrMCUsl <> 0, SpDog.cGrMCUsl <> 0)) AND (if(PlDg, SpCalPln.cMCUsl = 0, SpDog.cMCUsl = 0) )
+    {
+      if RunInterface('PickByGrMCUsl'
+                    , if (PlDg, SpCalPln.cGrMCUsl, SpDog.cGrMCUsl)
+                    , if (PlDg, SpCalPln.PrMC, SpDog.PrMC)
+                    , ostatok_
+                    , if (PlDg, SpCalPln.cOtpEd, SpDog.cOtpEd)
+                     ) = cmCancel
+        Exit;
+    }
+  else
+    {
+      simple := TRUE;
+
+      ClearBuffer(#Pick4SpStep);
+
+      Pick4SpStep.wList   := 800;
+      Pick4SpStep.cRec    := if(PlDg, SpCalPln.cMCUsl, SpDog.cMCUsl);
+      Pick4SpStep.PickKol := ostatok_ / fEdIzm.GetKoefOtpEd(if(PlDg, SpCalPln.cOtpEd, SpDog.cOtpEd));
+
+      if ( Pick4SpStep.PickKol <> 0 )
+        insert current Pick4SpStep;
+    }
+
+  _LOOP Pick4SpStep
+    {
+      var varcTypeNorma : word;
+      var varcNormaTPP  : comp;
+
+      if ( ( if(PlDg, SpCalPln.PrMC, SpDog.PrMC) = 5 ) AND ( BaseDoc.VidDoc = 520 ) )
+        {
+          ClearBuffer(#DsgOtpr);
+
+          DsgOtpr.LastTime  := Cur_Time;
+          DsgOtpr.LastDate  := Cur_Date;
+          DsgOtpr.LastUser  := UserName;
+          DsgOtpr.cBaseDoc  := BaseDoc.nRec;
+          DsgOtpr.cKATDSNOR := 0;
+          DsgOtpr.cMc       := Pick4SpStep.cRec;
+          DsgOtpr.cED       := if(PlDg, SpCalPln.cOtpEd, SpDog.cOtpEd);
+          DsgOtpr.Kol       := Pick4SpStep.PickKol;
+          DsgOtpr.Price     := if(PlDg, SpCalPln.Price, SpDog.Price);
+
+          if ( insert current DsgOtpr <> tsOK )
+            Message('Ошибка!!! insert current DsgOtpr <> tsOK', Information);
+
+          if PlDg
+            {
+              if ( SpCalPln.PrNorma = toKatDSNor )
+                {
+                  varcTypeNorma := toKatDSNor;
+                  varcNormaTPP  := SpCalPln.cNorma;
+                }
+             }
+          else
+            if ( SpDog.PrNorma = toKatDSNor )
+              {
+                varcTypeNorma := toKatDSNor;
+                varcNormaTPP  := SpDog.cNorma;
+              }
+
+          SetRefTPPNorm_for_DVS(BaseDoc.nRec, DsgOtpr.nRec, varcTypeNorma, varcNormaTPP);
+
+          Result := TRUE;
+
+          Continue;
+        }
+
+      ClearBuffer(#SpStep);
+
+      SpStep.dDoc     := BaseDoc.dDoc;
+      SpStep.cStepDoc := StepDoc.nRec;
+      SpStep.Price    := if(PlDg, SpCalPln.Price, SpDog.Price);
+      SpStep.PrMC     := if(PlDg, SpCalPln.PrMC , SpDog.PrMC);
+
+      if ( ( SpStep.PrMC = 4 ) AND ( BaseDoc.VidDoc = 520 ) )
+        SpStep.PrMC := 1;
+
+      SpStep.cOtpED  := if (PlDg, SpCalPln.cOtpEd, SpDog.cOtpEd);
+      SpStep.cMCUSL  := Pick4SpStep.cRec;
+      SpStep.Kol     := Pick4SpStep.PickKol;
+      SpStep.cUKS    := if (PlDg, SpCalPln.cUKS, SpDog.cUKS);
+
+      if ( if(PlDg, SpCalPln.TiDk, SpDog.TiDk) = 439 )
+        {
+          if ( GetFirst FastFirstRow SpDocs where (( if(PlDg, SpCalPln.nRec, SpDog.cDoc) == SpDocs.nRec )) = tsOk )
+            SpStep.Price := fEdIzm.ConvSellSumToSecondEd(SpDocs.Price, SpDocs.cOtpEd, SpStep.cOtpEd);
+        }
+      else
+        if not simple
+          {
+            var cAkt: comp;
+            cAkt := fEdIzm.GetAktOtpEdNRec(SpStep.cMCUsl, SpStep.PrMC);
+
+            SpStep.Price  := fEdIzm.ConvSellSumToSecondEd(SpStep.Price, SpStep.cOtpEd, cAkt);
+            SpStep.cOtpEd := cAkt;
+          }
+
+      if ( fEdIzm.ConvertToUchEd(SpStep.kol, SpStep.cOtpEd) > ostatok_ )
+        SpStep.kol := ostatok_ / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+
+      if ( SpStep.Kol > 0 )
+        {
+          saveKol := fEdIzm.ConvertToUchEd(SpStep.kol, SpStep.cOtpEd); //в уч.единице группы
+
+          if ( SpStep.PrMC = 1 )
+
+            if ( GetFirst FastFirstRow KatMC = tsOk )
+              {
+                SpStep.ProcUb := oSDfuns.GetNormUbFromKatalog(oDOfuns.GetTipHozOnVidDoc(BaseDoc.VidDoc), 0, KatMC.NormUb);
+                SpStep.Kol    := SpStep.Kol * (1 - SpStep.ProcUb / 100);
+                SpStep.cMasEd := KatMC.cMasEd;
+                SpStep.Netto  := KatMC.Massa;
+                SpStep.mTara  := KatMC.mTara;
+              }
+
+          SpStep.KolSkl     := SpStep.Kol;
+          SpStep.KolOpl     := 0;                  //double "количество оплаченного",
+          SpStep.ProcUb     := 0;                  //double "% естественной убыли",
+          SpStep.cParty     := 0;                  //tNrec  "код партии",
+          SpStep.cVal       := if (PlDg, CalPlan.cVal, SpDog.cVal);//tNrec  "код валюты",
+          SpStep.Summa      := 0;               //double "стоимость по товару",
+          SpStep.Reserv     := 0;               //double "количество товара в резерве",
+          SpStep.SumVal     := 0;               //double "сумма в валюте по товару",
+          SpStep.Garant     := 0;               //double "срок гарантии в месяцах",
+          SpStep.SrokRes    := 0;               //date   "последний день действия резерва",
+          SpStep.SopUsl     := 0;               //word   "1- %, 2- сумма к товару",
+          SpStep.StoTov     := 0;               //double "стоимость или % к товару",
+          SpStep.PrSkid     := 1;               //word   "1- скидка в %, 2- в сумме",
+          SpStep.VlSkid     := 0;               //double "стоимость или % к товару",
+          SpStep.NDS        := 0;               //double "величина налогов к позиции",
+          SpStep.cPriceList := if (PlDg, SpCalPln.cPriceLS, SpDog.cPriceLS); //tNRec "Ссылка на прайс-лист",
+          SpStep.NVagon     := '';                 //s20 "Номер ж/д вагона",
+          SpStep.NKvit      := '';                 //s20 "Номер ж/д квитанции",
+
+          if ( ( BaseDoc.VidDoc = 201 ) AND ( SpStep.PrMC = 2 ) ) //word "Вх. усл. в накладную",
+            SpStep.PrUsNkl := wGetTune('Doc.UslDoSell');
+
+          if ( ( BaseDoc.VidDoc = 1420 ) AND ( SpStep.PrMC = 2 ) ) //word "Вх. усл. в накладную",
+            SpStep.PrUsNkl := wGetTune('Doc.Wood.Schet.UslDoSell');
+
+          if ( ( BaseDoc.VidDoc = 211 ) AND ( SpStep.PrMC = 2 ) ) //word "Вх. усл. в накладную",
+            SpStep.PrUsNkl := wGetTune('Doc.UslDoSellPO');
+
+          SpStep.ManualTax := 0;                //word "Ручные налоги",
+          SpStep.cAltEd    := 0;                //tNrec "Альт.единица измерения",
+          SpStep.cPersons  := 0;                //tNRec "Сотрудник, выполняющий услугу"
+          SpStep.cSpDocs   := if(PlDg, SpCalPln.nRec, if(SpDog.TiDk = 439, SpDog.cDoc, SpDog.nRec));
+
+          //if SpStep.kol > ostatok_ then SpStep.kol := ostatok_;
+          //if SpStep.kol<= 0 then Continue;
+
+          SpStep.Npp    := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+          SpStep.cGrNal := if (PlDg, SpCalPln.cGrNal, SpDog.cGrNal);
+
+          #ifdef __vschet__
+          #include DOUKS.vpp
+          #end
+
+          insert current SpStep;
+
+          oMTRFun.CopySpecMTR(coSpDocs, if(PlDg, SpCalPln.nRec, SpDog.nRec), coSpStep, SpStep.nRec);
+
+          RunInterface('CopySpDocSmeta', word(coSpDocs), if(PlDg, SpCalPln.nRec, SpDog.nRec), word(coSpStep), SpStep.nRec);
+
+          if boGetTune('Oper.ExClassDog2Docs') // Копировать в спецификацию ДО внешние атрибуты
+            {
+              var oExtAtr: iExtAttr;
+              var oExtCls: iExtClass;
+
+              oExtAtr.CopyAllAttrEx    (word(coSpDocs), SpStep.cSpDocs, word(coSpStep), SpStep.nRec);
+              oExtCls.CopyAllClassValEx(word(coSpDocs), SpStep.cSpDocs, word(coSpStep), SpStep.nRec);
+            }
+
+          if ( ( SpStep.PrMC <> 1 ) AND ( GetFirst FastFirstRow KatUsl = tsOk ) )
+            if ( KatUsl.TYPEUSL = 1 )
+              oCalcFuns.ClcUsl_CopyFactPar(if(PlDg, SpCalPln.nRec, SpDog.nRec), coSpDocs, SpStep.nRec, coSpStep);
+
+          if ( SpStep.PrMC = 1 )
+            {
+              oDEIfuns.CopyDEISpDocsToSpStep(if(PlDg, SpCalPln.nRec, SpDog.nRec)
+                                           , SpStep.nRec
+                                           , word(2)
+                                           , if(PlDg, SpCalPln.Kol, SpDog.Kol)
+                                           , word(1)
+                                           , Pick4SpStep.PickKol
+                                           , BaseDoc.VidDoc
+                                            );
+            }
+
+          if UseDEI
+            {
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.nRec, SpStep.PrMC, SpStep.cMCUsl, 1, 0, SpStep.KolSkl, longint(0), BaseDoc.VidDoc);
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.nRec, SpStep.PrMC, SpStep.cMCUsl, 2, 0, SpStep.Kol,    longint(0), BaseDoc.VidDoc);
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.nRec, SpStep.PrMC, SpStep.cMCUsl, 3, 0, SpStep.KolOpl, longint(0), BaseDoc.VidDoc);
+            }
+
+          if ( kontrolOstat = 1 )
+            {
+              if PlDg
+                SpCalPln.Ostatok := if(SpCalPln.Ostatok > saveKol, SpCalPln.Ostatok - saveKol, 0)
+              else
+                if ( SpDog.TiDk <> 439 )
+                  SpDog.Ostatok := if(SpDog.Ostatok > saveKol, SpDog.Ostatok - saveKol, 0)
+                else
+                  {
+                    PushPos(#SpDog);
+
+                    var pSpDocs: comp; pSpDocs := SpDog.cDoc;
+
+                    if ( GetFirst fastfirstrow SpDog where (( pSpDocs == SpDog.nRec )) = tsOk )
+                      update current SpDog set SpDog.Ostatok := if(SpDog.Ostatok > saveKol, SpDog.Ostatok - saveKol, 0);
+
+                    PopPos(#SpDog);
+                  }
+            }
+
+          Result := TRUE;
+        }
+    }
+}
+
+//------------------------------------
+
+//******************************************************************************
+
+Function InsertTTNDoc(PlDg: boolean): boolean;
+{
+  InsertTTNDoc := TRUE;
+
+  ClearBuffer(#TTNDoc2);
+
+  TTNDoc2.wTable    := coBaseDoc;
+  TTNDoc2.cDoc      := BaseDoc.nRec;
+  TTNDoc2.cShipment := if(PlDg, CalPlan.cShipment, DogApp.cShipment);
+  TTNDoc2.cTipOtg   := if(PlDg, CalPlan.cTipOtg  , DogApp.cTipOtg);
+  TTNDoc2.cPunktP   := if(PlDg, CalPlan.cPunktP  , 0);
+  TTNDoc2.cPunktR   := if(PlDg, CalPlan.cPunktR  , 0);
+
+  if ( insert current TTNDoc2 <> tsOk )
+    InsertTTNDoc := FALSE
+  else
+    {
+      var pWayMove : comp;
+
+      pWayMove := if(PlDg, CalPlan.cWayMove, DogApp.cWayMove);
+
+      if ( pWayMove <> 0 )
+        {
+          var piExAttr: iExtAttr;
+
+          if ( GetFirst FastFirstRow WayMove where (( pWayMove == WayMove.nRec )) = tsOk )
+            piExAttr.sSetAttr(coTTNDoc,TTNDoc2.nRec,'СПОСОБ ТРАНСПОРТИРОВКИ', WayMove.Name);
+        }
+    }
+}
+
+//******************************************************************************
+
+Function InsertSpGrSch(pDoc: comp; VidList: word): boolean;
+{
+  InsertSpGrSch := FALSE;
+
+  _LOOP SpGrSchC where (( VidList == SpGrSchC.wList AND
+                          pDoc    == SpGrSchC.cBaseDoc ))
+     {
+       ClearBuffer(#SpGrSch2);
+
+       SpGrSch2.cGroupSch := SpGrSchC.cGroupSch;
+       SpGrSch2.cBaseDoc  := BaseDoc.nRec;
+
+       insert current SpGrSch2;
+
+       InsertSpGrSch := TRUE;
+     }
+
+  RereadRecord(#SpGrSch);
+
+  if ( GetFirst SpGrSch <> tsOk )
+    {}
+}
+
+//******************************************************************************
+
+Procedure CountOstatok (var ostat_: double; kol_: double);
+{
+  ostat_ := if( ostat_ > kol_, ostat_ -kol_, 0);
+}
+
+//******************************************************************************
+
+Procedure UpDateSpStepUslReference(PlDg: boolean); // Обновляет в SpStep ссылки на услуг на МЦ
+var
+  p_NRec1, p_NRec2, p_NRec3: comp;
+  varprMC_1, varprMC_2 : word;
+{
+  if PlDg
+    {
+      _LOOP SpCalPln
+        {
+          if ( SpCalPln.cSpMC = 0 )
+            Continue;
+
+          NextVisual;
+
+          p_NRec1 := SpCalPln.nRec;
+          p_NRec2 := SpCalPln.cSpMC;
+
+          PushPos(#SpCalPln);
+
+          if ( GetFirst SpCalPln where(( p_NRec2 == SpCalPln.nRec )) = tsOk )
+            if ( SpCalPln.cMCUsl <> 0 )
+              if ( GetFirst SpStep where(( StepDoc.nRec  == SpStep.cStepDoc AND
+                                           SpCalPln.nRec == SpStep.cSpDocs )) = tsOk )
+                {
+                  p_NRec3 := SpStep.nRec;
+
+                  if ( GetFirst SpStep where(( StepDoc.nRec == SpStep.cStepDoc AND
+                                               p_NRec1      == SpStep.cSpDocs )) = tsOk )
+                    {
+                      SpStep.cSpMC := p_NRec3;
+                      update current SpStep;
+                    }
+                }
+          PopPos(#SpCalPln);
+        }
+    }
+  else
+    {
+      varprMC_1 := if(BaseDoc.VidDoc = 520, 3, 0);
+      varprMC_2 := if(BaseDoc.VidDoc = 520, 6, 3);
+
+      _LOOP SpDog where (( DogApp.TiDk == SpDog.TiDk AND
+                           DogApp.nRec == SpDog.cDoc AND
+                           varprMC_1   << SpDog.PrMC and
+                           varprMC_2   >> SpDog.PrMC ))
+        {
+          if ( SpDog.cSpMC = 0 )
+            Continue;
+
+          NextVisual;
+
+          p_NRec1 := SpDog.nRec;
+          p_NRec2 := SpDog.cSpMC;
+
+          PushPos(#SpDog);
+
+          if ( GetFirst FastFirstRow SpDog where (( p_NRec2 == SpDog.nRec )) = tsOk )
+            if ( SpDog.cMCUsl <> 0)
+              if ( GetFirst SpStep where (( StepDoc.nRec == SpStep.cStepDoc AND
+                                            SpDog.nRec   == SpStep.cSpDocs )) = tsOk )
+                {
+                  p_NRec3 := SpStep.nRec;
+
+                  if ( GetFirst SpStep where(( StepDoc.nRec == SpStep.cStepDoc AND
+                                               p_NRec1      == SpStep.cSpDocs )) = tsOk )
+                    {
+                      SpStep.cSpMC := p_NRec3;
+                      update current SpStep;
+                    }
+                }
+
+          PopPos(#SpDog);
+        }
+    }
+}
+
+
+//******************************************************************************
+
+Procedure AfterMakeDo(PlDg: boolean);
+{
+  UpDateSpStepUslReference(PlDg);
+
+  TipDO  := BaseDoc.VidDoc;
+  Zapret := 0;
+
+  NeedTotalCount := TRUE;
+
+  var SavedNDS: double;
+
+  if ( ( BaseDoc.VidDoc = 111 ) OR ( BaseDoc.VidDoc = 211 ) ) AND PlDg AND ( CalPlan.DirectMC = 0 )
+    SavedNDS := BaseDoc.NDS;
+
+  ModifDO;  //пар-ры не играют роли
+
+  if ( ( BaseDoc.VidDoc = 111 ) OR ( BaseDoc.VidDoc = 211 ) ) AND PlDg AND ( CalPlan.DirectMC = 0 )
+    {
+      BaseDoc.NDS := SavedNDS;
+      update current BaseDoc;
+    }
+
+  RereadRecord(#BaseDoc);
+  RereadRecord(#StepDoc);
+
+  InsertTTNDoc(PlDg);
+
+  if ( RecordExists SoprHoz = tsOk )
+    UpDateDoSoprHoz
+  else
+    InsertDoSoprHoz;
+
+  if PlDg
+    {
+      if not InsertSpGrSch(CalPlan.nRec, 2)
+        InsertSpGrSch(DogApp.nRec, 1);
+    }
+  else
+    InsertSpGrSch(DogApp.nRec, 1);
+
+  RescanPanel(#BaseDoc);
+  RescanPanel(#StepDoc);
+}
+
+//******************************************************************************
+
+Function makeDO_ByDogovor(DogNRec: comp): boolean;
+var
+  kontrOst: longint;
+  DogTiDk, varprMC_1, varprMC_2 : word;
+{
+//по договору или соглашению:
+  makeDO_ByDogovor := FALSE;
+
+  if ( GetFirst DogApp where (( DogNRec == DogApp.nRec )) <> tsOk )
+    {}
+
+  DogTiDk := DogApp.TiDk;
+
+  if not MakeBaseDocByCurrentDogApp(FALSE)
+    Exit;
+
+  varprMC_1 := if (BaseDoc.VidDoc = 520, 3, 0);
+  varprMC_2 := if (BaseDoc.VidDoc = 520, 6, 3);
+
+  if ( ( BaseDoc.VidDoc <> 111 ) AND ( BaseDoc.VidDoc <> 211 ) OR ( BaseDoc.SpecYes = 1 ) )
+
+  _LOOP SpDog where (( DogTiDk   == SpDog.TiDk AND
+                       DogNRec   == SpDog.cDoc AND
+                       varprMC_1 << SpDog.PrMC AND
+                       varprMC_2 >> SpDog.PrMC ))
+   {
+     if ( BaseDoc.VidDoc <> 520 )
+       if ( DogApp.Direct > 2 ) AND ( SpDog.Direct <> (2 - (DogApp.Direct AND 1)) )
+         Continue;
+
+     kontrOst := oNotes.Notes_InUseStatus(BaseDoc.cNote) AND ((BaseDoc.VidDoc mod 10) <> 11);
+
+     if not MakeSpStepByCurrentDogApp(FALSE
+                                    , if((BaseDoc.VidDoc mod 10) <> 11, SpDog.Ostatok, SpDog.Kol)
+                                    , kontrOst )
+       Continue;
+
+     update current SpDog;
+
+     makeDO_ByDogovor := TRUE;
+   }
+
+  AfterMakeDo(FALSE);
+}
+
+
+//******************************************************************************
+
+Function makeDO_ByCalPlan: boolean;
+var
+  kontrOst: longint;
+  cDogSogl: comp;
+{
+  makeDO_ByCalPlan := FALSE;
+
+  cDogSogl := if(IsValid(tnAppDogovor), AppDogovor.nRec, Dogovor.nRec);
+
+  if ( GetFirst DogApp where (( cDogSogl == DogApp.nRec )) <> tsOk )
+    {}
+
+  if not MakeBaseDocByCurrentDogApp(TRUE)
+    Exit;
+
+  if ( ( BaseDoc.VidDoc <> 111 ) AND ( BaseDoc.VidDoc <> 211 ) OR ( BaseDoc.SpecYes = 1 ) )
+    _LOOP SpCalPln
+      {
+        if ( BaseDoc.VidDoc <> 520 )
+          if ( DogApp.Direct > 2 ) AND ( SpCalPln.Direct <> CalPlan.DirectMC )
+            Continue;
+
+        kontrOst := oNotes.Notes_InUseStatus(BaseDoc.cNote) AND ((BaseDoc.VidDoc mod 10) <> 11);
+
+        if not MakeSpStepByCurrentDogApp(TRUE
+                                       , if((BaseDoc.VidDoc mod 10) <> 11, SpCalPln.Ostatok, SpCalPln.Kol)
+                                       , kontrOst)
+          Continue;
+
+        update current SpCalPln;
+
+        makeDO_ByCalPlan := TRUE;
+      }
+
+  AfterMakeDO(TRUE);
+}
+
+
+//******************************************************************************
+
+Function makeDO_ByDogovorSp(DogNRec: comp): boolean;
+var
+  TmpDirect
+, DogTiDk
+, i
+    : word;
+
+  kontrOst
+, Marker
+, MarkerKol
+, MarkerCount
+    : longint;
+
+  pickrec
+, pSpDog
+    : comp;
+
+  tmpKol
+    : double;
+{
+//по договору или соглашению:
+  makeDO_ByDogovorSp := FALSE;
+
+  if ( GetFirst DogApp where (( DogNRec == DogApp.nRec )) <> tsOk )
+    {}
+
+  DogTiDk := DogApp.TiDk;
+
+  if not MakeBaseDocByCurrentDogApp(FALSE)
+    Exit;
+
+  if ( ( BaseDoc.VidDoc <> 111 ) AND ( BaseDoc.VidDoc <> 211 ) OR ( BaseDoc.SpecYes = 1 ) )
+    {
+      TmpDirect := if(DogApp.Direct = 3, word(0), DogApp.Direct);
+
+      if ( RunInterface('GetSomeSpDocs1'
+                      , TRUE
+                      , DogApp.nRec
+                      , DogTiDk
+                      , pSpDog
+                      , word(1)
+                      , comp(0)
+                      , word(1)
+                      , TmpDirect
+                       ) = cmDefault )
+        {
+          Marker      := InitMarker('MSpDocs'   , 8, 100, 10);
+          MarkerKol   := InitMarker('MSpDocsKol', 8, 100, 10);
+          MarkerCount := GetMarkerCount(Marker);
+
+          For(i := 0; i < MarkerCount; i++)
+            if GetMarker(Marker, i, pickrec)
+              if GetMarker(MarkerKol, i, tmpKol)
+                if (GetFirst FastFirstRow SpDog where (( pickrec == SpDog.nRec )) = tsOk )
+                  {
+                    if ( BaseDoc.VidDoc <> 520 )
+                      {
+                       if ( SpDog.PrMC > 2 )
+                          Continue;
+
+                       if ( DogApp.Direct > 2) AND ( SpDog.Direct <> (2 - (DogApp.Direct AND 1)) )
+                          Continue;
+                      }
+                    else
+                      if ( (SpDog.PrMC <> 4) AND (SpDog.PrMC <> 5) )
+                        Continue;
+
+                    kontrOst := oNotes.Notes_InUseStatus(BaseDoc.cNote);
+                    tmpKol   := fEdIzm.ConvertToUchEd(tmpKol, SpDog.cOtpEd);
+
+                    if not MakeSpStepByCurrentDogApp(FALSE, tmpKol, kontrOst)
+                      Continue;
+
+                    update current SpDog;
+
+                    makeDO_ByDogovorSp := TRUE;
+                  }
+
+          DoneMarker(Marker   , 'MSpDocs');
+          DoneMarker(MarkerKol, 'MSpDocsKol');
+        }
+    }
+
+  AfterMakeDo (FALSE);
+}
+
+//******************************************************************************
+
+Function makeDO_ByCalPlanSp: boolean;
+var
+  kontrOst
+, Marker
+, MarkerKol
+, MarkerCount
+    : longint;
+
+  cDogSogl
+, pickrec
+, pSpDog
+    : comp;
+
+  i
+    : word;
+
+  tmpKol
+    : double;
+{
+  makeDO_ByCalPlanSp := FALSE;
+
+  cDogSogl := if (IsValid(tnAppDogovor), AppDogovor.nRec, Dogovor.nRec);
+
+  if ( GetFirst DogApp where (( cDogSogl == DogApp.nRec )) <> tsOk )
+    {}
+
+  if not MakeBaseDocByCurrentDogApp(TRUE)
+    Exit;
+
+  if ( ( BaseDoc.VidDoc <> 111 ) AND ( BaseDoc.VidDoc <> 211 ) OR ( BaseDoc.SpecYes = 1 ) )
+    {
+      if ( RunInterface('GetSomeSpDocs1'
+                      , TRUE
+                      , CalPlan.nRec
+                      , word(403)
+                      , pSpDog
+                      , word(1)
+                      , comp(0)
+                      , word(1)
+                      , CalPlan.DirectMC
+                       ) = cmDefault )
+        {
+          Marker      := InitMarker('MSpDocs'   , 8, 100, 10);
+          MarkerKol   := InitMarker('MSpDocsKol', 8, 100, 10);
+          MarkerCount := GetMarkerCount(Marker);
+
+          For(i := 0; i < MarkerCount; i++)
+            if GetMarker(Marker, i, pickrec)
+              if GetMarker(MarkerKol, i, tmpKol)
+                if ( GetFirst FastFirstRow SpCalPln where(( pickrec == SpCalPln.nRec )) = tsOk )
+                  {
+                    if ( BaseDoc.VidDoc <> 520 )
+                      {
+                        if ( SpCalPln.PrMC > 2 )
+                          Continue;
+
+                        if (DogApp.Direct > 2) AND ( SpCalPln.Direct <> CalPlan.DirectMC )
+                          Continue;
+                      }
+                    else
+                       if ( ( SpCalPln.PrMC <> 4 ) AND ( SpCalPln.PrMC <> 5 ) )
+                         Continue;
+
+                    kontrOst := oNotes.Notes_InUseStatus(BaseDoc.cNote);
+                    tmpKol   := fEdIzm.ConvertToUchEd(tmpKol, SpCalPln.cOtpEd);
+
+                    if not MakeSpStepByCurrentDogApp(TRUE, tmpKol, kontrOst)
+                      Continue;
+
+                    update current SpCalPln;
+
+                    makeDO_ByCalPlanSp := TRUE;
+                  }
+
+          DoneMarker(Marker   , 'MSpDocs');
+          DoneMarker(MarkerKol, 'MSpDocsKol');
+        }
+    }
+
+  AfterMakeDO(TRUE);
+}
+
+//******************************************************************************

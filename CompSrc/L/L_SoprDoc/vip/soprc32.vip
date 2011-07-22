@@ -1,0 +1,278 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#include ExtAttrClass.vih
+
+//********************************************************************************
+
+#doc
+Назначение:
+  печать "акцизных" накладных
+
+Параметры:
+  TypeSopr - вид сопр.документа
+#end
+
+//******************************************************************************
+
+Interface ExciseNakl doAccept, EscClose, Cyan;
+Create view
+Var
+  TypeSopr: word;
+  StrDate: string;
+  aSklad  : comp;
+  BegDate, EndDate: Date;
+  piExAttr: iExtAttr;
+From
+  KatSopr ,
+  AttrNam ,
+  AttrVal ,
+  KatPodr ,
+  KatOrg  ,
+  ExClassName
+Where
+((
+  TypeSopr           ==  KatSopr.VidSopr   AND
+  KatSopr.cOrgBase   ==  KatOrg.NRec       AND
+  aSklad             ==  KatPodr.NRec      AND
+  coKatSopr          ==  AttrNam.wTable    AND
+  StrDate            ==  AttrNam.Name      AND
+  coKatSopr          ==  AttrVal.wTable    AND
+  KatSopr.NRec       ==  AttrVal.cRec      AND
+  AttrNam.NRec       ==  Attrval.cAttrNam
+))
+;
+
+Parameters
+  TypeSopr;
+
+Form fExciseNakl('ExcisNkl.out', 'ExciseNakl') with novisual;
+
+Function CheckExciseNkl: boolean;
+var
+  tRec: comp;
+
+begin
+  CheckExciseNkl := TRUE;
+
+  case TypeSopr of
+   101,
+   108,
+   600,
+   606:
+     tRec := KatSopr.cPodrTo;
+   201:
+     tRec := KatSopr.cPodrFrom;
+  end;
+
+  if aSklad <> tRec
+    {
+      CheckExciseNkl := FALSE;
+      Exit
+    }
+
+  if (BegDate > AttrVal.vDate) or (EndDate < AttrVal.vDate)
+    {
+      CheckExciseNkl := FALSE;
+      Exit
+    }
+end;//Function
+
+
+Function PrintExciseNakl: boolean;
+var
+  npp: integer;
+begin
+  PrintExciseNakl := FALSE;
+
+  if (BegDate > EndDate)
+    {
+      Message('Начальная дата больше конечной.', Information);
+      Exit;
+    }
+  if aSklad = comp(0)
+    {
+      Message('Не задан акцизный склад.', Information);
+      Exit;
+    }
+
+  npp := 1;
+
+  case TypeSopr of
+    101, 108, 600, 606:
+      fExciseNakl.SetGroup('Уведомления в снабжении');
+    201:
+      fExciseNakl.SetGroup('Уведомления в сбыте');
+  end;
+
+  if (fExciseNakl.Error)
+    {
+      fExciseNakl.AbortForm;
+      Exit;
+    }
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfThread+vfBreak, 'Подготовка журнала к печати: ', 1);
+
+  if GetFirst KatOrg where ((coGetTune('MyOrg') == KatOrg.nRec)) = tsOk
+    {
+      fExciseNakl.Write(KatOrg.Name);
+      fExciseNakl.Write(KatOrg.UNN);
+    }
+  else
+    fExciseNakl.SkipFormat(2);
+
+  fExciseNakl.Write(KatPodr.Addr);
+
+  _LOOP KatSopr
+   {
+    if not NextVisual
+      if (Message('Прервать процесс?', YesNo + Confirmation) = cmYes)
+        {
+          StopVisual('', 0);
+          fExciseNakl.AbortForm;
+          Exit;
+        }
+    if IsValid(tnAttrVal)
+     if AttrVal.vDate <> Date(0, 0, 0)
+      if CheckExciseNkl
+        {
+          fExciseNakl.Write(KatSopr.NRec);
+
+          fExciseNakl.Write(npp);
+
+          fExciseNakl.Write(piExAttr.sGetAttr(coKatSopr, KatSopr.NRec, 'НОМЕР ОТПР.УВЕДОМЛЕНИЯ'));
+          fExciseNakl.Write(piExAttr.sGetAttr(coKatSopr, KatSopr.NRec, 'НОМЕР ПОЛУЧ.УВЕДОМЛЕНИЯ'));
+          fExciseNakl.Write(string(piExAttr.dGetAttr(coKatSopr, KatSopr.NRec, 'ДАТА ОТПР.УВЕДОМЛЕНИЯ')));
+          fExciseNakl.Write(string(piExAttr.dGetAttr(coKatSopr, KatSopr.NRec, 'ДАТА ПОЛУЧ.УВЕДОМЛЕНИЯ')));
+
+          fExciseNakl.Write(KatSopr.dOpr);
+          fExciseNakl.Write(KatSopr.NSopr);
+
+          case KatSopr.VidSopr of
+           600, 606:
+             {
+               if GetFirst KatOrg where ((coGetTune('MyOrg') == KatOrg.nRec)) = tsOk
+                 fExciseNakl.Write(KatOrg.Name);
+               else
+                 fExciseNakl.SkipFormat(1);
+
+               if GetFirst KatPodr where ((KatSopr.cPodrFrom == KatPodr.Nrec)) = tsOk
+                 fExciseNakl.Write(KatPodr.Addr)
+               else
+                 fExciseNakl.SkipFormat(1);
+             }
+           else
+             {
+               if KatSopr.cOrgBase <> comp(0)
+                 {
+                   fExciseNakl.Write(KatOrg.Name);
+                   fExciseNakl.Write(piExAttr.sGetAttr(coKatOrg, KatOrg.NRec, 'РЕКВИЗИТЫ АКЦИЗНОГО СКЛАДА'));
+                 }
+               else
+                 fExciseNakl.SkipFormat(2);
+             }
+          end;
+
+          npp := npp + 1;
+        }
+   }
+
+  StopVisual('', 0);
+
+  if npp > 1
+    fExciseNakl.PutEvent(feBreak);
+
+  if fExciseNakl.Error
+    fExciseNakl.AbortForm;
+  else
+    {
+      PrintExciseNakl := TRUE;
+      fExciseNakl.ShowFile('Журнал регистрации отправленных уведомлений о поставке');
+    }
+end;//Function
+
+
+#doc
+  Параметры печати журнала
+#end
+
+Window JournalWin 'Печать журнала' (, hcSkladInmovListLMAkciz, ) escclose, gray;
+  Show at (35, 5, 65, 14);
+Panel pnJournal;
+screen scrSelJournal;
+Fields
+  KatPodr.Name ('Выбор акцизного склада', , sci13EnEsc): Protect,
+   {Font = {BackColor = if (aSklad = 0, ColorNeed, 0)}};
+  BegDate ('Выбирается начальная дата', , sci13Esc): NoProtect;
+  EndDate ('Выбирается конечная дата', , sci13Esc): NoProtect;
+buttons
+  cmOk , Default, , 'Формируется журнал', , sci1Esc;
+  cmCancel , , , 'Выход', , sci1Esc;
+<<
+
+`Акцизный склад: `
+.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+`Начальная дата`  .@@@@@@@@@@@
+`Конечная дата`   .@@@@@@@@@@@
+
+ <.~П~родолжить.>    <. Отмена .>
+>>
+end;
+
+HandleEvent
+cmPick:
+  Case CurField of
+    #KatPodr.Name:
+      {
+        var tSkl: comp;
+        if RunInterface('GetAnyPodr', tSkl, 1) <> cmCancel
+          if Upcase(piExAttr.sGetAttr(coKatPodr, tSkl, 'АКЦИЗНЫЙ')) = 'ДА'
+            {
+              set aSklad := tSkl;
+              RedrawPanel(#KatPodr);
+            }
+          else
+            Message('Выбранный склад не является акцизным!');
+      }
+  end;
+end;//HandleEvent
+end;//panel
+
+HandleEvent
+cmOk:
+  if PrintExciseNakl
+    {
+      SaveMyDsk(aSklad, 'JournASklad');
+      SaveMyDsk(BegDate, 'JournABegDate');
+      SaveMyDsk(EndDate, 'JournAEndDate');
+    }
+cmInit:
+  {
+    ReadMyDsk(aSklad, 'JournASklad'  , FALSE);
+    ReadMyDsk(BegDate, 'JournABegDate', FALSE);
+    ReadMyDsk(EndDate, 'JournAEndDate', FALSE);
+    if BegDate = Date(0, 0, 0)
+      BegDate := Cur_Date;
+    if EndDate = Date(0, 0, 0)
+      EndDate := Cur_Date;
+  }
+end;//HandleEvent
+end;//window
+
+
+HandleEvent
+cmInit:
+  {
+    Abort;
+    case TypeSopr of
+      101, 108, 600, 606:  StrDate := 'ДАТА ПОЛУЧ.УВЕДОМЛЕНИЯ';
+      201:          StrDate := 'ДАТА ОТПР.УВЕДОМЛЕНИЯ';
+    end;
+    RunWindowModal(JournalWin);
+  }
+end;
+End.

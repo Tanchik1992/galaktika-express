@@ -1,0 +1,124 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Процедуры обработки налогов в сопроводительных документах
+//******************************************************************************
+
+#include SDfuns.var
+
+// Формирование налогов к текущей позиции спецификации
+// сопроводительного документа
+
+#ifndef _SOPRNAL_VPP
+#define _SOPRNAL_VPP
+#include soprn00.vpp
+
+//-- Аналог RecalcNalogs только без проверки ручные налоги или расчетные
+procedure RecalcNalogs1(aGrNal: comp; chGrNal: comp);
+var vaGrNal  : comp;
+var WDate    : date;
+{
+  WDate := if (longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+
+  if (chGrNal <> 0)
+    vaGrNal := chGrNal;
+  else
+    if (GetFirst SpDocNal <> tsOk)
+      vaGrNal := aGrNal;
+    else
+      vaGrNal := if (SpDocNal.cGrNal <> 0, SpDocNal.cGrNal, aGrNal);
+
+  set SpSopr.cGrNal := vaGrNal;
+
+  var tBaseNalogNDE: double;
+  var tBaseNalogVal: double;
+  tBaseNalogNDE := FSRoundRub(oSDFuns.GetBaseNalog(KatSopr.Buffer, SpSopr.Buffer,
+                                                   if (SpSopr.PrMC = 1, KatMC.kGroupMC, 0), 0));
+  tBaseNalogVal := FSRoundRub(oSDFuns.GetBaseNalog(KatSopr.Buffer, SpSopr.Buffer,
+                                                   if (SpSopr.PrMC = 1, KatMC.kGroupMC, 0), 1));
+
+  if (KatSopr.VhodNal = 1)
+    {
+      CountBasePrice(KatSopr.NRec, SpSopr.NRec, KatSopr.VidSopr, vaGrNal,
+               KatSopr.cOrgBase, SpSopr.KolFact, SpSopr.cOtpEd, WDate,
+                     KatSopr.cValut, 0, tBaseNalogNDE, tBaseNalogVal, KatSopr.cPayment);
+
+      SpSopr.SumNDS      := tBaseNalogNDE - GetBasePrice;
+      set SpSopr.SumVNDS := tBaseNalogVal - GetBaseValPrice;
+    }
+  else
+    {
+      CountNalogPrice(KatSopr.NRec, SpSopr.NRec, KatSopr.VidSopr, vaGrNal,
+               KatSopr.cOrgBase, SpSopr.KolFact, SpSopr.cOtpEd, WDate,
+               KatSopr.cValut, 0, tBaseNalogNDE, tBaseNalogVal, KatSopr.cPayment);
+
+      SpSopr.SumNDS      := GetNalogPrice    - tBaseNalogNDE;
+      set SpSopr.SumVNDS := GetNalogValPrice - tBaseNalogVal;
+    }
+}
+!
+!
+!
+function ChangeSpDocNalOrg(OldOrg: comp; NewOrg: comp):boolean;
+{
+  ChangeSpDocNalOrg:=false;
+
+  If not isValid(#SpSopr)
+    Exit;
+
+  StartNewVisual(vtNumericVisual,vfTimer,
+                      ''#3'Модификация контрагента в налогах: ',1);
+
+  ResetBounds(#SpDocNal);
+  _loop SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc and
+                         KatSopr.NRec == SpDocNal.cDoc))
+    if (SpDocNal.cOrg = OldOrg)
+      {
+        SpDocNal.cOrg := NewOrg;
+        Update current SpDocNal;
+      }
+  SetBounds(#SpDocNal);
+
+  StopVisual('',0);
+
+  ChangeSpDocNalOrg := true;
+}
+
+
+
+// рассчитывает налоги для всей накладной
+procedure RecalcNalogsInNakl;
+{
+  PushPos(#SpSopr);
+  ResetBounds(#SpSopr);
+  StartNewVisual(vtNumericVisual,vfTimer, 'Пересчет сумм по документу...',1);
+
+  _loop SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+    {
+      //-- этот if нужен чтобы корректно считать налог по сопут усл %
+      var oldKolOpl : double;
+      if (SpSopr.prMC = 3)
+        {
+          oldKolOpl     := SpSopr.KolOpl;
+          SpSopr.KolOpl :=1;
+        }
+
+      RecalcNalogs(GetDefNalogGroup, SpSopr.cGrNal);
+
+      //-- этот if нужен чтобы корректно считать налог по сопут усл %
+      if SpSopr.PrMc=3
+        SpSopr.KolOpl := oldKolOpl;
+
+      if (update current SpSopr <> tsOK) {};
+      NextVisual;
+    }
+
+  StopVisual('',0);
+  PopPos(#SpSopr);
+  SetBounds(#SpSopr);
+  RecalcSumm(true);
+
+  Update_Current_KatSopr;
+}
+
+#end //_SOPRNAL_VPP

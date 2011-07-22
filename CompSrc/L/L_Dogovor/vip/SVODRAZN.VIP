@@ -1,0 +1,549 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Формирование сводной разнарядки на отгрузку               ║
+ ║ Ответственный : Славко Александр Анатольевич(SLAVKO)                      ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+#include xlReport.vih // Excel
+
+#doc
+Формирование сводной разнарядки на отгрузку
+#end
+Interface SvodRazn 'Сводная разнарядка на отгрузку' EscClose, Gray;
+  Show At (,,64,8);
+
+Var pxlrepsetup : xlrepsetup;
+
+Create View
+Var
+  pXL
+               : XlsRepBuilder;
+
+  DateBegin
+, DateEnd
+               : date;
+
+  RoundKolfromNastr
+, prVid
+               : word;
+
+  SXLTFileName
+, sXLSFileName
+, ID
+               : string;
+
+  flag
+               : boolean;
+
+From
+  OtgOrder ,
+  SpOtgOrd ,
+  NZakaz   ,
+  SpDocs   ,
+  CellVal,
+  synonym  MarPunkt MarPunktSyn_P ,
+  synonym  MarPunkt MarPunktSyn_R ,
+  MarAvt   ,
+  KatMC    ,
+  MoveCell ,
+  KatOtpEd ,
+  TempRazn (TempRazn01, Build),
+  synonym TempRazn TempRaznSyn,
+  synonym TempRazn TempRaznSyn01
+Where
+((
+       OtgOrder.NRec           == SpOtgOrd.cOtgOrder
+  and  OtgOrder.cPunktP        == MarPunktSyn_P.NRec
+
+  and  SpOtgOrd.cNZakaz        == NZakaz.NRec
+  and  NZakaz.cPunktR          == MarPunktSyn_R.NRec
+  and  NZakaz.cMarAvt          == MarAvt.NRec
+
+  and  SpOtgOrd.NRec           == SpNZRasp.cSpOtgOrd
+
+  and  SpNZRasp.cSpNZak        == SpDocs.NRec
+  and  SpDocs.cMCUsl           == KatMC.NRec
+  and  SpDocs.cMoveCell        == MoveCell.NRec
+  and  SpDocs.cOtpEd           == KatOtpEd.NRec
+
+  and  word(0)                 == CellVal.PrMC
+  and  KatMC.NRec              == CellVal.cMC
+  and  MoveCell.NRec           == CellVal.cMoveCell
+));
+
+Form FrmSR('SvodRazn.out', 'SvodRazn') With NoVisual;
+
+#INCLUDE G_Date.Vpp
+
+Procedure MakeReport;
+var
+  varDouble : Double;
+{
+  delete TempRazn;
+  // Все Р на О которые действуют в заданный период
+  _loop OtgOrder where ((    DateBegin <<= OtgOrder.dTo   (NoIndex)
+                         and DateEnd   >>= OtgOrder.dFrom (NoIndex)
+                       ))
+    {
+     _loop SpOtgOrd
+       {
+        _loop SpNZRasp
+          {
+           if ( (SpNZRasp.KolFact <> 0) and (SpDocs.PrMC = word(1)) ) // МЦ
+             {
+//              Message(''#3'!!!' + string(MarPunktSyn_P.NRec) + '!' + string(KatMC.NRec) +  '!' + string(MarPunktSyn_R.NRec) +'!' + string(MoveCell.NRec) +'!' + string( KatOtpEd.NRec),Information);
+              // тут проблемка когда не валидная какая нибудь таблица поля принимают случайные значения, делаю 0
+              if (not IsValid(#KatMC))          ClearBuffer(#KatMC);
+              if (not IsValid(#MarPunktSyn_R))  ClearBuffer(#MarPunktSyn_R);
+              if (not IsValid(#MoveCell))       ClearBuffer(#MoveCell);
+              if (not IsValid(#KatOtpEd))       ClearBuffer(#KatOtpEd);
+              if (not IsValid(#CellVal))        ClearBuffer(#CellVal);
+              // cOtpPunkt + cMC + cPolPunkt + cMoveCell + cOtpEd
+              if (GetFirst TempRazn where ((    MarPunktSyn_P.NRec == TempRazn.cOtpPunkt
+                                            and KatMC.NRec         == TempRazn.cMC
+                                            and MarPunktSyn_R.NRec == TempRazn.cPolPunkt
+                                            and MoveCell.NRec      == TempRazn.cMoveCell
+                                            and KatOtpEd.NRec      == TempRazn.cOtpEd
+                                          )) = tsOk)
+                {
+                 if (CellVal.Koef <> 0)
+                   {
+                    varDouble := (SpNZRasp.KolFact*KatOtpEd.Koef)/CellVal.Koef;
+                    if (Trunc(varDouble) < varDouble)
+                      varDouble := Trunc(varDouble) + 1;
+                    TempRazn.KolMoveCell := TempRazn.KolMoveCell + varDouble;
+                   };
+                 TempRazn.KolOtpEd := TempRazn.KolOtpEd + SpNZRasp.KolFact;
+                 Update Current TempRazn;
+                }
+              else
+                {
+                 ClearBuffer(#TempRazn);
+                 TempRazn.cOtpPunkt    := MarPunktSyn_P.NRec;
+                 TempRazn.NameOtpPunkt := MarPunktSyn_P.Name;
+                 TempRazn.cMC          := KatMC.NRec;
+                 TempRazn.NameMC       := KatMC.Name;
+                 TempRazn.cPolPunkt    := MarPunktSyn_R.NRec;
+                 TempRazn.NamePolPunkt := MarPunktSyn_R.Name;
+                 TempRazn.cMoveCell    := MoveCell.NRec;
+                 TempRazn.NameMoveCell := MoveCell.Name;
+                 if (CellVal.Koef <> 0)
+                   {
+                    varDouble := (SpNZRasp.KolFact*KatOtpEd.Koef)/CellVal.Koef;
+                    if (Trunc(varDouble) < varDouble)
+                      varDouble := Trunc(varDouble) + 1;
+                    TempRazn.KolMoveCell := varDouble;
+                   };
+                 TempRazn.cOtpEd       := KatOtpEd.NRec;
+                 TempRazn.NameOtpEd    := KatOtpEd.Name;
+                 TempRazn.KolOtpEd     := SpNZRasp.KolFact;
+                 TempRazn.WayCode      := MarAvt.KodMarch;
+                 TempRazn.WayName      := MarAvt.NMarAvt;
+//                 TempRazn.Comment :=
+                 Insert Current TempRazn;
+                };
+// Итоги по пункту погрузки
+              // cOtpPunkt + cMC + cPolPunkt + cMoveCell + cOtpEd
+              if (GetFirst TempRazn where ((    MarPunktSyn_P.NRec == TempRazn.cOtpPunkt
+                                            and comp(-2)           == TempRazn.cMC
+                                            and comp(-2)           == TempRazn.cPolPunkt
+                                            and MoveCell.NRec      == TempRazn.cMoveCell
+                                          )) = tsOk)
+                {
+                 if (CellVal.Koef <> 0)
+                   {
+                    varDouble := (SpNZRasp.KolFact*KatOtpEd.Koef)/CellVal.Koef;
+                    if (Trunc(varDouble) < varDouble)
+                      varDouble := Trunc(varDouble) + 1;
+                    TempRazn.KolMoveCell  := TempRazn.KolMoveCell + varDouble;
+                   };
+                 Update Current TempRazn;
+                }
+              else
+                {
+                 ClearBuffer(#TempRazn);
+                 TempRazn.cOtpPunkt    := MarPunktSyn_P.NRec;
+                 TempRazn.cMC          := comp(-2);
+                 TempRazn.cPolPunkt    := comp(-2);
+                 TempRazn.cMoveCell    := MoveCell.NRec;
+                 TempRazn.NameMoveCell := MoveCell.Name;
+                 if (CellVal.Koef <> 0)
+                   {
+                    varDouble := (SpNZRasp.KolFact*KatOtpEd.Koef)/CellVal.Koef;
+                    if (Trunc(varDouble) < varDouble)
+                      varDouble := Trunc(varDouble) + 1;
+                    TempRazn.KolMoveCell  := varDouble;
+                   };
+                 Insert Current TempRazn;
+                };
+             };
+          }
+       }
+    }
+};
+
+Procedure PrintItog(varcPunktP : comp);
+var varStr : string;
+{
+ Flag := false;
+ if (prvid = 0)
+   FrmSR.PutEvent(feBreak); // с позиций по пункту погрузки
+ if (GetFirst TempRaznSyn where ((    varcPunktP == TempRaznSyn.cOtpPunkt
+                                  and comp(-2)   == TempRaznSyn.cMC
+                                  and comp(-2)   == TempRaznSyn.cPolPunkt
+                                )) = tsOk)
+   {
+    varStr := 'Итого:';
+    do
+    {
+     if (TempRaznSyn.KolMoveCell<>0)
+       if ( prvid = 0 )
+         {
+            FrmSR.Write(varStr);
+            FrmSR.Write(Trim(String(TempRaznSyn.KolMoveCell,18,RoundKolfromNastr)));
+            FrmSR.Write(TempRaznSyn.NameMoveCell);
+            varStr := '';
+         }
+       else
+         {
+            pXL.ClearTblBuffer;
+            pXL.SetTblStringFldValue('Продукт',  if(flag, '', 'Итого: '));
+            pXL.SetTblStringFldValue('Кол_подв_сост', Trim(String(TempRaznSyn.KolMoveCell,18,RoundKolfromNastr)));
+            pXL.SetTblStringFldValue('Ед_подв_сост',  TempRaznSyn.NameMoveCell);
+            pXL.InsTblRow;
+            flag := true;
+         }
+// Всего - сделал сдесь т.к. если будут проблеммы с округлением, то надо будет суммировать округленные итоги ...
+     // cOtpPunkt + cMC + cPolPunkt + cMoveCell + cOtpEd
+     if (GetFirst TempRaznSyn01 where ((    comp(-2)       == TempRaznSyn01.cOtpPunkt
+                                        and comp(-2)       == TempRaznSyn01.cMC
+                                        and comp(-2)       == TempRaznSyn01.cPolPunkt
+                                        and MoveCell.NRec  == TempRaznSyn01.cMoveCell
+                                      )) = tsOk)
+       {
+        TempRaznSyn01.KolMoveCell := TempRaznSyn01.KolMoveCell + TempRaznSyn.KolMoveCell;
+        Update Current TempRaznSyn01;
+       }
+     else
+       {
+        ClearBuffer(#TempRaznSyn01);
+        TempRaznSyn01.cOtpPunkt    := comp(-2);
+        TempRaznSyn01.cMC          := comp(-2);
+        TempRaznSyn01.cPolPunkt    := comp(-2);
+        TempRaznSyn01.KolMoveCell  := TempRaznSyn.KolMoveCell;
+        TempRaznSyn01.NameMoveCell := TempRaznSyn.NameMoveCell;
+        Insert Current TempRaznSyn01;
+       };
+    } while (GetNext TempRaznSyn where ((    varcPunktP == TempRaznSyn.cOtpPunkt
+                                         and comp(-2)   == TempRaznSyn.cMC
+                                         and comp(-2)   == TempRaznSyn.cPolPunkt
+                                       )) = tsOk);
+   };
+  if ( prvid = 0 )
+    {
+      if (varStr <> '')
+        {
+          FrmSR.Write(varStr);
+          FrmSR.SkipFormat(2)
+        }
+
+      FrmSR.PutEvent(feBreak); // с итогов по пункту погрузки
+    }
+}; // procedure PrintItog
+
+Procedure PrintVsego;
+var varStr : string;
+{
+   Flag := false;
+   if (GetFirst TempRaznSyn01 where ((    comp(-2)   == TempRaznSyn01.cOtpPunkt
+                                    and comp(-2)   == TempRaznSyn01.cMC
+                                    and comp(-2)   == TempRaznSyn01.cPolPunkt
+                                  )) = tsOk)
+   {
+    varStr := 'Всего:';
+
+    _loop TempRaznSyn01 where ((    comp(-2)   == TempRaznSyn01.cOtpPunkt
+                                and comp(-2)   == TempRaznSyn01.cMC
+                                and comp(-2)   == TempRaznSyn01.cPolPunkt
+                              ))
+    {
+     if (TempRaznSyn01.KolMoveCell<>0)
+       if ( prvid = 0 )
+         {
+            FrmSR.Write(varStr);
+            FrmSR.Write(Trim(String(TempRaznSyn01.KolMoveCell,18,RoundKolfromNastr)));
+            FrmSR.Write(TempRaznSyn01.NameMoveCell);
+            varStr := '';
+         }
+       else
+         {
+            pXL.ClearTblBuffer;
+            pXL.SetTblStringFldValue('Продукт',  if(flag, '', 'ИТОГО: '));
+            pXL.SetTblStringFldValue('Кол_подв_сост', Trim(String(TempRaznSyn01.KolMoveCell,18,RoundKolfromNastr)));
+            pXL.SetTblStringFldValue('Ед_подв_сост',  TempRaznSyn01.NameMoveCell);
+            pXL.InsTblRow;
+            flag := true;
+         }
+    }
+   };
+  if ( prvid = 0 )
+    {
+      if (varStr <> '')
+        {
+           FrmSR.Write(varStr);
+           FrmSR.SkipFormat(2)
+        }
+      FrmSR.PutEvent(feBreak); // с всего
+ }
+}; // procedure PrintVsego
+
+Procedure PrintReport;
+Var varcPunktP ,
+    varcMC ,
+    varcPunktR
+       : comp;
+    varChg : boolean;
+{
+  if ( prvid = 0 )
+    {
+       FrmSR.Write(DateBegin);
+       FrmSR.Write(DateEnd);
+    }
+  else
+    {
+       if not pxlrepsetup.checkParam(0, ID, sXLTFileName)
+         Exit;
+
+       Set sXLSFileName := pXL.CreateReport(sXLTFileName, TRUE);
+
+       pXL.CreateVar(sXLSFileName);
+       pXL.SetStringVar('header', CommonFormHeader);
+       pXL.SetStringVar('Период', 'Сводная разнарядка за период:  с ' + DateToStr(DateBegin,'DD/MM/YYYY')
+                        + ' по ' + DateToStr(DateEnd,'DD/MM/YYYY'));
+       pXL.PublishVar;
+       pXL.CreateTbls(sXLSFileName);
+       pXL.CreateTbl('SvodnRazn');
+       pXL.ClearTblBuffer;
+       pXL.CreateTblFld('Продукт');
+       pXL.CreateTblFld('Пункт_разгр');
+       pXL.CreateTblFld('Кол_подв_сост');
+       pXL.CreateTblFld('Ед_подв_сост');
+       pXL.CreateTblFld('Кол_Отп');
+       pXL.CreateTblFld('Ед_Отп');
+       pXL.CreateTblFld('Маршрут');
+       pXL.CreateTblFld('Примечание');
+    }
+
+  if (GetFirst TempRazn Ordered by Index TempRazn02 = tsOk)
+    {
+     varcPunktP := comp(-1);
+     varChg     := True;
+     _loop TempRazn Ordered by Index TempRazn02
+     {
+//       Message(''#3'TempRazn ...' + string(TempRazn.cOtpPunkt) + '!' + string(TempRazn.cMC) +  '!' + string(TempRazn.cPolPunkt) +'!' + string(TempRazn.cMoveCell) +'!' + string( TempRazn.cOtpEd),Information);
+       if ((comp(-2) = TempRazn.cMC) and (comp(-2) = TempRazn.cPolPunkt)) // не итоги
+         Continue;
+       if (varcPunktP <> TempRazn.cOtpPunkt)
+         {
+          varChg := True;
+          if (varcPunktP <> comp(-1))
+            PrintItog(varcPunktP);
+          if (prvid = 0 )
+            FrmSR.Write(TempRazn.NameOtpPunkt);
+          else
+          {
+          pXL.ClearTblBuffer;
+          pXL.SetTblStringFldValue('Продукт',  'Пункт погрузки: ' + TempRazn.NameOtpPunkt);
+          pXL.InsTblRow;
+           }
+         };
+       if (varcMC <> TempRazn.cMC) varChg := True;
+
+       if ( prvid = 0 )
+         {
+            if (varChg) FrmSR.Write(TempRazn.NameMC) else FrmSR.SkipFormat(1);
+            if (varcPunktR <> TempRazn.cPolPunkt) varChg := True;
+            if (varChg) FrmSR.Write(TempRazn.NamePolPunkt) else FrmSR.SkipFormat(1);
+   //       FrmSR.Write(TempRazn.KolMoveCell);
+            if (TempRazn.KolMoveCell=0)
+              FrmSR.SkipFormat(2)
+            else
+             {
+              FrmSR.Write(Trim(String(TempRazn.KolMoveCell,18,RoundKolfromNastr)));
+              FrmSR.Write(TempRazn.NameMoveCell);
+             }
+   //        FrmSR.Write(TempRazn.KolOtpEd);
+            FrmSR.Write(Trim(String(TempRazn.KolOtpEd,18,RoundKolfromNastr)));
+            FrmSR.Write(TempRazn.NameOtpEd);
+            FrmSR.Write(TempRazn.WayCode);
+         }
+       else
+         {
+            pXL.ClearTblBuffer;
+            if (varChg)
+              pXL.SetTblStringFldValue('Продукт', '  ' + TempRazn.NameMC);
+
+            if (varcPunktR <> TempRazn.cPolPunkt)
+              varChg := True;
+
+            if (varChg)
+              pXL.SetTblStringFldValue('Пункт_разгр', TempRazn.NamePolPunkt);
+
+            if (TempRazn.KolMoveCell<>0)
+              {
+                pXL.SetTblStringFldValue('Кол_подв_сост', Trim(String(TempRazn.KolMoveCell,18,RoundKolfromNastr)));
+                pXL.SetTblStringFldValue('Ед_подв_сост', TempRazn.NameMoveCell);
+              }
+
+            pXL.SetTblStringFldValue('Кол_Отп', Trim(String(TempRazn.KolOtpEd,18,RoundKolfromNastr)));
+            pXL.SetTblStringFldValue('Ед_Отп', TempRazn.NameOtpEd);
+            pXL.SetTblStringFldValue('Маршрут', TempRazn.WayCode);
+            pXL.InsTblRow;
+         }
+
+!       FrmSR.Write(TempRazn.Comment);
+       varcPunktP := TempRazn.cOtpPunkt;
+       varcMC     := TempRazn.cMC;
+       varcPunktR := TempRazn.cPolPunkt;
+       varChg     := False;
+     }
+     PrintItog(varcPunktP);
+     if ( prvid = 0 )
+       FrmSR.PutEvent(feBreak); // Все пункты
+     else
+       {
+         pXL.ClearTblBuffer;
+         pXL.InsTblRow;
+       }
+
+     PrintVsego;
+     if ( prvid = 1 )
+       {
+          pXL.PublishTbl('SvodnRazn');
+          StartNewVisual(vtRotateVisual, vfTimer, 'Выгрузка данных в Excel', 1);
+          NextVisual;
+          pXL.LoadReport(sXLSFileName);
+          StopVisual('', 0);
+          pXL.DisConnectExcel;
+       }
+    };
+};
+
+Screen scrROtg_R01(,hcDogRaznReport,sci13EnEsc);
+ Show At (,,,);
+
+Fields
+  DateBegin   ('Дата начала отчетного периода',,sci1EnEsc) : [10,'DD/MM/YYYY'],NoProtect;
+  DateEnd     ('Дата конца  отчетного периода',,sci1EnEsc) : [10,'DD/MM/YYYY'],NoProtect;
+  prvid       ('Выбор формата отчета') : [LIST 'Текст', 'Excel'], Protect;
+
+Buttons
+  cmOk,Default,,'Сформировать отчет',,sci1EnEsc;
+  cmValue14, , ,'Настройка Excel', , sci1Esc;
+  cmCancel,,,'Отказ от формирования отчета',,sci1Esc;
+
+<<
+
+  Период формирования:   `c` .@@@@@@@@@@@   `по` .@@@@@@@@@@@
+
+ `Тип отчета:`               .@@@@@@@@@@@
+
+  <. ~С~формировать .> <.Настройка шаблона.> <.    ~О~тмена    .>
+>>
+End; // Screen
+
+HandleEvent
+
+cmInit :
+{
+  RoundKolfromNastr := wGetTune('Round.KolSign');
+  LoadDate(DateBegin ,'SvodRazn_DateBegin', DateEnd,'SvodRazn_DateEnd');
+  if (not ReadMyDsk(prvid, 'SvodRazn_VID', Boolean(True))) prvid := 1 ;
+
+  ID := 'L_Dogovor\SvodRazn';
+
+  if (not ReadMyDsk (sXLTFileName, ID, Boolean(True)))
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+
+  if (not ReadMyDsk(prvid,ID+'Prvid',true))
+    prvid := 0;
+
+  if ( prvid = 0 )
+    DisableCommand(cmValue14);
+  else
+    EnableCommand(cmValue14);
+
+  ReadMyDsk(sXLTFileName, ID, TRUE);
+};
+
+cmCheckField :
+{
+  case CurField of
+   #prvid:
+     {
+       if ( prvid = 0 )
+         DisableCommand(cmValue14);
+       else
+         EnableCommand(cmValue14);
+     }
+  end;
+}
+
+cmvalue14: // настройка Excel печати
+{
+   runinterface('xlrepsetup',1,ID,sXLTFileName);
+   ReadMyDsk(sXLTFileName,ID,true);
+}
+
+cmOk :
+{
+   SaveDate(DateBegin ,'SvodRazn_DateBegin', DateEnd,'SvodRazn_DateEnd');
+   SaveMyDsk(prvid,  ID + 'Prvid');
+
+   if (DateBegin <= DateEnd)
+     {
+        MakeReport;
+        if (RecordsInTable(#TempRazn) > 0)
+          {
+            PrintReport;
+            if (prvid = 0)
+              {
+                if (not FrmSR.Error)
+                  FrmSR.ShowFile('')
+                else
+                  FrmSR.AbortForm;
+              }
+          }
+        else
+          Message('В документе нет позиций для печати.',Information);
+     }
+   else
+     Message('Неверно задан диапазон дат.',Information);
+}
+
+cmPick :
+{
+  case CurField of
+    #sXLTFileName:
+      {
+         var sTmp : string;
+
+         sTmp := sXLTFileName;
+         sTmp := GetFileName('*.xlt', 'Выберите файл шаблона');
+
+         if (trim(sTmp)='') or (trim(sTmp)=trim(sXLTFileName))
+           Exit;
+
+         Set sXLTFileName := sTmp;
+         SaveMyDsk (sXLTFileName,'SvodRazn_XLT');
+       }
+  end;
+};
+
+End; // handleevent
+End. // interface

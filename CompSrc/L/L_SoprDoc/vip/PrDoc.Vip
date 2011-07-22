@@ -1,0 +1,1576 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Пакетное формирование платежных документов по ДО
+//********************************************************************************
+
+#include AutoFit.vih
+#include docs2obj.vih
+#include DocSet.vih    // Наборы документов для раздельного учета
+#include DOfuns.vih
+#include getdbase.vih
+#include iSynch.vih    // синхронизация SoprHoz и BaseFin
+#include KatOrg.vih
+#include kontrbal.vih
+#include PlPorSimple.vih
+#include NalTunes.vih
+#include PPMacros.vih
+#include SchFactFunctions.vih
+#include SelUsDoc.vih
+#include UKSfuns.vih
+#include ObjNalF.vih
+#include aStatUser.vih
+
+#doc
+структура для передачи параметров формирования
+#end
+type tPrDocParams = record
+//************************
+       DatePlDt
+        : date;
+//************************
+       UseMaxDate
+        : boolean;
+//************************
+       DatePl
+     , PlPor_ValDo
+     , PlPor_Curse
+     , tipCulc
+        : word;
+//************************
+     end;
+
+#doc
+структура для передачи значений фильтров
+#end
+type tPrDocFilters = record
+//************************
+       D1
+     , D2
+     , D3
+     , D4
+        : Date;
+//************************
+       TipMoney
+        : word;
+//************************
+       OnOrg
+     , OnDog
+     , OnAppDog
+     , OnPlan
+        : boolean;
+//************************
+     end;
+
+#ifdef ComponentVersion
+#component "L_SOPRDOC"
+#end
+
+//******************************************************************************
+
+#doc
+Содержит описание методов для работы со встроенным интерфейсом параметров
+#end
+ObjInterface PrDocTunerObj;
+//******************************************************************************
+  #doc
+  Конструктор встроенного интерфейса
+  #end
+  Procedure doInit(wVidDoc: word);
+//******************************************************************************
+  #doc
+  Деструктор встроенного интерфейса
+  #end
+  Procedure doDone(wVidDoc: word);
+//******************************************************************************
+  #doc
+  Обновить информацию во встроенном интерфейсе
+  #end
+  Procedure UpdateView(PickedKol: longint; _Descr, _NoDoc: string; _dDoc: Date; _Sum: double; _SimVolB: string);
+//******************************************************************************
+  #doc
+  Получить параметры формирования
+  #end
+  Procedure GetParams(var Params: tPrDocParams);
+//******************************************************************************
+  #doc
+  Проверка соответствия организации фильтру
+  #end
+  Function  CheckOrg(_param: comp): boolean;
+//******************************************************************************
+  #doc
+  Проверка соответствия договора фильтру
+  #end
+  Function  CheckDog(_param: comp): boolean;
+//******************************************************************************
+  #doc
+  Проверка соответствия соглашения фильтру
+  #end
+  Function  CheckAppDog(_param: comp): boolean;
+//******************************************************************************
+  #doc
+  Проверка соответствия ПКП фильтру
+  #end
+  Function  CheckPlan(_param: comp): boolean;
+//******************************************************************************
+  #doc
+  Возникает при необходимости пересчета сумм
+  #end
+  event Procedure RecalcSums;
+//******************************************************************************
+  #doc
+  Возникает при нажатии кнопки 'Установить фильтр'
+  #end
+  event Procedure SetFilter(Params: tPrDocFilters);
+//******************************************************************************
+  #doc
+  Возникает при нажатии кнопки 'Сформировать платежи'
+  #end
+  event Function  MakePlatDocs: boolean;
+//******************************************************************************
+end;
+
+//******************************************************************************
+
+VipInterface PrDocTuner implements PrDocTunerObj
+#ifdef ATL51
+  licensed (FREE)
+#end
+;
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Пакетное формирование платежных документов по ДО
+
+Параметры:
+  PrDoc_VidDoc - вид ДО
+#end
+
+Interface PrDoc EscClose, Cyan;
+  Show at (, , 116, 25);
+
+#include DOfuns.var
+#include UKSfuns.var
+#include iSynch.var       // синхронизация SoprHoz и BaseFin
+#include PlPorSimple.var
+//******************************************************************************
+
+Function CheckFilters: boolean; forward;
+
+Create view vwPrDocSel
+
+Var
+//------------------------------------------------------------------------------
+  varGroup     // по чем группировать ДО при формировании платежа
+, varKolIns
+, myI
+                : integer;
+//------------------------------------------------------------------------------
+  varSumVyp
+, varTmpSum
+                : double;
+//------------------------------------------------------------------------------
+  DatePlDt
+, varD1
+, varD2
+, varD3
+, varD4
+, dFormNa
+, myDate
+                : Date;
+//------------------------------------------------------------------------------
+  myFilialNo
+                : longint;
+//------------------------------------------------------------------------------
+  UseMaxDate
+                : boolean;
+//------------------------------------------------------------------------------
+  PrDoc_VidDoc
+, lstSortGrDo
+, DatePl
+, PlatDoc
+, PlPor_ValDO  //  для определения какое ПП формировать
+, PlPor_Curse
+, tipCulc
+, myW
+, myDirect
+, MarkNo
+                : word;
+//------------------------------------------------------------------------------
+  NoPlatDoc
+                : string[20];
+//------------------------------------------------------------------------------
+  tmpStr
+, s_SimvRub
+                : string;
+//------------------------------------------------------------------------------
+  myValNo
+                : comp;
+//------------------------------------------------------------------------------
+  FilterParams  : tPrDocFilters;
+  oTuner        : PrDocTunerObj;
+  BDCalc        : ObjGetDB;
+  oCheckKon     : CheckKonObj;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if ( BaseDoc.cVal = 0, s_SimvRub, KlVal.SimVolV) ( FieldName = SimVolB   )
+//------------------------------------------------------------------------------
+, if ( SpStep.PrMC  = 1, KatMC.Name, KatUsl.Name)  ( FieldName = NamTovar  )
+//------------------------------------------------------------------------------
+, if ( SpStep.PrMC  = 1, 'МЦ', 'Услуга')           ( FieldName = NamMC     )
+//------------------------------------------------------------------------------
+, if ( IsValid(tnPick), '√', ' ')                  ( FieldName = Picked    )
+//------------------------------------------------------------------------------
+
+, Dogovor.*
+, BaseDoc.*
+, KatOrg.*
+, *
+
+From
+  BaseDoc(BaseDoc10)
+, Pick
+, Dogovor
+, KLVAL
+, SPSTEP
+, KATMC
+, KATUSL
+, PARAMS
+
+Where
+((
+
+     BaseDoc.NRec      == StepDoc.cBaseDoc
+
+ AND StepDoc.NRec      == SpStep.cStepDoc
+
+ AND SpStep.cMCUsl     == KatMC.NRec
+ AND SpStep.cMCUsl     == KatUsl.NRec
+ AND SpStep.cOtpEd     == KatOtpEd.NRec
+
+ AND BaseDoc.cVal      == KlVal.NRec
+ AND BaseDoc.cOrg      == KatOrg.NRec
+ AND BaseDoc.cNote     == KatNotes.NRec
+
+ AND BaseDoc.NRec      == Pick.cRec
+ AND if((PrDoc_VidDoc=101) OR (PrDoc_VidDoc=111), 700, 701)
+                       == Pick.wList
+
+ AND BaseDoc.cDogovor  == Dogovor.NRec
+
+))
+
+//******************************************************************************
+
+Bounds MainBound  =
+      word(PrDoc_VidDoc)  == BaseDoc.VidDoc   // ДО на продажу
+  AND word(2)             == BaseDoc.Status   // только исполняемые
+      ordered by BaseDoc.Prior, BaseDoc.dDoc, BaseDoc.NoDoc
+
+//******************************************************************************
+
+Bounds dMainBound =
+       word(PrDoc_VidDoc) == BaseDoc.VidDoc   // ДО на продажу
+  AND  word(2)            == BaseDoc.Status   // только исполняемые
+  AND  varD1             <<= BaseDoc.dDoc
+  AND  varD2             >>= BaseDoc.dDoc
+
+//******************************************************************************
+Condition OnFilters = CheckFilters
+;
+
+//******************************************************************************
+Parameters
+  PrDoc_VidDoc;
+
+//******************************************************************************
+
+var
+  iKB        : iKontrBal;
+  iTempl     : PPT_GetTemplate; // создание назначения по шаблонам
+  iObjNDTunes: iNalDistrTunes; // интерфейс настроек работы с документами
+
+#include AutoFit.var
+#include DocSet.var
+
+#include Serv_Str.vpp
+#include direct.vpp
+#include Sh_PlPor.Vpp
+
+//******************************************************************************
+
+#undef __IntFuns_VIH__
+
+//******************************************************************************
+
+Function CheckFilters: boolean;
+{
+  CheckFilters := TRUE;
+
+  if ( ( FilterParams.TipMoney <> 0 ) AND ( FilterParams.TipMoney <> BaseDoc.TipMoney ) )
+    {
+      CheckFilters := FALSE;
+      Exit;
+    }
+
+  if ( ( FilterParams.D3 <> ZeroDate ) OR ( FilterParams.D4 <> ZeroDate ) )
+    {
+      if ( GetFirst FastFirstRow StepDoc <> tsOk )
+        {
+          CheckFilters := FALSE;
+          Exit;
+        }
+
+      if ( ( FilterParams.D3 <> ZeroDate ) AND ( FilterParams.D3 > StepDoc.dOplMax ) )
+        {
+          CheckFilters := FALSE;
+          Exit;
+        }
+
+      if ( ( FilterParams.D4 <> ZeroDate ) AND ( FilterParams.D4 < StepDoc.dOplMax ) )
+        {
+          CheckFilters := FALSE;
+          Exit;
+        }
+    }
+
+  if ( FilterParams.OnOrg )
+    CheckFilters := oTuner.CheckOrg(BaseDoc.cOrg);
+
+  if ( FilterParams.OnDog )
+    CheckFilters := oTuner.CheckDog(BaseDoc.cDogovor);
+
+  if ( FilterParams.OnAppDog )
+    CheckFilters := oTuner.CheckAppDog(BaseDoc.cAppDogovor);
+
+  if ( FilterParams.OnPlan )
+    CheckFilters := oTuner.CheckPlan(BaseDoc.cCalPlan);
+}
+
+//******************************************************************************
+
+Function GetDatePl(ExMode: boolean): Date;
+var
+  tmpD: Date;
+{
+  tmpD := ZeroDate;
+
+  if ( UseMaxDate AND ExMode AND ( longint(StepDoc.dOplMax) <> 0 ) )
+    tmpD := StepDoc.dOplMax
+  else
+    if ( DatePl = 1 )
+      tmpD := DatePlDt;
+
+  GetDatePl := tmpD;
+}
+
+//******************************************************************************
+
+Procedure GetParams;
+var
+  Params: tPrDocParams;
+{
+  oTuner.GetParams(Params);
+
+  DatePl      := Params.DatePl;
+  DatePlDt    := Params.DatePlDt;
+  UseMaxDate  := Params.UseMaxDate;
+  PlPor_ValDo := Params.PlPor_ValDo;
+  PlPor_Curse := Params.PlPor_Curse;
+
+  case Params.tipCulc of
+    0..3: tipCulc := Params.tipCulc;
+       4: tipCulc := 5;
+       5: tipCulc := 10;
+  end;
+}
+
+//******************************************************************************
+
+Procedure PrSumVyp;
+{
+  GetParams;
+
+  set varSumVyp := _Sh_PlPor_CalcSumma(BaseDoc.NRec, GetDatePl(TRUE));
+
+  oTuner.UpdateView(varKolIns, BaseDoc.Descr, BaseDoc.NoDoc, BaseDoc.dDoc, varSumVyp, SimVolB);
+
+  RescanPanel(tnBaseDoc);
+}; // Procedure PrSumVyp
+
+
+//******************************************************************************
+
+Procedure DoUnSelOperation;
+{
+  _Sh_PlPor_Done_Tbl;
+
+  varKolIns := 0;
+
+  _Sh_PlPor_Init_Tbl;
+
+  RescanPanel(tnBaseDoc);
+
+  oTuner.UpdateView(varKolIns, BaseDoc.Descr, BaseDoc.NoDoc, BaseDoc.dDoc, varSumVyp, SimVolB);
+}
+
+
+//******************************************************************************
+
+Function MakePlatDocs: boolean;
+{
+  MakePlatDocs := FALSE;
+
+  if Not UpdateTable
+    Exit;
+
+  if ( Message('Сформировать платежи по выбранным документам?', YesNo) = cmYes )
+    {
+      GetParams;
+
+      if Not _Sh_PlPor_Make(varGroup, lstSortGrDo, GetDatePl(FALSE), UseMaxDate, PlPor_ValDO)
+        Exit;
+
+      DoUnSelOperation;
+      PrSumVyp;
+    }
+
+  MakePlatDocs := TRUE;
+}
+
+//******************************************************************************
+
+Procedure SetFilter(Params: tPrDocFilters);
+{
+  FilterParams := Params;
+
+  set varD1 := FilterParams.D1;
+  set varD2 := FilterParams.D2;
+  set varD3 := FilterParams.D3;
+  set varD4 := FilterParams.D4;
+
+  if ( ( varD1 = ZeroDate ) AND ( varD2 = ZeroDate ) )
+    PushBounds(tbMainBound)
+  else
+    PushBounds(tbdMainBound);
+
+  if (
+      ( NOT FilterParams.OnOrg    )
+       AND
+      ( NOT FilterParams.OnDog    )
+       AND
+      ( NOT FilterParams.OnAppDog )
+       AND
+      ( NOT FilterParams.OnPlan   )
+       AND
+      ( FilterParams.TipMoney = 0 )
+       AND
+      ( FilterParams.D3       = ZeroDate )
+       AND
+      ( FilterParams.D4       = ZeroDate )
+     )
+    {
+      if ConditionActiveInLeave(tcOnFilters, tnBaseDoc)
+        PopConditionForLeave(tcOnFilters, tnBaseDoc);
+    }
+  else
+    if NOT ConditionActiveInLeave(tcOnFilters, tnBaseDoc)
+      PushConditionForLeave(tcOnFilters, tnBaseDoc);
+
+  RereadRecord(tnBaseDoc);
+
+  PrSumVyp;
+}
+
+//******************************************************************************
+
+#doc
+  Спецификация документа
+#end
+
+Window winInf 'Спецификация документа' (, hci_nakl_Spec_Dok_Plat, ) Cyan;
+  Show at(, , , );
+
+Browse brSpStep ('Наименование МЦ/услуги', , sci1Esc);
+  Table SpStep;
+
+Fields
+  NamMC         #3'Тип'              :  [6],                 Skip, NoAutoSize, Centered;
+  NamTovar      #3'Наименование'     : [16],                 Protect;
+  KatOtpEd.Abbr #3'ЕдИзм'            :  [6],                 Skip, NoAutoSize, Centered;
+  SpStep.Price  #3'Цена за единицу'  : [17], [brForPrice  , '\2p[|-]36`666`666`666`666.88'],   Skip, NoAutoSize;
+  SimVolB       #3'Вал.'             :  [4],                 Skip, NoAutoSize, Centered;
+  Kol           #3'Количество'       : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Skip, NoAutoSize;
+  SpStep.Summa  #3'Стоимость'        : [17], [brForSumma  , '\2p[|-]36`666`666`666`666.88'],   Skip, NoAutoSize;
+end; // Browse
+end; // Window
+
+//******************************************************************************
+
+Embedded scPrDocTune Interface oTuner;
+  Show at (, , 92, 10);
+end;
+
+//******************************************************************************
+
+Screen scPrDoc ('', hcSellM1OperPlDoc, sci1Esc);
+  Show at (93, , , 10) fixed_Y;
+
+Fields
+  varGroup  : NoProtect;
+  lstSortGrDo (, , sci13Esc):
+    [LIST 'по убыванию даты',
+          'по возрастанию даты',
+          'по приоритету'], Protect;
+<<
+ Группировка ДО
+  [.] контрагент      `
+  [.] валюта          `
+  [.] собственный банк`
+  [.] банк контрагента`
+  [.] грузоотправитель`
+  [.] грузополучатель `
+
+ .@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+//******************************************************************************
+
+Screen spInfo;
+  Show at (, 24, , ) fixed_Y;
+
+Fields
+  if (varKolIns = 0, '', 'Помечено документов: '): skip, left, { Font = { Color = ColorSysBlue } };
+  varKolIns: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, LessNull, { Font = { Bold = TRUE; Color = ColorSysBlue } };
+  if (varSumVyp = 0, '', 'По документу-основанию №' + BaseDoc.NoDoc + ' уже сформировано платежей на сумму:'): right, skip;
+  varSumVyp: [brForSumma, '\2p[|-]36`666`666`666`666.88'], Skip, LessNull, { Font = { Bold = TRUE } };
+  if (varSumVyp = 0, '', SimVolB): Skip, left, { Font = { Bold = TRUE } };
+<<
+ .@@@@@@@@@@@@@@@@@.@@@@@    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@.@@@@@
+>>
+end;
+
+
+//******************************************************************************
+
+Panel pnPrDoc
+
+Browse brPrDoc ('Спецификация документа - Сtrl+ENTER.', hcSellM1OperPlDoc, sci1EscIns);
+  Show at(, 11, , 23);
+  Table BaseDoc;
+
+Fields { Font = { Color = if ( IsValid(tnPick), ColorMark, 0 ) }};
+//------------------------------------------------------------------------------
+  Picked
+                #3'√'
+                : [1], Skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  BaseDoc.Prior
+                #3'!!'
+                ('Приоритет документа на продажу. Спецификация документа - Сtrl+ENTER.', hcSellM1OperPlDoc)
+                : [2], NoProtect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatNotes.sName
+                #3'Статус'
+                (, hcKouDocFSost)
+                : [6], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  BaseDoc.dDoc
+                #3'Дата'
+                (, hcKouDocFBegDate)
+                : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.Descr
+                #3'Дескр.'
+                (, hcKouDocFNum)
+                : [5], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  BaseDoc.NoDoc
+                #3'Номер'
+                (, hcKouDocFNum)
+                : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name
+               #3'Покупатель',
+               (, hcKouDocFOrg)
+                : [14], Protect;
+//------------------------------------------------------------------------------
+  BaseDoc.TipMoney
+                #3'Тип'('Тип документа по отношению к денежной единице', , )
+                : [7], [LIST 1 'НДЕ', 'Вал-НДЕ', 'Вал'], Skip, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  StepDoc.dOplMax
+                #3'Оплатить до'
+                : [11], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.Total
+                #3'Сумма по ДО'
+                (, hcKouDocFDogSum)
+                : [17], [brforsumma, '\2p[|-]36`666`666`666`666.88'], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  [DoldOnDO '']
+  BDCalc.GetDolgBaseDoc(BaseDoc.NRec, tipCulc)
+                #3'Долг по ДО'
+                : [17], [brforsumma, '\2p[|-]36`666`666`666`666.88'], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  Pick.PickKol
+                #3'Сумма к оплате'
+                ('Сумма для платежных требований/поручений', )
+                : [17], [brforsumma, '\2p[|-]36`666`666`666`666.88'], NoProtect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SimVolB
+                #3'Вал.'
+                : [5], Skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+end; // Browse
+
+HandleEvent
+
+cmDelOnProtect:
+  Abort;
+
+end;
+end;
+
+
+//******************************************************************************
+
+Function Ins_In_Tbl: boolean;
+{
+  Ins_In_Tbl := TRUE;
+
+  inc(MarkNo);
+
+  _Sh_PlPor_Ins_In_Tbl(BaseDoc.NRec, MarkNo, DoldOnDO);
+
+  RereadRecord(tnPick);
+
+  if ( Pick.PickKol > 0.000001 )
+    varKolIns := varKolIns + 1
+  else
+    {
+      _Sh_PlPor_Del_In_Tbl(BaseDoc.NRec);
+
+      Ins_In_Tbl := FALSE;
+    }
+} // Function Ins_In_Tbl
+
+
+//******************************************************************************
+
+Panel panBaseDoc;
+  Table BaseDoc;
+
+HandleEvent
+
+cmIdle:
+  PrSumVyp;
+
+cmPositionChanged:
+  set varSumVyp := 0;
+
+cmUpdateRecord:
+  {
+    if ( ( word(2) <> BaseDoc.Status ) AND IsValid(tnPick) )
+      {
+        varKolIns := varKolIns - 1;
+
+        _Sh_PlPor_Del_In_Tbl(BaseDoc.NRec);
+      }
+
+    StepDoc.Status := BaseDoc.Status;
+
+    update current StepDoc; // спецификация ДО
+    update current BaseDoc;
+  }
+
+end; // HandleEvent
+end; // Panel
+
+
+//******************************************************************************
+
+HandleEvent // Обработчик основного интерфейса
+
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    MarkNo := 0;
+
+    _Sh_PlPor_wList := if((PrDoc_VidDoc = word(101)) OR (PrDoc_VidDoc = word(111)), 700, 701); // для внешней логической таблицы
+
+      if ( GetLast BaseDoc <> tsOk )
+        {
+          Message('Нет ни одного исполняемого ДО '
+                 + if(PrDoc_VidDoc = word(101), 'на закупку',
+                   if(PrDoc_VidDoc = word(201), 'на продажу',
+                   if(PrDoc_VidDoc = word(111), 'на предоплату закупок',
+                   if(PrDoc_VidDoc = word(211), 'на предоплату продаж', '')))) + '!'
+                 , Warning + CancelButton);
+          Abort;
+          Exit;
+        }
+
+    var varStr: string;
+
+    case PrDoc_VidDoc of
+      101:
+        {
+          varStr := 'закупку';
+          SetColumnTitle (brPrDoc, #KatOrg.Name, ''#3'Поставщик');
+        }
+      111: varStr := 'предоплату закупок';
+      201: varStr := 'продажу';
+      211: varStr := 'предоплату продаж';
+    end;
+
+    oDOfuns.QuickSetRoundFormat(PrDoc_VidDoc);
+
+    SetWindowTitle(wnMainWindow, 'Пакетное формирование платежных документов по ДО на ' + varStr);
+
+    _Sh_PlPor_Init_Tbl;
+
+    varKolIns   := 0;
+    DatePl      := 0;
+    PlPor_ValDO := 0;
+
+    GetVipRef(BDCalc, 'GetDBase');
+    LoadVipRef(oTuner, 'PrDocTuner');
+
+    ClearAdvRecord(FilterParams);
+
+    SetFilter(FilterParams);
+
+    oTuner.doInit(PrDoc_VidDoc);
+    oTuner.UpdateView(varKolIns, BaseDoc.Descr, BaseDoc.NoDoc, BaseDoc.dDoc, varSumVyp, SimVolB);
+
+    BindEvent(SetFilter   , oTuner.SetFilter   );
+    BindEvent(MakePlatDocs, oTuner.MakePlatDocs);
+    BindEvent(PrSumVyp    , oTuner.RecalcSums  );
+//********************************************************************************
+// Восстановление парамеров из DSK
+// Параметры восстанавливаются для каждого типа - на закупку и на продажу
+//********************************************************************************
+    ReadMyDsk(varGroup   , 'PrDoc_' + string(PrDoc_VidDoc) + '_varGroup'   , TRUE);
+    ReadMyDsk(lstSortGrDo, 'PrDoc_' + string(PrDoc_VidDoc) + '_lstSortGrDo', TRUE);
+//********************************************************************************
+  }
+
+cmDone:
+  {
+    _Sh_PlPor_Done_Tbl;
+
+    if ( NOT NullVipRef(oTuner) )
+      oTuner.doDone(PrDoc_VidDoc);
+
+//********************************************************************************
+// Сохранение парамеров из DSK
+// Параметры сохраняются для каждого типа - на закупку и на продажу
+//********************************************************************************
+    SaveMyDsk(varGroup   , 'PrDoc_' + string(PrDoc_VidDoc) + '_varGroup'   );
+    SaveMyDsk(lstSortGrDo, 'PrDoc_' + string(PrDoc_VidDoc) + '_lstSortGrDo');
+//********************************************************************************
+  }
+
+cmAttrib:
+  RunWindow(winInf);
+
+cmMarkUnMark:   //insert
+  {
+    if ( NOT UpdateTable )
+      Exit;
+
+    if ( IsValid(tnPick) )
+      {
+        varKolIns := varKolIns - 1;
+        _Sh_PlPor_Del_In_Tbl(BaseDoc.NRec);
+      }
+    else
+      if ( NOT Ins_In_Tbl )
+        Message('По документу ' + f_SNumDate(BaseDoc.NoDoc, BaseDoc.dDoc) + ' все платежи произведены.', Information);
+
+    RereadRecord(tnBaseDoc);
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+    if ( GetNext BaseDoc = tsOk )
+      CallToNeighbours(cmPosDown, tnBaseDoc);
+#end
+    PrSumVyp;
+    oTuner.UpdateView(varKolIns, BaseDoc.Descr, BaseDoc.NoDoc, BaseDoc.dDoc, varSumVyp, SimVolB);
+  }
+
+cmUnSelectAll:
+  if UpdateTable
+    DoUnSelOperation;
+
+cmSelectAll:
+  if UpdateTable
+    {
+      StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Помечаются все позиции', 1);
+
+      DoUnSelOperation;
+
+      PushPos(tnBaseDoc);
+
+      _LOOP BaseDoc
+        if ( NOT NextVisual )
+          Break
+        else
+          Ins_In_Tbl;
+
+      PopPos(tnBaseDoc);
+
+      StopVisual('', 0);
+
+      RereadRecord(tnBaseDoc);
+
+      oTuner.UpdateView(varKolIns, BaseDoc.Descr, BaseDoc.NoDoc, BaseDoc.dDoc, varSumVyp, SimVolB);
+    }
+
+cmCheckField:
+  case CurField of
+    #Pick.PickKol:
+      {
+        if ( NOT IsValid(tnPick) )
+          {
+            varTmpSum := Pick.PickKol;
+
+            if ( Ins_In_Tbl )
+              {
+                if ( varTmpSum > Pick.PickKol )
+                  case Message('Сумма к оплате больше, чем неоплаченная сумма по документу!'#13#13
+                             + 'ДА-продолжить; '#13
+                             + 'НЕТ-оплатить неоплаченную сумму по документу; '#13
+                             + 'ОТМЕНА-отменить изменение суммы оплаты.'
+                             , YesNo + CancelButton + Confirmation) of
+                    cmYes:
+                      update current Pick set Pick.PickKol := varTmpSum;
+                    cmNo:
+                      update current Pick set Pick.PickKol := BaseDoc.Total - varSumVyp;
+                    cmCancel:
+                      update current Pick set Pick.PickKol := double(OldFieldValue);
+                  end;
+                else
+                  {
+                    set Pick.PickKol := varTmpSum;
+                    update current Pick;
+                  }
+              }
+            else
+              Message('По документу все платежи произведены.', Information);
+          }
+         else
+           {
+             update current Pick;
+
+             if ( (Pick.PickKol + varSumVyp) > BaseDoc.Total )
+               case Message('Сумма к оплате больше, чем неоплаченная сумма по документу!'#13#13
+                          + 'ДА-продолжить; '#13
+                          + 'НЕТ-оплатить неоплаченную сумму по документу; '#13
+                          + 'ОТМЕНА-отменить изменение суммы оплаты.'
+                          , YesNo + CancelButton + Confirmation) of
+                 cmNo:
+                   update current Pick set Pick.PickKol := BaseDoc.Total - varSumVyp;
+                 cmCancel:
+                   _Sh_PlPor_Del_In_Tbl(BaseDoc.NRec);
+               end;
+           }
+
+        RereadRecord(tnPick);
+        RescanPanel(tnBaseDoc);
+      }
+  end; //case
+
+end; //HandleEvent Interface
+End. // Interface
+
+//******************************************************************************
+
+#include rundsel.vih
+
+//******************************************************************************
+
+#doc
+Встроенный интерфейс задания параметров для пакетного формирования платежных документов по ДО
+#end
+Interface PrDocTuner;
+  Show at (, , 92, );
+
+Create view
+
+Var
+  DatePl      : word;
+
+  DatePlDt    : date;
+
+  varKolIns   : longint;
+
+  varSumVyp   : double;
+
+  SimVolB     : string;
+
+  boFilterActive : boolean;
+
+  tipCulc
+, UseMaxDate
+, fltTipMoney
+, PlPor_ValDo
+, PlPor_Curse : word;
+
+  BD_Descr
+, BD_NoDoc    : string;
+
+  BD_dDoc
+, D1
+, D2
+, D3
+, D4          : Date;
+
+  pOrg
+, pDog
+, pAppDog
+, pPlan       : comp;
+
+  fltOrg
+, fltDog
+, fltAppDog
+, fltPlan
+              : string;
+
+  MarkerOrg
+, Marker
+, MarkerDog
+, MarkerAppDog
+, MarkerPlan    : longint;
+
+As select
+ *
+From
+  KatOrg
+, Dogovor
+, Dogovor AppDogovor
+, CalPlan
+, PARAMS
+
+Where
+((
+       pOrg     ==  KatOrg.NRec
+  AND  pDog     ==  Dogovor.NRec
+  AND  pAppDog  ==  AppDogovor.NRec
+  AND  pPlan    ==  CalPlan.NRec
+))
+;
+
+//******************************************************************************
+
+Screen scPrDocInfPPSell 'Формирование' ('', hcSellM1OperPlDoc, sci1Esc);
+  Show at(41, , , );
+
+Fields
+//------------------------------------------------------------------------------
+  tipCulc ('Алгоритм расчета долга', , ):
+    [LIST 0 'долг по платежам (не оплачено по ДО)',
+            'долг по отгрузкам  (сумма неотгруженного)',
+            'долг с учетом отгрузок МЦ (отгружено, но не оплачено)',
+            'сумма по ДО',
+            'сумма по накладным (отгрузки/поставки)',
+            'долг с учетом возвратов'
+    ], Protect;
+//------------------------------------------------------------------------------
+  UseMaxDate   : NoProtect;
+//------------------------------------------------------------------------------
+  DatePl       : NoProtect;
+//------------------------------------------------------------------------------
+  DatePlDt     : NoProtect;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmValue1, , , '', , sci1EnEsc;
+<<
+ Остаток.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ Формирование платежей производить:
+    [.] на дату "Оплатить до..."(если указана)`
+ либо
+    (.) на дату документа-основания`
+    (.) на произвольную дату       `.@@@@@@@@@@
+
+              <.Сформировать платежи.>
+>>
+end; // Screen
+
+//******************************************************************************
+
+Screen scPrDocInfPPBuy 'Формирование' ('', hcSellM1OperPlDoc, sci1Esc);
+  Show at(41, , , );
+
+Fields
+//------------------------------------------------------------------------------
+  tipCulc ('Алгоритм расчета долга', , ):
+    [LIST 0 'долг по платежам (не оплачено по ДО)',
+            'долг по отгрузкам  (сумма неотгруженного)',
+            'долг с учетом отгрузок МЦ (отгружено, но не оплачено)',
+            'сумма по ДО',
+            'сумма по накладным (отгрузки/поставки)',
+            'долг с учетом возвратов'
+    ], Protect;
+//------------------------------------------------------------------------------
+  PlPor_Curse  : [LIST 'из ДО', 'на дату ДО', 'на дату оплаты'], Protect;
+//------------------------------------------------------------------------------
+  PlPor_ValDo  : [LIST 'в валюте ДО', 'в НДЕ', 'с запросом валюты'], Protect;
+//------------------------------------------------------------------------------
+  UseMaxDate   : NoProtect;
+//------------------------------------------------------------------------------
+  DatePl       : NoProtect;
+//------------------------------------------------------------------------------
+  DatePlDt     : NoProtect;
+//------------------------------------------------------------------------------
+
+Buttons
+  cmValue1, , , '', , sci1EnEsc;
+<<
+ Остаток.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Курс валюты для ДО с типом Вал-НДЕ.@@@@@@@@@@@@@@
+ Формирование платежей производить:
+    .@@@@@@@@@@@@@@@@@@@@@@
+    [.] на дату "Оплатить до..."(если указана)`
+ либо
+    (.) на дату документа-основания`
+    (.) на произвольную дату       `.@@@@@@@@@@
+              <.Сформировать платежи.>
+>>
+end; // Screen
+
+//******************************************************************************
+
+Screen sc1 'Установка фильтров' (, hcm_zakup_vkladFiltr_dok, sci13Esc);
+  Show at(, , 40, );
+
+Fields
+  D1         : NoProtect;
+  D2         : NoProtect;
+  D3         : NoProtect;
+  D4         : NoProtect;
+  fltOrg     : Protect, QuickChoice;
+  fltDog     : Protect, QuickChoice;
+  fltAppDog  : Protect, QuickChoice;
+  fltPlan    : Protect, QuickChoice;
+  fltTipMoney: [LIST 'все', 'НДЕ', 'Вал-НДЕ', 'Вал'], Protect;
+
+Buttons
+  cmValue4, , , 'Установить/снять фильтр', , sci1EnEsc;
+<<
+Фильтр по документам:
+ Период        .@@@@@@@@@@...@@@@@@@@@@
+ "Оплатить до" .@@@@@@@@@@...@@@@@@@@@@
+ Контрагент    .@@@@@@@@@@@@@@@@@@@@@@@
+ Договор       .@@@@@@@@@@@@@@@@@@@@@@@
+ Соглашение    .@@@@@@@@@@@@@@@@@@@@@@@
+ ПКП           .@@@@@@@@@@@@@@@@@@@@@@@
+ Тип по валюте .@@@@@@@@@@
+         <.Установить фильтр.>
+>>
+end;
+
+//******************************************************************************
+
+var oChkLink: CheckLinksObj;
+
+//******************************************************************************
+
+Procedure doInit(wVidDoc: word);
+{
+  Marker       := InitMarker('$$$PrDocOrgMarker$$$' , 8, 100, 10);
+  ClearMarker(Marker);
+
+  MarkerDog    := InitMarker('$$$PrDocDogovor$$$'   , 8, 100, 10);
+  ClearMarker(MarkerDog);
+
+  MarkerAppDog := InitMarker('$$$PrDocAppDogovor$$$', 8, 100, 10);
+  ClearMarker(MarkerAppDog);
+
+  MarkerPlan   := InitMarker('$$$PrDocCalPlan$$$'   , 8, 100, 10);
+  ClearMarker(MarkerPlan);
+
+
+  MarkerOrg := InitMarker('KatOrg', 8, 100, 10);
+  ClearMarker(MarkerOrg);
+  DoneMarker(MarkerOrg, 'KatOrg');
+
+  MarkerOrg := InitMarker('KatOrgDescr', 8, 100, 10);
+  ClearMarker(MarkerOrg);
+  DoneMarker(MarkerOrg, 'KatOrgDescr');
+
+  set fltOrg    := 'нет фильтра';
+  set fltDog    := 'нет фильтра';
+  set fltAppDog := 'нет фильтра';
+  set fltPlan   := 'нет фильтра';
+
+  set D1 := Sub_Day(Cur_Date, 5);
+  set D2 := Cur_Date;
+
+  if ( wVidDoc <> 101 )
+    {
+      PlPor_ValDo := 0;
+      SetFieldSelectable(#PlPor_ValDo, FALSE);
+      SetFormat(scPrDocInfPPSell);
+    }
+  else
+    SetFormat(scPrDocInfPPBuy);
+
+  boFilterActive := FALSE;
+
+//********************************************************************************
+// Восстановление парамеров из DSK
+// Параметры восстанавливаются для каждого типа - на закупку и на продажу
+//********************************************************************************
+  ReadMyDsk(tipCulc    , 'PrDoc_' + string(wVidDoc) + '_tipCulc'    , TRUE);
+  ReadMyDsk(DatePl     , 'PrDoc_' + string(wVidDoc) + '_DatePl'     , TRUE);
+  ReadMyDsk(DatePlDt   , 'PrDoc_' + string(wVidDoc) + '_DatePlDt'   , TRUE);
+  ReadMyDsk(UseMaxDate , 'PrDoc_' + string(wVidDoc) + '_UseMaxDate' , TRUE);
+  ReadMyDsk(PlPor_ValDo, 'PrDoc_' + string(wVidDoc) + '_PlPor_ValDo', TRUE);
+  ReadMyDsk(BD_Descr   , 'PrDoc_' + string(wVidDoc) + '_BD_Descr'   , TRUE);
+  ReadMyDsk(BD_NoDoc   , 'PrDoc_' + string(wVidDoc) + '_BD_NoDoc'   , TRUE);
+  ReadMyDsk(BD_dDoc    , 'PrDoc_' + string(wVidDoc) + '_BD_dDoc'    , TRUE);
+  ReadMyDsk(varSumVyp  , 'PrDoc_' + string(wVidDoc) + '_varSumVyp'  , TRUE);
+  ReadMyDsk(SimVolB    , 'PrDoc_' + string(wVidDoc) + '_SimVolB'    , TRUE);
+  ReadMyDsk(PlPor_Curse, 'PrDoc_' + string(wVidDoc) + '_PlPor_Curse', TRUE);
+//********************************************************************************
+  if ( DatePl = 0 )
+    ClearFieldState(#DatePlDt, sfVisible);
+}
+
+
+//******************************************************************************
+
+Procedure doDone(wVidDoc: word);
+{
+  DoneMarker(Marker, '');
+//********************************************************************************
+// Сохранение парамеров в DSK
+// Параметры сохраняются для каждого типа - на закупку и на продажу
+//********************************************************************************
+  SaveMyDsk(tipCulc    , 'PrDoc_' + string(wVidDoc) + '_tipCulc'    );
+  SaveMyDsk(DatePl     , 'PrDoc_' + string(wVidDoc) + '_DatePl'     );
+  SaveMyDsk(DatePlDt   , 'PrDoc_' + string(wVidDoc) + '_DatePlDt'   );
+  SaveMyDsk(UseMaxDate , 'PrDoc_' + string(wVidDoc) + '_UseMaxDate' );
+  SaveMyDsk(PlPor_ValDo, 'PrDoc_' + string(wVidDoc) + '_PlPor_ValDo');
+  SaveMyDsk(BD_Descr   , 'PrDoc_' + string(wVidDoc) + '_BD_Descr'   );
+  SaveMyDsk(BD_NoDoc   , 'PrDoc_' + string(wVidDoc) + '_BD_NoDoc'   );
+  SaveMyDsk(BD_dDoc    , 'PrDoc_' + string(wVidDoc) + '_BD_dDoc'    );
+  SaveMyDsk(varSumVyp  , 'PrDoc_' + string(wVidDoc) + '_varSumVyp'  );
+  SaveMyDsk(SimVolB    , 'PrDoc_' + string(wVidDoc) + '_SimVolB'    );
+  SaveMyDsk(PlPor_Curse, 'PrDoc_' + string(wVidDoc) + '_PlPor_Curse');
+//********************************************************************************
+}
+
+
+//******************************************************************************
+
+Procedure UpdateView(PickedKol: longint; _Descr, _NoDoc: string; _dDoc: Date; _Sum: double; _SimVolB: string);
+{
+  set varKolIns := PickedKol;
+  set BD_Descr  := _Descr;
+  set BD_NoDoc  := _NoDoc;
+  set BD_dDoc   := _dDoc;
+  set varSumVyp := _Sum;
+  set SimVolB   := _SimVolB;
+  SetCommandEnabled(cmValue1, varKolIns>0);
+}
+
+
+//******************************************************************************
+
+Procedure GetParams(var Params: tPrDocParams);
+{
+  Params.DatePl      := DatePl;
+  Params.UseMaxDate  := UseMaxDate = 1;
+  Params.DatePlDt    := DatePlDt;
+  Params.PlPor_ValDo := PlPor_ValDo;
+  Params.PlPor_Curse := PlPor_Curse;
+  Params.tipCulc     := tipCulc;
+}
+
+//******************************************************************************
+
+Function CheckOrg(_Param: comp): boolean;
+var Ind: longint;
+{
+  CheckOrg := SearchMarker(Marker, _Param, Ind);
+}
+
+Function CheckDog(_Param: comp): boolean;
+var Ind: longint;
+{
+  CheckDog := SearchMarker(MarkerDog, _Param, Ind);
+}
+
+Function CheckAppDog(_Param: comp): boolean;
+var Ind: longint;
+{
+  CheckAppDog := SearchMarker(MarkerAppDog, _Param, Ind);
+}
+
+Function CheckPlan(_Param: comp): boolean;
+var Ind: longint;
+{
+  CheckPlan := SearchMarker(MarkerPlan, _Param, Ind);
+}
+
+//******************************************************************************
+Procedure GetPicks;
+{
+  var DskParams  : longint;
+  var isSelect
+      ,wSelect   : word;
+
+  case CurField of
+    #fltDog   : isSelect := 1;
+    #fltAppDog: isSelect := 2;
+    #fltPlan  : isSelect := 4;
+  end;
+
+  if ( DskParams = 0 )
+    {
+      SaveMyDsk(word(2), 'GetDAK_Status');      // разрешен выбор только из исполняемых
+      SaveMyDsk(byte(0), 'GetDAK_Status_e');    // К договорам и соглашениям
+      DskParams := vcGetDog_Status;
+    }
+
+  wSelect := word(isSelect and 31);
+  SaveMyDsk(wSelect, 'GetDAK_isSelect');
+
+  DskParams := DskParams or vcGetDog_isSelect;  // для позиционирования на нужный документ
+
+  if ( (isSelect and 32) <> 32 )
+    DskParams := DskParams or vcGetDog_NoFinKP; // не показывать финансовые ПКП
+
+  var  cDog
+     , cAppDog
+     , cPlan   : comp;
+
+  cDog    := 0;
+  cAppDog := 0;
+  cPlan   := 0;
+
+  if ( RunInterface( 'GetDocs'
+                    , cDog
+                    , cAppDog
+                    , cPlan
+                    , DskParams
+                    , cgiMulti ) <> cmCancel )
+    {
+      var  BufDog
+         , BufAppDog
+         , BufPlan   : comp;
+
+      BufDog    := InitMarker('GetDocsPick_cDogovor'   , 8, 100, 10);
+      BufAppDog := InitMarker('GetDocsPick_cAppDogovor', 8, 100, 10);
+      BufPlan   := InitMarker('GetDocsPick_cCalPlan'   , 8, 100, 10);
+
+      ClearMarker(MarkerDog   );
+      ClearMarker(MarkerAppDog);
+      ClearMarker(MarkerPlan  );
+
+      var i
+        , Dog
+        , ADog
+        , Plan
+        , buf    : comp;
+
+      pDog    := 0;
+      pAppDog := 0;
+      pPlan   := 0;
+
+      case GetMarkerCount(BufDog) of
+        1 :
+          {
+            GetMarker(BufDog   , 0, Dog );
+            GetMarker(BufAppDog, 0, ADog);
+            GetMarker(BufPlan  , 0, Plan);
+
+            case CurField of
+            #fltDog    : if ( Dog <> comp(0) AND ADog = comp(0)  AND Plan = comp(0) )
+                           InsertMarker(MarkerDog, Dog);
+
+            #fltAppDog : if ( Dog <> comp(0) AND ADog <> comp(0) AND Plan = comp(0) )
+                           {
+                             InsertMarker(MarkerDog, Dog);
+                             InsertMarker(MarkerAppDog, ADog);
+                           }
+
+            #fltPlan   : if ( Dog <> comp(0) AND Plan <> comp(0) )
+                           {
+                             if (ADog <> comp(0))
+                               InsertMarker(MarkerAppDog, ADog);
+                             InsertMarker(MarkerDog, Dog);
+                             InsertMarker(MarkerPlan, Plan);
+                           }
+            end;
+          }
+        else
+          for (i := 0; i < GetMarkerCount(BufDog); i++)
+            {
+              GetMarker(BufDog   , i, Dog );
+              GetMarker(BufAppDog, i, ADog);
+              GetMarker(BufPlan  , i, Plan);
+
+              case CurField of
+              #fltDog    : if ( Dog <> comp(0) AND ADog = comp(0)  AND Plan = comp(0) )
+                             InsertMarker(MarkerDog, Dog);
+
+              #fltAppDog : if ( Dog <> comp(0) AND ADog <> comp(0) AND Plan = comp(0) )
+                             {
+                               InsertMarker(MarkerDog, Dog);
+                               InsertMarker(MarkerAppDog, ADog);
+                             }
+
+              #fltPlan   : if ( Dog <> comp(0) AND Plan <> comp(0) )
+                             {
+                               if (ADog <> comp(0))
+                                 InsertMarker(MarkerAppDog, ADog);
+                               InsertMarker(MarkerDog, Dog);
+                               InsertMarker(MarkerPlan, Plan);
+                             }
+              end;
+            }
+      end;
+
+      if ( GetMarkerCount(MarkerDog)    = 1)
+        GetMarker(MarkerDog   , 0 , pDog);
+
+      if ( GetMarkerCount(MarkerAppDog) = 1)
+        GetMarker(MarkerAppDog, 0 , pAppDog);
+
+      if ( GetMarkerCount(MarkerPlan)   = 1)
+        GetMarker(MarkerPlan  , 0 , pPlan);
+
+      set pDog    := pDog;
+      set pAppDog := pAppDog;
+      set pPlan   := pPlan;
+
+      set fltDog    := if(GetMarkerCount(MarkerDog) = 0, 'нет фильтра'
+                            , if(GetMarkerCount(MarkerDog) = 1
+                                   , f_sNumDate(Dogovor.NoDoc   , Dogovor.dDoc)
+                                   , 'множественный выбор (' + string(GetMarkerCount(MarkerDog)) + ')'));
+
+      set fltAppDog := if(GetMarkerCount(MarkerAppDog) = 0, 'нет фильтра'
+                            , if(GetMarkerCount(MarkerAppDog) = 1
+                                   , f_sNumDate(AppDogovor.NoDoc, AppDogovor.dDoc)
+                                   , 'множественный выбор (' + string(GetMarkerCount(MarkerAppDog)) + ')'));
+
+      set fltPlan   := if(GetMarkerCount(MarkerPlan) = 0, 'нет фильтра'
+                            , if(GetMarkerCount(MarkerPlan) = 1
+                                   , f_sNumDate(CalPlan.NoDoc   , CalPlan.dInput)
+                                   , 'множественный выбор (' + string(GetMarkerCount(MarkerPlan)) + ')'));
+
+      DoneMarker(BufDog   , '');
+      DoneMarker(BufAppDog, '');
+      DoneMarker(BufPlan  , '');
+    }
+
+}
+
+//******************************************************************************
+
+var pRunDSel: RunDocSelObj;
+var Params: tPrDocFilters;
+
+HandleEvent
+
+cmOnVipLoad:
+  DatePlDt := Cur_Date;
+
+cmCheckField:
+  case CurField of
+  //--------------
+    #DatePlDt
+  , #PlPor_Curse
+  , #UseMaxDate
+  , #tipCulc:
+      RecalcSums;
+  //--------------
+    #DatePl:
+      {
+        case DatePl of
+          0: ClearFieldState(#DatePlDt, sfVisible)
+          1:   SetFieldState(#DatePlDt, sfVisible);
+        end; //case
+
+        RecalcSums;
+      }
+  //--------------
+  end;
+
+cmValue1:
+  if Not MakePlatDocs
+    {
+      Abort;
+      Exit;
+    }
+
+cmValue4:
+  {
+    if boFilterActive
+      ClearAdvRecord(Params);
+    else
+      {
+        if ( D1 > D2 )
+          {
+            var d: date; d := d2;
+            set d2 := d1;
+            set d1 := d;
+          }
+
+        MarkerOrg := InitMarker('KatOrg', 8, 100, 10, FALSE);
+        CopyMarker(Marker, MarkerOrg);
+        DoneMarker(MarkerOrg, '');
+
+        Params.D1       := D1;
+        Params.D2       := D2;
+        Params.D3       := D3;
+        Params.D4       := D4;
+        Params.TipMoney := fltTipMoney;
+        Params.OnDog    := GetMarkerCount(MarkerDog)    > 0;
+        Params.OnAppDog := GetMarkerCount(MarkerAppDog) > 0;
+        Params.OnPlan   := GetMarkerCount(MarkerPlan)   > 0;
+        Params.OnOrg    := GetMarkerCount(Marker)       > 0;
+      }
+
+    SetFieldSelectable(#D1         , boFilterActive);  SetFontBold(sc1, #D1         , NOT boFilterActive);
+    SetFieldSelectable(#D2         , boFilterActive);  SetFontBold(sc1, #D2         , NOT boFilterActive);
+    SetFieldSelectable(#D3         , boFilterActive);  SetFontBold(sc1, #D3         , NOT boFilterActive);
+    SetFieldSelectable(#D4         , boFilterActive);  SetFontBold(sc1, #D4         , NOT boFilterActive);
+    SetFieldSelectable(#fltOrg     , boFilterActive);  SetFontBold(sc1, #fltOrg     , NOT boFilterActive);
+    SetFieldSelectable(#fltDog     , boFilterActive);  SetFontBold(sc1, #fltDog     , NOT boFilterActive);
+    SetFieldSelectable(#fltAppDog  , boFilterActive);  SetFontBold(sc1, #fltAppDog  , NOT boFilterActive);
+    SetFieldSelectable(#fltPlan    , boFilterActive);  SetFontBold(sc1, #fltPlan    , NOT boFilterActive);
+    SetFieldSelectable(#fltTipMoney, boFilterActive);  SetFontBold(sc1, #fltTipMoney, NOT boFilterActive);
+
+    boFilterActive := NOT boFilterActive;
+
+    cfsSetProp('b_sc1_Установить_фильтр', 'Title', if (boFilterActive, 'Снять фильтр', 'Установить фильтр'));
+
+    SetFilter(Params);
+  }
+
+cmPick:
+  case CurField of
+    #fltOrg:
+      {
+        MarkerOrg := InitMarker('KatOrgDescr', 8, 100, 10);
+        ClearMarker(MarkerOrg);
+        DoneMarker(MarkerOrg, 'KatOrgDescr');
+
+        if ( RunInterface('GetSomeKontrPrim', TRUE) <> cmCancel )
+          {
+            MarkerOrg := InitMarker('KatOrg', 8, 100, 10, FALSE);
+
+            if ( GetMarkerCount(MarkerOrg) = 1 )
+              GetMarker(MarkerOrg, 0, pOrg);
+
+            set pOrg := pOrg;
+            set fltOrg := if(GetMarkerCount(MarkerOrg) = 1
+                           , KatOrg.Name
+                           , 'множественный выбор (' + string(GetMarkerCount(MarkerOrg)) + ')');
+
+            DoneMarker(MarkerOrg, '');
+          }
+      }
+
+    #fltDog
+  , #fltAppDog
+  , #fltPlan:
+      GetPicks;
+  end;
+
+cmDelOnProtect:
+  case CurField of
+    #fltOrg:
+      {
+        MarkerOrg := InitMarker('KatOrg', 8, 100, 10, FALSE);
+        ClearMarker(MarkerOrg);
+        DoneMarker(MarkerOrg, 'KatOrg');
+
+        MarkerOrg := InitMarker('KatOrgDescr', 8, 100, 10);
+        ClearMarker(MarkerOrg);
+        DoneMarker(MarkerOrg, 'KatOrgDescr');
+
+        set fltOrg := 'нет фильтра';
+      }
+
+    #fltDog:
+      {
+        set pDog    := 0;
+        set pAppDog := 0;
+        set pPlan   := 0;
+
+        set fltDog    := 'нет фильтра';
+        set fltAppDog := 'нет фильтра';
+        set fltPlan   := 'нет фильтра';
+
+        ClearMarker(MarkerDog);
+        ClearMarker(MarkerAppDog);
+        ClearMarker(MarkerPlan)
+      }
+
+    #fltAppDog:
+      {
+        set pAppDog := 0;
+        set pPlan   := 0;
+
+        set fltAppDog := 'нет фильтра';
+        set fltPlan   := 'нет фильтра';
+
+        ClearMarker(MarkerAppDog);
+        ClearMarker(MarkerPlan);
+      }
+
+    #fltPlan:
+      {
+        set pPlan := 0;
+
+        set fltPlan   := 'нет фильтра';
+
+        ClearMarker(MarkerPlan);
+      }
+
+  end;
+
+cmOpenSearch:
+  if ( CurField = #fltOrg )
+    {
+      if NullVipRef(oChkLink)
+        GetVipRef(oChkLink, 'KatOrg');
+
+      if oChkLink.CheckLinks(coKatOrgDescr)
+        QuickChoiceName := 'qcKatOrgName'
+      else
+        QuickChoiceName := 'qcKatOrgTreeName';
+
+      if ( RunInterface('GetKatOr', pOrg, comp(0), FALSE, comp(0), comp(0)) <> cmCancel )
+        {
+          MarkerOrg := InitMarker('KatOrg', 8, 100, 10, FALSE);
+          ClearMarker(MarkerOrg);
+          InsertMarker(MarkerOrg, pOrg);
+          DoneMarker(MarkerOrg, 'KatOrg');
+
+          set pOrg   := pOrg;
+          set fltOrg := KatOrg.Name;
+        }
+
+      Stop;
+    }
+
+end; // HandleEvent
+
+End.
+
+//******************************************************************************

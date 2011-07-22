@@ -1,0 +1,743 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Создание корректирующей накладной
+//******************************************************************************
+
+// ------------------------------------------------
+// Этот интерфейс не имеет визуальной части и
+// служит для создания корректирующей накладной.
+//
+// Вызывается в интерфейсе приходных накладных.
+//
+// Функциональность была выделена в отдельный интерфейс для уменьшения
+// объема основного кода интерфейса приходных накладных
+// ------------------------------------------------
+// ниже используются сокращения:
+// PN - ПН - приходная накладная
+// SN - СН - сторнирующая накладная
+// KN - КН - корректирующая накладная
+// BS - БС - бухгалтерская справка
+//-------------------------------------------------
+
+#include UKSfuns.vih
+#include Actualit.vih  // Обьектный интерфес Поддержки актуальности сальдо
+#include notes.vih
+#include SHmanager.vih
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.vih           // функции целевого учета
+#end
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Создание корректирующей накладной
+
+Параметры:
+  pNRec - ссылка на исходный сопроводительный документ
+#end
+
+//******************************************************************************
+VipInterface CreateKN_Release licensed (FREE);
+Public:
+  Function CreateNewKN(PN_KatSopr: comp): boolean;
+end;
+
+Interface CreateKN_Release 'Создание корректирующей накладной' EscClose, Cyan;
+
+#include UKSfuns.var
+#include Actualit.var  // Переменная типа VipInterface SaldoActuality
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+#end
+
+oNotes : iNotes;
+
+Create view vNewKatSopr
+var
+  pNRec: comp;
+
+As select
+  KatSopr.nRec
+
+From
+  KatSopr
+, SpSopr
+, SchFact
+, SpecZatr
+
+Where
+((
+  KatSopr.nRec      == SpSopr.cSopr     AND
+  SpSopr.nRec       == SoprOrdB.cSpSopr AND
+  SoprOrdB.cPodr    == KatPodr.nRec     AND
+  KatSopr.cSchFact  == SchFact.NRec
+));
+
+Parameters
+  pNRec;
+
+//******************************************************************************
+
+Create view vNewSoprHoz
+As select
+  NewSoprHoz.nRec
+from
+  SoprHoz,
+  SoprHoz NewSoprHoz
+Where
+((
+  SoprHoz.nRec == NewSoprHoz.nRec
+));
+
+//******************************************************************************
+
+Create view vNewOborot
+As select
+  NewOborot.nRec
+From
+  Oborot,
+  Oborot NewOborot
+Where
+((
+  Oborot.nRec == NewOborot.nRec
+));
+
+//******************************************************************************
+
+var RaznoskaSpSopr: comp;
+var RaznoskaSoprHoz: comp;
+
+Create view vRaznoska
+As select
+  SpSopHoz.nRec
+From
+  SpSopHoz,
+  SpSopHoz NewSpSopHoz,
+  SoprHoz,
+  SoprHoz NewSoprHoz
+Where
+((
+     SpSopHoz.cSoprHoz == SoprHoz.nRec
+AND  SpSopHoz.nRec     == NewSpSopHoz.nRec
+AND  SoprHoz.nRec      == NewSoprHoz.nRec
+))
+;
+
+//******************************************************************************
+
+Create view vNewTTNDoc
+As select
+  TTNDoc.nRec
+from
+  TTNDoc;
+
+//******************************************************************************
+
+Create view vNewSoprOrdB
+As select
+  NewSoprOrdB.nRec
+From
+  SoprOrdB,
+  SoprOrdB NewSoprOrdB
+Where
+((SoprOrdB.nRec == NewSoprOrdB.nRec));
+
+//******************************************************************************
+
+Create view vNewSpDocNal
+As select
+  NewSpDocNal.nRec
+From
+  SpDocNal,
+  SpDocNal NewSpDocNal
+Where
+  ((SpDocNal.nRec == NewSpDocNal.nRec));
+
+//******************************************************************************
+
+Create view vNewPlPor
+As select
+  PlPor.nRec
+From
+  PlPor;
+
+//******************************************************************************
+
+var PN_nSopr        : string;
+var PN_VidSopr      : word;
+var PN_cStepDoc     : comp;
+var PN_Summa        : double;
+var InsertionDate   : Date;
+var KN_nSopr        : string;
+
+// создаем хозоперации, цепляем их на платежи,
+// при этом кэшируем их в массиве, после того как создадим все разноски для этих ТXО, еще раз пробегаем
+// и апдейтим суммы этих TXO
+var ArrSoprHozK,                                 //массив хозопераций которые будут корректируовать хозоперации разносок по ПН
+    ArrSoprHozS,                                 //массив хозопераций которые будут сторнировать хозоперации разносок по ПН
+    ArrPlPor        : array [1..10] of comp;     //массив платежей на которые разнесена ПН
+var ArrSum          : array [1..10] of double;   //массив разнесенных сумм по платежам
+
+//******************************************************************************
+// функция для внутреннего использования в CreateNewKN и Copy_KatSopr (см. ниже)
+// копирует запись в TTNDoc
+// Source_wTable, Source_cDoc -  значения по которым находим исходный TTNDoc
+// Dest_cDoc - документ на который будет ссылаться новый TTNDoc
+// SignOfSum - знак с которым копируется сумма в TTNDoc (т.е. можно создать сторнирующуя копию)
+Function Copy_TTNDoc(Source_wTable: word; Source_cDoc: comp; Dest_cDoc: comp; SignOfSum: integer): comp;
+{
+  Copy_TTNDoc := 0;
+  if (vNewTTNDoc.GetFirst TTNDoc
+                where ((Source_wTable == TTNDoc.wTable AND
+                          Source_cDoc == TTNDoc.cDoc)) <> tsOk)
+    exit;
+
+  vNewTTNDoc.TTNDoc.nRec   := 0;
+  vNewTTNDoc.TTNDoc.SumAvt := vNewTTNDoc.TTNDoc.SumAvt * SignOfSum;
+  vNewTTNDoc.TTNDoc.cDoc   := Dest_cDoc;
+  if (vNewTTNDoc.insert current TTNDoc <> tsOk)
+    {
+      Message('Не удалось скопировать товарно-транспортную информацию.', Warning);
+      Exit;
+    } // if insert
+
+  Copy_TTNDoc := vNewTTNDoc.TTNDoc.nRec;
+}
+
+//******************************************************************************
+// функция для внутреннего использования в CreateNewKN (см. ниже)
+// для спецификации копирует записи SoprOrdB
+// Source_SpSopr -  исходная спецификация
+// Dest_SpSopr, Dest_SoprDoc - на что цепляем новые SoprOrdB
+// SignOfSum - знак с которым копируется сумма (т.е. можно создать сторнирующуя копию)
+Function CopyALL_SoprOrdB(Source_SpSopr: comp; Dest_SpSopr: comp; Dest_SoprDoc: comp; SignOfSum: integer): boolean;
+{
+  CopyALL_SoprOrdB := FALSE;
+
+  vNewSoprOrdB._LOOP SoprOrdB where ((Source_SpSopr == SoprOrdB.cSpSopr))
+    {
+      vNewSoprOrdB.NewSoprOrdB.nRec     := 0;
+      vNewSoprOrdB.NewSoprOrdB.cSpSopr  := Dest_SpSopr;
+      vNewSoprOrdB.NewSoprOrdB.cSoprDoc := Dest_SoprDoc;
+      vNewSoprOrdB.NewSoprOrdB.Kol      := vNewSoprOrdB.NewSoprOrdB.Kol * SignOfSum;
+
+      if (vNewSoprOrdB.insert current NewSoprOrdB <> tsOk)
+        {
+          Message('Не удалось скопировать информацию о распределении МЦ по складам.');
+          Exit;
+        } // if insert
+    }
+
+  CopyALL_SoprOrdB := TRUE;
+}
+
+//******************************************************************************
+// функция для внутреннего использования в CreateNewKN (см. ниже)
+// для спецификации копирует записи SpDocNal
+// Source_SpSopr -  исходная спецификация
+// Dest_SpSopr, Dest_SoprDoc - на что цепляем новые SpDocNal
+// SignOfSum - знак с которым копируется сумма (т.е. можно создать сторнирующуя копию)
+Function Copy_SpDocNal(Source_SpSopr: comp; Dest_SpSopr: comp; Dest_SoprDoc: comp; SignOfSum: integer): boolean;
+{
+  Copy_SpDocNal := FALSE;
+
+  vNewSpDocNal._LOOP SpDocNal where ((Source_SpSopr == SpDocNal.cSpDoc))
+    {
+      vNewSpDocNal.NewSpDocNal.nRec    := 0;
+      vNewSpDocNal.NewSpDocNal.cSpDoc  := Dest_SpSopr;
+      vNewSpDocNal.NewSpDocNal.cDoc    := Dest_SoprDoc;
+      vNewSpDocNal.NewSpDocNal.SumNal  := vNewSpDocNal.NewSpDocNal.SumNal * SignOfSum;
+      vNewSpDocNal.NewSpDocNal.SumVal  := vNewSpDocNal.NewSpDocNal.SumVal * SignOfSum;
+      vNewSpDocNal.NewSpDocNal.Summa   := vNewSpDocNal.NewSpDocNal.Summa  * SignOfSum;
+
+      if (vNewSpDocNal.insert current NewSpDocNal <> tsOk)
+        {
+          Message('Не удалось скопировать информацию о налогах.');
+          Exit;
+        }
+    }
+
+  Copy_SpDocNal := TRUE;
+}
+
+//******************************************************************************
+// функция для внутреннего использования в CreateNewKN (см. ниже)
+// создает сторнирующую или корректирующую накладную (в зависимости от параметра SignOfSum)
+// на основе приходной накладной PN_KatSopr
+Function Copy_KatSopr(PN_KatSopr: comp; SignOfSum: integer): Comp;
+{
+  var wADocValue: word;
+  var ShortName  : string;
+  var TypeName   : string;
+  var N_KatSopr  : comp;
+  var j, k        : word;
+  var NewSoprHozNRec,
+      OldSoprHozNRec: comp;
+
+  Copy_KatSopr := 0;
+  case SignOfSum of
+  //---------------
+    -1:
+       {
+         wADocValue := adSoprDocSN;         // объявлена в INC\GALNET.CAD
+         ShortName  := if (wGetTune('Oper.Buy.Nakl.NumStorNakl') = 0, 'KН', '');
+         TypeName   := '(сторно)'
+       } // -1
+  //---------------
+     1:
+       {
+         wADocValue := adSoprDocKN;
+         ShortName  := 'КН';
+         TypeName   := '';
+       }  // 1
+  //---------------
+     else
+       {
+         Message('Ошибка вызова внутренней функции.');
+         Exit;
+       }
+  //---------------
+  end; // case
+
+  //    a.      Все атрибуты копируются из соответствующей Приходной накладной
+  if (GetFirst KatSopr where ((PN_KatSopr == KatSopr.nRec))<> tsOk)
+    {
+      Message('Произошла ошибка вызова внутренней процедуры копирования '+
+                'накладной '+Hex(PN_KatSopr)+' для ' + ShortName);
+      Exit;
+    }
+
+  KatSopr.nRec     := 0;
+  KatSopr.wADoc    := wADocValue;  //    b.      В поле WADOC заносится  значение 1
+  KatSopr.cADoc    := PN_KatSopr;  //    c.      В поле CADOC заносится ссылка на ПН
+
+  KatSopr.nSopr    := PN_nSopr + ShortName;
+  KatSopr.dSopr    := InsertionDate;
+  KatSopr.YearSopr := Year(KatSopr.dSopr);
+  KatSopr.dOpr     := to_Days(0);
+  KatSopr.Summa    := KatSopr.Summa * SignOfSum;
+  KatSopr.SumVal   := KatSopr.SumVal * SignOfSum;
+  KatSopr.cSchFact := 0;
+  KatSopr.DesGr    := sGetTune('User.DesGr');
+  KatSopr.Descr    := sGetTune('User.Descr');
+  KatSopr.Status   := if (SignOfSum = -1, 4, 1-wGetTune('Doc.Buy.SoprStatus'));
+  KatSopr.cNote    := oNotes.GetFirstNote(100, KatSopr.Status);
+
+  if (insert current KatSopr <> tsOk)
+    {
+      Message('Не удалось создать '+ShortName+' по ПН.');
+      Exit;
+    }
+
+  N_KatSopr := KatSopr.nRec;
+  Copy_TTNDoc(word(coKatSopr), PN_KatSopr, N_KatSopr, SignOfSum);  // копировать ТТ информацию для накладной
+
+  //    d.      Копируется с отрицательным знаком соответствующая запись в SoprHoz, отражающая получение МЦ
+  if boGetTune('Doc.Buy.AutoProvKN')
+    {
+      StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Создание ТХО для '+ShortName, 1);
+
+      vNewSoprHoz._LOOP SoprHoz where ((PN_VidSopr == SoprHoz.TipDoc AND
+                                                      PN_KatSopr == SoprHoz.cSoprDoc))
+      {
+        if (not NextVisual)
+          {
+            StopVisual('Создание корректирующей накладной прервано пользователем.', vfWait);
+            Exit;
+          }
+
+        OldSoprHozNRec                  := vNewSoprHoz.SoprHoz.nRec;       // переменную пришлось ввести, т.к. валился Атлантис
+
+        vNewSoprHoz.NewSoprHoz.nRec     := 0;
+        vNewSoprHoz.NewSoprHoz.cSoprDoc := N_KatSopr;
+        vNewSoprHoz.NewSoprHoz.Summa    := vNewSoprHoz.NewSoprHoz.Summa * SignOfSum;
+        vNewSoprHoz.NewSoprHoz.DatOb    := InsertionDate;
+        vNewSoprHoz.NewSoprHoz.NameSHO  := 'Запись '+TypeName+' по накладной №' + PN_nSopr;
+        vNewSoprHoz.NewSoprHoz.DesGr    := sGetTune('User.DesGr');
+        vNewSoprHoz.NewSoprHoz.Descr    := sGetTune('User.Descr');
+        vNewSoprHoz.NewSoprHoz.NoDoc    := KatSopr.nSopr;
+
+        if (vNewSoprHoz.insert current NewSoprHoz <> tsOk)
+          {
+            StopVisual('Не удалось создать ТХО '+TypeName+' по ПН.', vfWait);
+            Exit;
+          } // if insert
+
+        NewSoprHozNRec   := vNewSoprHoz.NewSoprHoz.nRec;    // запомним, чтобы ссылаться на нее в дальнейшем
+
+        //    e.  соответствующие проводки о получении МЦ (таблица Oborot) конвертируются в сторнирующие
+       if (SignOfSum = -1)
+        vNewOborot._LOOP Oborot where ((OldSoprHozNRec == Oborot.cSoprHoz))
+        {
+
+          vNewOborot.NewOborot.nRec     := 0;
+          vNewOborot.NewOborot.CSOPRDOC := N_KatSopr;
+          vNewOborot.NewOborot.CSOPRHOZ := NewSoprHozNRec;
+          vNewOborot.NewOborot.DATOB    := InsertionDate;
+          vNewOborot.NewOborot.DesGr    := sGetTune('User.DesGr');
+          vNewOborot.NewOborot.Descr    := sGetTune('User.Descr');
+
+          if not boGetTune('Doc.Buy.KorrSchetovKN')//Изменение корреспонденции счетов для корректирующей накладной
+           {
+            vNewOborot.NewOborot.SumOb    := -vNewOborot.NewOborot.SumOb;
+            vNewOborot.NewOborot.Kol      := -vNewOborot.NewOborot.Kol;//пир 101.26303
+           }
+          else
+           {
+            //дебет := кредит
+            vNewOborot.NewOborot.SchetO   := vNewOborot.Oborot.SchetK; // счет и субсчет
+            vNewOborot.NewOborot.dbSchetO := vNewOborot.Oborot.krSchetK;
+            vNewOborot.NewOborot.SubOsSch := vNewOborot.Oborot.SubSchK;
+            vNewOborot.NewOborot.KauOs[1] := vNewOborot.Oborot.KauKs[1]; // аналитка 6 уровней
+            vNewOborot.NewOborot.KauOs[2] := vNewOborot.Oborot.KauKs[2];
+            vNewOborot.NewOborot.KauOs[3] := vNewOborot.Oborot.KauKs[3];
+            vNewOborot.NewOborot.KauOs[4] := vNewOborot.Oborot.KauKs[4];
+            vNewOborot.NewOborot.KauOs[5] := vNewOborot.Oborot.KauKs[5];
+            vNewOborot.NewOborot.KauOs[6] := vNewOborot.Oborot.KauKs[6];
+            vNewOborot.NewOborot.TblOs[1] := vNewOborot.Oborot.TblKs[1];
+            vNewOborot.NewOborot.TblOs[2] := vNewOborot.Oborot.TblKs[2];
+            vNewOborot.NewOborot.TblOs[3] := vNewOborot.Oborot.TblKs[3];
+            vNewOborot.NewOborot.TblOs[4] := vNewOborot.Oborot.TblKs[4];
+            vNewOborot.NewOborot.TblOs[5] := vNewOborot.Oborot.TblKs[5];
+            vNewOborot.NewOborot.TblOs[6] := vNewOborot.Oborot.TblKs[6];
+            vNewOborot.NewOborot.KodSpO   := vNewOborot.Oborot.KodSpK; // подразделение
+            //кредит := дебет
+            vNewOborot.NewOborot.SchetK   := vNewOborot.Oborot.SchetO; // счет и субсчет
+            vNewOborot.NewOborot.krSchetK := vNewOborot.Oborot.dbSchetO;
+            vNewOborot.NewOborot.SubSchK  := vNewOborot.Oborot.SubOsSch;
+            vNewOborot.NewOborot.KauKs[1] := vNewOborot.Oborot.KauOs[1]; // аналитка 6 уровней
+            vNewOborot.NewOborot.KauKs[2] := vNewOborot.Oborot.KauOs[2];
+            vNewOborot.NewOborot.KauKs[3] := vNewOborot.Oborot.KauOs[3];
+            vNewOborot.NewOborot.KauKs[4] := vNewOborot.Oborot.KauOs[4];
+            vNewOborot.NewOborot.KauKs[5] := vNewOborot.Oborot.KauOs[5];
+            vNewOborot.NewOborot.KauKs[6] := vNewOborot.Oborot.KauOs[6];
+            vNewOborot.NewOborot.TblKs[1] := vNewOborot.Oborot.TblOs[1];
+            vNewOborot.NewOborot.TblKs[2] := vNewOborot.Oborot.TblOs[2];
+            vNewOborot.NewOborot.TblKs[3] := vNewOborot.Oborot.TblOs[3];
+            vNewOborot.NewOborot.TblKs[4] := vNewOborot.Oborot.TblOs[4];
+            vNewOborot.NewOborot.TblKs[5] := vNewOborot.Oborot.TblOs[5];
+            vNewOborot.NewOborot.TblKs[6] := vNewOborot.Oborot.TblOs[6];
+            vNewOborot.NewOborot.KodSpK   := vNewOborot.Oborot.KodSpO; // подразделение
+           }
+
+          if (vNewOborot.insert current NewOborot <> tsOk)
+            {
+              StopVisual('Не удалось создать проводки '+TypeName+' по '+ShortName, vfWait);
+              Exit;
+            } // if insert
+
+          // сброс актуальности сальдо
+          var BegDate: Date;  BegDate := dGetTune('Dat_M_Ot');
+
+          if (( BegDate                     <= vNewOborot.NewOborot.DatOb) AND
+              ( vNewOborot.NewOborot.DatOb  <= Sub_Day(Add_Months(BegDate, 1), 1)))
+            {
+              iSaldoActuality.DropActuality(vNewOborot.NewOborot.SchetO, vNewOborot.NewOborot.SubOsSch);
+              iSaldoActuality.DropActuality(vNewOborot.NewOborot.SchetK, vNewOborot.NewOborot.SubSchK);
+            }
+
+        }
+      }
+
+      StopVisual('', 0);
+    }//end if
+
+  Copy_KatSopr := N_KatSopr;
+} // Function Copy_KatSopr
+
+//******************************************************************************
+
+Function UpdateSoprHozByPlPor: boolean;
+var iSH: ObjSHmanager;
+{
+  UpdateSoprHozByPlPor := FALSE;
+
+  var i: integer;
+
+  LoadVipRef(iSH, 'SHmanager');
+
+  For (i := 1; InitItem(ArrPlPor, i); i := i+1 )
+    {
+      if (vNewSoprHoz.GetFirst SoprHoz where ((ArrSoprHozS[i] == SoprHoz.nRec)) = tsOk)
+        {
+          vNewSoprHoz.SoprHoz.Summa := -ArrSum[i];
+          if (iSH.UpdByHan(vNewSoprHoz.SoprHoz.BufferP) <> tsOk)
+            {
+              Message('Не удалось модифицировать сторно ТХО для корректирующей накладной.');
+              Exit;
+            } // if insert
+        }
+
+      if (vNewSoprHoz.GetFirst SoprHoz where ((ArrSoprHozK[i] == SoprHoz.nRec)) = tsOk)
+        {
+          vNewSoprHoz.SoprHoz.Summa := ArrSum[i];
+          if (iSH.UpdByHan(vNewSoprHoz.SoprHoz.BufferP) <> tsOk)
+            {
+              Message('Не удалось модифицировать ТХО для корректирующей накладной.');
+              Exit;
+            } // if insert
+        }
+    } // For i
+
+  UpdateSoprHozByPlPor := TRUE;
+} // Function UpdateSoprHozByPlPor
+
+//******************************************************************************
+// создает корректирующую накладную и выполняет все необходимые операции для ее корректной обработки.
+// возвращает TRUE, если КН создана успешно
+// в противном случае FALSE
+Function CreateNewKN(PN_KatSopr: comp): boolean;
+{
+  var KN_KatSopr,
+      SN_KatSopr      : comp;
+  var SN_SoprHozByBS,
+      PN_SoprHozByBS  : comp;
+  var PN_SpSopr,
+      SN_SpSopr,
+      KN_SpSopr       : comp;
+  var PN_cSchFact     : comp;
+  var j, k, l, m      : word;
+  var NewSoprHozS_nRec,
+      NewSoprHozK_nRec: comp;
+
+  CreateNewKN := FALSE;
+  InsertionDate := Cur_Date;
+  // позиционируемся на приходную накладную
+  if (GetFirst KatSopr where ((PN_KatSopr == KatSopr.nRec)) <> tsOk)
+    {
+      Message('Не найдена приходная накладная по которой формируется корректирующая.');
+      Exit;
+    } // if
+
+  PN_nSopr   := KatSopr.nSopr;
+  PN_VidSopr := KatSopr.VidSopr;
+  PN_cSchFact := KatSopr.cSchFact;
+  PN_cStepDoc := KatSopr.cStepDoc;
+  PN_Summa   := KatSopr.Summa;   // т.к. всегда рублевая (см. по ограничениям)
+
+  // -------------------- Стратегические ограничения -----------------------
+  // Проверим подтип накладной: ведь создавать КН по КН (или CH) -- нельзя
+  if (KatSopr.wADoc = adSoprDocSN) OR (KatSopr.wADoc = adSoprDocKN)
+    {
+      Message('Создание Корректирующей накладной (КН) на основе КН запрещено.');
+      Exit;
+    } // if
+
+  // Проверяется валюта, используемая в накладной. Продолжение работы допускается только при использовании НДЕ.
+  if (KatSopr.cVal<>0)
+    {
+      Message('Формирование Корректирующей накладной разрешено только для приходных накладных использующих валюту НДЕ.');
+      Exit;
+    } // if
+
+  // Проверяется для каждой спецификации ПН: указана ли для нее партия (т.е. ведется ли партионный учет). Если нет, выдается соответствующее сообщение о невозможности продолжения и процесс прерывается.
+  if (GetFirst SpSopr where ((PN_KatSopr == SpSopr.cSopr AND
+                                ((3 > SpSopr.prMC) AND
+                                (0 = SpSopr.cParty)) )) = tsOk)
+     AND (wGetTune('Party.NaklWithoutSchet') = word(0))
+    If Message('По МЦ в спецификации приходной накладной не велся партионный учет.'#13+
+               'В случае, если производился отпуск их со склада, возможна некорректная работа системы.'#13+
+               'Продолжить?', YesNo) <> cmYes
+      Exit;
+
+  // Проверяется для каждой спецификации ПН: распределена ли она в розничную торговлю. Если да -- прервать.
+  if (GetFirst SpSopr where ((PN_KatSopr == SpSopr.cSopr AND ((3 > SpSopr.prMC) AND (2 = KatPodr.Sklad)) )) = tsOk)
+    {
+      Message('Как минимум одна МЦ в спецификации была распределена в розничную торговлю.'#13+
+              'Функциональность корректирующей накладной для данного случая не реализована.');
+      Exit;
+    } // if
+
+  // Проверим наличие СФ по накладной
+  if (KatSopr.cSchFact <> 0)
+    if (Message('По данной приходной накладной уже была сформирована счет-фактура.'#13+
+                'Вы действительно хотите создать корректирующую накладную?', YesNo+Warning)<>cmYes)
+      Exit;
+
+  // 4. Проверяется существует ли уже соответствующая КН для выбранной ПН. Если да, то для редактирования выводится уже существующая КН. Иначе процесс продолжается.
+  if (GetFirst KatSopr
+      where ((PN_KatSopr == KatSopr.cADoc AND adSoprDocKN == KatSopr.wADoc)) = tsOk )
+    Exit;
+
+  // 5. --------------------------- Создается Сторнирующая Накладная (в Таблице KatSopr) -------------------
+  SN_KatSopr := Copy_KatSopr(PN_KatSopr, -1);
+  if (SN_KatSopr = 0)
+    Exit;
+
+  // 6. ---------------------------- Создается Корректирующая Накладная (в Таблице KatSopr) ----------------
+  KN_KatSopr := Copy_KatSopr(PN_KatSopr, 1);
+  if (KN_KatSopr = 0)
+    Exit;
+
+  KN_nSopr := KatSopr.nSopr;
+
+  // 7. -------------------- Создается Бухгалтерская справка на нулевую сумму (в таблице PlPor) ------------
+  SetLimit(ArrPlPor, 0); // обнуляем массив платежей
+  SetLimit(ArrPlPor, 10);
+  SetLimit(ArrSum, 0);   // обнуляем массив разнесенных сумм по платежам
+  SetLimit(ArrSum, 10);
+
+  // -------------------------------- цикл по спецификациям (SpSopr) -------------------------------------
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Обработка спецификаций накладной', 1);
+  _LOOP SpSopr where ((PN_KatSopr == SpSopr.cSopr))
+    {
+      PN_SpSopr := SpSopr.nRec;
+      if (not NextVisual)
+        {
+          StopVisual('Создание корректирующей накладной прервано пользователем на стадии обработки спецификаций.', vfWait);
+          Exit;
+        } // if NextVisual
+
+      // ----------- Копируются спецификации из ПН для СН.
+      PushPos(tnSpSopr);
+      SpSopr.NRec    := 0;
+      SpSopr.cSopr   := SN_KatSopr;
+      SpSopr.dSopr   := InsertionDate;
+      if (SpSopr.PrMC<= 1)
+        {
+        // для услуг значения количества интерпретируются иначе -- они д.б. положительными
+          SpSopr.Kol     := -SpSopr.Kol;
+          SpSopr.Kol2    := -SpSopr.Kol2;
+          SpSopr.KolOpl  := -SpSopr.KolOpl;
+          SpSopr.KolFact := -SpSopr.KolFact;
+          SpSopr.KolFact2 := -SpSopr.KolFact2;
+          SpSopr.KolNorma := -SpSopr.KolNorma;
+        }
+      else
+        {
+        // для услуг значения цены интерпретируются иначе -- они д.б. отрицательными
+          SpSopr.Price   := -SpSopr.Price;
+          SpSopr.VPrice  := -SpSopr.VPrice;
+        }
+
+      SpSopr.SumNDS  := -SpSopr.SumNDS;
+      SpSopr.SumVNDS := -SpSopr.SumVNDS;
+      SpSopr.SumAvt  := -SpSopr.SumAvt;
+      SpSopr.cADocSp := PN_SpSopr;
+      SpSopr.wADocSp := adSoprDocSN;
+
+      if (insert current SpSopr <> tsOk)
+        {
+          StopVisual('Не удалось создать спецификацию для СН.', vfWait);
+          Exit;
+        } // if insert
+
+      SN_SpSopr := SpSopr.nRec;
+
+      Copy_TTNDoc(word(coSpSopr), PN_SpSopr, SN_SpSopr, -1);  // копировать товарно-транспортную информацию по спецификации
+      CopyALL_SoprOrdB(PN_SpSopr, SN_SpSopr, SN_KatSopr, -1);  // копировать информацию о распределении МЦ по складам
+      Copy_SpDocNal(PN_SpSopr, SN_SpSopr, SN_KatSopr, -1);
+      PopPos(tnSpSopr);
+
+      // ---------- Копируются спецификации из ПН (таблица SpSopr) для КН.
+      PushPos(tnSpSopr);
+      SpSopr.NRec    := 0;
+      SpSopr.cSopr   := KN_KatSopr;
+      SpSopr.dSopr   := InsertionDate;
+      SpSopr.cADocSp := PN_SpSopr;
+      SpSopr.wADocSp := adSoprDocKN;
+      if (insert current SpSopr <> tsOk)
+        {
+          StopVisual('Не удалось создать спецификацию для КН.', vfWait);
+          Exit;
+        } // if insert
+
+      KN_SpSopr := SpSopr.nRec;
+
+#ifndef __MTR_TO_SPEC__
+      var cZatr: comp;  cZatr := 0;
+
+      if (GetFirst SpecZatr where ((coSpSopr == SpecZatr.coTable AND PN_SpSopr == SpecZatr.cSpec)) = tsOk)
+        cZatr := SpecZatr.cAddSumTune;
+
+      if (cZatr <> 0)
+        {
+          ClearBuffer(#SpecZatr);
+          SpecZatr.coTable := coSpSopr;
+          SpecZatr.cAddSumTune := cZatr;
+          SpecZatr.cSpec := SN_SpSopr;
+          SpecZatr.cUKS := SpSopr.cUKS;
+          insert current SpecZatr;
+          ClearBuffer(#SpecZatr);
+          SpecZatr.coTable := coSpSopr;
+          SpecZatr.cAddSumTune := cZatr;
+          SpecZatr.cSpec := KN_SpSopr;
+          SpecZatr.cUKS := SpSopr.cUKS;
+          insert current SpecZatr;
+        }
+#else
+      oMTRFun.CopySpecMTR(coSpSopr, PN_SpSopr, coSpSopr, SN_SpSopr);
+      oMTRFun.CopySpecMTR(coSpSopr, PN_SpSopr, coSpSopr, KN_SpSopr);
+#end
+
+      RunInterface('CopySpDocSmeta', word(coSpSopr), PN_SpSopr, word(coSpSopr), SN_SpSopr);
+      RunInterface('CopySpDocSmeta', word(coSpSopr), PN_SpSopr, word(coSpSopr), KN_SpSopr);
+
+      Copy_TTNDoc(word(coSpSopr), PN_SpSopr, KN_SpSopr, 1);  // копировать товарно-транспортную информацию по спецификации
+      CopyALL_SoprOrdB(PN_SpSopr, KN_SpSopr, KN_KatSopr, 1);  // копировать информацию о распределении МЦ по складам
+      Copy_SpDocNal(PN_SpSopr, KN_SpSopr, KN_KatSopr, 1);
+      PopPos(tnSpSopr);
+
+      if boGetTune('Doc.Buy.AutoProvKN')
+        {
+         // создадим разноску на всю сумму спецификации и привяжем к ПН
+          vRaznoska.ClearBuffer(vRaznoska.tnNewSpSopHoz);
+          vRaznoska.NewSpSopHoz.nRec     := 0;
+          vRaznoska.NewSpSopHoz.cSoprHoz := PN_SoprHozByBS;
+          vRaznoska.NewSpSopHoz.cSpSopr  := PN_SpSopr; // привязка к ПН
+          vRaznoska.NewSpSopHoz.kolvo    := SpSopr.KolOpl;
+          vRaznoska.NewSpSopHoz.Summa    := SpSopr.KolOpl*SpSopr.Price;
+          vRaznoska.NewSpSopHoz.cBookPrZk := 0;
+          if (vRaznoska.insert current NewSpSopHoz <> tsOk)
+            {
+              StopVisual('Не удалось создать разноску на всю сумму спецификации для ПН.', vfWait);
+              Exit;
+            } // if insert
+
+          // создадим сторно разноску на всю сумму спецификации и привяжем к СН
+          vRaznoska.ClearBuffer(vRaznoska.tnNewSpSopHoz);
+          vRaznoska.NewSpSopHoz.nRec     := 0;
+          vRaznoska.NewSpSopHoz.cSoprHoz := SN_SoprHozByBS;
+          vRaznoska.NewSpSopHoz.cSpSopr  := SN_SpSopr; // привязка к CН
+          vRaznoska.NewSpSopHoz.kolvo    := -SpSopr.KolOpl;
+          vRaznoska.NewSpSopHoz.Summa    := -SpSopr.KolOpl*SpSopr.Price;
+          vRaznoska.NewSpSopHoz.cBookPrZk := 0;
+          if (vRaznoska.insert current NewSpSopHoz <> tsOk)
+            {
+              StopVisual('Не удалось создать сторно разноску на всю сумму спецификации для СН.', vfWait);
+              Exit;
+            } // if insert
+        } //if boGetTune('Doc.Buy.AutoProvKN')
+   } // цикл по спецификациям
+
+  StopVisual('', 0);
+
+  // после того как пробежали по всем спецификациям --
+  // необоходимо проставить правильные суммы в по хозоперациям, подвязанным к платежам
+  if UKS_Used
+    if UpdateTable
+      {
+        oUKSfuns.JoinNakl(SN_KatSopr);
+        oUKSfuns.JoinNakl(KN_KatSopr);
+      }
+
+  CreateNewKN := TRUE;
+} // Procedure CreateNewKN
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    CreateNewKN(pNRec);
+    Abort;
+  } // cmInit
+
+end; // HandleEvent Interface
+
+End.
+
+//******************************************************************************

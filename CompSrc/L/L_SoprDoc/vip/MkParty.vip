@@ -1,0 +1,480 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Формирование партий (накладные на приход,вн.перемещение)  ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#define _RETTARA_
+
+#define _MKPARTY_VIP
+
+#include MkParty.vih
+#include oEdIzm.vih
+#include FactoryPrice.vih
+
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Формирование партий (накладные на приход,вн.перемещение)
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+Interface iMakeParty EscClose;
+  Show at (,,,);
+
+type
+TDocParty = record
+  _SOPRDOCB_VIP,
+  INV_PRIH_VIP,
+  SOPINMOV_VIP : boolean;
+end;
+
+#include oEdIzm.var
+#include FactoryPrice.var
+
+create view
+var
+  pSpSopr : comp;
+  aOnePart: comp;
+  DocParty: TDocParty;
+
+from
+  SpSopr
+, SpSopr   SpSoprTar
+, KatSopr
+, SoprOrdB
+, SoprOrdB SoprOrdBTar
+, KatParty
+, KatParty KParty
+, KatMC
+, KlVal
+, KatOrg
+, SpOtpEd
+, Prices
+
+
+where
+((
+   pSpSopr          ==  SpSopr.NRec      and
+   SpSopr.cSopr     ==  KatSopr.NRec     and
+   SpSopr.NRec      ==  SoprOrdB.cSpSopr and
+   SpSopr.cParty    ==  KatParty.NRec    and
+   SpSopr.cMCUSL    ==  KatMC.NRec       and
+   KatSopr.cOrgBase ==  KatOrg.NRec      and
+   KatSopr.cValut   ==  KlVal.NRec
+
+))
+;
+
+Form frmAutoParty('AutoParty.OUT','AutoParty') with novisual;
+
+#include SoprVal.vpp //Модуль работы с валютой в накладной
+#include mkparty.vpp //функции формирования названия партии и записи в KatParty
+
+// запрет формирования партии для тары
+Function MakePartyINTara: Boolean;
+{
+  MakePartyINTara := TRUE;
+
+  if DocParty._SOPRDOCB_VIP
+    if (NOT boGetTune('Tara.AutoMakeParty'))
+      if ((KatMC.kGroupMC <> '') AND KatMC.kGroupMC = sGetTune('Tara.KodGrMcTara'))
+         MakePartyINTara := FALSE;
+}
+
+//определение действий в документах
+Procedure DefineDocParty;
+{
+  //снабжение
+  DocParty._SOPRDOCB_VIP := false;
+  //склад
+  DocParty.SOPINMOV_VIP  := false;
+  DocParty.INV_PRIH_VIP  := false;
+
+  case KatSopr.VidSopr of
+    101,//Накладная на прием МЦ
+    102,//Накладная на возврат МЦ от консигнатора
+    103,//Накладная на прием МЦ от консигнанта
+    1411://УЛХ. Дневник приемки
+    {
+      DocParty._SOPRDOCB_VIP := true;
+    }
+    600,//Накладная на внутреннее перемещение /склад-склад
+    601,//Накладная на передачу МЦ в ОС
+    602,//Накладная на передачу МЦ в МБП
+    603,//Накладная на передачу МЦ в розничную торговлю
+    605,//Накладная на передачу МЦ в НМА
+    606://Транзитная накладная
+      DocParty.SOPINMOV_VIP  := true;
+    611://Акт инвентаризации об излишке МЦ
+      DocParty.INV_PRIH_VIP  := true;
+  end;
+}
+
+//заводская цена в учетных единицах
+function fnFactoryPrice: double;
+{
+  fnFactoryPrice := oFPrice.GetFactoryPrice (SpSopr.NRec, GetCursPrice, FALSE);
+}
+
+//входящий процент надбавки
+function fnFactoryProcNac: double;
+{
+  fnFactoryProcNac := oFPrice.GetFactoryProcNac (SpSopr.NRec);
+}
+
+function GetNewPartyRec(aSpSopr: comp; var NewPartyRec: tNewPartyRec): boolean;
+var
+  b_MultiCurrReg: boolean;
+  s_SimvRub : string;
+{
+  Result := FALSE;
+
+  //не для текущей позиции - спозиционироваться
+  if (aSpSopr <> 0)
+  {
+    pSpSopr := aSpSopr;
+
+    //присвоения для "перестройки" логической таблицы недостаточно
+    if GetFirst SpSopr <> tsOk
+      Exit;
+  }
+
+  DefineDocParty;
+  // для MakeNewParty_2 нужно подцепить только KatMC
+  oValFunc.InitVal;
+  b_MultiCurrReg := boGetTune('Oper.MultiCurrReg');
+  s_SimvRub := sGetTune('NDE.SimvRub');
+
+  ClearAdvRecord(NewPartyRec);
+  NewPartyRec.KatSopr_VidSopr  := KatSopr.VidSopr;
+  NewPartyRec.KatSopr_DSopr    := KatSopr.DSopr;
+  NewPartyRec.KatSopr_NSopr    := KatSopr.NSopr;
+  NewPartyRec.KatSopr_Name     := KatSopr.Name;
+  NewPartyRec.KatSopr_cOrgBase := KatSopr.cOrgBase;
+  NewPartyRec.KatSopr_cVal     := KatSopr.cVal;
+  NewPartyRec.KatOrg_Name      := if(KatSopr.VidSopr<>502,KatOrg.Name,
+                                    if(isvalid(tnKatOrg),KatOrg.Name,''));
+  NewPartyRec.KatOrg_UNN       := if(KatSopr.VidSopr<>502,KatOrg.UNN,
+                                    if (isvalid(tnKatOrg),KatOrg.UNN,''));
+  NewPartyRec.KatOrg_Code      := if(KatSopr.VidSopr<>502,KatOrg.Code,
+                                    if (isvalid(tnKatOrg),KatOrg.Code,''));
+  NewPartyRec.SpSopr_nSertif   := SpSopr.nSertif;
+  NewPartyRec.Sopr_Cena        := if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice) / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+  NewPartyRec.Sopr_Valuta      := if (KatSopr.cVal = 0, oValFunc.ValNatSimv
+                                                      , oValFunc.GetValSimv(SpSopr.cVal));
+  if (isvalid(tnSoprOrdB))
+    NewPartyRec.OrdB_Cena      := if (b_MultiCurrReg, SoprOrdB.VPrice, SoprOrdB.Price) / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+  else
+    {
+      if ( KatSopr.VidSopr = 630 ) // акт на пересортицу
+        NewPartyRec.OrdB_Cena  := NewPartyRec.Sopr_Cena;
+    }
+
+  if (isvalid(tnSoprOrdB))
+    NewPartyRec.OrdB_Valuta     := if (b_MultiCurrReg, oValFunc.GetValSimv(SoprOrdB.cVal)
+                                                     , oValFunc.ValNatSimv);
+  else
+    {
+      if ( KatSopr.VidSopr = 630 ) // акт на пересортицу
+        NewPartyRec.Sopr_Valuta  := NewPartyRec.Sopr_Valuta;
+    }
+
+  NewPartyRec.Tip_kons         := if(KatSopr.VidSopr = 502,2,if(KatSopr.VidSopr=102,1,if(KatSopr.VidSopr=103,1,0)));
+  NewPartyRec._OtpEdKoef       := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+  NewPartyRec.FactoryPrice     := string(fnFactoryPrice)
+                                  + if (KatSopr.cVal = 0, if (s_SimvRub <> '', s_SimvRub,'руб.'), KlVal.SimVolV);
+  NewPartyRec.FactoryProcNac   := DoubleToStr(fnFactoryProcNac, '666.88') + '%';
+  NewPartyRec.Sopr_cUKS        := SpSopr.cUKS;
+  NewPartyRec.KatMC_NRec       := KatMC.NRec;
+  NewPartyRec.KatMC_Name       := KatMC.Name;
+  NewPartyRec.KatMC_BarKod     := KatMC.BarKod;
+
+  Result := TRUE;
+}
+
+//формирование новой партии
+function MakeNewParty (aSpSopr: comp; ProtParty, AutoSetParty: word) : comp;
+var
+  NewPartyRec: tNewPartyRec;
+{
+  if not GetNewPartyRec(aSpSopr, NewPartyRec)
+    Result := 0
+  else
+    Result := MakeNewParty_2(NewPartyRec, ProtParty, AutoSetParty);
+}
+
+//для работы с заводской ценой
+#include soprc18.vpp
+
+// Проверяет на корректность одной позиции спецификации партии
+function OnCheckPosParty(var aPart: comp; aSpSopr: comp; ProtParty, AutoSetParty: word): boolean;
+var
+  b_MultiCurrReg, b_McUslAvtoParty, b_NeedUpdateParty : boolean;
+  w_AvtoFormParty : word;
+
+begin
+  //не для текущей позиции - спозиционироваться
+  if (aSpSopr <> comp(0))
+  {
+    pSpSopr := aSpSopr;
+
+    //присвоения для "перестройки" логической таблицы недостаточно
+    if GetFirst SpSopr <> tsOk
+    {
+      OnCheckPosParty := FALSE;
+      EXIT;
+    }
+  }
+
+  // запрет формирования партии для тары
+  if (NOT MakePartyINTara)
+  {
+    aPart := 0;
+    OnCheckPosParty := TRUE;
+    EXIT;
+  }
+
+  DefineDocParty;
+  OnCheckPosParty := TRUE;
+
+  if DocParty._SOPRDOCB_VIP
+   if (SpSopr.PrVoz <> 0)
+    if boGetTune('Tara.GrParty')
+     if wGetTune('Tara.GrTara') = 0
+       EXIT;
+
+  b_MultiCurrReg   := boGetTune('Oper.MultiCurrReg');
+
+  if (KatSopr.VidSopr <> 630) and (KatSopr.VidSopr <> 611)
+    b_McUslAvtoParty := boGetTune('McUsl.AvtoParty');
+  else
+    b_McUslAvtoParty := boGetTune('Sklad.SoprDoc.AvtoParty');
+
+  w_AvtoFormParty  := wGetTune('Party.AvtoForm');
+
+  if (SpSopr.cParty <> 0) and b_MultiCurrReg
+   if (GetFirst KatParty = tsOK)
+   {
+     if (KatParty.cValPar <> KatSopr.cVal)
+     {
+       if ((KatSopr.VidSopr > 500) and
+           (KatSopr.VidSopr < 600) and // Только для производственных накладных
+           (KatSopr.cValut = KatParty.cValPar))
+           {} // Они рублевые и валютный эквивалент равен валюте партии считаем ситуацию нормальной.
+       else
+       {
+         OnCheckPosParty := false;
+         Message(''#3'Валюта выбранной партии отличается от '+
+                 'валюты накладной...',CancelButton);
+         Exit;
+       }
+     }
+   }
+   else
+   {
+     OnCheckPosParty := false;
+     Message(''#3'Нет партии в каталоге партий для позиции '+
+                 'спецификации накладной...',CancelButton);
+     Exit;
+   }
+
+  if (w_AvtoFormParty = 0) and b_MultiCurrReg and (SpSopr.cParty = 0)
+  {
+    if (KatSopr.cVal <> 0)
+    {
+       OnCheckPosParty := false;
+        Message(''#3'При многовалютном учете в валютной накладной №' +
+                KatSopr.NSopr + ' не задана партия поступления '+
+                'матценности "'+KatMC.Name+'".',CancelButton);
+    }
+  }
+  else
+    if b_McUslAvtoParty and (w_AvtoFormParty <> 0) and
+       if(DocParty._SOPRDOCB_VIP,(AutoSetParty = 1), true)
+    {
+       #ifdef NUTICIA_PERIOD
+       if GetFirst GroupMC where ((KatMC.cGroupMC == GroupMC.nRec))=tsOk
+        { if GetFirst AttrNam where (( coGroupMC == AttrNam.wTable
+             and 'Методика средних цен периода' == AttrNam.Name ))=tsOk
+            if GetFirst AttrVal where (( coGroupMC == AttrVal.wTable
+                                  and GroupMC.nRec == AttrVal.cRec
+                                  and AttrNam.nRec == AttrVal.cAttrNam ))=tsOk
+              if AttrVal.vDouble <> 0
+                { OnCheckPosParty := true;  Exit; }
+          //если AttrVal.vDouble=0  или не найдено
+          if GetFirst AttrNam where (( coGroupMC    == AttrNam.wTable
+               and 'запрет автоформирования партий' == AttrNam.Name ))=tsOk
+            if GetFirst AttrVal where (( coGroupMC == AttrVal.wTable
+                                  and GroupMC.nRec == AttrVal.cRec
+                                  and AttrNam.nRec == AttrVal.cAttrNam ))=tsOk
+              if AttrVal.vDouble <> 0
+                { OnCheckPosParty := true;  Exit; }
+        }
+       #end
+
+      b_NeedUpdateParty := FALSE;
+
+      if (w_AvtoFormParty = 2)
+      {
+        if not boGetTune('Party.SaveOldParty')
+          aPart := if(aPart = 0, MakeNewParty(aSpSopr, ProtParty, AutoSetParty), aPart)
+        else
+          if (SpSopr.cParty <> 0)
+          {
+            aPart := SpSopr.cParty;
+            b_NeedUpdateParty := boGetTune('Party.RenameOldParty');
+          }
+          else
+          {
+            //если нет ссылки на партию и партия не создана
+            aOnePart := if(aOnePart = 0, MakeNewParty(aSpSopr, ProtParty, AutoSetParty), aOnePart);
+            aPart    := aOnePart;
+          }
+      }
+      else // w_AvtoFormParty = 1
+      {
+        // наименование партии могло измениться
+        if ( not boGetTune('Party.RenameOldParty') OR ( SpSopr.cParty = 0 ) )
+          aPart := if(SpSopr.cParty = 0, MakeNewParty(aSpSopr, ProtParty, AutoSetParty), SpSopr.cParty)
+        else
+          {
+            aPart := SpSopr.cParty;
+            b_NeedUpdateParty := TRUE;
+          }
+      }
+
+      if b_NeedUpdateParty
+      {
+        var Kode, sNewParty : string;
+        var isNakl: boolean;
+        var NewPartyRec: tNewPartyRec;
+
+        if GetNewPartyRec(aSpSopr, NewPartyRec)
+          if GetNewPartyName(NewPartyRec, ProtParty, AutoSetParty, isNakl, Kode, sNewParty)
+          {
+            if ( ( sNewParty <> '' ) AND ( sNewParty <> KatParty.Name ) )
+              if ( RecordExists KParty where (( NewPartyRec.KatMC_NRec == KParty.cMC  AND
+                                                sNewParty              == KParty.Name AND
+                                               (SpSopr.cParty <> KParty.NRec) )) = tsOk)
+                {
+                  if isNakl
+                    if (ProtParty = 1)
+                      {
+                        frmAutoParty.write(NewPartyRec.KatMC_Name);
+                        frmAutoParty.write(sNewParty);
+                        frmAutoParty.write('существовала');
+                      }
+                }
+              else
+                {
+                  update KParty where (( SpSopr.cParty == KParty.nRec )) set KParty.Name := sNewParty;
+
+                  update Prices where (( SpSopr.cParty == Prices.cParty AND
+                                         (Prices.NParty <> sNewParty) ))
+                    set Prices.NParty := sNewParty;
+
+                  if isNakl
+                    if (ProtParty = 1)
+                      {
+                        frmAutoParty.write(NewPartyRec.KatMC_Name);
+                        frmAutoParty.write(sNewParty);
+                        frmAutoParty.write('переименована');
+                      }
+                }
+          }
+      }
+
+      if DocParty._SOPRDOCB_VIP
+        FactoryPriceInKatParty(aPart);
+
+      if (aPart = 0)
+      {
+         Message(''#3'Ошибка при формировании новой партии...', CancelButton);
+         OnCheckPosParty := false;
+      }
+      else
+      {
+         SpSopr.cParty := if(makePartyINTara,aPart,0);
+         if (Update current SpSopr <> tsOk)
+         {
+            Message('Невозможно обновить спецификацию накладной при формировании новой партии...', CancelButton);
+            OnCheckPosParty := false;
+         }
+         else
+          if DocParty._SOPRDOCB_VIP
+          {
+            if (boGetTune('Tara.GrParty') and (wGetTune('Tara.GrTara') = 0))
+              if GetFirst SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk
+              {
+                 _LOOP SpSoprTar where ((KatSopr.NRec  == SpSoprTar.cSopr and
+                                         SpSopr.NRec   == SpSoprTar.cOwner ))
+                 {
+                   SpSoprTar.cParty := SpSopr.cParty;
+                   Update Current SpSoprTar;
+
+                   _LOOP SoprOrdBTar where ((SpSoprTar.NRec == SoprOrdBTar.cSpSopr))
+                   {
+                     SoprOrdBTar.cParty := SpSopr.cParty;
+                     Update current SoprOrdBTar;
+                   }
+                 } //_Loop
+               }
+          }//if DocParty._SOPRDOCB_VIP
+      }
+    }//if b_McUslAvtoParty and (w_AvtoFormParty <> 0)
+end;
+
+//протокол формирования партий
+procedure ShowProtParty;
+{
+  if (not frmAutoParty.Error)
+    frmAutoParty.ShowFile('Протокол формирования партий');
+  frmAutoParty.AbortForm;
+}
+//формирование(проверка) партии
+function CheckPartys(aKatSopr: comp; ProtParty, AutoSetParty: word): boolean;
+var sPart: comp;
+{
+  SPart := 0;
+  aOnePart := 0;
+  CheckPartys := true;
+  StartNewVisual(vtNumericVisual,vfTimer,
+        'Формирование/проверка партий для документа: ',1);
+  _LOOP SpSopr
+        where ((aKatSopr == SpSopr.cSopr and
+                word(1)  == SpSopr.PrMc))
+    {
+      pSpSopr := SpSopr.NRec;
+      if (not OnCheckPosParty(sPart, comp(0), ProtParty, AutoSetParty))
+        {
+          CheckPartys := false;
+          break;
+        };
+      _LOOP SoprOrdB where((SpSopr.NRec == SoprOrdB.cSpSopr))
+        if SoprOrdB.cParty <> SpSopr.cParty
+          {
+            SoprOrdB.cParty := SpSopr.cParty;
+            Update current SoprOrdB;
+          }
+      NextVisual;
+      RunInterface('iKatPartydGodn', SpSopr.cParty, aKatSopr);
+      RunInterface('iKatPartyKATPARTYCENAZAV',SpSopr.nRec);
+    }
+
+  StopVisual('',0);
+  if ProtParty = 1
+    ShowProtParty;
+}
+
+HandleEvent
+
+cmInit:
+  abort;
+
+end;
+End.

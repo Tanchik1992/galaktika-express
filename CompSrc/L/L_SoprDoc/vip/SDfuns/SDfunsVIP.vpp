@@ -1,0 +1,295 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Функции для сопроводительных документов - реализация всех версий
+//******************************************************************************
+
+#ifdef __SDfunsV1__
+#include makeres.vpp
+#end
+
+//******************************************************************************
+#ifdef __SDfunsV2__
+//******************************************************************************
+
+#include CalcFuns.var
+#include LinkGrPl.var
+#include KontrBal.var
+#include SHmanager.var
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+#end
+#include RsvRegObj.var        // RsvRegObj        функции журнала резервирования
+
+//******************************************************************************
+
+#include ttndoc.vpp
+#include SpSopr.vpp
+
+//******************************************************************************
+
+Create view vSD
+From
+  KatSopr
+, SpSopr
+, SoprHoz
+, Filial
+, ActSaldo
+, Oborot
+;
+
+//******************************************************************************
+
+Procedure UpdateSoprHoz(KS: type$KatSopr);
+{
+  if ( KS.NRec = 0 )
+    Exit;
+
+  var boFoundSH: boolean;
+  boFoundSH := (vSD.GetFirst FastFirstRow SoprHoz where (( KS.VidSopr == SoprHoz.TipDoc AND
+                                                           KS.NRec    == SoprHoz.cSoprDoc )) = tsOk );
+
+  iKB.SaveInfoforBal(KS.VidSopr, KS.NRec);
+
+  if ( NOT boFoundSH )
+    vSD.ClearBuffer(vSD.tnSoprHoz);
+
+  if ( KS.cOrg = 0 )
+    vSD.SoprHoz.cFilKor := 0;
+  else
+    if ( vSD.GetFirst FastFirstRow Filial where (( KS.cOrg == Filial.cOrg )) = tsOk )
+      vSD.SoprHoz.cFilKor := vSD.Filial.NRec;
+
+  vSD.SoprHoz.DatOb       := KS.dSopr;
+  vSD.SoprHoz.Summa       := KS.Summa;
+  vSD.SoprHoz.FilialNo    := lGetTune('Konsolid.FilialNo');
+  vSD.SoprHoz.KodValut    := KS.cVal;
+  vSD.SoprHoz.NoDoc       := KS.NSopr;
+  vSD.SoprHoz.Direct      := KS.TipSopr;
+  vSD.SoprHoz.TipDoc      := KS.VidSopr;
+  vSD.SoprHoz.cSoprDoc    := KS.NRec;
+  vSD.SoprHoz.cStepDoc    := KS.cStepDoc;
+  vSD.SoprHoz.TiDkGal     := vSD.SoprHoz.TipDoc;
+  vSD.SoprHoz.Descr       := KS.Descr;
+  vSD.SoprHoz.DesGr       := KS.DesGr;
+
+  vSD.SoprHoz.cDogovor    := KS.cDogovor;
+  vSD.SoprHoz.cAppDogovor := KS.cAppDogovor;
+  vSD.SoprHoz.cCalPlan    := KS.cCalPlan;
+
+  vSD.SoprHoz.VhSumHoz := '+';
+  vSD.SoprHoz.cOrg := if ( KS.cOrgBase <> comp(0), KS.cOrgBase, KS.cOrg );
+
+  if ( KS.cVal <> 0 )
+    vSD.SoprHoz.SumValut  := KS.SumVal;
+
+  if ( boFoundSH )
+    oSHmanager.UpdByHan(vSD.SoprHoz.BufferP)
+  else
+    oSHmanager.InsByHan(vSD.SoprHoz.BufferP);
+
+  iKB.ModiKontrBal(KS.VidSopr, KS.NRec);
+}
+
+//******************************************************************************
+// Удаление SoprHoz вместе с оборотами и всем-всем-всем
+//******************************************************************************
+
+Procedure DeleteSoprHoz(cKatSopr: comp; wVidSopr: word);
+{
+  iKB.SaveInfoforBal(wVidSopr, cKatSopr);
+
+  oSHmanager.DeleteDoc(cKatSopr, wVidSopr);
+
+  iKB.DeleteKontrBal(wVidSopr, cKatSopr);
+}
+
+//******************************************************************************
+
+Function GetVidSopr(cKatSopr: comp): word;
+{
+  GetVidSopr := if (vSD.GetFirst FastFirstRow KatSopr where ((cKatSopr == KatSopr.NRec)) = tsOk, vSD.KatSopr.VidSopr, 0);
+}
+
+//******************************************************************************
+
+Function ExistsAnyOborotByVid(cKatSopr: comp; wVidSopr: word): boolean;
+{
+  ExistsAnyOborotByVid := FALSE;
+
+  if vSD.GetFirst FastFirstRow SoprHoz where
+                        ((
+                           cKatSopr == SoprHoz.cSoprDoc AND
+                           wVidSopr == SoprHoz.TipDoc
+                        )) = tsOk
+    ExistsAnyOborotByVid := oSHmanager.HaveBuhOborot(vSD.SoprHoz.NRec, 0, 0) OR
+                            oSHmanager.HaveFpOborot (vSD.SoprHoz.NRec, 0, 0);
+}
+
+//******************************************************************************
+
+Function ExistsAnyOborot(cKatSopr: comp): boolean;
+{
+  ExistsAnyOborot := ExistsAnyOborotByVid(cKatSopr, GetVidSopr(cKatSopr));
+}
+
+//******************************************************************************
+
+Function Set_dOprTTN (cKatSopr: comp; d: Date): boolean;
+{
+  Set_dOprTTN := FALSE;
+
+  if (
+      (
+        vSD.UpDate SpSopr where ((cKatSopr == SpSopr.cSopr))
+          set SpSopr.dOprTTN := d
+      ) = tsOk
+     )
+     Set_dOprTTN := TRUE;
+  else
+    if (vSD.GetFirst KatSopr where ((cKatSopr == KatSopr.NRec)) <> tsOk)
+      Message('Не найдена накладная NRec = '+string(cKatSopr), Warning)
+    else
+      Message('Не удалось обновить дату списания у всех позиций спецификации накладной № ' +
+              f_sNumDate(vSD.KatSopr.nSopr, vSD.KatSopr.dSopr) +
+              '.'#13'Рекомендуется провести проверку корректности данных логистики', Warning);
+}
+
+//******************************************************************************
+
+#include KatSopr.vpp
+#include DublSopr.vpp
+
+//******************************************************************************
+
+#include chclbp.vpp
+
+//******************************************************************************
+
+Function CanDeleteDocument(_DDoc: Date): boolean;
+{
+  CanDeleteDocument := CheckCloseBuhPeriod(_DDoc);
+}
+
+//******************************************************************************
+
+Function GetWaDoc(
+            cKatSopr: comp      // NRec сопроводительного документа
+         ): word;               // значение поля KatSopr.waDoc для заданного cKatSopr
+{
+  GetWaDoc := if (vSD.GetFirst KatSopr where (( cKatSopr == KatSopr.NRec )) = tsOk, KatSopr.waDoc, 0);
+}
+
+//******************************************************************************
+
+Function CanDeleteDocumentOborot(
+            cKatSopr    : comp;
+            wTiDk       : word
+         ): boolean;
+{
+  CanDeleteDocumentOborot := TRUE;
+
+  if (wGetTune('Fin.User.ModHaveProvod') = 0)
+    Exit;
+
+  if (wTiDk = 101)
+    if (GetWaDoc(cKatSopr) = 2)
+      Exit; // TRUE -- корректирующая накладная
+
+  if ExistsAnyOborotByVid(cKatSopr, wTiDk)
+    case (wGetTune('Fin.User.ModHaveProvod')) of
+    //-------------------------------------------------------------------------------------------------------------
+      1:
+        CanDeleteDocumentOborot := (Message('У документа есть проводки'#13'Удалить текущую запись?', YesNo) = Yes);
+    //-------------------------------------------------------------------------------------------------------------
+      2:
+        {
+          CanDeleteDocumentOborot := FALSE;
+          ShowTune('У документа есть проводки'#13'Нельзя удалить документ!', 'Fin.User.ModHaveProvod');
+        }
+    //-------------------------------------------------------------------------------------------------------------
+    end
+}
+
+//******************************************************************************
+
+Function CanModifyDocument(
+           cKatSopr     : comp;
+           wTiDk        : word;
+           boNeedMsg    : boolean
+         ): boolean;
+{
+  CanModifyDocument := TRUE;
+
+  if (wGetTune('Fin.User.ModHaveProvod') = 0)
+    Exit;
+
+  if (wTiDk = 101)
+    if (GetWaDoc(cKatSopr) = 2)
+      Exit; // TRUE -- корректирующая накладная
+
+  if ExistsAnyOborotByVid(cKatSopr, wTiDk)
+    {
+      CanModifyDocument := FALSE;
+
+      if (boNeedMsg)
+        case wGetTune('Fin.User.ModHaveProvod') of
+        //------------------------------------------------------------------------------
+          1:
+            CanModifyDocument := (Message('У документа есть проводки'#13+
+                                          'Разрешить возможность редактирования документа?', YesNo) = Yes);
+        //------------------------------------------------------------------------------
+          2:
+            ShowTune('Имеются проводки, поэтому документ доступен только для просмотра', 'Fin.User.ModHaveProvod');
+        //------------------------------------------------------------------------------
+        end
+    }
+}
+
+//******************************************************************************
+
+Create view vSOB
+From
+  SoprOrdB
+;
+
+//******************************************************************************
+
+Procedure CheckKolSoprOrdB(cSpSopr: comp; dblOld: double);  // Пересчет количества в распределении позиции
+{
+  if GetFirst SpSopr where ((cSpSopr == SpSopr.NRec)) <> tsOk
+    Exit;
+
+  var TotalKol: double;  TotalKol := 0;
+
+  vSOB._LOOP SoprOrdB where ((cSpSopr == SoprOrdB.cSpSopr))
+    {
+      var k: double; k := vSOB.SoprOrdB.Kol * SpSopr.KolFact / dblOld;
+
+      if NOT (fEdIzm.CheckKolDiskret( k                 // проверяемое количество
+                                    , SpSopr.cOtpEd     // отпускная единица
+                                    , TRUE              // не производить округление, только проверку
+                                    , FALSE             // без выдачи сообщений
+                                    )
+             )
+        k := Round(k);                                  // просто округлим, без добавления единицы...
+
+      TotalKol := TotalKol + k;
+      vSOB.SoprOrdB.Kol := k;
+
+      vSOB.Update Current SoprOrdB;
+    }
+
+  var dif: double; dif := SpSopr.KolFact - TotalKol;    // рассчитываем погрешность
+
+  if (NOT f_KolIsZero(dif))                             // погрешность ненулевая?
+    if (vSOB.GetLast SoprOrdB where ((cSpSopr == SoprOrdB.cSpSopr)) = tsOk)
+      vSOB.Update current SoprOrdB                      // корректируем последнюю позицию!
+        set SoprOrdB.Kol := SoprOrdB.Kol + dif;
+}
+
+//******************************************************************************
+
+#end  // __SDfunsV2__
+
+//******************************************************************************

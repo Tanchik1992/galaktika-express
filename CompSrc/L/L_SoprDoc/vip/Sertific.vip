@@ -1,0 +1,1276 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Удостоверения качества
+//******************************************************************************
+
+
+#include notes.vih
+#include statlog.vih
+#include ofpmacro.vpp
+#include OnExpImp.vih // Подключение Экспорта - Импорта
+#include ValPokAn.vih
+#include GetKau.vih   // Обьектный интерфес выбора КАУ
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Удостоверения качества
+
+Параметры:
+  TypeWork - 0 - просмотр
+             1 - интерфейс выбора
+             2 - интерфейс редактирования
+
+  c1       - для позиционирования на нужную запись
+#end
+
+//******************************************************************************
+
+Interface Sertificate 'Удостоверения качества' Cyan, EscClose,alwaysreturn;
+  show at (,,,);
+
+//******************************************************************************
+
+#include OnExpImp.var         // oOnExpImp      подключение Экспорта - Импорта
+#include Notes.var            // oNotes         пояснения к статусу
+#include StatLog.var          // oStatLog       работа со статусами документов
+#include GetKau.var             // Обьектный интерфес выбора КАУ
+
+//******************************************************************************
+
+create view
+var
+  VagonMarker: longint;
+  VagonNRec: comp;
+
+  GloFilter, pGloFilter, GloStatus, pGloStatus: word;
+  GloNote: comp;
+  Glod1, pGlod1, Glod2, pGlod2: date;
+  GloMC, pGloMC: comp;
+
+  wFilter: word;
+  fStatus: word;
+  fNote: comp;
+  fd1: date;
+  fd2: date;
+  fMC: comp;
+  SertificMarker: longint;
+  IndexNo: longint;
+  TypeWork:word;
+  c1:comp;
+  isEditSoprVisible:boolean;
+
+  SaveSertDoc : comp;
+
+As select
+//------------------------------------------------------------------------------
+  Sertific.Descr
+    ( FieldName = DocDescr )
+//------------------------------------------------------------------------------
+, Sertific.DesGr
+    ( FieldName = DocDesGr )
+//------------------------------------------------------------------------------
+, if (SearchMarker(SertificMarker, Sertific.NRec, IndexNo), '√', '')
+    ( FieldName = PickLabel )
+//------------------------------------------------------------------------------
+
+, Sertific.NRec
+
+from
+  KatMC                         (ReadOnly)
+, KatMC         fKatMC          (ReadOnly)
+, KatNotes                      (ReadOnly)
+, KatNotes      FiltKatNotes    (ReadOnly)
+, KatOrg                        (ReadOnly)
+, KatOrg        Keepper         (ReadOnly)
+, KatOrg        TasteOrg        (ReadOnly)
+, KatPodr       TastePodr       (ReadOnly)
+, Persons                       (ReadOnly)
+, Sertific
+, Vagon
+, Vagon         Vagon2
+, ValPokaz
+, ValPokaz      ValPokaz2
+, ExClassVal
+, ExClassVal    ExClassVal2
+, AttrVal
+, AttrVal       AttrVal2
+
+where
+((
+           Sertific.cMC == KatMC.NRec
+and          Vagon.cOrg == KatOrg.NRec
+and       Sertific.NRec == Vagon.cSertific
+and   Sertific.cKeepper == Keepper.NRec
+and  Sertific.cTasteOrg == TasteOrg.NRec
+and Sertific.cTastePodr == TastePodr.NRec
+and  Sertific.cOtvetstv == Persons.NRec
+and      Sertific.cNote == KatNotes.NRec
+and               fNote == FiltKatNotes.NRec
+and                 fMC == fKatMC.NRec
+))
+
+#include sertific1.vpp
+
+bounds SertificByStatus =
+      GloStatus == Sertific.Status (noIndex)
+
+bounds SertificBydDoc =
+          Glod1 <<= Sertific.dDoc
+and       Glod2 >>= Sertific.dDoc  (noIndex)
+
+bounds SertificBycMC =
+          GloMC == Sertific.cMC    (noIndex)
+
+order by Sertific.dDoc, Sertific.nDoc
+;
+
+//******************************************************************************
+
+Parameters
+  TypeWork,c1;
+  //TypeWork
+  //0-обычный список документов
+  //1-позволяет использовать для выбора документов из других интерфейсов
+  //2-позволяет работать с cmEdit
+  //c1-nREC для позиционирования на нужную запись
+
+//******************************************************************************
+Procedure DoBounds;
+{
+  Case wGetTune('Doc.Visible') of
+    0 :
+       {
+         if BoundActive(tbOwnDesBound)
+           SubBounds(tbOwnDesBound);
+         if BoundActive(tbOwnGrDesBound)
+           SubBounds(tbOwnGrDesBound);
+         if BoundActive(tbGrDesBound)
+           SubBounds(tbGrDesBound);
+       }
+    1 :
+       {
+         AddBounds(tbOwnDesBound);
+       }
+    2 :
+       {
+         AddBounds(tbOwnGrDesBound);
+       }
+    3 :
+       {
+         AddBounds(tbGrDesBound);
+       }
+    4 :
+       {
+         if BoundActive(tbOwnDesBound)
+           SubBounds(tbOwnDesBound);
+         if BoundActive(tbOwnGrDesBound)
+           SubBounds(tbOwnGrDesBound);
+         if BoundActive(tbGrDesBound)
+           SubBounds(tbGrDesBound);
+       }
+    5 :
+       {
+         if BoundActive(tbOwnDesBound)
+           SubBounds(tbOwnDesBound);
+         if BoundActive(tbOwnGrDesBound)
+           SubBounds(tbOwnGrDesBound);
+         if BoundActive(tbGrDesBound)
+           SubBounds(tbGrDesBound);
+       }
+  end;
+  if (boGetTune('USER.USEFILTER') = 1)
+    if (dGetTune('USER.DFILTER1') <= dGetTune('USER.DFILTER2'))
+    and (dGetTune('USER.DFILTER1') <> 0)
+    and (dGetTune('USER.DFILTER2') <> 0)
+      {
+      Addbounds(tbBoundByDate);
+      }
+}
+//******************************************************************************
+function CanEditDocument: boolean;
+{
+  CanEditDocument:=false;
+
+   Case wGetTune('Doc.Visible') of
+
+     2 :
+        {
+          If ((Sertific.Descr<>sGetTune('User.Descr')) or  (Sertific.DesGr<>sGetTune('User.DesGr')))
+        {
+         Message('Документ доступен только для просмотра.'+
+                    ''#13+'Настройка: "свои-изменение, по группе - чтение".');
+         Exit;
+        }
+        }
+     4 :
+        {
+          If  Sertific.Descr<>sGetTune('User.Descr')
+        {
+          Message('Документ доступен только для просмотра.'+
+                ''#13+'Настройка: "свои - изменение, по всем - чтение".');
+            exit;
+        }
+        }
+     5 :
+        {
+         If  Sertific.DesGr<>sGetTune('User.DesGr')
+        {
+          Message('Документ доступен только для просмотра.'+
+                ''#13+'Настройка: "все права в рамках группы, по всем - чтение".');
+         exit;
+        }
+
+        }
+   end;
+
+  CanEditDocument := true;
+}
+
+//******************************************************************************
+procedure DoTitleDoc;
+{
+  Var
+    sTitle, HighDate, LowDate, pFlag : string;
+
+  pFlag := '0';
+  if BoundActive(tbBoundByDate) or BoundActive(tbSertificByStatus) or BoundActive(tbSertificBydDoc) or BoundActive(tbSertificBycMC)
+    sTitle := '~Фильтры - '
+  else
+    sTitle := '';
+
+  if BoundActive(tbBoundByDate) and BoundActive(tbSertificBydDoc)
+    if (dGetTune('USER.DFILTER1') < Glod2) and (dGetTune('USER.DFILTER2') > Glod1)
+      {
+        if (CalcDaysBetweenDates(dGetTune('USER.DFILTER1'), Glod1, False) > 0)
+          LowDate := DateToStr(Glod1,'DD/MM/YYYY ');
+        else
+          LowDate := DateToStr(dGetTune('USER.DFILTER1'),'DD/MM/YYYY ');
+
+        if (CalcDaysBetweenDates(dGetTune('USER.DFILTER2'), Glod2, False) > 0)
+          HighDate := DateToStr(dGetTune('USER.DFILTER2'),'DD/MM/YYYY ');
+        else
+          HighDate := DateToStr(Glod2,'DD/MM/YYYY ');
+        pFlag := '1';
+      }
+
+  if (not BoundActive(tbBoundByDate)) and BoundActive(tbSertificBydDoc)
+    {
+      LowDate := DateToStr(Glod1,'DD/MM/YYYY ');
+      HighDate := DateToStr(Glod2,'DD/MM/YYYY ');
+      pFlag := '1';
+    }
+
+  if BoundActive(tbBoundByDate) and (not BoundActive(tbSertificBydDoc))
+    {
+      LowDate := DateToStr(dGetTune('USER.DFILTER1'),'DD/MM/YYYY ');
+      HighDate := DateToStr(dGetTune('USER.DFILTER2'),'DD/MM/YYYY ');
+      pFlag := '1';
+    }
+
+  if (not BoundActive(tbBoundByDate)) and (not BoundActive(tbSertificBydDoc))
+    {
+      pFlag := '0';
+    }
+
+  SetTitle('Удостоверения качества '+ stitle
+    + if (pFlag = '1', 'Интервал дат: с ' + LowDate + 'по ' + HighDate + ';', '')
+    + if (BoundActive(tbSertificByStatus), ' Статус: ' + FiltKatNotes.Name + ';', '')
+    + if (BoundActive(tbSertificBycMC), ' МЦ: ' + fKatMC.NAME + ';', ''));
+
+  RereadRecord(#Sertific);
+}
+
+
+//******************************************************************************
+procedure SaveFiltersParameters;
+{
+  pGloFilter := GloFilter;
+  pGloStatus := GloStatus;
+  pGlod1     := Glod1;
+  pGlod2     := Glod2;
+  pGloMC     := GloMC;
+}
+
+//******************************************************************************
+
+procedure RestoreFiltersParameters;
+{
+  GloFilter := pGloFilter;
+  GloStatus := pGloStatus;
+  Glod1     := pGlod1;
+  Glod2     := pGlod2;
+  GloMC     := pGloMC;
+}
+
+//******************************************************************************
+
+procedure SwitchBounds(iBound: longint; Enable: boolean);
+{
+  if (not BoundActive(iBound))
+    {
+      if (Enable)
+        AddBounds(iBound);
+    }
+  else
+    if (not Enable)
+      SubBounds(iBound);
+}; // procedure SetBounds
+
+//******************************************************************************
+
+procedure SwitchCondition(iCondition: longint; Enable: boolean);
+{
+  if (not ConditionActiveInLeave(iCondition, #Sertific))
+    {
+      if (Enable)
+        PushConditionForLeave(iCondition, #Sertific);
+    }
+  else
+    {
+      if (not Enable)
+        PopConditionForLeave(iCondition, #Sertific);
+    };
+}; // procedure SetConditions
+
+//******************************************************************************
+
+procedure SetFilters;
+{
+  SwitchBounds(tbSertificBydDoc, (GloFilter and 1) <> 0);
+  SwitchBounds(tbSertificByStatus, (GloFilter and 2) <> 0);
+  SwitchBounds(tbSertificBycMC, (GloFilter and 4) <> 0);
+}; // procedure SetFilters
+
+//******************************************************************************
+
+procedure ClearFilters;
+{
+  SwitchBounds(tbSertificBydDoc, false);
+  SwitchBounds(tbSertificByStatus, false);
+  SwitchBounds(tbSertificBycMC, false);
+}; // procedure SetFilters
+
+//******************************************************************************
+
+function OtkatToOldState(mess:boolean;TW:word):boolean;
+{
+  OtkatToOldState:=false;
+
+  If (isEditSoprVisible or TW=1)
+    If not CanEditDocument
+      Exit;
+
+  OtkatToOldState:=true;
+};
+
+//******************************************************************************
+
+procedure SaveDocSertific;
+{
+  if (Sertific.nRec = 0)
+    {
+      Message('Текущий документ еще не оформлен!', CancelButton);
+      Exit;
+    }
+
+  SaveSertDoc := Sertific.NRec;
+  Message('Текущий документ сохранен в буфер!', Information);
+}
+
+//******************************************************************************
+
+procedure CopyDocSertific;
+{
+  var cNewDoc : comp;
+  if ( getfirst Sertific where (( SaveSertDoc == Sertific.nRec)) <> tsOK )
+    Exit;
+
+  Sertific.nRec  := 0;
+  Sertific.Descr := sGetTune('User.Descr');
+  Sertific.DesGr := sGetTune('User.DesGr');
+  Sertific.dDoc  := Cur_Date;
+  Sertific.NDoc  := GetLastNumD(290);
+
+  if ( insert current Sertific = tsOk)
+    {};
+
+  cNewDoc := Sertific.nRec;
+
+  _LOOP Vagon2 where (( SaveSertDoc == Vagon2.cSertific))
+    {
+
+      if ( getfirst Vagon where (( Vagon2.nRec == Vagon.nRec)) = tsOK )
+        {
+          Vagon.nRec      := 0;
+          Vagon.cSertific := cNewDoc;
+
+          if ( insert current Vagon = tsOk)
+            {};
+        };
+    };
+
+  _LOOP ValPokaz2 where (( SaveSertDoc == ValPokaz2.cOwner))
+    {
+      if ( getfirst ValPokaz where (( ValPokaz2.nRec == ValPokaz.nRec)) = tsOK )
+        {
+          ValPokaz.nRec   := 0;
+          ValPokaz.cOwner := cNewDoc;
+
+          if ( insert current ValPokaz = tsOk)
+            {};
+        };
+    }
+
+  _loop ExClassVal2 where ((  word(coSertific) == ExClassVal2.wTable
+                          and SaveSertDoc      == ExClassVal2.cRec
+                          ))
+    {
+      if ( GetFirst ExClassVal where (( ExClassVal2.nRec == ExClassVal.nRec )) = tsOK )
+        {
+          ExClassVal.nRec := 0;
+          ExClassVal.cRec := cNewDoc;
+
+          if ( insert current ExClassVal = tsOk ) {}
+        }
+    }
+
+  _loop AttrVal2 where ((  word(coSertific) == AttrVal2.wTable
+                       and SaveSertDoc      == AttrVal2.cRec
+                       ))
+    {
+      if ( GetFirst AttrVal where (( AttrVal2.nRec == AttrVal.nRec )) = tsOK )
+        {
+          AttrVal.nRec := 0;
+          AttrVal.cRec := cNewDoc;
+
+          if ( insert current AttrVal = tsOk ) {}
+        }
+    }
+
+  ReReadRecord(#Sertific);
+  Message('Операция копирования завершена.',Information);
+}
+
+//******************************************************************************
+
+#doc
+  Диалоговое окно копирования цен из прайс-листа
+#end
+
+window wnFilters 'Фильтры по документам' Gray, DoAccept;
+  show at (,5,71,12);
+
+screen scFilters (,hcKuzbassISertificFilter,sci1EnEsc);
+fields
+  wFilter           ('Фильтры',,): noprotect;
+  fd1               ('Начальная дата периода',,): ['DD/MM/YYYY'], noprotect;
+  fd2               ('Конечная дата периода',,): ['DD/MM/YYYY'], noprotect;
+  FiltKatNotes.Name ('Статус документа',,sci13Esc): pickbutton, protect;
+  fKatMC.Name       ('Название МЦ',,sci13Esc): protect, pickbutton;
+Buttons
+  cmOK,   default, , 'Установить ограничения';
+  cmValue7, , , 'Снять ограничения';
+  cmCancel,      , , 'Отмена';
+
+<<
+ `Фильтры по:`
+    [.] дате формирования`  За период `с`.@@@@@@@@@@@`по`.@@@@@@@@@@@
+    [.] статусу документа`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    [.] МЦ               `  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ <.~У~становить фильтр.> <.  ~С~нять фильтр   .> <.     Отмена      .>
+>>
+end; // screen scFilters
+
+//******************************************************************************
+
+handleEvent
+#include soprc13.vpp
+cmInit:
+  {
+    wFilter := GloFilter;
+    fMC := GloMC;
+    fd1 := Glod1;
+    fd2 := Glod2;
+    fStatus := GloStatus;
+    fNote := GloNote;
+    ProcessCommand(cmValue10);
+  };
+
+cmOK:
+  PutCommand(cmDefault);
+
+cmValue7:
+  {
+    wFilter := 0;
+    PutCommand(cmDefault);
+  }
+
+cmDefault:
+  {
+    if not CheckFields
+      {
+        Stop;
+        Exit;
+      }
+
+    if (wFilter and 1) <> 0
+      if ((fd1 > fd2) or (fd1 = date(0,0,0)) or (fd2 = date(0,0,0)))
+        {
+          message('Необходимо корректно задать период!', Warning);
+          Stop;
+          Exit;
+        }
+
+    UpdateTable;
+    GloFilter := wFilter;
+    GloMC := fMC;
+    Glod1 := fd1;
+    Glod2 := fd2;
+    GloStatus := fStatus;
+    GloNote := fNote;
+  };
+
+end; // handleevent window wnFilters
+end; // window wnFilters
+
+//******************************************************************************
+
+#doc
+  Редактирование удостоверения качества
+#end
+
+window wnSertificate 'Удостоверение качества' EscClose;
+  show at (,,,);
+
+screen scSertificate (,hcKuzbassISertific,sci178Esc);
+  show at (,,,12);
+  table Sertific;
+fields
+  Sertific.DesGr   ('Код группы пользователей',,sci1378Esc): [4];
+  Sertific.Descr   ('Дескриптор(идентификатор) пользователя)',,sci1378Esc): [4];
+  Sertific.NDoc    ('Номер удостоверения качества',,):
+   { Font = { BackColor = if( trim(Sertific.NDoc) = '', ColorNeed, 0 )} };
+  Sertific.dDoc    ('Дата удостоверения качества',,): ['DD/MM/YYYY'],
+   { Font = { BackColor = if( longint(Sertific.dDoc) = 0, ColorNeed, 0 )} };
+  KatNotes.Name    ('Статус удостоверения качества',,sci1378Esc): PickButton, protect;
+  Sertific.Name    ('Наименование документа',,);
+  KatMC.Name       ('Название МЦ',,sci1378Esc): pickbutton, protect,
+   { Font = { BackColor = if( not IsValid(#KatMC), ColorNeed, 0 )} };
+  Sertific.GOST    ('ГОСТ',,);
+  Sertific.TU      ('ТУ',,);
+  Sertific.NReg    ('Регистрационный номер',,);
+  Sertific.CodeProbe ('Код пробы',,);
+  Keepper.Name     ('Название организации - держателя удостоверения качества',,sci1378Esc): pickbutton, protect;
+  TasteOrg.Name    ('Название организации, проводившей пробы',,sci1378Esc): pickbutton, protect;
+  TastePodr.Name   ('Подразделение, проводившее пробы',,sci1378Esc): pickbutton, protect;
+  Sertific.dEnd    ('Дата окончания срока действия удостоверения качества',,): ['DD/MM/YYYY'];
+  Persons.FIO      ('Мастер ОТК',,sci1378Esc): pickbutton, protect;
+buttons
+  cmPickAttr,,,'Внешние атрибуты документа',,sci178Esc;
+#ifdef Kachestvo
+  cmValue12,,,'Пробы качества',,sci178Esc;
+#end // #ifdef Kachestvo
+  cmValue1,,,'Показатели качества',,sci178Esc;
+<<
+  Группа &Дескр.  &Номер         &Дата оформления  &Статус
+  .@@@@@  .@@@@@@  .@@@@@@@@@@@@  .@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@
+  Наименование .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Название МЦ  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  ГОСТ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  ТУ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Регистрационный номер .@@@@@@@@@@@@@@@@@@@@@ Код пробы .@@@@@@@@@@@@@@@@@
+  Держатель сертификата .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Организация, проводившая пробы   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Подразделение, проводившее пробы .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Дата окончания .@@@@@@@@@@ Мастер ОТК .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+#ifdef Kachestvo
+  <.Дополнительные параметры.>  <.Пробы качества.>  <.Показатели качества.>
+#else
+    <.Дополнительные параметры.>                     <.Показатели качества.>
+#end // #ifdef Kachestvo
+>>
+end; // screen scSertificate
+
+//******************************************************************************
+
+browse brVagons (,hcKuzbassISertificSpec,sci178Esc);
+  show at (,13,,);
+  table Vagon;
+fields
+  Vagon.Num        'Номер'   ('Номер единицы подвижного состава',,): [10], protect;
+  Vagon.Massa      'Вес тары'('Вес тары',,): [12], [prSignsInKol], protect;
+  Vagon.Netto      'Нетто'   ('Нетто',,)   : [12], [prSignsInKol], protect;
+  Vagon.Massa+Vagon.Netto
+                   'Брутто'  ('Брутто',,)  : [12], [prSignsInKol], protect;
+  KatOrg. Name     'Грузополучатель' ('Грузополучатель из документа-основания',,): [24], protect;
+end; // browse brVagons
+
+//******************************************************************************
+
+handleEvent
+
+#include soprc13.vpp
+
+cmPick:
+  ProcessCommand(cmValue9);
+
+cmPickAttr:
+  ProcessCommand(cmPickAttr);
+
+cmPickClass:
+  ProcessCommand(cmPickClass);
+
+cmValue1:
+  ProcessCommand(cmValue1);
+
+#ifdef Kachestvo
+cmValue12:
+  ProcessCommand(cmValue12);
+#end // #ifdef Kachestvo
+
+cmPrintDoc:
+  ProcessCommand(cmPrintDoc);
+
+cmValue33:
+  ProcessCommand(cmValue33);
+
+cmHotKeys:
+  if CurTable = #Sertific
+    PutHotCommand(RunMenu('mnuSertificEdit'));
+
+cmFilterSave:
+  ProcessCommand(cmFilterSave);
+
+cmInit:
+  isEditSoprVisible:=true;
+
+cmDone:
+  isEditSoprVisible:=false;
+
+end; // handleevent window wnSertific
+end; // window wnSertificate
+
+//******************************************************************************
+
+browse brSertificates (,hcKuzbassISertificList,sci178InsPM);
+  table Sertific;
+fields
+  { Font = { Color = if (SearchMarker(SertificMarker, Sertific.NRec, IndexNo), ColorMark, 0 )} };
+//------------------------------------------------------------------------------
+  PickLabel        #3'√': [1], skip;
+//------------------------------------------------------------------------------
+  KatNotes.sName   #3'Статус'       ('Статус удостоверения качества',,): [10], protect;
+//------------------------------------------------------------------------------
+  Sertific.dDoc    #3'Дата'         ('Дата удостоверения качества',,): [10, 'DD/MM/YYYY'], protect;
+//------------------------------------------------------------------------------
+  Sertific.Descr   #3'Дескриптор'   ('Дескриптор',,): [4], protect;
+//------------------------------------------------------------------------------
+  Sertific.NDoc    #3'Номер'        ('Номер удостоверения качества',,): [10], protect;
+//------------------------------------------------------------------------------
+  Sertific.Name    #3'Наименование' ('Наименование документа',,): [23], protect;
+//------------------------------------------------------------------------------
+  KatMC.Name       #3'Название МЦ'  ('Название МЦ',,): [20], protect;
+//------------------------------------------------------------------------------
+end; // browse brSertificates
+
+browse brSertificates2 (,hcKuzbassISertificList,sci147EnEsc);
+  table Sertific;
+fields
+   { Font = { Color = if (SearchMarker(SertificMarker, Sertific.NRec, IndexNo), ColorMark, 0 )} };
+//------------------------------------------------------------------------------
+  KatNotes.sName   #3'Статус'       ('Статус удостоверения качества',,): [10], protect;
+//------------------------------------------------------------------------------
+  Sertific.dDoc    #3'Дата'         ('Дата удостоверения качества',,): [10, 'DD/MM/YYYY'], protect;
+//------------------------------------------------------------------------------
+  Sertific.Descr   #3'Дескриптор'   ('Дескриптор',,): [4], protect;
+//------------------------------------------------------------------------------
+  Sertific.NDoc    #3'Номер'        ('Номер удостоверения качества',,): [10], protect;
+//------------------------------------------------------------------------------
+  Sertific.Name    #3'Наименование' ('Наименование документа',,): [23], protect;
+//------------------------------------------------------------------------------
+  KatMC.Name       #3'Название МЦ'  ('Название МЦ',,): [20], protect;
+//------------------------------------------------------------------------------
+end; // browse brSertificates
+
+//******************************************************************************
+
+panel pnParams;
+
+HandleEvent
+
+#include soprc13.vpp
+
+cmCheckField:
+  case CurField of
+    #wFilter: ProcessCommand(cmValue10);
+    //#fd1: if (fd1 > fd2) set fd2 := fd1; ShV - Пир 102.33689 (не соответствует стандартам)
+    //#fd2: if (fd1 > fd2) set fd1 := fd2;
+  end; // case
+
+cmPick:
+  case CurField of
+    #FiltKatNotes.Name,#fKatMC.Name: ProcessCommand(cmValue9);
+  end; // case
+
+end; // handleevent panel pnParams
+end; // panel pnParams
+
+//******************************************************************************
+
+panel pnSertific;
+  table Sertific;
+
+HandleEvent
+
+#include soprc13.vpp
+
+cmSetDefault:
+  {
+    ClearBuffer(#Sertific) ;
+    PutCommand(cmValue2);
+    Sertific.NRec := GetNextNRec(#Sertific, 0);
+    Sertific.Status := 0 ;
+    Sertific.cNote := oNotes.GetFirstNote(290, Sertific.Status );
+    Sertific.Descr := sGetTune('User.Descr');
+    Sertific.DesGr := sGetTune('User.DesGr');
+    Sertific.dDoc := Cur_Date;
+    Sertific.dEnd := Add_Months(Cur_Date, 1);
+    Sertific.NDoc := GetLastNumD(290);
+    SelectField(#Sertific.Name);
+  };
+
+cmInsertRecord:
+  {
+    insert current Sertific;
+  };
+
+cmDeleteRecord:
+  if (message('Вы хотите удалить документ?',YesNo) = cmYes)
+    {
+      var wres : word ; wres := tsOk ;
+      wres := delete ValPokaz
+                 where ((Sertific.NRec == ValPokaz.cOwner and
+                         coSertific    == ValPokaz.wTable )) ;
+      if (wres=tsOk)
+        if (IsValid(#Sertific))
+          wres := wres or
+                  (update Vagon
+                     where ((Sertific.NRec == Vagon.cSertific))
+                     set Vagon.cSertific := 0) ;
+
+      if (wres=tsOk)
+        wres := oStatlog.StatLog_Delete(290, Sertific.nRec);
+
+      if (wres=tsOk)
+        {
+          DelLastNumD(290,Sertific.NDoc);
+          wres := delete current Sertific;
+        }
+
+      if (wres<>tsOk)
+        Message ('При удалении документа произошли ошибки!', CancelButton) ;
+    }
+
+cmUpdateRecord:
+  {
+    update current Sertific;
+  };
+
+cmAbortInsert:
+  {
+    DelLastNumD(290,Sertific.NDoc);
+  }
+
+cmCheckRecord:
+  {
+    if (GetFirst KatMC <> tsOk)
+      {
+        Message('Необходимо указать МЦ!', Warning + OkButton) ;
+        SelectField(#KatMC.Name) ;
+        Abort ;
+      }
+  }; // cmCheckRecord
+
+end; // handleevent panel pnSertific
+end; // panel pnSertific
+
+//******************************************************************************
+
+panel pnVagon;
+  table Vagon
+
+handleEvent
+
+#include soprc13.vpp
+
+cmSetDefault:
+  {
+    ProcessCommand(cmValue3);
+    RereadRecord;
+  }
+
+cmDeleteRecord:
+  {
+    if (message('Вы хотите удалить запись?', Confirmation+YesNo) = cmYes)
+      update current Vagon set Vagon.cSertific := 0;
+  }
+
+end; // handleevent panel pnVagon
+end; // panel pnVagon
+
+//******************************************************************************
+
+HandleEvent
+
+#include soprc13.vpp
+cmInit:
+  {
+    isEditSoprVisible:=false;
+    SertificMarker := InitMarker('SertificMarker', 8, 10, 10);
+    ClearMarker(SertificMarker);
+    if (not ReadMyDsk(GloFilter, 'Sertificate_GloFilter', boolean(true))) GloFilter := 0;
+    if (not ReadMyDsk(GloStatus, 'Sertificate_GloStatus', boolean(true))) GloStatus := 1;
+    if (not ReadMyDsk(GloNote, 'Sertificate_GloNote', boolean(true))) GloNote := oNotes.GetFirstNote(290, GloStatus);
+    if (not ReadMyDsk(GloMC, 'Sertificate_GloMC', boolean(true))) GloMC := 0;
+    if (not ReadMyDsk(Glod1, 'Sertificate_Glod1', boolean(true))) Glod1 := Sub_Months(Cur_Date, 1);
+    if (not ReadMyDsk(Glod2, 'Sertificate_Glod2', boolean(true))) Glod2 := Cur_Date;
+    if (Glod1 > Glod2) Glod1 := Sub_Months(Glod2, 1);
+    SaveMyDsk(1, 'Mult_Choice_KatPok');
+    wFilter := GloFilter;
+    fMC := GloMC;
+    fd1 := Glod1;
+    fd2 := Glod2;
+    fStatus := GloStatus;
+    fNote := GloNote;
+    ProcessCommand(cmValue10);
+    SetFilters;
+    DoBounds;
+    DoTitleDoc;
+
+    If TypeWork=1
+      setformat(brSertificates2);
+    else
+      setformat(brSertificates);
+
+    IF c1<>0
+      IF getfirst Sertific where((c1 == Sertific.nREC))=tsOK
+        {
+          If TypeWork=2
+            PutCommand(cmValue2);
+
+          Exit;
+        }
+
+    IF GetLast Sertific <> tsOK {};
+  };
+
+cmDone:
+  {
+    SaveMyDsk(GloFilter, 'Sertificate_GloFilter');
+    SaveMyDsk(GloStatus, 'Sertificate_GloStatus');
+    SaveMyDsk(GloNote, 'Sertificate_GloNote');
+    SaveMyDsk(GloMC, 'Sertificate_GloMC');
+    SaveMyDsk(Glod1, 'Sertificate_Glod1');
+    SaveMyDsk(Glod2, 'Sertificate_Glod2');
+    SaveMyDsk(0, 'Mult_Choice_KatPok');
+
+    ClearFilters;
+    ClearMarker(SertificMarker);
+    DoneMarker(SertificMarker, 'SertificMarker');
+  };
+
+cmValue1:
+  {
+    if UpdateTable
+#ifdef Kachestvo
+      RunInterface('ValPokan', Sertific.NRec, word(coSertific),cgRecordEdit);
+#else
+      RunInterface('EditValPokaz', Sertific.NRec, word(coSertific));
+#endif
+  };
+
+#ifdef Kachestvo
+cmValue12:
+  {
+    if (UpdateTable)
+      RunInterface('ProbeAtt'
+                   ,word(0)
+                   ,4901/*toQualSert*/
+                   ,Sertific.nRec
+                   ,11123/*toQualProbe*/
+                   ,comp(0)
+                   ,word(1)
+                   ,4905/*toValPokaz*/
+                  );
+
+  }; //
+#endif // #ifdef Kachestvo
+
+cmValue2:
+  RunWindow(wnSertificate);
+
+cmValue9:
+  {  // cmPick
+    case CurField of
+    //------------------------------------------------------------------------------
+      #KatMC.Name:
+        RunInterface('GetMC', Sertific.cMC);
+    //------------------------------------------------------------------------------
+      #TasteOrg.Name:
+        RunInterface('GetKatOr', Sertific.cTasteOrg, comp(0), false, comp(0), comp(0));
+    //------------------------------------------------------------------------------
+      #TastePodr.Name:
+        RunInterface(GetAnyPodr, Sertific.cTastePodr, 0);
+    //------------------------------------------------------------------------------
+      #Keepper.Name:
+        RunInterface('GetKatOr', Sertific.cKeepper, comp(0), false, comp(0), comp(0));
+    //------------------------------------------------------------------------------
+      #Sertific.Descr:
+        RunInterface('GetDescr', Sertific.Descr, word(0), word(0));
+    //------------------------------------------------------------------------------
+      #Sertific.DesGr:
+        RunInterface(GetGrDescr, Sertific.DesGr, FALSE, FALSE, comp(0));
+
+      #Persons.FIO:
+        {
+          var pRec: comp;
+          pRec := Sertific.cOtvetstv;
+
+          iGetKau.GetCodeKau(cgiPick, cgKau_Persons, pRec);
+
+          set Sertific.cOtvetstv := pRec;
+        }
+
+    //------------------------------------------------------------------------------
+      #KatNotes.Name:
+        if (RunInterface('StatLog',
+                         word(1),
+                         Sertific.NRec,
+                         word(290),
+                         Sertific.Status,
+                         Sertific.cNote,
+                         word(0)) <> cmCancel)
+           {
+             set Sertific.Status := Sertific.Status ;
+             set Sertific.cNote  := Sertific.cNote  ;
+           };
+
+    //------------------------------------------------------------------------------
+      #fKatMC.Name:
+        RunInterface('GetMC', fMC);
+
+    //------------------------------------------------------------------------------
+      #FiltKatNotes.Name:
+        {
+          var tmpStatus: word;
+          tmpStatus := 0;
+          if (RunInterface('GetSomKatNotes', word(290), word(0), tmpStatus, false, fNote) <> cmCancel)
+            fStatus := tmpStatus;
+        };
+    //------------------------------------------------------------------------------
+    end; // case
+
+    ProcessCommand(cmValue10);
+  };
+
+cmDelOnProtect:
+   case curfield of
+   //------------------------------------------------------------------------------
+     #KatNotes.Name:
+       stop;//пир 102.44156
+   //------------------------------------------------------------------------------
+     #KatNotes.sName:
+       stop;
+   //------------------------------------------------------------------------------
+     #KatMC.Name:
+       stop;
+
+   end;
+
+cmEdit:
+  PutCommand(cmValue2);
+
+cmDefault:
+  {
+    IF TypeWork=1
+      {
+        c1:=Sertific.nREC;
+        CloseInterface(cmDefault);
+        Exit;
+      }
+
+    PutCommand(cmValue2);
+  }
+
+cmAddNewRec:
+  {
+    IF TypeWork=1
+      {
+        processcommand(cmSetDefault);
+        insert current Sertific;
+        rereadrecord(#Sertific);
+      }
+  }
+
+cmValue3:
+  case CurTable of
+  //------------------------------------------------------------------------------
+    #Vagon:
+      {
+        if (RunInterface('GetVagon', 0, comp(0), Sertific.cMC, comp(0), Sertific.NRec) = cmDefault)
+          {
+            VagonMarker := InitMarker('VagonMarker', 8, 10, 10);
+            var i: longint;
+
+            for (i := 0; i < GetMarkerCount(VagonMarker); i := i + 1)
+              if (GetMarker(VagonMarker, i, VagonNRec))
+                if (GetFirst Vagon where ((VagonNRec == Vagon.NRec)) = tsOk)
+                  update current Vagon set Vagon.cSertific := Sertific.NRec;
+
+            ClearMarker(VagonMarker);
+            DoneMarker(VagonMarker, 'VagonMarker');
+          };
+      };
+  //------------------------------------------------------------------------------
+  end; // case
+
+cmValue10:
+  {
+    if ((wFilter and 1) <> 0)
+      {
+        SetFieldState(#fd1, sfVisible);
+        SetFieldState(#fd2, sfVisible);
+      }
+    else
+      {
+        ClearFieldState(#fd1, sfVisible);
+        ClearFieldState(#fd2, sfVisible);
+      };
+
+    if ((wFilter and 2) <> 0)
+      SetFieldState(#FiltKatNotes.Name, sfVisible);
+    else
+      ClearFieldState(#FiltKatNotes.Name, sfVisible);
+
+    if ((wFilter and 4) <> 0)
+      SetFieldState(#fKatMC.Name, sfVisible);
+    else
+      ClearFieldState(#fKatMC.Name, sfVisible);
+  };
+
+cmMarkUnmark:
+  {
+    InvertMarker(SertificMarker, Sertific.NRec);
+    RereadRecord(#Sertific);
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat,true);
+#else
+    if (GetNext Sertific =tsOk)
+      {
+        CallToNeighbours(cmPosDown, #Sertific);
+        RedrawPanel(#Sertific);
+      };
+#end
+   };
+
+cmSelectAll:
+  {
+    PushPos(#Sertific);
+
+    _LOOP Sertific
+      InsertMarker(SertificMarker, Sertific.NRec);
+
+    PopPos(#Sertific);
+    RereadRecord(#Sertific);
+   };
+
+cmUnselectAll:
+  {
+    PushPos(#Sertific);
+
+    _LOOP Sertific
+      if (SearchMarker(SertificMarker, Sertific.NRec, IndexNo))
+        DeleteMarker(SertificMarker, Sertific.NRec);
+
+    PopPos(#Sertific);
+    RescanPanel(#Sertific);
+    RereadRecord(#Sertific);
+  };
+
+cmHotKeys:
+  if CurTable = #Sertific
+    PutHotCommand(RunMenu('mnuSertific'));
+
+cmPrintDoc:
+  {
+    SaveMyDsk(false,'FRPrintOrNotToPrint');
+    if (CurTable = #Sertific)
+      UpdateTable;
+
+    if (CurWindow = wnSertificate)
+      {
+        var SertificMarker: longint;
+        SertificMarker := InitMarker('SertificMarker', 8, 10, 10);
+        ClearMarker(SertificMarker);
+        InsertMarker(SertificMarker, Sertific.NRec);
+        DoneMarker(SertificMarker, 'SertificMarker');
+        RunInterface('RepSertif', 'SertificMarker');
+      }
+    else
+      {
+        var boMrkEmpty : boolean;
+        boMrkEmpty := false;
+        if (GetMarkerCount(SertificMarker) = 0)
+          {
+            boMrkEmpty := true;
+            InsertMarker(SertificMarker, Sertific.NRec);
+          }
+        DoneMarker(SertificMarker, 'SertificMarker');
+        RunInterface('RepSertif', 'SertificMarker');
+        SertificMarker := InitMarker('SertificMarker', 8, 10, 10);
+        if (boMrkEmpty) ClearMarker(SertificMarker);
+      }
+  };
+
+cmValue33:
+  {
+    SaveMyDsk(true,'FRPrintOrNotToPrint');
+    if (CurTable = #Sertific)
+      UpdateTable;
+
+    if (CurWindow = wnSertificate)
+      {
+        var SertificMarker: longint;
+        SertificMarker := InitMarker('SertificMarker', 8, 10, 10);
+        ClearMarker(SertificMarker);
+        InsertMarker(SertificMarker, Sertific.NRec);
+        DoneMarker(SertificMarker, 'SertificMarker');
+        RunInterface('RepSertif', 'SertificMarker');
+      }
+    else
+      {
+        var boMrkEmpty : boolean;
+        boMrkEmpty := false;
+        if (GetMarkerCount(SertificMarker) = 0)
+          {
+            boMrkEmpty := true;
+            InsertMarker(SertificMarker, Sertific.NRec);
+          }
+        DoneMarker(SertificMarker, 'SertificMarker');
+        RunInterface('RepSertif', 'SertificMarker');
+        SertificMarker := InitMarker('SertificMarker', 8, 10, 10);
+        if (boMrkEmpty) ClearMarker(SertificMarker);
+      }
+  };
+
+cmFilterSave:
+  {
+    var NeedRestore: boolean;
+    NeedRestore := false;
+    SaveFiltersParameters;
+    PushPos(#Sertific);
+    if (RunWindowModal(wnFilters) = cmDefault)
+      {
+        SetFilters;
+        if (GetFirst Sertific <> tsOk)
+          {
+            NeedRestore := true;
+            message('Не найдены документы, удовлетворяющие установленным ограничениям!', Information);
+          };
+      }
+    else
+      NeedRestore := true;
+
+    if NeedRestore
+      {
+        RestoreFiltersParameters;
+        SetFilters;
+        PopPos(#Sertific);
+      }
+    else
+      DropPos(#Sertific);
+
+    DoTitleDoc;
+    RescanPanel(#Sertific);
+    RereadRecord(#Sertific);
+  };
+
+cmSaveDoc :
+  SaveDocSertific;
+
+cmRestoreDoc :
+  CopyDocSertific;
+
+#include ukattr.vpp
+
+cmExp:
+  {
+    oOnExpImp.OnExportHandler( ieSertific, 0, Sertific.nRec, 0, SertificMarker );
+    RescanPanel(tnSertific);
+  }
+
+cmImp:
+  {
+    oOnExpImp.OnImportHandler( ieSertific, 0 );
+    RescanPanel(tnSertific);
+  }
+
+cmIEHist:
+  oOnExpImp.OnExportImportHistory( ieSertific, Sertific.nRec );
+
+end; // handleevent
+end. // interface
+
+//******************************************************************************
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::SERTIFICATE>L_SOPRDOC::SERTIFICATE - Удостоверения качества</link>
+#end
+
+mnuSertific Menu
+{
+- 'Фильтр на данные',cmFilterSave,'Установить фильтр на данные',hcHotKeyFiltr,'Alt+B',kbAltB,sci1Esc;
+= 'Печать документа','Печать документа',,sci1Esc;
+{
+ -'Печать Бизнес-Текст',cmPrintDoc,'Печать Бизнес-Текст',,'Ctrl+P',kbCtrlP,sci1Esc;
+#ifdef ATL51
+ -'Печать FastReport',cmValue33,'Печать FastReport',,,,sci1Esc;
+#endif
+}
+-----------;
+- 'Экспорт', cmExp, 'Экспорт документов', hcSwiftMAll,'Alt+O', kbAltO, sci1Esc;
+- 'Импорт', cmImp, 'Импорт документов', hcSwiftMAll,'Alt+I', kbAltI, sci1Esc;
+- 'Протокол', cmIEHist, 'Протокол экспорта/импорта', hcSwiftMAll,'Alt+H', kbAltH, sci1Esc;
+-----------;
+- 'Внешняя классификация',cmPickClass,'Внешняя классификация',hcGkatalM1ExtClass,'Alt+C',kbAltC,sci1Esc;
+- 'Внешние атрибуты',cmPickAttr,'Заполнение внешних атрибутов по данной позиции',hcGkatalM1Attr,'Alt+A',kbAltA,sci1Esc;
+-----------;
+- 'Сохранить документ в буфер', cmSaveDoc, 'Сохранение документа в буфер', hcctxSoprSaveDoc, 'Ctrl+F2', kbCtrlF2, sci1Esc;
+- 'Копирование документа из буфера', cmRestoreDoc, 'Копировать сохраненный в буфере документ', hcctxSoprRestoreDoc , 'Ctrl+F3', kbCtrlF3, sci1Esc;
+}
+
+//******************************************************************************
+
+#doc
+Локальное меню окна редактирования интерфейса <link Interface L_SOPRDOC::SERTIFICATE>L_SOPRDOC::SERTIFICATE - Удостоверения качества</link>
+#end
+
+mnuSertificEdit Menu
+{
+- 'Фильтр на данные',cmFilterSave,'Установить фильтр на данные',hcHotKeyFiltr,'Alt+B',kbAltB,sci1Esc;
+= 'Печать документа','Печать документа',,sci1Esc;
+{
+ -'Печать Бизнес-Текст',cmPrintDoc,'Печать Бизнес-Текст',,'Ctrl+P',kbCtrlP,sci1Esc;
+#ifdef ATL51
+ -'Печать FastReport',cmValue33,'Печать FastReport',,,,sci1Esc;
+#endif
+}
+-----------;
+- 'Внешняя классификация',cmPickClass,'Внешняя классификация',hcGkatalM1ExtClass,'Alt+C',kbAltC,sci1Esc;
+- 'Внешние атрибуты',cmPickAttr,'Заполнение внешних атрибутов по данной позиции',hcGkatalM1Attr,'Alt+A',kbAltA,sci1Esc;
+}
+
+//******************************************************************************

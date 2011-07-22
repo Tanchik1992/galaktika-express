@@ -1,0 +1,313 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Выбор документов-оснований
+//********************************************************************************
+
+/// Параметры возвращает через Pick  (WLIST = 14)
+
+#doc
+Интерфейс выбора документов-оснований
+#end
+Interface GetKonDo 'Выбор исполняемых документов' doAccept, EscClose, cyan;
+  Show at (, 2, , 21);
+  pascal "getkondo.inc";
+
+Create View
+Var
+  AllOrg, TpDO: word;
+  MyStopped: boolean;
+  d1, d2: Date;
+  s_SimvRub: string;
+
+As select
+  if (IsValid(tnPick), 'V', '')
+    ( FieldName = picked )
+
+, IsValid(tnPick)
+    ( FieldName = boIsPicked )
+
+
+, if( BaseDoc.VidDoc = 101, 'ДО на закупку',
+   if( BaseDoc.VidDoc = 102, 'ДО на прием на консигнацию',
+    if( BaseDoc.VidDoc = 201, 'ДО на продажу',
+     if( BaseDoc.VidDoc = 202, 'ДО на отпуск на консигнацию',
+      if( BaseDoc.VidDoc = 520, 'ДО на давальческую обработку',
+       if( BaseDoc.VidDoc =  90, 'Договор продажи долга контрагента',
+        if( BaseDoc.VidDoc =  91, 'Договор покупки долга контрагента',
+         if( BaseDoc.VidDoc =  92, 'Договор уступки собственного долга',
+          if( BaseDoc.VidDoc =  93, 'ДО на оплату долга контрагента',
+           if( BaseDoc.VidDoc = 1410, 'Наряд-акт на производство работ',
+             if( BaseDoc.VidDoc = 1420, 'Счет лесопользователя',
+                                    '!? = ' + string( BaseDoc.VidDoc ))))))))))))
+    ( FieldName = VidD )
+
+, if (BaseDoc.cVal = 0, s_SimvRub, KlVal.SimvolV )
+    ( FieldName = ValDo )
+
+From
+  BaseDoc(ReadOnly, BaseDoc06),
+  KlVal(ReadOnly),
+  KatOrg(ReadOnly),
+  TempDB (TempDB02),
+  Pick,
+  Pick Pick6,
+  StepDoc,
+  BaseFin,
+  KatSopr
+
+Where
+((
+  TempDB.DBASEScv  ==  BaseDoc.Nrec  AND
+  BaseDoc.cOrg     ==  KatOrg.Nrec   AND
+  BaseDoc.cVal     ==  KlVal.NRec    AND
+  word(14)         ==  Pick.wList    AND
+  BaseDoc.NRec     ==  Pick.cRec     AND
+
+  BaseDoc.Nrec     ==  StepDoc.cBaseDoc AND
+  word(0)          ==  BaseFin.TiDkBase AND
+  StepDoc.Nrec     ==  BaseFin.cStepDoc AND
+  StepDoc.Nrec     ==  KatSopr.cStepDoc
+))
+
+condition SetRub          = ( word(1) = BaseDoc.TipMoney )
+
+condition SetRubVal       = ( word(2) = BaseDoc.TipMoney )
+
+condition SetVal          = ( word(3) = BaseDoc.TipMoney )
+
+condition SetRubAndVal    = ( word(1) = BaseDoc.TipMoney or
+                              word(3) = BaseDoc.TipMoney )
+
+condition SetRubAndRubval = ( word(1) = BaseDoc.TipMoney or
+                              word(2) = BaseDoc.TipMoney )
+
+condition SetValAndRubval = ( word(2) = BaseDoc.TipMoney or
+                              word(3) = BaseDoc.TipMoney )
+;
+
+Parameters // только входящие параметры
+  AllOrg,  // 1-все контрагенты, 0 - в таблице с pick.wlist = 6
+  TpDO,    // типы отбираемых ДО
+  d1,      // 1я дата интервала
+  d2;      // 2я дата интервала
+
+!------------------------------------------------------------------------
+
+Procedure KillPick14;
+{
+  ResetBounds(#Pick);
+  Delete Pick where((word(14) == Pick.wList));
+  SetBounds(#Pick);
+}
+
+!------------------------------------------------------------------------
+
+Procedure AddVidDoc(VD: word);
+{
+
+!
+!  добавляем документы со статусом 2 в диапазоне дат по требуемым контрагентам
+!
+  if (MyStopped)
+    Exit;
+
+  _LOOP BaseDoc
+        where ((word(2) == BaseDoc.Status AND
+                VD == BaseDoc.VidDoc AND
+                d1 <<= BaseDoc.DDoc AND
+                d2 >>= BaseDoc.DDoc))
+    {
+      if (Not NextVisual)
+        {
+          MyStopped := TRUE;
+          Exit;
+        }
+
+      if (AllOrg = 0)
+        if (GetFirst Pick6 where
+                ((word(6) == Pick6.wList AND
+                  BaseDoc.cOrg == Pick6.cRec)) <> tsOk)
+          Continue;
+
+      ClearBuffer(#TempDB);
+      TempDB.DBASEScv := BaseDoc.Nrec;
+      TempDB.DBASED := BaseDoc.Ddoc;
+      TempDB.DBASEN := VidD;
+      if (insert current TempDB <> tsOk)
+        Message(''#3'Не добавился ДО в выбор');
+    }
+}
+
+!------------------------------------------------------------------------
+
+Procedure FillUpTempDB;
+var
+    DateChanged  : Boolean;
+    MyTipDO : record
+      SeekCond : boolean;
+      TipDO    : Word;
+    end;
+    boSeekCond : Boolean;
+    wTipDO     : Word;
+{
+  if (delete safe novisual TempDB <> tsOk) {};
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+             ''#3'Просмотрено ДО: ', 1);
+
+  ResetBounds(#BaseDoc);
+
+  MyStopped := FALSE;
+
+  if (ReadMyDsk(MyTipDO, 'GetTipDO', DateChanged))
+  if (not DateChanged)
+    {
+      boSeekCond := MyTipDO.SeekCond;
+      wTipDO     := MyTipDO.TipDO;
+    }
+  if ( boSeekCond )
+    Case wTipDO of
+      1 : PushCondition(tcSetRub);
+      2 : PushCondition(tcSetVal);
+      3 : PushCondition(tcSetRubAndVal);
+      4 : PushCondition(tcSetRubVal);
+      5 : PushCondition(tcSetRubAndRubval);
+      6 : PushCondition(tcSetValAndRubval);
+    end;
+
+  if ((TpDO AND   1) <> 0) AddVidDoc(201);
+  if ((TpDO AND   2) <> 0) AddVidDoc(101);
+  if ((TpDO AND   4) <> 0) AddVidDoc(202);
+  if ((TpDO AND   8) <> 0) AddVidDoc(102);
+  if ((TpDO AND  16) <> 0) AddVidDoc(520);
+  if ((TpDO AND  32) <> 0) AddVidDoc(90);
+  if ((TpDO AND  64) <> 0) AddVidDoc(91);
+  if ((TpDO AND 128) <> 0) AddVidDoc(92);
+  if ((TpDO AND 256) <> 0) AddVidDoc(93);
+  if ((TpDO AND 512)  <> 0) AddVidDoc(1410);
+  if ((TpDO AND 1024) <> 0) AddVidDoc(1420);
+
+
+  SetBounds(#BaseDoc);
+
+  StopVisual('', 0);
+}
+
+!------------------------------------------------------------------------
+
+Browse brBaseDoc ('Выберите ДО и нажмите ВВОД', hcAllVPick, sci1EnIns);
+  Table TempDB;
+Fields { Font = { Color = if( boIsPicked, ColorMark, 0) } };
+  Picked        'V'             : [1], skip;
+  VidD          'Вид ДО'        : [15], skip;
+  TempDB.DBASED 'Дата'          : [10, 'DD/MM/YYYY'], protect;
+  BaseDoc.NoDoc 'Номер ДО'      : [10], protect;
+  BaseDoc.Descr 'Деск'          : [4], protect;
+  KatOrg.Name   'Контрагент'    : [14], protect;
+  BaseDoc.Name  'Примечание'    : [10], protect;
+  BaseDoc.Total ' Сумма '       : [15.2, '\2p[|-]36`666`666`666`666.88'], protect;
+  ValDo         'Вал'           : [3], skip;
+  if(isvalid(tnKatSopr), 'Н','') #3'Н' ('Признак наличия сопроводительных документов по ДО')
+                : [1], protect, centered, NoAutoSize;
+  if(isvalid(tnBaseFin), 'П','') #3'П' ('Признак наличия платежей по документу')
+                : [1], protect, centered, NoAutoSize;
+
+End; // Browse
+
+HandleEvent
+
+cmInit:
+  {
+    FillUpTempDB;
+    if (MyStopped)
+      {
+        Abort;
+        Exit;
+      }
+
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    if ( GetFirst TempDB <> tsOk )
+      { Message('Нет исполняемых ДО с указанными контрагентами'
+                + if( longint(d1) = 0, '',
+                      ', выписанных за интервал с ' + DateToStr(d1, 'DD/MM/YYYY')
+                      + ' по ' + DateToStr(d2, 'DD/MM/YYYY')),
+                      Information + CancelButton);
+        Abort; }
+    else
+      {
+        KillPick14;
+        SetTitle('Выбор исполняемых ДО '
+                 + if( longint(d1) = 0, '',
+                       '(с '+datetostr(d1, 'DD/MM/YYYY') +
+                       ' по ' + DateToStr(d2, 'DD/MM/YYYY') + ')'
+                     )
+                 );
+      }
+  }
+
+cmDelOnProtect:
+  Abort;
+
+cmMarkUnMark:
+  { if (isvalid(#Pick))
+      delete current Pick
+    else
+      { Pick.wList := 14;
+        Pick.PickKol := 0;
+        Pick.cRec := TempDB.DBASEScv;
+        insert current Pick;
+      }
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+    if (GetNext TempDB = tsOk)
+      CallToNeighbours(cmPosDown, #TempDB);
+    RescanPanel(#TempDB);
+#endif
+  }
+
+cmSelectAll:
+  {
+    PushPos(#TempDB);
+    KillPick14;
+    StartNewVisual(vtNumericVisual, vfTimer+vfBreak,
+               ''#3'Помечаю все документы-основания...'#13#3, 1);
+
+    _LOOP TempDB
+       if (not NextVisual)
+         Break
+       else
+         {
+           Pick.wList := 14;
+           Pick.cRec := TempDB.DBASEScv;
+           Pick.PickKol := 0;
+           insert current Pick;
+         }
+
+    PopPos(#TempDB);
+    ReReadRecord;
+    RescanPanel(#TempDB);
+    StopVisual('', 0);
+  }
+
+cmUnselectAll:
+  {
+    KillPick14;
+    RescanPanel(#TempDB);
+    ReReadRecord;
+  }
+
+cmDefault:
+  {
+    ResetBounds(#Pick);
+    if (GetFirst Pick where ((word(14) == Pick.wList)) <> tsOk)
+      {
+        ClearBuffer(#Pick);
+        Pick.wList := 14;
+        Pick.cRec := TempDB.DBASEScv;
+        insert current Pick;
+      }
+  }
+end;  // Interface's HandleEvent
+end.  // Interface

@@ -1,0 +1,307 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Спецификация договора поставки
+//********************************************************************************
+
+#include xlReport.vih    // Excel
+#include MTRFuncs.vih    // Функции целевого учета
+
+#doc
+Отчет - Спецификация договора поставки
+#end
+Interface MTR_Sp 'Спецификация договора поставки' EscClose, Cyan;
+  show at (,,,27);
+
+#include NDSComp.gd   // Временная таблица для расчета сумм НДС элементов комптектного МЦ
+#include NDSComp.defs // Макрос для расчета сумм НДС элементов комптектного МЦ
+
+Create View
+var
+  // Параметры
+  pDogovor : Comp;
+  pPrint   : Boolean;
+
+  sXLSFileName, sXLTFileName : String;
+
+  pXL : XLSRepBuilder;    // Объект формирования Excel-отчетов
+
+as select
+  if (IsValid(tnKatMC), KatMC.Name, '? МЦ ' + String(SpDocs.cMCUsl))
+    (FieldName = KatMCName),
+
+  if (IsValid(tnKatUsl), KatUsl.Name, '? услуга ' + String(SpDocs.cMCUsl))
+    (FieldName = KatUslName),
+
+  if (SpDocs.cMCUsl = 0, '',
+    if ((SpDocs.prMC = 1) or (SpDocs.prMC = 4) or (SpDocs.prMC = 5), KatMCName,
+      if ((SpDocs.prMC = 2) or (SpDocs.prMC = 3), KatUslName, '')))
+    (FieldName = SpDocsName),
+
+  if (IsValid(tnKatMC), KatMC.BarKod, '? МЦ ' + String(SpDocs.cMCUsl))
+    (FieldName = KatMCBarKod),
+
+  if (IsValid(tnKatUsl), KatUsl.Kod, '? услуга ' + String(SpDocs.cMCUsl))
+    (FieldName = KatUslKod),
+
+  if (SpDocs.cMCUsl = 0, '',
+    if ((SpDocs.prMC = 1) or (SpDocs.prMC = 4) or (SpDocs.prMC = 5), KatMCBarKod,
+      if ((SpDocs.prMC = 2) or (SpDocs.prMC = 3), KatUslKod, '')))
+    (FieldName = SpDocsKod),
+
+  if (Dogovor.VhodNal = 1, SpDocs.Summa, SpDocs.Summa + SpDocs.SumNDS)
+    (FieldName = SpDocs_SummAll),
+
+  if (Dogovor.VhodNal = 1, SpDocs.Summa - SpDocs.SumNDS, SpDocs.Summa)
+    (FieldName = SpDocs_SummNoNDS),
+
+  if (SpDocs.Kol = 0, 0, SpDocs_SummNoNDS / SpDocs.Kol)
+    (FieldName = SpDocs_PriceNoNDS),
+
+  if (SpDocs_Compl.cMCUsl = 0, '',
+    if (IsValid(tnKatMC_Compl), KatMC_Compl.Name, '? МЦ ' + String(SpDocs_Compl.cMCUsl)))
+    (FieldName = SpDocsCompl_Name),
+
+  if (SpDocs_Compl.cMCUsl = 0, '',
+    if (IsValid(tnKatMC_Compl), KatMC_Compl.BarKod, '? МЦ ' + String(SpDocs_Compl.cMCUsl)))
+    (FieldName = SpDocsCompl_Kod),
+
+  if (SpDocs_Compl.cOtpEd = 0, KatEd_Compl.Name, KatOtpEd_Compl.ABBR)
+    (FieldName = OtpEd_Compl),
+
+  *
+from
+  Dogovor,
+  SpDocs (SpDocs02),
+  KatOrg,
+  KatMC,
+  KatUsl,
+  KatOtpEd,
+  KatStroy,
+  IerDog,
+  AttrNam,
+  AttrVal,
+  SpMC,
+  tmpNDSComp (tmpNDSComp01),
+  Synonym SpDocs SpDocs_Compl (SpDocs02),
+  Synonym KatMC KatMC_Compl,
+  Synonym KatEd KatEd_Compl,
+  Synonym KatOtpEd KatOtpEd_Compl,
+  Synonym Dogovor DogovorUp,
+  Synonym KatOrg KatOrgUp,
+  Synonym tmpNDSComp tmpNDSComp_Sp
+where
+((
+  // Договор в отчете
+  pDogovor            == Dogovor.NRec           and
+  Dogovor.cOrg        == KatOrg.NRec            and
+  // Спецификация
+  Dogovor.TiDk        == SpDocs.TiDk            and
+  Dogovor.NRec        == SpDocs.cDoc            and
+  SpDocs.cMCUsl       == KatMC.NRec             and
+  SpDocs.cMCUsl       == KatUsl.NRec            and
+  SpDocs.cOtpEd       == KatOtpEd.Nrec          and
+  // Состав комплектных МТР
+  Word(438)           == SpDocs_Compl.TiDk      and
+  SpDocs.NRec         == SpDocs_Compl.cDoc      and
+  SpDocs_Compl.cMCUsl == KatMC_Compl.NRec       and
+  KatMC_Compl.cEd     == KatEd_Compl.NRec       and
+  SpDocs_Compl.cOtpEd == KatOtpEd_Compl.NRec    and
+  SpDocs_Compl.NRec   == tmpNDSComp_Sp.cSpDocs  and
+
+  SpDocs.cMCUsl       == SpMC.cMCkompl          and
+  SpDocs_Compl.cMCUsl == SpMC.cMC               and
+
+  coKatMC             == AttrNam.wTable         and
+  '% стоимости'       == AttrNam.Name           and
+  coSpMC              == AttrVal.wTable         and
+  SpMC.NRec           == AttrVal.cRec           and
+  AttrNam.NRec        == AttrVal.cAttrNam       and
+
+  // Ссылка на корневой договор для соглашения
+  Dogovor.NRec         == IerDog.cRec           and
+  IerDog.cDogovor      == DogovorUp.NRec        and
+  DogovorUp.cOrg       == KatOrgUp.NRec
+))
+;
+
+Parameters
+  pDogovor,  // Договор
+  pPrint;    // Признак печати или настройки отчета
+
+const
+  xltID = 'L_Dogovor\MTR_Sp';
+end;
+
+#include MTRFuncs.var    // oMTRFun - объект целевого учета
+#include RoundDog.vpp    // Функции округления сумм договоров
+
+// Функция формирования отчета
+procedure PrintSp;
+var
+  aSumma
+, aSummNoNDS
+, aPriceNoNDS : Double;
+  pObj        : Comp;
+{
+  StartNewVisual(vtRotateVisual, vfTimer, 'Формирование отчета...', 1);
+
+  if (not ReadMyDsk(sXLTFileName, xltID, True))
+    Set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + xltID + '.xlt';
+
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True); // Создание отчета
+!  Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);    // Создание заготовки шаблона
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('RepName',
+    'Спецификация договора поставки по состоянию на ' + DateToStr(Cur_Date, 'DD/MM/YYYY'));
+  pXL.SetDateVar('RepDate', Cur_Date);
+
+  pXL.PublishVar;
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('Tobot');
+
+  // Объявление полей таблицы
+  pXL.CreateTblFld('Object_Code');
+  pXL.CreateTblFld('Object_Name');
+
+  pXL.CreateTblFld('Dogovor_KatOrg');
+  pXL.CreateTblFld('Dogovor_Nomer');
+  pXL.CreateTblFld('Dogovor_Date');
+
+  pXL.CreateTblFld('AppDog_Nomer');
+  pXL.CreateTblFld('AppDog_Date');
+
+  pXL.CreateTblFld('Sp_NPP');
+  pXL.CreateTblFld('Sp_Name');
+  pXL.CreateTblFld('Sp_Code');
+  pXL.CreateTblFld('Sp_PlanPost');
+  pXL.CreateTblFld('Sp_TU');
+  pXL.CreateTblFld('Sp_EdIzm');
+  pXL.CreateTblFld('Sp_Kol');
+  pXL.CreateTblFld('Sp_Price_NoNDS');
+  pXL.CreateTblFld('Sp_Summa_NoNDS');
+  pXL.CreateTblFld('Sp_Summa');
+
+  // Выгрузка полей таблицы
+  pXL.ClearTblBuffer;
+
+  if (Dogovor.cDogovor <> Comp(0)) // Соглашение
+  {
+    pXL.SetTblStringFldValue('Dogovor_Nomer',  '№ ' + DogovorUp.NoDoc);
+    pXL.SetTblDateFldValue  ('Dogovor_Date' ,  DogovorUp.dDoc);
+    pXL.SetTblStringFldValue('Dogovor_KatOrg', KatOrgUp.Name);
+
+    pXL.SetTblStringFldValue('AppDog_Nomer', '№ ' + Dogovor.NoDoc);
+    pXL.SetTblDateFldValue  ('AppDog_Date' , Dogovor.dDoc);
+  }
+  else
+  {
+    pXL.SetTblStringFldValue('Dogovor_Nomer',  '№ ' + Dogovor.NoDoc);
+    pXL.SetTblDateFldValue  ('Dogovor_Date' ,  Dogovor.dDoc);
+    pXL.SetTblStringFldValue('Dogovor_KatOrg', KatOrg.Name);
+  }
+
+  // Спецификация договора или соглашения
+  _loop SpDocs
+  {
+    pObj := oMTRFun.GetObjUKS(coSpDocs, SpDocs.NRec)
+    if (GetFirst FastFirstRow KatStroy where ((pObj == KatStroy.NRec)) = tsOk)
+    {
+      pXL.SetTblStringFldValue('Object_Code', '''' + KatStroy.Code);
+      pXL.SetTblStringFldValue('Object_Name', KatStroy.Name);
+    }
+
+    pXL.SetTblStringFldValue('Sp_NPP',  '''' + SpDocs.Code);
+    pXL.SetTblStringFldValue('Sp_Name', SpDocsName);
+    pXL.SetTblStringFldValue('Sp_Code', SpDocsKod);
+    //pXL.SetTblDateFldValue  ('Sp_PlanPost', ''); // У Юрика уточнить, как заполнять
+    //pXL.SetTblStringFldValue('Sp_TU', '');
+
+    if (SpDocs.cOtpEd <> Comp(0))
+      pXL.SetTblStringFldValue('Sp_EdIzm', KatOtpEd.ABBR);
+
+    pXL.SetTblNumberFldValue('Sp_Kol',         SpDocs.Kol);
+    pXL.SetTblNumberFldValue('Sp_Price_NoNDS', SpDocs_PriceNoNDS);
+    pXL.SetTblNumberFldValue('Sp_Summa_NoNDS', SpDocs_SummNoNDS);
+    pXL.SetTblNumberFldValue('Sp_Summa',       SpDocs_SummAll);
+
+    pXL.InsTblRow;
+    pXL.ClearTblBuffer;
+
+
+    // Расчет сумм НДС элементов комптектного МЦ
+    #CalcNDSForElement_ComplMC(SpDocs_Compl, SpDocs.SumNDS, SpDocs.Kol, SpDocs.Summa, SpDocs.cVal)
+
+    // Состав комплектных МТР
+    _loop SpDocs_Compl
+    {
+      pXL.ClearTblBuffer;
+
+      pXL.SetTblStringFldValue('Sp_NPP',  '''' + SpDocs.Code + '.' + SpDocs_Compl.Code);
+      pXL.SetTblStringFldValue('Sp_Name', SpDocsCompl_Name);
+      pXL.SetTblStringFldValue('Sp_Code', SpDocsCompl_Kod);
+      //pXL.SetTblDateFldValue  ('Sp_PlanPost', '');
+      //pXL.SetTblStringFldValue('Sp_TU', '');
+
+      pXL.SetTblStringFldValue('Sp_EdIzm', OtpEd_Compl);
+
+      pXL.SetTblNumberFldValue('Sp_Kol',         SpDocs.Kol * SpDocs_Compl.Kol);
+
+      // Суммы без НДС.
+      aSummNoNDS  := SpDocs_Compl.Summa - if (Dogovor.VhodNal = 1, 
+                                            if (IsValid(#tmpNDSComp_Sp), tmpNDSComp_Sp.SumNDS, 0), 
+                                              0);
+
+      aPriceNoNDS := if (SpDocs_Compl.Kol = 0, 0, aSummNoNDS / SpDocs_Compl.Kol);
+      
+      aSumma := SpDocs_Compl.Summa + if (Dogovor.VhodNal = 1, 0,
+                                       if (IsValid(#tmpNDSComp_Sp), tmpNDSComp_Sp.SumNDS, 0));
+
+      pXL.SetTblNumberFldValue('Sp_Price_NoNDS', aPriceNoNDS);
+      pXL.SetTblNumberFldValue('Sp_Summa_NoNDS', aSummNoNDS * SpDocs.Kol);
+
+      pXL.SetTblNumberFldValue('Sp_Summa',       aSumma * SpDocs.Kol);
+
+      pXL.InsTblRow;
+      pXL.ClearTblBuffer;
+    } // _loop SpDocs_Compl
+  } // _loop SpDocs
+
+  // Вставка записи в таблицу
+  if (GetFirst FastFirstRow SpDocs <> tsOK)
+    pXL.InsTblRow;
+
+  pXL.PublishTbl('Tobot');
+
+  pXL.LoadReport(sXLSFileName);
+  pXL.DisConnectExcel;
+  StopVisual('', 0);
+}
+
+HandleEvent
+
+cmInit :
+{
+  Abort;
+
+  if (not IsValid(tnDogovor))
+    Exit;
+
+  if (pPrint) // Печать отчета
+  {
+    PrintSp;
+  }
+  else        // Настройка отчета
+  {
+    if (not ReadMyDsk(sXLTFileName, xltID, True))
+      Set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + xltID + '.xlt';
+
+    RunInterface('xlRepSetup', 1, xltID, sXLTFileName);
+    SaveMyDsk(sXLTFileName, xltID);
+  }
+}
+
+end;
+end.

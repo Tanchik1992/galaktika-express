@@ -1,0 +1,235 @@
+.begin
+  kounter  := kounter+1;
+
+#ifdef _IN_VAL_DOC_
+  СтНДСНац := СтНДСНак;
+  СтНацБН  := СтНакБН;
+  СтНацСН  := СтНакСН;
+#else
+  СтНДСНац := СтНДСНац0;
+  СтНацБН  := СтНацБН0;
+  СтНацСН  := СтНацСН0;
+#end
+!Итоговые сумммы
+  АНДСНац   := АНДСНац   + СтНДСНац;
+  АСтНацБН  := АСтНацБН  + СтНацБН;
+  АСтНацСН  := АСтНацСН  + СтНацСН;
+  АСтНацСБН := АСтНацСБН + if (Признак_МЦ = 1, СтНацСН, СтНацБН);
+
+  var tMassaBrItog: double;
+  tMassaBrItog := 0;
+
+  if (Признак_МЦ = 1)
+  {
+    if (bAutoGrM)
+      sumkolf  := sumkolf  + if(ЕД_ИЗМЕРЕНИЯ_ГРУЗОВЫХ_МЕСТ = 'н/у', 0, КОЛ_ГРУЗОВЫХ_МЕСТ)
+    else
+      sumkolf  := sumkolf  + if(КОЛ_ГРУЗОВЫХ_МЕСТ <> 0, КОЛ_ГРУЗОВЫХ_МЕСТ,
+                              if(ЕД_ИЗМЕРЕНИЯ_ГРУЗОВЫХ_МЕСТ = 'н/у', 0, КолФ));
+    case wRoundMass2 of
+      0..2 : tMassaBrItog := Round(КолВес / 1000, wRoundMass2) * 1000;
+      3..5 : tMassaBrItog := Round(КолВес, wRoundMass2 mod 3);
+      6..12: tMassaBrItog := Round(КолВес * 1000, wRoundMass2 mod 3) / 1000;
+    end;
+  }
+
+#ifdef _TTN_FRN_
+ #ifdef _TTN_ALC_
+  sumves := sumves + if (wRoundMass2 > 3, Round(КолВес, wRoundMass2 - 3), Round(КолВес));
+ #else
+  sumves := sumves + tMassaBrItog;
+ #end
+#end
+
+!Итоги по страницам
+  strАСтНацБН  := strАСтНацБН  + СтНацБН;
+  strАНДСНац   := strАНДСНац   + СтНДСНац;
+  strАСтНацСН  := strАСтНацСН  + СтНацСН;
+  strАСтНацСБН := strАСтНацСБН + if (Признак_МЦ = 1, СтНацСН, СтНацБН);
+
+  if (Признак_МЦ = 1)
+  {
+    if (bAutoGrM)
+      strАКолФ := strАКолФ + if(ЕД_ИЗМЕРЕНИЯ_ГРУЗОВЫХ_МЕСТ = 'н/у', 0, КОЛ_ГРУЗОВЫХ_МЕСТ)
+    else
+      strАКолФ := strАКолФ + if(КОЛ_ГРУЗОВЫХ_МЕСТ <> 0, КОЛ_ГРУЗОВЫХ_МЕСТ,
+                             if(ЕД_ИЗМЕРЕНИЯ_ГРУЗОВЫХ_МЕСТ = 'н/у', 0, КолФ));
+
+#ifdef _TTN_FRN_
+ #ifdef _TTN_ALC_
+    strАКолВес  := strАКолВес  + if (wRoundMass2 > 3, Round(КолВес, wRoundMass2 - 3), Round(КолВес));
+ #else
+    strАКолВес  := strАКолВес  + tMassaBrItog;
+ #end
+#end
+  }
+
+!Признак розничной накладной
+#ifdef _TTN_DOC_ROZN_
+  TypeRozn.pNRec := спецификацияМЦ_нрек;
+
+  if TypeRozn.GetFirst SpSopr = tsOk
+    if TypeRozn.GetFirst RzSpDoc = tsOk
+      if TypeRozn.GetFirst RzDoc = tsOk
+        if (TypeRozn.RzDoc.TypeMove = 911) OR (TypeRozn.RzDoc.TypeMove = 912)
+        {
+          isRozn911 := TRUE;// AND (KatSoprVhodNal <> 1);
+        }
+#end
+  // процент скидки из ДО
+  var KolZnCena: word;
+#ifdef _IN_VAL_DOC_
+  KolZnCena := GetPrecisionGroup('brForSopr_RVPrice');
+#else
+  KolZnCena := GetPrecisionGroup('brForSopr_Price');
+#end
+
+  PrSkidkaDO := (1 - СуммаДО / Round(Кол_ДО_Опл * ЦенаДО, KolZnCena)) * 100;
+
+!Цена
+PriceMC :=
+#ifndef _TTN_2009R_
+ #ifdef _TTN_DOC_ROZN_
+   #ifdef _IN_VAL_DOC_
+     if (isRozn911, if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), ЦНакСН, ЦНакБН), ЦНакСН)
+   #else
+     if (isRozn911, if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), ЦНацСН, ЦНацБН), ЦНацСН)
+   #end
+ #else
+   #ifdef _IN_VAL_DOC_
+     if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), ЦНакСН, ЦНакБН)
+   #else
+     if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), ЦНацСН, ЦНацБН)
+   #end
+ #end
+#else
+    if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), ЦНацСН, ЦНацБН)
+#end
+
+  sPriceMC := DoubleToStr(PriceMC, if (Валюта_нрек = 0, Cena_PrR, Cena_Pr))
+
+!Стоимость
+sSummaMC :=
+#ifndef _TTN_2009R_
+ #ifdef _TTN_DOC_ROZN_
+     DoubleToStr (if (isRozn911, if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), СтНацСН, СтНацБН), СтНацСН), Cena_Pr)
+ #else
+     DoubleToStr (if ((bNalProd OR bFixGrMC) AND (Признак_МЦ = 1), СтНацСН, СтНацБН), Cena_Pr)
+ #end
+#else
+     DoubleToStr(Стоимость6, Cena_PrR)
+#end
+
+!Поле примечание
+sPrim :=
+  #ifdef _IN_VAL_DOC_
+    if (Завод_ЦенаНак = 0, '',
+      if ((wSkidkaDO = 2) AND (PrSkidkaDO > 0), '',
+        sNameFPrice + ' '                  //'Зав.цена: '
+        + DoubleToStr(if (bFixGrMC, Завод_ЦенаНак + СтНДСНац / КолУч, Завод_ЦенаНак_Отп), Cena_Pr)
+        + if (bFixGrMC, '(' + УчЕд + ')', '')
+        + ' ' + sNameProcSN + ' '          //' проц.с/н: '
+        + Скидка_Надбавка_cтрока))
+
+    + if (СтНПродНак = 0, '',
+          ' ' + sNameNP + ' '              //' НП: '
+          + DoubleToStr(СтНПродНак, Cena_Pr)
+          + ', ' + sNameNPStavka + ' '     //', ставка: '
+          + DoubleToStr(ПрНПрод, NDS_St))
+  #else
+    if (Завод_Цена = 0, '',
+      if ((wSkidkaDO = 2) AND (PrSkidkaDO > 0), '',
+        sNameFPrice + ' '                  //'Зав.цена: '
+        + DoubleToStr(if (bFixGrMC, Завод_Цена + СтНДСНац / КолУч, Завод_Цена_Отп), Cena_PrR)
+        + if (bFixGrMC, '(' + УчЕд + ')', '')
+        + ' ' + sNameProcSN + ' '          //' проц.с/н: '
+        + Скидка_Надбавка_cтрока))
+
+    + if (СтНПродНац = 0, '',
+          ' ' + sNameNP + ' '              //' НП: '
+          + DoubleToStr(СтНПродНац, Cena_PrR)
+          + ', ' + sNameNPStavka + ' '     //', ставка: '
+          + DoubleToStr(ПрНПрод, NDS_St))
+  #end
+
+    + if ((wSkidkaDO > 0) AND (PrSkidkaDO > 0),
+        ' ' + sNamePriceDO + ' '           //' цена: '
+        + DoubleToStr(Кол_ДО_Опл * ЦенаДО / if (bFixGrMC, КолУч, КолФ), if (Валюта_нрек = 0, Cena_PrR, Cena_Pr))
+        + if (bFixGrMC, '(' + УчЕд + ')', '')
+        + ' ' + sNameProcDO + ' '          //' скидка: '
+        + DoubleToStr(PrSkidkaDO, '\2p66.88%'), '')
+    + if (bDocEveryStr,
+        if ((с_грузом_след_док <> '') OR (Номер_сертификата <> ''),
+           if (с_грузом_след_док <> '', ' ' + с_грузом_след_док, '') +
+           if (Номер_сертификата <> '', ' Серт.№' + Номер_сертификата, ''), ''), '')
+
+!Разбивка на строки НАИМЕНОВАНИЯ и БАРКОДА
+var lnSName, lnSCode, KolLine, lnSPrim: word
+#ifdef _TTN_FRN_
+ #ifdef _TTN_2009F_
+   lnSName   := 35;
+   lnSPrim   := 29
+
+  #ifdef _TTN_2009P_
+   lnSName   := 26;
+   lnSPrim   := 18;
+   lnSCode   := 0;
+  #else
+   lnSCode   := 0;
+  #end
+
+  #ifdef _TTN_2009R_
+   lnSName   := 19;
+   lnSCode   := 0;
+  #end
+ #else
+!@@@@@@@@@@@@@@@@@@@@@@@@@@@ @@@@@@@@@@@│
+   lnSName   := 47;
+   lnSPrim   := 39;
+   lnSCode   := 0;
+ #end
+#end
+#ifdef _TN2_PC_FRN_
+!│@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@│
+ #ifdef _TTN_2009F_
+  lnSName    := 24;
+  lnSCode    := 0;
+  lnSPrim    := 26;
+ #else
+  lnSName    := 32;
+  lnSCode    := 0;
+  lnSPrim    := 25;
+ #end
+#end
+
+  KolLine := 0;
+  Название_Доп := Название + if (bBarKodMC, if (КодМЦ <> '', ' ' + КодМЦ, ''), '');
+#ifdef _PROCNAC_
+  if (Дополнительная_информация <> '')
+    Название_Доп := Название + if (bBarKodMC, if (КодМЦ <> '', ' ' + КодМЦ, ''), '')
+                    + '(' + Дополнительная_информация + ')';
+#end
+#ifdef _TTN_ALC_
+  if (страна_ввоза <> '')
+    Название_Доп := Название_Доп + '; ' + страна_ввоза;
+#end
+
+  КодМЦ_Доп := КодМЦ;
+
+  if (length(Название_Доп) > lnSName)
+     OR (length(КодМЦ_Доп) > lnSCode)
+  {
+    KolLine  := KolAddInStr (Название_Доп, lnSName, true);//кол. доп. строк
+    var tKolLine: word;
+    tKolLine := KolAddInStr (КодМЦ_Доп, lnSCode, true);
+
+    if (tKolLine > KolLine)
+      KolLine := tKolLine;
+
+    kounter  := kounter + KolLine;
+
+    if (kounter > fixkol)
+      kounter := fixkol;
+  }
+
+end.

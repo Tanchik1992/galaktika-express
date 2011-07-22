@@ -1,0 +1,660 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - Управление договорами
+//
+//******************************************************************************
+
+#ifndef _PKPMANUF_VPP
+#define _PKPMANUF_VPP
+
+#include pkpfunc.vpp
+
+//******************************************************************************
+// --- выборка данных из ПКП для производственных отчетов ---
+//******************************************************************************
+
+procedure GetSpPKP (DateB   : date;    // начало периода
+                    DateE   : date;    // конец периода
+                    pOrg    : comp;    // nRec контрагента
+                    pDirect : word;    // Direct договора: 1-продажа, 2-закупка, 3-переработка дав.сырья
+                    pPrMC   : word;    // признак МЦ/услуги спецификации ПКП: 4-ДС, 5-ГП
+                    pVhNal  : word);   // входимость налогов: 1-входят,2-не входят
+var InsertOk : boolean;
+var KolF     : double;
+var SummaF   : double;
+var SumSp    : double;
+var CurseDat : date;
+var Koef     : double;
+{
+  delete all TmpDoc;
+  delete all TmpSpDoc;
+
+  if (pOrg <> comp(0))
+    {
+      loCalPlan._loop Dogovor where (( word(0) == Dogovor.cDogovor and
+                                       pOrg    == Dogovor.cOrg         ))
+        {
+          if ((loCalPlan.Dogovor.dBeg  <= DateE) and
+              (loCalPlan.Dogovor.dEnd  >= DateB) and
+              (loCalPlan.Dogovor.Direct = pDirect) and
+              (loCalPlan.Dogovor.Status = 1))
+            {
+              loCalPlan._loop IerCalPl
+                   where ((loCalPlan.Dogovor.nRec == IerCalPl.cDogovor and
+                           word(1)                == IerCalPl.IsLeaf))
+                {
+                  if (loCalPlan.GetFirst CalPlan
+                        where ((loCalPlan.IerCalPl.cRec == CalPlan.nRec)) = tsOk)
+                    {
+                      if ((loCalPlan.CalPlan.dFrom >= DateB) and
+                          (loCalPlan.CalPlan.dTo   <= DateE) and
+                          (loCalPlan.CalPlan.Status = 1))
+                        {
+                          InsertOk := false;
+
+                          loCalPlan._loop SpDocs
+                               where (( word(403)              == SpDocs.TiDk and
+                                        loCalPlan.CalPlan.nRec == SpDocs.cDoc and
+                                        pPrMC                  == SpDocs.PrMC ))
+                            {
+                              loCalPlan.TmpSpDoc.nRec   := loCalPlan.SpDocs.nRec;   // ссылка на спецификацию ПКП
+                              loCalPlan.TmpSpDoc.cDoc   := loCalPlan.SpDocs.cDoc;   // ссылка на ПКП
+                              loCalPlan.TmpSpDoc.cVal   := loCalPlan.SpDocs.cVal;   // ссылка на валюту ПКП
+                              loCalPlan.TmpSpDoc.PrMC   := loCalPlan.SpDocs.PrMC;   // признак МЦ/услуги
+                              loCalPlan.TmpSpDoc.cMCUsl := loCalPlan.SpDocs.cMCUsl; // ссылка на каталог МЦ/услуг
+                              loCalPlan.TmpSpDoc.cOtpEd := loCalPlan.SpDocs.cOtpEd; // отпускная единица измерения
+                              loCalPlan.TmpSpDoc.Kol    := loCalPlan.SpDocs.Kol;    // плановое количество
+                              loCalPlan.TmpSpDoc.dPost  := loCalPlan.SpDocs.dPost;  // рекомендуемая дата поставки
+
+                              if (loCalPlan.CalPlan.VhodNal = 1)  // плановые суммы с учетом входимости налогов
+                                {
+                                  if (pVhNal = 1)
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa
+                                  else
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa - loCalPlan.SpDocs.SumNDS;
+                                }
+                              else
+                                {
+                                  if (pVhNal = 1)
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa + loCalPlan.SpDocs.SumNDS
+                                  else
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa;
+                                }
+
+                              if (loCalPlan.insert current TmpSpDoc = tsOk)
+                                {
+                                  InsertOk := true;
+                                }
+                            }
+
+                          if InsertOk
+                            {
+                              loCalPlan.TmpDoc.nRec   := loCalPlan.CalPlan.nRec;    // ссылка на ПКП
+                              loCalPlan.TmpDoc.cGrOtp := loCalPlan.CalPlan.cGrOtp;  // грузоотправитель
+                              loCalPlan.TmpDoc.cGrPol := loCalPlan.CalPlan.cGrPol;  // грузополучатель
+                              loCalPlan.TmpDoc.cVal   := loCalPlan.CalPlan.cVal;    // валюта
+                              loCalPlan.TmpDoc.dFrom  := loCalPlan.CalPlan.dFrom;   // начало периода действия ПКП
+                              loCalPlan.TmpDoc.dTo    := loCalPlan.CalPlan.dTo;     // конец периода действия ПКП
+
+                              if (loCalPlan.insert current TmpDoc <> tsOk) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+  else
+    {
+      loCalPlan._loop Dogovor where (( word(0) == Dogovor.cDogovor ))
+        {
+          if ((loCalPlan.Dogovor.dBeg  <= DateE) and
+              (loCalPlan.Dogovor.dEnd  >= DateB) and
+              (loCalPlan.Dogovor.Direct = pDirect) and
+              (loCalPlan.Dogovor.Status = 1))
+            {
+              loCalPlan._loop IerCalPl
+                   where ((loCalPlan.Dogovor.nRec == IerCalPl.cDogovor and
+                           word(1)                == IerCalPl.IsLeaf))
+                {
+                  if (loCalPlan.GetFirst CalPlan
+                        where ((loCalPlan.IerCalPl.cRec == CalPlan.nRec)) = tsOk)
+                    {
+                      if ((loCalPlan.CalPlan.dFrom >= DateB) and
+                          (loCalPlan.CalPlan.dTo   <= DateE) and
+                          (loCalPlan.CalPlan.Status = 1))
+                        {
+                          InsertOk := false;
+
+                          loCalPlan._loop SpDocs
+                               where (( word(403)              == SpDocs.TiDk and
+                                        loCalPlan.CalPlan.nRec == SpDocs.cDoc and
+                                        pPrMC                  == SpDocs.PrMC ))
+                            {
+                              loCalPlan.TmpSpDoc.nRec   := loCalPlan.SpDocs.nRec;   // ссылка на спецификацию ПКП
+                              loCalPlan.TmpSpDoc.cDoc   := loCalPlan.SpDocs.cDoc;   // ссылка на ПКП
+                              loCalPlan.TmpSpDoc.cVal   := loCalPlan.SpDocs.cVal;   // ссылка на валюту ПКП
+                              loCalPlan.TmpSpDoc.PrMC   := loCalPlan.SpDocs.PrMC;   // признак МЦ/услуги
+                              loCalPlan.TmpSpDoc.cMCUsl := loCalPlan.SpDocs.cMCUsl; // ссылка на каталог МЦ/услуг
+                              loCalPlan.TmpSpDoc.cOtpEd := loCalPlan.SpDocs.cOtpEd; // отпускная единица измерения
+                              loCalPlan.TmpSpDoc.Kol    := loCalPlan.SpDocs.Kol;    // плановое количество
+                              loCalPlan.TmpSpDoc.dPost  := loCalPlan.SpDocs.dPost;  // рекомендуемая дата поставки
+
+                              if (loCalPlan.CalPlan.VhodNal = 1)  // плановые суммы с учетом входимости налогов
+                                {
+                                  if (pVhNal = 1)
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa
+                                  else
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa - loCalPlan.SpDocs.SumNDS;
+                                }
+                              else
+                                {
+                                  if (pVhNal = 1)
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa + loCalPlan.SpDocs.SumNDS
+                                  else
+                                    loCalPlan.TmpSpDoc.Summa := loCalPlan.SpDocs.Summa;
+                                }
+
+                              if (loCalPlan.insert current TmpSpDoc = tsOk)
+                                {
+                                  InsertOk := true;
+                                }
+                            }
+
+                          if InsertOk
+                            {
+                              loCalPlan.TmpDoc.nRec   := loCalPlan.CalPlan.nRec;    // ссылка на ПКП
+                              loCalPlan.TmpDoc.cGrOtp := loCalPlan.CalPlan.cGrOtp;  // грузоотправитель
+                              loCalPlan.TmpDoc.cGrPol := loCalPlan.CalPlan.cGrPol;  // грузополучатель
+                              loCalPlan.TmpDoc.cVal   := loCalPlan.CalPlan.cVal;    // валюта
+                              loCalPlan.TmpDoc.dFrom  := loCalPlan.CalPlan.dFrom;   // начало периода действия ПКП
+                              loCalPlan.TmpDoc.dTo    := loCalPlan.CalPlan.dTo;     // конец периода действия ПКП
+
+                              if (loCalPlan.insert current TmpDoc <> tsOk) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+  if (pDirect <> 2) // расчет фактических поступлений только для закупок
+    exit;
+
+  loCalPlan._loop TmpSpDoc
+    {
+      KolF   := 0;
+      SummaF := 0;
+
+      loCalPlan._loop KatSopr
+           where ((loCalPlan.TmpSpDoc.cDoc == KatSopr.cCalPlan and
+                   word(101)               == KatSopr.VidSopr))
+        {
+          if (KatSopr.dOpr = date(0,0,0))
+            continue;
+
+          CurseDat := loCalPlan.KatSopr.dPrice;  // дата цен
+
+          loCalPlan._loop SpSopr
+               where ((loCalPlan.KatSopr.nRec    == SpSopr.cSopr and
+                       loCalPlan.TmpSpDoc.cMCUsl == SpSopr.cMCUsl and
+                       word(1)                   == SpSopr.PrMC))
+            {
+              if (loCalPlan.KatSopr.VhodNal = 1)
+                {
+                  if (pVhNal = 1)
+                    SumSp := loCalPlan.SpSopr.KolFact*loCalPlan.SpSopr.Price
+                  else
+                    SumSp := loCalPlan.SpSopr.KolFact*loCalPlan.SpSopr.Price - loCalPlan.SpSopr.SumNDS;
+                }
+              else
+                {
+                  if (pVhNal = 1)
+                    SumSp := loCalPlan.SpSopr.KolFact*loCalPlan.SpSopr.Price + loCalPlan.SpSopr.SumNDS
+                  else
+                    SumSp := loCalPlan.SpSopr.KolFact*loCalPlan.SpSopr.Price;
+                }
+
+              if (loCalPlan.SpSopr.cOtpEd = loCalPlan.TmpSpDoc.cOtpEd)
+                KolF   := KolF + loCalPlan.SpSopr.KolFact
+              else
+                {
+                  Koef := 1;
+                  if (loCalPlan.GetFirst KatOtpEd
+                        where ((loCalPlan.SpSopr.cOtpEd == KatOtpEd.nRec)) = tsOk)
+                    Koef := loCalPlan.KatOtpEd.Koef;
+
+                  if (loCalPlan.GetFirst KatOtpEd
+                        where ((loCalPlan.TmpSpDoc.cOtpEd == KatOtpEd.nRec)) = tsOk)
+                    Koef := Koef/loCalPlan.KatOtpEd.Koef;
+
+                  KolF   := KolF + loCalPlan.SpSopr.KolFact*Koef;
+                }
+
+              SummaF := SummaF + if ((loCalPlan.TmpSpDoc.cVal = comp(0)),
+                                     SumSp,
+                                     oValFunc.GetAnyCurrency(comp(0),
+                                                             SumSp,
+                                                             CurseDat,
+                                                             loCalPlan.TmpSpDoc.cVal));
+            }
+        }
+
+      loCalPlan.TmpSpDoc.Kol2   := KolF;    // фактическое количество
+      loCalPlan.TmpSpDoc.Summa2 := SummaF;  // фактическая сумма
+
+      if (loCalPlan.update current TmpSpDoc <> tsOk) {}
+    }
+}
+
+procedure SummaOfPriceList (cPriceList : comp; VhNal : word; Koef : double);
+var Koef0     : double;
+var dCurseVal : date;
+var PriceN    : double;
+var PriceV    : double;
+var NewPrice  : double;
+{
+  if (cPriceList <> comp(0))
+    {
+      if (loCalPlan.GetFirst Prices
+          where ((loCalPlan.SpDocs.cMCUsl == Prices.cThing and
+                  cPriceList              == Prices.cKlPrice)) = tsOk)
+        {
+          Koef0 := 1;
+          if (loCalPlan.GetFirst KatOtpEd
+                where ((loCalPlan.Prices.cOtpEd == KatOtpEd.nRec)) = tsOk)
+            {
+              Koef0 := Koef / loCalPlan.KatOtpEd.Koef;
+            }
+
+          dCurseVal := oSpDocs.GetTrueDateValCurse(loCalPlan.CalPlan.dValCurse, loCalPlan.CalPlan.dFrom, loCalPlan.CalPlan.dInput);
+
+           PriceN := loCalPlan.Prices.Price;
+           PriceV := loCalPlan.Prices.SumVal;
+
+///------Пересчет цен прайса при разной входимости налогов
+          if (loCalPlan.CalPlan.VhodNal <> VhNal)
+            {
+              if (loCalPlan.CalPlan.VhodNal = 1) // налоги входят в цену
+                {
+                  CountNalogPrice(
+                       loCalPlan.CalPlan.nRec,  loCalPlan.SpDocs.nRec,
+                       loCalPlan.SpDocs.TiDk,   loCalPlan.SpDocs.cGrNal,
+                       loCalPlan.CalPlan.cOrg,  loCalPlan.SpDocs.Kol,
+                       loCalPlan.SpDocs.cOtpEd, dCurseVal,
+                       loCalPlan.SpDocs.cVal,   0,
+                       PriceN,                  PriceV, 0);
+
+                   PriceN := GetNalogPrice;
+                   PriceV := GetNalogValPrice;
+                }
+              else
+                {
+                  CountBasePrice(
+                       loCalPlan.CalPlan.nRec,  loCalPlan.SpDocs.nRec,
+                       loCalPlan.SpDocs.TiDk,   loCalPlan.SpDocs.cGrNal,
+                       loCalPlan.CalPlan.cOrg,  loCalPlan.SpDocs.Kol,
+                       loCalPlan.SpDocs.cOtpEd, dCurseVal,
+                       loCalPlan.SpDocs.cVal,   0,
+                       PriceN,                  PriceV, 0);
+
+                  PriceN := GetBasePrice;
+                  PriceV := GetBaseValPrice;
+                }
+            }
+//---------------------------------------------------------------------
+
+          if (loCalPlan.CalPlan.cVal <> 0)
+            {
+              if (loCalPlan.Prices.cVal = 0)
+                NewPrice := oValFunc.GetAnyCurrency(comp(0),
+                                                    PriceN,
+                                                    dCurseVal,
+                                                    loCalPlan.CalPlan.cVal)
+              else
+                {
+                  if (loCalPlan.CalPlan.cVal <> loCalPlan.Prices.cVal)
+                    NewPrice := oValFunc.GetAnyCurrency(loCalPlan.Prices.cVal,
+                                                        PriceV,
+                                                        dCurseVal,
+                                                        loCalPlan.CalPlan.cVal)
+                  else
+                    NewPrice := PriceV;
+                }
+            }
+          else
+            {
+              if (loCalPlan.Prices.cVal <> 0)
+                {
+                NewPrice := oValFunc.GetNatCurrency(loCalPlan.Prices.cVal,
+                                                    PriceV,
+                                                    dCurseVal);
+                }
+              else
+                NewPrice := PriceN;
+            }
+
+          loCalPlan.SpDocs.Price := NewPrice*Koef0;
+        }
+    }
+}
+
+procedure MakeUslFromProd (pGP : comp; KolGP_UchEd : double;
+                           UpTiDk : word; cPriceList : comp; VhNal : word);
+var Koef0 : double;
+var Price0 : double;
+var dCurseVal : date;
+{
+  loCalPlan._loop TmpPotr
+    {
+      if ((loCalPlan.TmpPotr.tResource = cgKau_KatUsl) and
+          (loCalPlan.TmpPotr.Kind = 4))
+        {
+          if (loCalPlan.GetFirst KatUsl
+                where ((loCalPlan.TmpPotr.cResource == KatUsl.nRec)) = tsOk)
+            {
+              loCalPlan.ClearBuffer(loCalPlan.tnSpDocs);
+
+              loCalPlan.SpDocs.cDoc      := loCalPlan.CalPlan.nRec;
+              loCalPlan.SpDocs.TiDk      := 403;
+              loCalPlan.SpDocs.Direct    := loCalPlan.CalPlan.DirectMC;
+              loCalPlan.SpDocs.cShipment := loCalPlan.CalPlan.cShipment;
+              loCalPlan.SpDocs.cTipOtg   := loCalPlan.CalPlan.cTipOtg;
+              loCalPlan.SpDocs.cWayMove  := loCalPlan.CalPlan.cWayMove;
+              loCalPlan.SpDocs.cVal      := loCalPlan.CalPlan.cVal;
+              loCalPlan.SpDocs.Empty     := 1;
+
+              loCalPlan.SpDocs.PrMC      := 3;
+              loCalPlan.SpDocs.cMCUsl    := loCalPlan.KatUsl.nRec;
+              loCalPlan.SpDocs.cGrMCUsl  := loCalPlan.KatUsl.cGroupUsl;
+              loCalPlan.SpDocs.cGrNal    := loCalPlan.KatUsl.cGrNal;
+              loCalPlan.SpDocs.cSpMC     := pGP;
+
+              Koef0 := 1;
+              if (loCalPlan.GetFirst KatOtpEd
+                    where ((word(2)                 == KatOtpEd.PrMC and
+                            loCalPlan.SpDocs.cMCUsl == KatOtpEd.cMCUsl and
+                            word(1)                 == KatOtpEd.Akt)) = tsOk)
+                {
+                  loCalPlan.SpDocs.cOtpEd := loCalPlan.KatOtpEd.nRec;
+                  Koef0 := loCalPlan.KatOtpEd.Koef;
+                }
+
+              loCalPlan.SpDocs.Kol     := loCalPlan.TmpPotr.Rasx*KolGP_UchEd/Koef0;
+
+              fEdIzm.CheckKolDiskret(loCalPlan.SpDocs.Kol, loCalPlan.SpDocs.cOtpEd, true, false);
+
+              loCalPlan.SpDocs.Ostatok := fEdIzm.ConvertToUchEd(loCalPlan.SpDocs.Kol, loCalPlan.SpDocs.cOtpEd);
+
+// ---- формирование цены на основании спецификации договора
+              loCalPlan._loop SpDogovor
+                   where (( word(UpTiDk)               == SpDogovor.TiDk and
+                            loCalPlan.CalPlan.cDogovor == SpDogovor.cDoc and
+                            loCalPlan.SpDocs.PrMC      == SpDogovor.PrMC ))
+                {
+                  if (loCalPlan.SpDogovor.cMCUsl = loCalPlan.SpDocs.cMCUsl)
+                    {
+                      Price0 := 0;
+
+                      if (loCalPlan.SpDogovor.cVal = loCalPlan.SpDocs.cVal)
+                        {
+                          Price0 := loCalPlan.SpDogovor.Price;
+                        }
+                      else
+                        {
+                          dCurseVal := oSpDocs.GetTrueDateValCurse(loCalPlan.CalPlan.dValCurse, loCalPlan.CalPlan.dFrom, loCalPlan.CalPlan.dInput);
+                          Price0 := oValFunc.GetAnyCurrency(loCalPlan.SpDogovor.cVal,
+                                                            loCalPlan.SpDogovor.Price,
+                                                            dCurseVal,
+                                                            loCalPlan.SpDocs.cVal);
+                        }
+
+                      if (loCalPlan.SpDocs.cOtpEd <> loCalPlan.SpDogovor.cOtpEd)
+                        {
+                          if (loCalPlan.GetFirst KatOtpEd
+                                where ((loCalPlan.SpDogovor.cOtpEd == KatOtpEd.nRec)) = tsOk)
+                            {
+                              loCalPlan.SpDocs.Price := Price0 * Koef0 / loCalPlan.KatOtpEd.Koef;
+                            }
+                        }
+                      else
+                        loCalPlan.SpDocs.Price := Price0;
+
+                      loCalPlan.SpDocs.PrNorma := loCalPlan.SpDogovor.PrNorma;
+                      loCalPlan.SpDocs.cNorma  := loCalPlan.SpDogovor.cNorma;
+
+                      break;
+                    }
+                }
+
+// ---- формирование цены на основании прайс-листа ---------------------------
+              if (loCalPlan.SpDocs.Price < 0.00001)
+                SummaOfPriceList(cPriceList, VhNal, Koef0);
+// ---------------------------------------------------------------------------
+
+              loCalPlan.SpDocs.Summa := loCalPlan.SpDocs.Price * loCalPlan.SpDocs.Kol;
+
+              if (loCalPlan.insert current SpDocs <> tsOk) {}
+              oSpDocs.ChangePosSpDocs(word(403), loCalPlan.CalPlan.nRec, loCalPlan.SpDocs.nRec);
+              oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer,2,0,loCalPlan.SpDocs.Kol,0,loCalPlan.SpDocs.TiDK);
+            }
+        }
+    }
+}
+
+// формирование ПКП по корпоративным планам
+
+procedure PKPfromCorpoPlan (pDogovor : comp; DirectPKP : word);
+var nRecNew   : comp;
+var Summa     : double;
+var SumNal    : double;
+var dCurseVal : date;
+var pTiDk     : word;
+var cPriceList : comp;
+var TipPriceList : word;
+var Koef      : double;
+var VhNal     : word;
+var fNal      : boolean;
+var cGP       : comp;
+var cSpGP     : comp;
+var KolGP_UchEd : double;
+var iPotr     : oiPotrEx;
+{
+  if (NullVipRef(pPKP)) GetVipRef(pPKP, 'CalPlan');
+  if (NullVipRef(iPotr)) GetVipRef(iPotr, 'iPotrEx');
+
+  fNal := false;
+  fNal := InitNalServ;
+
+  if (loCalPlan.GetFirst Dogovor where ((pDogovor == Dogovor.nRec)) = tsOk)
+    {
+      if (loCalPlan.Dogovor.cDogovor = comp(0))
+        pTiDk := 400
+      else
+        pTiDk := 401;
+
+      VhNal := 0;
+      cPriceList := 0;
+      TipPriceList := 0;
+      if (loCalPlan.Dogovor.MethodPrice = 1)
+        {
+          cPriceList := loCalPlan.Dogovor.cPriceLs;
+          if (loCalPlan.GetFirst KlPrice
+                   where ((cPriceList == KlPrice.nRec)) = tsOK)
+            {
+              VhNal := loCalPlan.KlPrice.VhodNal;
+              TipPriceList := loCalPlan.KlPrice.Tip;
+            }
+        }
+    }
+  else
+    exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer + vfBreak + vfConfirm,
+                 ''#3'Идет формирование пунктов календарного плана ...'#13#3, 1);
+
+  loCalPlan._loop TmpDoc ordered by TmpDoc.dTo
+    {
+      if ((loCalPlan.TmpDoc.dFrom < loCalPlan.Dogovor.dBeg) or
+          (loCalPlan.TmpDoc.dTo   > loCalPlan.Dogovor.dEnd))
+        continue;
+
+      nRecNew := pPKP.MakeNewMCCalPLan(pDogovor, DirectPKP);
+      if (loCalPlan.GetFirst CalPlan where ((nRecNew == CalPlan.nRec)) = tsOk)
+        {
+          loCalPlan._loop TmpSpDoc where ((loCalPlan.TmpDoc.nRec == TmpSpDoc.cDoc))
+            {
+              if (loCalPlan.TmpSpDoc.Kol < 0.000001)
+                continue;
+
+              loCalPlan.ClearBuffer(loCalPlan.tnSpDocs);
+
+              loCalPlan.SpDocs.cDoc      := loCalPlan.CalPlan.nRec;
+              loCalPlan.SpDocs.TiDk      := 403;
+              loCalPlan.SpDocs.Direct    := loCalPlan.CalPlan.DirectMC;
+              loCalPlan.SpDocs.cShipment := loCalPlan.CalPlan.cShipment;
+              loCalPlan.SpDocs.cTipOtg   := loCalPlan.CalPlan.cTipOtg;
+              loCalPlan.SpDocs.cWayMove  := loCalPlan.CalPlan.cWayMove;
+              loCalPlan.SpDocs.cVal      := loCalPlan.CalPlan.cVal;
+              loCalPlan.SpDocs.Empty     := 1;
+
+              loCalPlan.SpDocs.PrMC      := loCalPlan.TmpSpDoc.PrMC;
+              loCalPlan.SpDocs.cMCUsl    := loCalPlan.TmpSpDoc.cMCUsl;
+              loCalPlan.SpDocs.dPost     := loCalPlan.TmpSpDoc.dPost;
+              loCalPlan.SpDocs.PrNorma   := 0;
+              loCalPlan.SpDocs.cNorma    := loCalPlan.TmpSpDoc.cHDR_PS;
+
+              if (loCalPlan.GetFirst KatMC
+                       where ((loCalPlan.SpDocs.cMCUsl == KatMC.nRec)) = tsOk)
+                {
+                  loCalPlan.SpDocs.cGrMCUsl := loCalPlan.KatMC.cGroupMC;
+                  loCalPlan.SpDocs.cGrNal   := loCalPlan.KatMC.cGrNal;
+                }
+              else
+                continue;
+
+              Koef := 1;
+              if (loCalPlan.GetFirst KatOtpEd
+                    where ((word(1)                 == KatOtpEd.PrMC and
+                            loCalPlan.SpDocs.cMCUsl == KatOtpEd.cMCUsl and
+                            word(1)                 == KatOtpEd.Akt)) = tsOk)
+                {
+                  loCalPlan.SpDocs.cOtpEd := loCalPlan.KatOtpEd.nRec;
+                  Koef := loCalPlan.KatOtpEd.Koef;
+                }
+
+              loCalPlan.SpDocs.Kol     := loCalPlan.TmpSpDoc.Kol / Koef;
+
+              fEdIzm.CheckKolDiskret(loCalPlan.SpDocs.Kol, loCalPlan.SpDocs.cOtpEd, true, false);
+
+              loCalPlan.SpDocs.Ostatok := fEdIzm.ConvertToUchEd(loCalPlan.SpDocs.Kol, loCalPlan.SpDocs.cOtpEd);
+
+// ---- формирование цены на основании спецификации договора
+              loCalPlan._loop SpDogovor
+                   where (( word(pTiDk)                == SpDogovor.TiDk and
+                            loCalPlan.CalPlan.cDogovor == SpDogovor.cDoc and
+                            loCalPlan.SpDocs.PrMC      == SpDogovor.PrMC ))
+                {
+                  if (loCalPlan.SpDogovor.cMCUsl = loCalPlan.SpDocs.cMCUsl)
+                    {
+                      if (loCalPlan.SpDogovor.cVal = loCalPlan.SpDocs.cVal)
+                        {
+                          loCalPlan.SpDocs.Price := loCalPlan.SpDogovor.Price;
+                        }
+                      else
+                        {
+                          dCurseVal := oSpDocs.GetTrueDateValCurse(loCalPlan.CalPlan.dValCurse, loCalPlan.CalPlan.dFrom, loCalPlan.CalPlan.dInput);
+                          loCalPlan.SpDocs.Price := oValFunc.GetAnyCurrency(loCalPlan.SpDogovor.cVal,
+                                                                            loCalPlan.SpDogovor.Price,
+                                                                            dCurseVal,
+                                                                            loCalPlan.SpDocs.cVal);
+                        }
+
+                      if (loCalPlan.SpDocs.cNorma = comp(0))
+                        {
+                          loCalPlan.SpDocs.PrNorma := loCalPlan.SpDogovor.PrNorma;
+                          loCalPlan.SpDocs.cNorma  := loCalPlan.SpDogovor.cNorma;
+                        }
+
+                      break;
+                    }
+                }
+// ---- формирование цены на основании прайс-листа ---------------------------
+              if ((loCalPlan.SpDocs.Price < 0.00001) and (TipPriceList = 0) and fNal)
+                SummaOfPriceList(cPriceList, VhNal, Koef);
+// ---------------------------------------------------------------------------
+
+              loCalPlan.SpDocs.Summa := loCalPlan.SpDocs.Price * loCalPlan.SpDocs.Kol;
+
+              if (loCalPlan.insert current SpDocs <> tsOk) {}
+              oSpDocs.ChangePosSpDocs(word(403), loCalPlan.CalPlan.nRec, loCalPlan.SpDocs.nRec);
+              oSpDocs.UpdateDEIKolSpDocs(SpDocs.Buffer,2,0,loCalPlan.SpDocs.Kol,0,loCalPlan.SpDocs.TiDK);
+// ---- добавление услуг по переработке давальческого сырья ------------------
+              if ((loCalPlan.SpDocs.PrMC = 5) and
+                  (loCalPlan.SpDocs.cNorma <> comp(0)))
+                {
+                  cGP         := loCalPlan.SpDocs.nRec;
+                  cSpGP       := loCalPlan.SpDocs.cNorma;
+                  KolGP_UchEd := loCalPlan.TmpSpDoc.Kol;   // кол-во ГП в учетных единицах
+
+                  if (loCalPlan.SpDocs.PrNorma = 0)
+                    iPotr.GetDocPotr(cgKAU_HDR_PS,  cSpGP, 0)   // для произв. спецификации
+                  else
+                    iPotr.GetDocPotr(cgKAU_KatMarsh, cSpGP, 0); // для маршрутных карт
+
+                  if ((TipPriceList = 1) and fNal)
+                    MakeUslFromProd(cGP, KolGP_UchEd, pTiDk, cPriceList, VhNal)
+                  else
+                    MakeUslFromProd(cGP, KolGP_UchEd, pTiDk, comp(0), VhNal);
+                }
+// ---------------------------------------------------------------------------
+            }
+
+          if (loCalPlan.GetFirst SpDocs
+                where ((word(403)              == SpDocs.TiDk and
+                        loCalPlan.CalPlan.nRec == SpDocs.cDoc)) = tsOk)
+            {
+              Summa  := 0;
+              SumNal := 0;
+              loCalPlan._loop SpDocs where ((word(403)              == SpDocs.TiDk and
+                                             loCalPlan.CalPlan.nRec == SpDocs.cDoc))
+                {
+                  if ((loCalPlan.SpDocs.PrMC <> 4) and (loCalPlan.SpDocs.PrMC <> 5))
+                    {
+                      if (loCalPlan.CalPlan.VhodNal = 1)
+                        Summa := Summa + loCalPlan.SpDocs.Summa;
+                      else
+                        Summa := Summa + loCalPlan.SpDocs.Summa + loCalPlan.SpDocs.SumNDS;
+
+                      SumNal := SumNal + loCalPlan.SpDocs.SumNDS;
+                    }
+                  loCalPlan.SpDocs.Code := oSpDocs.GetSpDocsCodeNext(loCalPlan.CalPlan.nRec, word(403));
+                  if (loCalPlan.update current SpDocs <> tsOk) {}
+                }
+
+              loCalPlan.CalPlan.cGrOtp    := loCalPlan.TmpDoc.cGrOtp;
+              loCalPlan.CalPlan.cGrPol    := loCalPlan.TmpDoc.cGrPol;
+              loCalPlan.CalPlan.dFrom     := loCalPlan.TmpDoc.dFrom;
+              loCalPlan.CalPlan.dTo       := loCalPlan.TmpDoc.dTo;
+              loCalPlan.CalPlan.SummaSpec := Summa  - SumDiscount(Summa);
+              loCalPlan.CalPlan.SumNDS    := SumNal - SumDiscount(SumNal);
+
+              if (loCalPlan.update current CalPlan <> tsOk) {}
+            }
+          else
+            {
+              if (loCalPlan.delete current CalPlan <> tsOk) {}
+            }
+
+          if (not NextVisual)
+            exit;
+        }
+    }
+
+  StopVisual('',0);
+
+  if (fNal = true) DoneNalServ;
+}
+
+#end //_PKPMANUF_VPP

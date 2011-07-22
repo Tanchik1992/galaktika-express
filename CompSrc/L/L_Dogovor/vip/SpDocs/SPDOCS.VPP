@@ -1,0 +1,2441 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// public - функции для работы со спецификацией договоров, пкп, наряз-заказов
+//********************************************************************************
+
+#ifndef _SPDOCS_VPP
+#define _SPDOCS_VPP
+
+//******************************************************************************
+
+#include CalcFuns.var
+#include Notes.var
+#include oEdIzm.var
+#include DogFuns.var
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+
+//******************************************************************************
+
+#include rounddog.vpp
+
+//******************************************************************************
+
+Create view loSpDocs
+
+Var
+  pOwnDoc
+, pOwnDocUp : comp;
+
+  wTiDk
+, wTiDkUp   : word;
+
+  gldt      : GlobData;
+  insTbl    : InsertTblMnpl;
+
+Select
+  SpDocs.*
+, SpDocsUp.*
+
+From
+  SpDocs SpDocsUp
+, SpDocs SpDocs2
+, SpDocs SpDocsDown
+, SpDocs
+, KatOtpEd
+, NZakaz
+, Dogovor
+, CalPlan
+, SpDocNal
+, Pick
+, KatUsl
+, SpStep
+, SpSopr
+, SpDocSmeta
+, SpDocSmeta SpDocSmeta1
+, rltRents
+, rltLinks
+, KatVidD
+;
+
+var oExtAtr: iExtAttr;
+var oExtCls: iExtClass;
+
+//********************************************************************************
+// Функция получения даты для пересчетов сумм
+//********************************************************************************
+Function GetTrueDateValCurse(dValC, dF, dInp : date) : date;
+{
+  GetTrueDateValCurse := if(longint(dValC) = 0, if(longint(dF) = 0, dInp, dF), dValC);
+}
+
+//********************************************************************************
+// пересчет налогов по позиции договора/соглашения/ПКП
+//********************************************************************************
+Procedure ChangePosSpDocs (pTiDk  : word;   // общесистемный тип документа
+                           pDoc   : comp;   // ссылка на документ
+                           pSpDoc : comp);  // ссылка на позицию спецификации
+var
+  sPos      : double;
+  dCurseVal : date;
+  VhNal     : word;
+  cKontr    : comp;
+{
+
+  case pTiDk of
+    400, 401:
+      {
+        if ( loSpDocs.GetFirst fastfirstrow Dogovor where (( pDoc == Dogovor.nRec )) = tsOk )
+          {
+            VhNal     := loSpDocs.Dogovor.VhodNal;
+            cKontr    := loSpDocs.Dogovor.cOrg;
+            dCurseVal := GetTrueDateValCurse(loSpDocs.Dogovor.dValCurse
+                                           , loSpDocs.Dogovor.dBeg
+                                           , loSpDocs.Dogovor.dDoc);
+          }
+      }
+    403:
+      {
+        if (loSpDocs.GetFirst fastfirstrow CalPlan where ((pDoc == CalPlan.nRec)) =tsOk)
+          {
+            VhNal     := loSpDocs.CalPlan.VhodNal;
+            cKontr    := loSpDocs.CalPlan.cOrg;
+            dCurseVal := GetTrueDateValCurse(loSpDocs.CalPlan.dValCurse
+                                           , loSpDocs.CalPlan.dFrom
+                                           , loSpDocs.CalPlan.dInput);
+
+          }
+      }
+  else
+    Exit;
+  end; // case
+
+  if ( loSpDocs.GetFirst fastfirstrow SpDocs where (( pSpDoc == SpDocs.nRec )) <> tsOk )
+    Exit;
+
+  loSpDocs.SpDocs.Summa := DogRound(loSpDocs.SpDocs.cVal <> 0, loSpDocs.SpDocs.Price*loSpDocs.SpDocs.Kol);
+
+  if ( loSpDocs.SpDocs.ManualTax = 0 )  //неручные
+    {
+      loSpDocs.delete SpDocNal where (( SpDocs.nRec == SpDocNal.cSpDoc and SpDocs.TiDk == SpDocNal.TipDoc ));
+
+      if ( loSpDocs.SpDocs.cGrNal = comp(0) )
+        loSpDocs.SpDocs.SumNDS := 0
+      else
+        {
+          sPos := loSpDocs.SpDocs.Summa;
+
+          if ( VhNal = 1 ) // налоги входят
+            if ( CountBasePrice(pDoc
+                              , loSpDocs.SpDocs.nRec
+                              , loSpDocs.SpDocs.TiDk
+                              , loSpDocs.SpDocs.cGrNal
+                              , cKontr
+                              , loSpDocs.SpDocs.Kol
+                              , loSpDocs.SpDocs.cOtpEd
+                              , dCurseVal
+                              , loSpDocs.SpDocs.cVal
+                              , 0
+                              , 0
+                              , sPos
+                              , 0) )
+              loSpDocs.SpDocs.SumNDS := sPos - GetBaseValPrice
+            else
+              loSpDocs.SpDocs.SumNDS := 0
+          else
+            if ( CountNalogPrice(pDoc
+                               , loSpDocs.SpDocs.nRec
+                               , loSpDocs.SpDocs.TiDk
+                               , loSpDocs.SpDocs.cGrNal
+                               , cKontr
+                               , loSpDocs.SpDocs.Kol
+                               , loSpDocs.SpDocs.cOtpEd
+                               , dCurseVal
+                               , loSpDocs.SpDocs.cVal
+                               , 0
+                               , 0
+                               , sPos
+                               , 0) )
+              loSpDocs.SpDocs.SumNDS := GetNalogValPrice - sPos
+            else
+              loSpDocs.SpDocs.SumNDS := 0;
+        }
+    }
+
+  if ( loSpDocs.update current SpDocs <> tsOk )
+    {
+    }
+}
+
+Procedure ChangeOrgInNal(pTiDk : word;   // общесистемный тип документа
+                         pDoc
+                       , pOrg  : comp);  // ссылка на документ и на организацию
+{
+  loSpDocs.update SpDocNal where (( pDoc == SpDocNal.cDoc and pTiDk == SpDocNal.TipDoc ))
+    set SpDocNal.cOrg := pOrg;
+}
+
+//********************************************************************************
+// пересчет налогов по всей спецификации договора/соглашения/ПКП
+//********************************************************************************
+Procedure ReCalcSpec (pTiDk : word;   // общесистемный тип документа
+                      pDoc  : comp);  // ссылка на документ
+var
+  sPos      : double;
+  dCurseVal : date;
+  VhNal     : word;
+  cKontr
+, cVlt      : comp;
+{
+
+  case pTiDk of
+    400, 401:
+      {
+        if ( loSpDocs.GetFirst fastfirstrow Dogovor where (( pDoc == Dogovor.nRec )) = tsOk )
+          {
+            VhNal     := loSpDocs.Dogovor.VhodNal;
+            cKontr    := loSpDocs.Dogovor.cOrg;
+            cVlt      := loSpDocs.Dogovor.cVal;
+            dCurseVal := GetTrueDateValCurse(loSpDocs.Dogovor.dValCurse, loSpDocs.Dogovor.dBeg, loSpDocs.Dogovor.dDoc);
+
+          }
+      }
+    403:
+      {
+        if ( loSpDocs.GetFirst fastfirstrow CalPlan where (( pDoc == CalPlan.nRec )) = tsOk )
+          {
+            VhNal     := loSpDocs.CalPlan.VhodNal;
+            cKontr    := loSpDocs.CalPlan.cOrg;
+            cVlt      := loSpDocs.CalPlan.cVal;
+            dCurseVal := GetTrueDateValCurse(loSpDocs.CalPlan.dValCurse, loSpDocs.CalPlan.dFrom, loSpDocs.CalPlan.dInput);
+          }
+      }
+  else
+    Exit;
+  end; // case
+
+  if ( loSpDocs.GetFirst SpDocs where (( pTiDk == SpDocs.TiDk and pDoc == SpDocs.cDoc )) = tsOk )
+    {
+      StartNewVisual(vtRotateVisual, vfTimer + vfBreak + vfConfirm, 'Пересчет налогов ...'#13#13, 1);
+      do
+        {
+          loSpDocs.SpDocs.Summa := DogRound(loSpDocs.SpDocs.cVal <> 0, loSpDocs.SpDocs.Price * loSpDocs.SpDocs.Kol);
+          loSpDocs.SpDocs.cVal  := cVlt;
+
+          if ( loSpDocs.SpDocs.cGrNal = comp(0) )
+            {
+              loSpDocs.delete SpDocNal where (( SpDocs.nRec == SpDocNal.cSpDoc and
+                                                SpDocs.TiDk == SpDocNal.TipDoc ));
+
+              loSpDocs.SpDocs.SumNDS := 0;
+            }
+          else
+            {
+              if ( loSpDocs.SpDocs.ManualTax = 0 )  //неручные
+                {
+                  sPos := loSpDocs.SpDocs.Summa;
+
+                  if ( VhNal = 1 ) // налоги входят
+                    if ( CountBasePrice(pDoc
+                                      , loSpDocs.SpDocs.nRec
+                                      , loSpDocs.SpDocs.TiDk
+                                      , loSpDocs.SpDocs.cGrNal
+                                      , cKontr
+                                      , loSpDocs.SpDocs.Kol
+                                      , loSpDocs.SpDocs.cOtpEd
+                                      , dCurseVal
+                                      , loSpDocs.SpDocs.cVal
+                                      , 0
+                                      , 0
+                                      , sPos
+                                      , 0) )
+                      loSpDocs.SpDocs.SumNDS := sPos - GetBaseValPrice
+                    else
+                      loSpDocs.SpDocs.SumNDS := 0
+                  else
+                    if ( CountNalogPrice(pDoc
+                                       , loSpDocs.SpDocs.nRec
+                                       , loSpDocs.SpDocs.TiDk
+                                       , loSpDocs.SpDocs.cGrNal
+                                       , cKontr
+                                       , loSpDocs.SpDocs.Kol
+                                       , loSpDocs.SpDocs.cOtpEd
+                                       , dCurseVal
+                                       , loSpDocs.SpDocs.cVal
+                                       , 0
+                                       , 0
+                                       , sPos
+                                       , 0) )
+                      loSpDocs.SpDocs.SumNDS := GetNalogValPrice - sPos
+                    else
+                      loSpDocs.SpDocs.SumNDS := 0;
+                }
+            }
+
+          if ( loSpDocs.update current SpDocs <> tsOk )
+            {
+            }
+
+          NextVisual;
+        }
+      while (loSpDocs.GetNext SpDocs where (( pTiDk == SpDocs.TiDk and pDoc == SpDocs.cDoc )) = tsOk);
+
+      StopVisual('', 0);
+    }
+}
+
+/*
+ wTipKol:
+     2 - Kol
+*/
+Procedure UpDateDEIKolSpDocs(SpDocsPos : #TSpDocs;
+                             wTipKol   : word;
+                             _OldKol   : double;
+                             _NewKol   : double;
+                             lParam    : longint;
+                             _wTiDK    : word);
+var piKatDopEd_ : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+{
+ if ( SpDocsPos.PrMC = 1 )
+   piKatDopEd_.SetDefaultDopEd(coSpDocs,         // _wTable: word;     // код таблицы спецификации
+                               SpDocsPos.nRec,   // _cRec: comp;       // ссылка на запись спецификации
+                               wTipKol,          // _wTipKol: word;    // тип количества
+                               SpDocsPos.cMCUsl, // _cMCUsl: comp;     // ссылка на МЦ/Услугу
+                               SpDocsPos.PrMC,   // _PrMC: word;       // признак МЦ/Услуга
+                               _OldKol,          // старое количество
+                               _NewKol,          // _Kol: double       // количество в отпускных единицах
+                               lParam,
+                               _wTiDk            // тип документа системный
+                              );
+}
+
+//--
+Function CheckLimitSpec(pDoc : comp; pTiDk : word) : boolean;
+var ret : word;
+{
+  CheckLimitSpec := true;
+
+  if ( ( pTiDk <> 440 ) OR ( not boGetTune('Doc.NZ.SpOnePos') ) )
+    Exit;
+
+  ret := loSpDocs.GetFirst fastfirstrow SpDocs where ((pDoc == SpDocs.cDoc and pTiDk == SpDocs.TiDk ));
+
+  CheckLimitSpec := ret <> tsOk;
+}
+
+//-- возвращает способ отгрузки и т.п. из документа
+Procedure GetDocInfoOtgr(pDoc      : comp;
+                         pTiDk     : word;
+                     var pShipment : comp;
+                     var pTipOtgr  : comp;
+                     var pWayMove  : comp;
+                     var pFilialNo : longint
+                        );
+var ret : word;
+{
+  pShipment := 0;
+  pTipOtgr  := 0;
+  pWayMove  := 0;
+  pFilialNo := 0;
+
+  case pTiDk of
+    400, 401: // договор(приложение)
+      {
+        ret := loSpDocs.GetFirst fastfirstrow Dogovor where (( pDoc == Dogovor.nRec ));
+
+        if ( ret = tsOk )
+          {
+            pShipment := loSpDocs.Dogovor.cShipment;
+            pTipOtgr  := loSpDocs.Dogovor.cTipOtg;
+            pWayMove  := loSpDocs.Dogovor.cWayMove;
+            pFilialNo := oNotes.Notes_InUseStatus(loSpDocs.Dogovor.cNote);
+          }
+      }
+    403: // календарный план
+      {
+        ret := loSpDocs.GetFirst fastfirstrow CalPlan where (( pDoc == CalPlan.nRec ));
+
+        if ( ret = tsOk )
+          {
+            pShipment := loSpDocs.CalPlan.cShipment;
+            pTipOtgr  := loSpDocs.CalPlan.cTipOtg;
+            pWayMove  := loSpDocs.CalPlan.cWayMove;
+            pFilialNo := oNotes.Notes_InUseStatus(loSpDocs.CalPlan.cNote);
+          }
+      }
+    440: // наряд-заказ
+      {
+        ret := loSpDocs.GetFirst fastfirstrow NZakaz where (( pDoc == NZakaz.nRec ));
+
+        if ( ret = tsOk )
+          {
+            pShipment := loSpDocs.NZakaz.cShipment;
+            pTipOtgr  := loSpDocs.NZakaz.cTipOtg;
+            pWayMove  := loSpDocs.NZakaz.cWayMove;
+            pFilialNo := oNotes.Notes_InUseStatus(loSpDocs.NZakaz.cNote);
+          }
+      }
+  end;
+}
+
+Procedure SpDocs_ClearUsed(pNRec : comp; pTiDk : word);
+{
+  loSpDocs._loop SpDocs2 where (( pTiDk == SpDocs2.TiDk and pNRec == SpDocs2.cDoc ))
+    loSpDocs.update SpDocs where (( SpDocs2.nRec == SpDocs.cUpDoc ))
+      set SpDocs.cUpDoc := 0;
+}
+
+//-- проверяет, есть ли записи сформированные по данному SpDocs
+//-- true - есть, false-нет
+Function SpDocs_isInUse(pNRec : comp) : boolean;
+var ret : word;
+{
+  ret := loSpDocs.RecordExists SpDocs where (( pNRec == SpDocs.cUpDoc ));
+
+  SpDocs_isInUse := ret = tsOk;
+}
+
+
+Function SpDocs_isInUseStatus(pInUseStat : longint) : boolean;
+{
+  SpDocs_isInUseStatus := pInUseStat = 1;
+}
+
+//--Возвращает статус спецификации 0-обязательная,1-рекомендательная
+//--статус спецификации указывается в договоре и приложении к договору
+//--и влияет на контроль количества в приложении и календарном плане
+Function SpDocs_SpecStatusUp(pSpDocsUp : comp; curTiDk : word) : word;
+var
+  SpecStat, ret : word;
+{
+  SpecStat := 0;
+
+  SpDocs_SpecStatusUp := SpecStat;
+
+  PushPos(loSpDocs.tnSpDocsUp);
+
+  case curTiDk of
+    401,403:
+      {
+        ret := loSpDocs.GetFirst fastfirstrow SpDocsUp where (( pSpDocsUp == SpDocsUp.nRec ));
+
+        if ( ret = tsOk )
+          case loSpDocs.SpDocsUp.TiDk of
+            400,401:
+              {
+                ret := loSpDocs.GetFirst fastfirstrow Dogovor where ((loSpDocs.SpDocsUp.cDoc == Dogovor.nRec ));
+
+                if ( ret = tsOk )
+                  SpecStat := loSpDocs.Dogovor.SpecStatus;
+              }
+          end;
+      }
+  end;
+
+  PopPos(loSpDocs.tnSpDocsUp);
+
+  SpDocs_SpecStatusUp := SpecStat;
+}
+//-- возвращает правильное значение Empty
+Function GetEmpty(Ost : double) : word;
+{
+  if ( Ost <> 0.0 )
+    GetEmpty := 1
+  else
+    GetEmpty := 0;
+
+}
+
+//-- Выполнять контроль количества по вышестоящей спецификации
+//-- TRUE   да
+//-- FALSE  нет
+Function SpDocs_isUseControlKol(pSpDocsUp : comp; curTiDk : word; pInUseStat : longint) : boolean;
+{
+  SpDocs_isUseControlKol := false;
+
+  if ( SpDocs_SpecStatusUp(pSpDocsUp,curTiDk) = 0 )
+    SpDocs_isUseControlKol := SpDocs_isInUseStatus(pInUseStat);
+}
+
+//-- получить следующий номер позиции спецификации
+Function GetSpDocsCodeNext(pDoc : comp; pTiDk : word) : string;
+var
+  ret  : Word;
+
+  tmpN
+, maxN : string;
+{
+  maxN := '';
+
+  ret := loSpDocs.GetLast fastfirstrow SpDocs
+                     where (( pDoc  == SpDocs.cDoc and
+                              pTiDk == SpDocs.TiDk
+                           )) ordered by index SpDocs02;
+
+  if ( ret = tsOk )
+    maxN := loSpDocs.SpDocs.Code;
+
+  if ( maxN <> '' )
+    tmpN := maxN
+  else
+    tmpN := '0000';
+
+  if ( length(tmpN) < 3 )
+    tmpN := PadCh('', '0', 3 - length(tmpN)) + tmpN;
+
+  NextNumStr(tmpN);
+
+  GetSpDocsCodeNext := tmpN;
+}
+
+//-- заново пронумеровать все позиции спецификации
+Function UpDateSpDocsCode(pDoc : comp; pTiDk : word) : word;
+  // возвращает количество позиций спецификации
+var
+  i           : word;
+
+  Marker
+, MarkerCount : longint;
+
+  SpDocNRec   : comp;
+{
+  Marker := InitMarker('spdocs_SpDocsNpp', 8, 10, 10, false);
+  ClearMarker(Marker);
+
+  loSpDocs._loop SpDocs where ((pTiDk == SpDocs.TiDk and pDoc == SpDocs.cDoc)) ordered by index SpDocs02
+    InsertMarker(Marker, loSpDocs.SpDocs.nRec);
+
+  MarkerCount := GetMarkerCount(Marker);
+
+  for (i := 0; i < MarkerCount; inc(i))
+    if ( GetMarker(Marker, i, SpDocNRec) )
+      if ( loSpDocs.GetFirst fastfirstrow SpDocs where (( SpDocNRec == SpDocs.nRec )) = tsOk )
+        if ( loSpDocs.SpDocs.Code <> string(i + 1) )
+          {
+            loSpDocs.SpDocs.Code := string(i + 1);
+            loSpDocs.update current SpDocs;
+          }
+
+  DoneMarker(Marker, 'spdocs_SpDocsNpp');
+
+  UpDateSpDocsCode := MarkerCount;
+}
+
+//-- пересчет количества по всем подчиненным спецификациям для данной
+//-- позиции спецификации
+Function SpDocs_RecalcOst(pSpDocs : comp;  // NRec SpDocs-а, для которого пересчитывать
+                      var kol     : double //-- суммарное количество по всем подчиненым спецификациям
+                         ) : boolean;
+var
+  ret         : word;
+  UpOtpEdKoef
+, UsedKol     // суммарное количество по подчиненным спецификациям
+, TempKol     : double;
+{
+  SpDocs_RecalcOst := false;
+
+  kol := 0;
+//--
+  ret := loSpDocs.GetFirst fastfirstrow SpDocsUp where (( pSpDocs == SpDocsUp.nRec ));
+  if ( ret <> tsOk )
+    Exit;
+
+  UpOtpEdKoef := fEdIzm.GetKoefOtpEd(loSpDocs.SpDocsUp.cOtpEd);
+//-- просматриваем все подчиненные спецификации
+  UsedKol := 0;
+
+  loSpDocs._loop SpDocs where (( pSpDocs == SpDocs.cUpDoc ))
+    {
+      if ( not SpDocs_isUseControlKol(loSpDocs.SpDocs.cUpDoc, loSpDocs.SpDocs.TiDk, loSpDocs.SpDocs.FilialNo) )
+        Continue;
+
+      TempKol := loSpDocs.SpDocs.Kol;
+      //-- в учетных Ed
+      UsedKol := UsedKol + loSpDocs.SpDocs.Kol * fEdIzm.GetKoefOtpEd(loSpDocs.SpDocs.cOtpEd);
+    }
+
+  kol := UsedKol;
+
+  SpDocs_RecalcOst := true;
+}
+
+//-- Для позиции спецификации модифицировать поле остаток в родительской
+//-- спецификации
+Function SpDocs_UpDate_UpDoc(pNRec      : comp; //-- NRec SpDocs-а, для которого модифицировать родителя
+                             var retKol : double; //--(возвращаемый) текущее количество
+                                               //-- если текущее количество превысит остаток в родителе,
+                                               //-- то текущее количество станет равным остатку родителя и вернется здесь
+                             pOtpEd     : comp;
+                             OkNew      : boolean
+                            ) : word;
+var
+  ret         : word;
+
+  MyOtpEdKoef
+, UpOstatok   : double;
+{
+  ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( pNRec == SpDocs.nRec ));
+
+  if ( ret <> tsOk )
+    {
+      SpDocs_UpDate_UpDoc := ret;
+      Exit;
+    }
+
+  if ( loSpDocs.SpDocs.cUpDoc = 0 )
+    {
+      SpDocs_UpDate_UpDoc := tsOk;
+      Exit;
+    }
+
+  if ( not SpDocs_isUseControlKol(loSpDocs.SpDocs.cUpDoc, loSpDocs.SpDocs.TiDk, loSpDocs.SpDocs.FilialNo) )
+    Exit;
+
+  MyOtpEdKoef := fEdIzm.GetKoefOtpEd(pOtpEd);
+
+  ret := loSpDocs.GetFirst fastfirstrow SpDocsUp where (( loSpDocs.SpDocs.cUpDoc == SpDocsUp.nRec ));
+
+  if ( ret = tsOk )
+    {
+      if ( OkNew )
+        UpOstatok := loSpDocs.SpDocsUp.Ostatok
+      else
+        UpOstatok := loSpDocs.SpDocsUp.Ostatok + fEdIzm.ConvertToUchEd(loSpDocs.SpDocs.Kol, loSpDocs.SpDocs.cOtpEd);
+
+      // UpOstatok - доступное количество в уч.ед.
+
+      if ( UpOstatok <= fEdIzm.ConvertToUchEd(retKol, pOtpEd) )
+      // количество превышает допустимое - корректируем
+        {
+          retKol := UpOstatok / MyOtpEdKoef;
+
+          if ( fEdIzm.GetDiskrOtpEd(pOtpEd) = 1 )
+            retKol := trunc(retKol);
+        }
+
+      // уменьшаем остаток
+      loSpDocs.SpDocsUp.Ostatok := UpOstatok - fEdIzm.ConvertToUchEd(retKol, pOtpEd);
+
+      if f_KolIsZero(loSpDocs.SpDocsUp.Ostatok)
+        loSpDocs.SpDocsUp.Ostatok := 0;
+
+      loSpDocs.SpDocsUp.Empty := GetEmpty(loSpDocs.SpDocsUp.Ostatok);
+
+      ret := loSpDocs.Update current SpDocsUp;
+    }
+  else
+    ret := 0;
+
+  SpDocs_UpDate_UpDoc := ret;
+}
+
+//-- Праверка количества для позиции спецификации
+//-- если есть подчиненные документы
+Function Ch_KolSpDocs(pNRec       : comp;   //-- NRec SpDocs-а, для которого модифицировать родителя
+                  var retKol      : double; //--(возвращаемый) текущее количество
+                                            //-- если текущее количество меньше количества в подчиненных
+                                            //-- документах,то текущее количество будет восстановлено
+                      cOtpEdSPDoc : comp
+                     ) : boolean;
+var _Kol : double;
+{
+  Ch_KolSpDocs := true;
+
+  if ( loSpDocs.GetFirst fastfirstrow SpDocs where (( pNRec == SpDocs.nRec )) = tsOk )
+    if ( loSpDocs.GetFirst SpDocsDown where (( SpDocs.nRec == SpDocsDown.cUpDoc )) = tsOk )
+      {
+        _Kol := 0;
+
+        loSpDocs._loop SpDocsDown where (( SpDocs.nRec == SpDocsDown.cUpDoc ))
+          if ( loSpDocs.SpDocsDown.FilialNo = 1 )
+            _Kol := _Kol + fEdIzm.ConvertToSecondEd(loSpDocs.SpDocsDown.Kol
+                                                   ,loSpDocs.SpDocsDown.cOtpEd
+                                                   ,cOtpEdSpDoc
+                                                   );
+
+        if ( retKol < _Kol )
+          {
+            Ch_KolSpDocs := false;
+
+            retKol := _Kol;
+
+            message('Количество не может быть меньше '+string(_Kol, 14, 3)
+             + ''#13'(суммы количеств в подчиненных документах)', Warning);
+
+          }
+      }
+}
+
+Procedure SpDocs_CopyZamenFromMarker(pDocFrom, pDocTo: comp; MarkerZ: longint; DelFromMarker: boolean);
+var
+  NumPos: string;
+  pSpDoc: comp;
+  Indx  : longint;
+{
+  if ( pDocFrom = pDocTo )
+    Exit;
+
+  NumPos := '000';
+
+  loSpDocs._loop SpDocsUp where (( pDocFrom  == SpDocsUp.cDoc AND
+                                   word(439) == SpDocsUp.TiDk AND
+                                   comp(0)   == SpDocsUp.cSpMc ))
+    {
+      if ( MarkerZ <> 0 )
+        if ( Not SearchMarker(MarkerZ, loSpDocs.SpDocsUp.nRec, Indx) )
+          Continue;
+
+      pSpDoc := loSpDocs.SpDocsUp.nRec;
+
+      NextNumStr(NumPos);
+
+      loSpDocs.SpDocsUp.nRec := 0;
+      loSpDocs.SpDocsUp.cDoc := pDocTo;
+      loSpDocs.SpDocsUp.Code := NumPos;
+
+      loSpDocs.insert current SpDocsUp;
+
+      if ( ( MarkerZ <> 0 ) AND DelFromMarker )
+        AtDeleteMarker(MarkerZ, Indx);
+
+      loSpDocs._loop SpDocs2 where (( pDocFrom  == SpDocs2.cDoc AND
+                                      word(439) == SpDocs2.TiDk AND
+                                      pSpDoc    == SpDocs2.cSpMc ))
+        {
+          if ( MarkerZ <> 0 )
+            if ( Not SearchMarker(MarkerZ, loSpDocs.SpDocs2.nRec, Indx) )
+              Continue;
+
+          NextNumStr(NumPos);
+
+          loSpDocs.SpDocs2.nRec  := 0;
+          loSpDocs.SpDocs2.cDoc  := pDocTo;
+          loSpDocs.SpDocs2.cSpMc := loSpDocs.SpDocsUp.nRec;
+          loSpDocs.SpDocs2.Code  := NumPos;
+
+          loSpDocs.insert current SpDocs2;
+
+          if ( ( MarkerZ <> 0 ) AND DelFromMarker )
+            AtDeleteMarker(MarkerZ, Indx);
+        }
+    }
+}
+
+Procedure SpDocs_CopyZamen(pDocFrom, pDocTo: comp);
+{
+  SpDocs_CopyZamenFromMarker(pDocFrom, pDocTo, 0, FALSE);
+}
+
+Function SpDocs_isHaveZam(pDoc : comp; TiDk : word): boolean;
+{
+  SpDocs_isHaveZam := loSpDocs.RecordExists SpDocs where ((pDoc == SpDocs.cDoc and word(439) == SpDocs.TiDk )) = tsOk;
+}
+
+Procedure SpDocs_CopyCompl(pDocFrom, pDocTo: comp);
+{
+  if ( pDocFrom = pDocTo )
+    Exit;
+
+  loSpDocs._loop SpDocsUp where (( pDocFrom  == SpDocsUp.cDoc AND
+                                   word(438) == SpDocsUp.TiDk AND
+                                   comp(0)   == SpDocsUp.cSpMc ))
+    {
+      loSpDocs.SpDocsUp.nRec := 0;
+      loSpDocs.SpDocsUp.cDoc := pDocTo;
+
+      loSpDocs.insert current SpDocsUp;
+    }
+}
+
+#include parusl.vpp
+
+Procedure CopyRltLinks(OldSpDocs, NewSpDocs : #TSpDocs);
+{
+  if (loSpDocs.GetFirst fastfirstrow rltLinks where (( OldSpDocs.nRec == rltLinks.cSpDocs )) = tsOK)
+    {
+      loSpDocs.rltLinks.nRec := 0;
+      loSpDocs.rltLinks.cSpDocs := NewSpDocs.nRec;
+
+      if (NewSpDocs.TiDk = 403)
+      // копируем в ПКП - заменяем ссылку на ПКП
+        loSpDocs.rltLinks.cCalPlan := NewSpDocs.nRec
+      else
+      // копируем в договор - заменяем ссылку на договор
+        loSpDocs.rltLinks.cDogovor := NewSpDocs.nRec;
+
+      loSpDocs.insert current rltLinks;
+    }
+}
+
+//-- сформировать новый SpDocs по другому SpDocs-у
+Function SpDocs_InsCurentFromUpDoc
+  (pUpDoc            : comp;   //-- NReSpDocs-а из которого формировать
+   pDoc              : comp;   //-- NRec документа к которому привязать спецификацию
+   curTiDk           : word;   //-- тип документа к которому привязать спецификацию
+   OkMaxKol          : boolean;//-- true-в спецификацию вставлять максимально возможное количество
+                               //-- false - количество из myKol
+   myKol             : double; //-- количество
+   pShipment         : comp;   //-- ссылка на способ отгрузки
+   pTipOtgr          : comp;   //-- ссылка на базис отгрузки
+   pWayMove          : comp;   //-- ссылка на способ транспортировки
+   pFilialNo         : longint;
+   pDirect           : word;
+   NotWithOutOstatok : boolean //-- true-в спецификацию не вставлять товар с Ostatok <= 0
+  ) : word;
+var
+  ret            : word;
+
+  OkModf         : boolean;
+
+  NextCode       : string;
+
+  Kol_UpDoc      : double;
+
+  pMCUsl
+, pGrMCUsl
+, pMakeSp
+, pOtpEd         : comp;
+
+  _wDirectUpDoc
+, _wDirectCurDoc : word;
+  cRecUpDoc      : comp;
+{
+  ret := loSpDocs.GetFirst fastfirstrow SpDocsUp where ((pUpDoc == SpDocsUp.nRec));
+
+  _wDirectUpDoc  := word(0);
+  _wDirectCurDoc := word(0);
+
+  if ( ret <> tsOk )
+    {
+      SpDocs_InsCurentFromUpDoc := ret;
+      Exit;
+    }
+  else
+    {
+      cRecUpDoc := loSpDocs.SpDocsUp.cDoc;
+
+      case loSpDocs.SpDocsUp.TiDk of
+        400, 401:
+          {
+            if ( loSpDocs.GetFirst fastfirstrow Dogovor where (( cRecUpDoc == Dogovor.nRec )) = tsOk )
+              _wDirectUpDoc := loSpDocs.Dogovor.Direct;
+          }
+        403:
+          {
+            if ( loSpDocs.GetFirst fastfirstrow CalPlan where (( cRecUpDoc == CalPlan.nRec )) = tsOk )
+              _wDirectUpDoc := loSpDocs.CalPlan.DirectMC;
+          }
+      end;
+    }
+
+  pMCUsl   := loSpDocs.SpDocsUp.cMCUsl;
+  pGrMCUsl := loSpDocs.SpDocsUp.cGrMCUsl;
+  pOtpEd   := loSpDocs.SpDocsUp.cOtpEd;
+
+  if ( loSpDocs.SpDocsUp.TiDk = 439 )
+    {
+      pMakeSp := loSpDocs.SpDocsUp.cDoc;
+
+      ret := loSpDocs.GetFirst fastfirstrow SpDocsUp where (( pMakeSp == SpDocsUp.nRec ));
+
+      if ( ret <> tsOk )
+        {
+          SpDocs_InsCurentFromUpDoc := ret;
+          Exit;
+        }
+    }
+
+  OkModf := false;
+
+  NextCode := GetSpDocsCodeNext(pDoc,curTiDk);
+
+  loSpDocs.ClearBuffer(loSpDocs.tnSpDocs);
+  loSpDocs.CopyTableFields(loSpDocs.tnSpDocsUp,loSpDocs.tnSpDocs);
+
+  loSpDocs.SpDocs.cMCUsl   := pMCUsl;
+  loSpDocs.SpDocs.cGrMCUsl := pGrMCUsl;
+  loSpDocs.SpDocs.cOtpEd   := pOtpEd;
+  loSpDocs.SpDocs.cMakeSp  := 0;
+
+  loSpDocs.SpDocs.cNorma  := loSpDocs.SpDocsUp.cNorma;
+  loSpDocs.SpDocs.PrNorma := loSpDocs.SpDocsUp.PrNorma;
+
+  loSpDocs.SpDocs.nRec     := 0;
+  loSpDocs.SpDocs.cDoc     := pDoc;
+  loSpDocs.SpDocs.TiDk     := curTiDk;
+  loSpDocs.SpDocs.cUpDoc   := loSpDocs.SpDocsUp.nRec;
+  loSpDocs.SpDocs.Code     := NextCode;
+  loSpDocs.SpDocs.FilialNo := pFilialNo;
+
+  var dCurseVal : date;
+
+  case curTiDk of
+    400, 401:
+      {
+        if ( loSpDocs.GetFirst fastfirstrow Dogovor where (( pDoc == Dogovor.nRec )) = tsOk )
+          {
+            _wDirectCurDoc       := loSpDocs.Dogovor.Direct;
+            loSpDocs.SpDocs.cVal := loSpDocs.Dogovor.cVal;
+
+            if ( loSpDocs.SpDocsUp.cVal <> loSpDocs.Dogovor.cVal )
+              {
+                dCurseVal := GetTrueDateValCurse(loSpDocs.Dogovor.dValCurse
+                                               , loSpDocs.Dogovor.dBeg
+                                               , loSpDocs.Dogovor.dDoc);
+
+                loSpDocs.SpDocs.Price := DogRound_P(loSpDocs.SpDocs.cVal <> 0
+                                                  , oValFunc.GetAnyCurrency(loSpDocs.SpDocsUp.cVal
+                                                                          , loSpDocs.SpDocs.Price
+                                                                          , dCurseVal
+                                                                          , loSpDocs.Dogovor.cVal));
+              }
+          }
+      }
+    403:
+      {
+        if ( loSpDocs.GetFirst fastfirstrow CalPlan where (( pDoc == CalPlan.nRec )) = tsOk )
+          {
+            loSpDocs.SpDocs.cVal := loSpDocs.CalPlan.cVal;
+            if ( loSpDocs.SpDocsUp.cVal <> loSpDocs.CalPlan.cVal )
+              {
+                dCurseVal := GetTrueDateValCurse(loSpDocs.CalPlan.dValCurse
+                                               , loSpDocs.CalPlan.dFrom
+                                               , loSpDocs.CalPlan.dInput);
+
+                loSpDocs.SpDocs.Price := DogRound_P(loSpDocs.SpDocs.cVal <> 0
+                                                  , oValFunc.GetAnyCurrency(loSpDocs.SpDocsUp.cVal
+                                                                          , loSpDocs.SpDocs.Price
+                                                                          , dCurseVal
+                                                                          , loSpDocs.CalPlan.cVal));
+              }
+          }
+      }
+  end;
+
+  if ( pDirect = 0 )
+    loSpDocs.SpDocs.Direct := loSpDocs.SpDocsUp.Direct
+  else
+    loSpDocs.SpDocs.Direct := pDirect;
+
+// shaf для "Почты России"
+  if (
+       ( pDirect = 0 )
+       AND
+       (
+         ( _wDirectCurDoc = 1 )
+         OR
+         ( _wDirectCurDoc = 2 )
+       )
+       AND
+       (
+         ( _wDirectUpDoc = 1 )
+         OR
+         ( _wDirectUpDoc = 2 )
+       )
+       AND
+       ( _wDirectUpDoc <> _wDirectCurDoc )
+     )
+    loSpDocs.SpDocs.Direct := if(loSpDocs.SpDocsUp.Direct = 1, 2, 1);
+
+  Kol_UpDoc:=loSpDocs.SpDocs.Kol;
+
+  if ( ( pShipment <> 0 ) OR ( pTipOtgr <> 0 ) OR ( pWayMove <> 0 ) )
+    { //--
+      loSpDocs.SpDocs.cShipment := pShipment;
+      loSpDocs.SpDocs.cTipOtg   := pTipOtgr;
+      loSpDocs.SpDocs.cWayMove  := pWayMove;
+    }
+
+  if ( OkMaxKol )
+    {
+      loSpDocs.SpDocs.Kol := fEdIzm.ConvertToSecondEd(loSpDocs.SpDocsUp.Ostatok,
+                                                      comp(0),
+                                                      loSpDocs.SpDocs.cOtpEd);
+      if ( loSpDocs.GetFirst fastfirstrow KatOtpEd
+                       where (( loSpDocs.SpDocs.cOtpEd == KatOtpEd.nRec )) = tsOK )
+        if ( ( loSpDocs.KatOtpEd.Diskret = 1 ) AND ( Round(loSpDocs.SpDocs.Kol) <> loSpDocs.SpDocs.Kol ) )
+          loSpDocs.SpDocs.Kol := Trunc(loSpDocs.SpDocs.Kol);
+
+      loSpDocs.SpDocs.Ostatok := fEdIzm.ConvertToUchEd(loSpDocs.SpDocs.Kol, loSpDocs.SpDocs.cOtpEd);
+
+      if (SpDocs_isUseControlKol(loSpDocs.SpDocs.cUpDoc, loSpDocs.SpDocs.TiDk, loSpDocs.SpDocs.FilialNo))
+        if ( loSpDocs.SpDocsUp.Ostatok <> 0.0 )
+          {
+            OkModf := true;
+            loSpDocs.SpDocsUp.Ostatok := 0;
+          }
+    }
+  else
+    {
+      if ( SpDocs_isUseControlKol(loSpDocs.SpDocs.cUpDoc, loSpDocs.SpDocs.TiDk, loSpDocs.SpDocs.FilialNo) )
+        {
+          if ( fEdIzm.ConvertToUchEd(myKol, loSpDocs.SpDocs.cOtpEd) >= loSpDocs.SpDocsUp.Ostatok )
+            {
+              loSpDocs.SpDocs.Kol       := fEdIzm.ConvertToSecondEd(loSpDocs.SpDocsUp.Ostatok
+                                                                  , comp(0)
+                                                                  , loSpDocs.SpDocs.cOtpEd);
+              loSpDocs.SpDocsUp.Ostatok := 0;
+
+              OkModf := true;
+            }
+          else
+            {
+              loSpDocs.SpDocs.Kol       := myKol;
+              loSpDocs.SpDocsUp.Ostatok := loSpDocs.SpDocsUp.Ostatok - fEdIzm.ConvertToUchEd(myKol, loSpDocs.SpDocs.cOtpEd);
+
+              OkModf := true;
+            }
+        }
+      else
+        loSpDocs.SpDocs.Kol := myKol;
+
+      loSpDocs.SpDocs.Ostatok := fEdIzm.ConvertToUchEd(loSpDocs.SpDocs.Kol, loSpDocs.SpDocs.cOtpEd);
+    }
+
+  loSpDocs.SpDocs.Summa := DogRound(loSpDocs.SpDocs.cVal <> 0, loSpDocs.SpDocs.Price * loSpDocs.SpDocs.Kol);
+
+  if ( OkModf )
+    loSpDocs.SpDocsUp.Empty := GetEmpty(loSpDocs.SpDocsUp.Ostatok);
+
+  loSpDocs.SpDocs.Empty := GetEmpty(loSpDocs.SpDocs.Ostatok);
+
+ // не нужно вставлять нулевое количество (для DOG2DO.VIP) / Yurgen для Nazgul
+  if ( ( loSpDocs.SpDocs.Kol <= 0 ) AND ( NotWithOutOstatok ) )
+    Exit;
+
+  var Koef : double; Koef := loSpDocs.SpDocs.Kol / loSpDocs.SpDocsUp.Kol;
+
+  loSpDocs.SpDocs.SumNDS := loSpDocs.SpDocs.SumNDS * Koef;
+
+  ret := loSpDocs.Insert current SpDocs;
+
+  if ( ret = tsOK )
+    CopyRltLinks(loSpDocs.SpDocsUp.Buffer, loSpDocs.SpDocs.Buffer);
+
+  oMTRFun.CopySpecMTR(coSpDocs, loSpDocs.SpDocsUp.nRec, coSpDocs, loSpDocs.SpDocs.nRec);
+
+  RunInterface('CopySpDocSmeta', word(coSpDocs), loSpDocs.SpDocsUp.nRec, word(coSpDocs), loSpDocs.SpDocs.nRec);
+
+  loSpDocs._loop SpDocNal where (( SpDocsUp.nRec == SpDocNal.cSpDoc and SpDocsUp.TiDk == SpDocNal.TipDoc ))
+    {
+      loSpDocs.SpDocNal.nRec   := 0;
+      loSpDocs.SpDocNal.cSpDoc := loSpDocs.SpDocs.nRec;
+      loSpDocs.SpDocNal.cDoc   := loSpDocs.SpDocs.cDoc;
+      loSpDocs.SpDocNal.TipDOc := loSpDocs.SpDocs.TiDk;
+      loSpDocs.SpDocNal.SumNal := loSpDocs.SpDocNal.SumNal * Koef;
+      loSpDocs.SpDocNal.SumVal := loSpDocs.SpDocNal.SumVal * Koef;
+      loSpDocs.SpDocNal.Summa  := loSpDocs.SpDocNal.Summa  * Koef;
+      if ( loSpDocs.insert current SpDocNal <> tsOk )
+        {
+        }
+    }
+
+  ChangePosSpDocs(curTiDK, pDoc, loSpDocs.SpDocs.nRec);
+
+  if ( ret = tsOk )
+    {
+      var piKatDopEd2 : iKatDEI; // Интерфейс с public-функциями для ДЕИ
+      piKatDopEd2.CopyDopEd(coSpDocs,              // код таблицы спецификации источника
+                            pUpDoc,                // ссылка на запись спецификации источника
+                            2,                     // тип количества источника
+                            Kol_UpDoc,             // количество источника в отпускных единицах
+                            coSpDocs,              // код таблицы спецификации приемника
+                            loSpDocs.SpDocs.nRec,  // ссылка на запись спецификации приемника
+                            2,                     // тип количества приемника
+                            loSpDocs.SpDocs.Kol,   // количество приемника в отпускных единицах
+                            loSpDocs.SpDocs.TiDK
+                           );
+     if ( ( loSpDocs.SpDocs.PrMC = 2 ) OR ( loSpDocs.SpDocs.PrMC = 3 ) )
+       if ( loSpDocs.GetFirst fastfirstrow KatUsl where (( loSpDocs.SpDocs.cMCUSL == KatUsl.nRec )) = tsOK )
+         if ( loSpDocs.KatUsl.TYPEUSL = 1 )
+           oCalcFuns.ClcUsl_CopyFactPar(pUpDoc, coSpDocs, loSpDocs.SpDocs.nRec, coSpDocs);
+
+      oExtAtr.CopyAllAttr    (word(coSpDocs), pUpDoc, loSpDocs.SpDocs.nRec);
+      oExtCls.CopyAllClassVal(word(coSpDocs), pUpDoc, loSpDocs.SpDocs.nRec);
+    }
+
+  if ( ( ret = tsOk ) AND ( OkModf ) )
+    ret := loSpDocs.UpDate current SpDocsUp;
+
+  SpDocs_InsCurentFromUpDoc := ret;
+
+}
+
+Procedure UpdateUpSpDocsRef(pDoc : comp; curTiDk : word);
+{
+  loSpDocs._loop SpDocs where (( pDoc == SpDocs.cDoc and curTiDk == SpDocs.TiDk ))
+    if ( ( ( loSpDocs.SpDocs.PrMC = 2 ) OR ( loSpDocs.SpDocs.PrMC = 3 ) ) AND ( loSpDocs.SpDocs.cSpMC <> comp(0) ) )
+      loSpDocs._loop SpDocsUp where (( loSpDocs.SpDocs.cSpMC == SpDocsUp.cUpDoc ))
+        if (loSpDocs.SpDocs.cDoc = loSpDocs.SpDocsUp.cDoc)
+          {
+            loSpDocs.SpDocs.cSpMC := loSpDocs.SpDocsUp.nRec;
+            loSpDocs.UpDate current SpDocs;
+            Break;
+          }
+}
+
+!-------------------------------------------------------------------------------
+! Вставляет МЦ/Усл из выбранных групп спецификации
+!
+Function SpDocs_InsFromMarkerInGr(pDoc              : comp;
+                                  curTiDk           : word;
+                                  IsSome            : boolean;
+                                  pDirect           : word;
+                                  NotWithOutOstatok : boolean) : word;
+var
+  i            : word;
+
+  Marker
+, MarkerKol
+, MarkerCount  : longint;
+
+  pickrec      : comp;
+
+  tmpKol       : double;
+
+  pShipment
+, pTipOtgr
+, pWayMove     : comp;
+
+  pFilialNo    : longint;
+
+{
+  Marker    := InitMarker('MSpDocs'   , 8, 100, 10);
+  MarkerKol := InitMarker('MSpDocsKol', 8, 100, 10);
+
+  MarkerCount := GetMarkerCount(Marker);
+
+  GetDocInfoOtgr(pDoc, curTiDk, pShipment, pTipOtgr, pWayMove, pFilialNo);
+
+  var piKatDopEd2 : iKatDEI;
+  //проход по всем маркерам
+  for(i := 0;i < MarkerCount; inc(i))
+    {
+      if GetMarker(Marker, i, pickrec)
+        {
+          if (not GetMarker(MarkerKol,i,tmpKol))
+            {
+              //если не указано кол-во
+              tmpKol := 0;
+
+              if ( loSpDocs.GetFirst fastfirstrow SpDocsUp where (( pickrec == SpDocsUp.nRec )) = tsOk )
+                if ( loSpDocs.SpDocsUp.cMCUSL = 0 )
+                  {
+                    //запуск интерфейса для выбора МЦ/Усл
+                    if ( Runinterface('PickByGrMCUsl', loSpDocs.SpDocsUp.cGrMCUsl
+                                                     , loSpDocs.SpDocsUp.prMC
+                                                     , loSpDocs.SpDocsUp.ostatok
+                                                     , loSpDocs.SpDocsUp.cOtpEd) = cmCancel )
+                      Continue;
+
+                    //перегон из Pick в спецификацию Н-з.
+                    loSpDocs._loop Pick where (( word(800) == Pick.wList ))
+                      {
+                        SpDocs_InsCurentFromUpDoc(loSpDocs.SpDocsUp.nRec
+                                                , NZakaz.nRec
+                                                , 440
+                                                , false
+                                                , loSpDocs.Pick.PickKol
+                                                , NZakaz.cShipment
+                                                , NZakaz.cTipOtg
+                                                , NZakaz.cWayMove
+                                                , oNotes.Notes_InUseStatus(NZakaz.cNote)
+                                                , pDirect
+                                                , NotWithOutOstatok);
+
+                        loSpDocs.SpDocs.cMCUsl := loSpDocs.Pick.cRec;
+
+                        if ( loSpDocs.GetFirst fastfirstrow KatOtpEd
+                                      where (( loSpDocs.SpDocs.prMC   == KatOtpEd.prMC   and
+                                               loSpDocs.SpDocs.cMCUsl == KatOtpEd.cMCUsl and
+                                               word(1)                == KatOtpEd.akt )) = tsOk )
+                          {
+                            loSpDocs.SpDocs.Price  := DogRound_P(loSpDocs.SpDocs.cVal <> 0
+                                                               , fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocs.Price
+                                                                                            , loSpDocs.SpDocs.cOtpED
+                                                                                            , loSpDocs.KatOtpEd.nRec));
+                            loSpDocs.SpDocs.cOtpED := loSpDocs.KatOtpEd.nRec;
+                          }
+                        loSpDocs.update current SpDocs;
+                      }
+                    //удаление маркера после вставки в спецификацию н-з
+                    AtDeleteMarker(Marker, i);
+                    inc(i);
+                  }
+            }
+          else
+            {
+              //если есть кол-во
+              if ( loSpDocs.GetFirst fastfirstrow SpDocsUp where (( pickrec == SpDocsUp.nRec )) = tsOk )
+                if ( loSpDocs.SpDocsUp.cMCUSL = 0 )
+                  {
+                    //запуск интерфейса для выбора МЦ/Усл
+                    if ( Runinterface('PickByGrMCUsl', loSpDocs.SpDocsUp.cGrMCUsl
+                                                     , loSpDocs.SpDocsUp.prMC
+                                                     , loSpDocs.SpDocsUp.ostatok
+                                                     , loSpDocs.SpDocsUp.cOtpEd) = cmCancel )
+                      Continue;
+
+                    //перегон из Pick в спецификацию Н-з.
+                    loSpDocs._loop Pick where (( word(800) == Pick.wList ))
+                      {
+                        SpDocs_InsCurentFromUpDoc(loSpDocs.SpDocsUp.nRec
+                                                , NZakaz.nRec
+                                                , 440
+                                                , false
+                                                , loSpDocs.Pick.PickKol
+                                                , NZakaz.cShipment
+                                                , NZakaz.cTipOtg
+                                                , NZakaz.cWayMove
+                                                , oNotes.Notes_InUseStatus(NZakaz.cNote)
+                                                , pDirect
+                                                , NotWithOutOstatok);
+
+                        loSpDocs.SpDocs.cMCUsl := loSpDocs.Pick.cRec;
+
+                        if ( loSpDocs.GetFirst fastfirstrow KatOtpEd
+                                      where (( loSpDocs.SpDocs.prMC   == KatOtpEd.prMC   and
+                                               loSpDocs.SpDocs.cMCUsl == KatOtpEd.cMCUsl and
+                                               word(1)                == KatOtpEd.akt )) = tsOk )
+                          {
+                            loSpDocs.SpDocs.Price  := DogRound_P(loSpDocs.SpDocs.cVal <> 0
+                                                               , fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocs.Price
+                                                                                            , loSpDocs.SpDocs.cOtpED
+                                                                                            , loSpDocs.KatOtpEd.nRec));
+                            loSpDocs.SpDocs.cOtpED := loSpDocs.KatOtpEd.nRec;
+                          }
+
+                        loSpDocs.update current SpDocs;
+                      }
+                    //удаление маркера после вставки в спецификацию н-з
+                    AtDeleteMarker(Marker   , i);
+                    AtDeleteMarker(MarkerKol, i);
+
+                    i := i - 1;
+                  }
+            }
+        }
+    }
+
+ DoneMarker(Marker   , 'MSpDocs');
+ DoneMarker(MarkerKol, 'MSpDocsKol');
+
+ UpdateUpSpDocsRef(pDoc, curTiDk);
+
+ SpDocs_InsFromMarkerInGr := 0;
+}
+
+Function SpDocs_InsFromMarker(pDoc : comp; curTiDk : word; pDirect : word; NotWithOutOstatok : boolean) : word;
+var
+  ret
+, i            : word;
+
+  Marker
+, MarkerKol
+, MarkerCount  : longint;
+
+  pickrec      : comp;
+
+  tmpKol       : double;
+
+  pShipment
+, pTipOtgr
+, pWayMove     : comp;
+
+  pFilialNo
+, MarkerZ
+, MarkerZCount : longint;
+{
+  Marker    := InitMarker('MSpDocs'   , 8, 100, 10);
+  MarkerKol := InitMarker('MSpDocsKol', 8, 100, 10);
+  MarkerZ   := InitMarker('MSpDocsZam', 8, 100, 10);
+
+  MarkerCount  := GetMarkerCount(Marker);
+  MarkerZCount := GetMarkerCount(MarkerZ);
+
+  GetDocInfoOtgr(pDoc, curTiDk, pShipment, pTipOtgr, pWayMove, pFilialNo);
+
+  for(i := 0; i < MarkerCount; inc(i))
+    if ( GetMarker(Marker, i, pickrec) )
+      {
+        if ( not GetMarker(MarkerKol, i, tmpKol) )
+          {
+            tmpKol := 0;
+
+            ret := SpDocs_InsCurentFromUpDoc(pickrec
+                                           , pDoc
+                                           , curTiDk
+                                           , true
+                                           , tmpKol
+                                           , pShipment
+                                           , pTipOtgr
+                                           , pWayMove
+                                           , pFilialNo
+                                           , pDirect
+                                           , NotWithOutOstatok);
+          }
+        else
+          ret := SpDocs_InsCurentFromUpDoc(pickrec
+                                         , pDoc
+                                         , curTiDk
+                                         , false
+                                         , tmpKol
+                                         , pShipment
+                                         , pTipOtgr
+                                         , pWayMove
+                                         , pFilialNo
+                                         , pDirect
+                                         , NotWithOutOstatok);
+
+        if ( ret = tsOk )
+          {
+            SpDocs_CopyZamenFromMarker(pickrec, loSpDocs.SpDocs.nRec, MarkerZ, FALSE);
+
+            SpDocs_CopyCompl(pickrec, loSpDocs.SpDocs.nRec);
+          }
+      }
+
+ DoneMarker(Marker   , 'MSpDocs');
+ DoneMarker(MarkerKol, 'MSpDocsKol');
+ DoneMarker(MarkerZ  , 'MSpDocsZam');
+
+ UpdateUpSpDocsRef(pDoc, curTiDk);
+
+ SpDocs_InsFromMarker := 0;
+}
+
+//-- удалить SpDocs
+Function Delete_current_SpDocsEx(pNRec : comp; isVis, NeedReCode : boolean) : word;
+var
+  ret
+, tmpTiDk : word;
+
+  tmpcDoc : comp;
+
+  tmpN    : string;
+
+  Buf     : TSpDocs;
+{
+  Delete_current_SpDocsEx := 1;
+
+  if ( SpDocs_isInUse(pNRec) )
+    {
+      if ( isVis )
+        message('Данная запись используется'#13
+              + 'в спецификациях других документов.'#13
+              + 'Удаление невозможно.', OkButton);
+      Exit;
+    }
+
+  ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( pNRec == SpDocs.nRec ));
+
+  tmpcDoc := loSpDocs.SpDocs.cDoc;
+  tmpTiDk := loSpDocs.SpDocs.TiDk;
+
+  if ( ret <> tsOk )
+    Exit
+  else
+    {
+      if ( SpDocs_isUseControlKol(loSpDocs.SpDocs.cUpDoc, loSpDocs.SpDocs.TiDk, loSpDocs.SpDocs.FilialNo) )
+        {
+          ret := loSpDocs.GetFirst SpDocsUp where (( loSpDocs.SpDocs.cUpDoc == SpDocsUp.nRec ));
+
+          if ( ret = tsOk )
+            {
+              loSpDocs.SpDocsUp.Ostatok := loSpDocs.SpDocsUp.Ostatok + fEdIzm.ConvertToUchEd(loSpDocs.SpDocs.Kol
+                                                                                           , loSpDocs.SpDocs.cOtpEd);
+
+              if ( loSpDocs.SpDocsUp.Ostatok > fEdIzm.ConvertToUchEd(loSpDocs.SpDocsUp.Kol, loSpDocs.SpDocsUp.cOtpEd) )
+                loSpDocs.SpDocsUp.Ostatok := fEdIzm.ConvertToUchEd(loSpDocs.SpDocsUp.Kol, loSpDocs.SpDocsUp.cOtpEd);
+
+              loSpDocs.SpDocsUp.Empty := GetEmpty(loSpDocs.SpDocsUp.Ostatok);
+
+              ret := loSpDocs.Update current SpDocsUp;
+            }
+        }
+
+      loSpDocs.Delete SpDocsUp where (( pNRec == SpDocsUp.cDoc and word(438) == SpDocsUp.TiDk ));
+      loSpDocs.Delete SpDocsUp where (( pNRec == SpDocsUp.cDoc and word(439) == SpDocsUp.TiDk ));
+      loSpDocs.Delete SpDocNal where (( pNRec == SpDocNal.cSpDoc and tmpTiDk == SpDocNal.TipDoc));
+
+      Buf := TSpDocs(loSpDocs.SpDocs.Buffer);
+
+      oMTRFun.DelSpecMTR(coSpDocs, loSpDocs.SpDocs.NRec);
+
+      ret := loSpDocs.Delete current SpDocs;
+
+      if ( ret <> tsOk )
+        {
+          Delete_current_SpDocsEx := ret;
+          Exit;
+        }
+
+      if ( Buf.PrMC = 2 )
+        {
+          var pDog : comp;
+
+          if ( Buf.TiDk = 403 )
+            {
+              if ( loSpDocs.GetFirst fastfirstrow CalPlan where (( Buf.cDoc == CalPlan.nRec )) = tsOk )
+                pDog := loSpDocs.CalPlan.cDogovor;
+            }
+          else
+            pDog := Buf.cDoc;
+
+          var FoundElse : boolean; FoundElse := false;
+          var oRltFuncs : RltFuncs;
+          var wVidObj   : word;
+          var pObj      : comp;
+
+          if ( loSpDocs.GetFirst fastfirstrow Dogovor where (( pDog == Dogovor.nRec )) = tsOk )
+            if ( loSpDocs.Dogovor.VidDog = 12 ) // договор аренды
+              if ( oRltFuncs.GetObjOnSpDocs(Buf.nRec, wVidObj, pObj, false) )
+                {
+                  // удаляем связь с позицией спецификации из rltLinks
+                  delete rltLinks where (( wVidObj  == rltLinks.VidObj and
+                                           pObj     == rltLinks.cObj   and
+                                           Buf.nRec == rltLinks.cSpDocs ));
+
+                  loSpDocs._loop SpDocsUp where (( loSpDocs.Dogovor.nRec == SpDocsUp.cDoc and
+                                                   loSpDocs.Dogovor.TiDk == SpDocsUp.TiDk and
+                                                   word(2)               == SpDocsUp.PrMC ))
+                    if ( ( loSpDocs.SpDocsUp.cMCUsl = Buf.cMCUsl ) AND ( loSpDocs.SpDocsUp.cOtvPodr = Buf.cOtvPodr ) )
+                      {
+                        FoundElse := true;
+                        Break;
+                      }
+
+                    if ( not FoundElse )
+                      {
+                        loSpDocs._loop CalPlan where (( loSpDocs.Dogovor.nRec == CalPlan.cDogovor and
+                                                        comp(0)               == CalPlan.cCalPlan ))
+                          loSpDocs._loop SpDocsUp where (( loSpDocs.CalPlan.nRec == SpDocsUp.cDoc and
+                                                           word(403)             == SpDocsUp.TiDk and
+                                                           word(2)               == SpDocsUp.PrMC ))
+                          if ( ( loSpDocs.SpDocsUp.cMCUsl = Buf.cMCUsl ) AND ( loSpDocs.SpDocsUp.cOtvPodr = Buf.cOtvPodr ) )
+                            {
+                              FoundElse := true;
+                              Break;
+                            }
+                      }
+
+                    if ( not FoundElse ) // нет больше такой услуги в договоре и КП
+                      _loop rltRents where (( wVidObj == rltRents.VidObj    and
+                                              pObj    == rltRents.cObj      and
+                                              word(1) == rltRents.Operation and
+                                              pDog    == rltRents.cDogovor ))
+                        {
+                          delete current rltRents;
+                          oRltFuncs.ModifyObjStatus(wVidObj, pObj);
+                        }
+                }
+        }
+
+//-- удаление привязанных ДЕИ
+      var piKatDopEd : iKatDEI;
+      piKatDopEd.SpDopEd_Delete(coSpDocs, pNRec, tmpTiDk);
+      // перенумерация спецификации-------------------------------------------
+      if ( ( ret = tsOk ) AND NeedReCode )
+        {
+          tmpN := '0000';
+          loSpDocs._loop SpDocs where (( tmpcDoc == SpDocs.cDoc and tmpTiDk == SpDocs.TiDk )) ordered by index SpDocs02
+            {
+              NextNumStr(tmpN);
+              loSpDocs.SpDocs.Code := tmpN;
+              loSpDocs.UpDate current SpDocs;
+            }
+        }
+      //----------------------------------------------------------------------
+    }
+
+  Delete_current_SpDocsEx := tsOk;
+}
+
+Function Delete_current_SpDocs(pNRec : comp; isVis : boolean) : word;
+{
+  var cSmet, cDog : comp;
+
+  loSpDocs.GetFirst SpDocs where (( pNRec == SpDocs.nRec ));
+
+  if ( loSpDocs.GetFirst SpDocSmeta where (( coSpDocs             == SpDocSmeta.coTable and
+                                             loSpDocs.SpDocs.nRec == SpDocSmeta.cSpec )) = tsOk )
+    {
+      cSmet := loSpDocs.SpDocSmeta.cPosition;
+      cDog  := loSpDocs.SpDocs.cDoc;
+
+      loSpDocs._Loop SpDocSmeta1 where (( coSpDocs == SpDocSmeta1.coTable and
+                                          cDog     == SpDocSmeta1.cDoc    and
+                                          cSmet    == SpDocSmeta1.cPosition ))
+        {
+          Delete_current_SpDocs := Delete_current_SpDocsEx(loSpDocs.SpDocSmeta1.cSpec, isVis, true);
+          case loSpDocs.SpDocs.TiDk of
+            400: insTbl.DeleteSpEnviroment(toSpDogovor, loSpDocs.SpDocSmeta1.cSpec);
+            401: insTbl.DeleteSpEnviroment(toSpAppDog , loSpDocs.SpDocSmeta1.cSpec);
+            403: insTbl.DeleteSpEnviroment(toSpCalPlan, loSpDocs.SpDocSmeta1.cSpec);
+          end;
+        }
+    }
+  else
+    {
+      Delete_current_SpDocs := Delete_current_SpDocsEx(pNRec, isVis, true);
+      case loSpDocs.SpDocs.TiDk of
+        400: insTbl.DeleteSpEnviroment(toSpDogovor, pNRec);
+        401: insTbl.DeleteSpEnviroment(toSpAppDog , pNRec);
+        403: insTbl.DeleteSpEnviroment(toSpCalPlan, pNRec);
+      end;
+    }
+}
+
+//-- проверяет, есть ли записи сформированные по SpDocs документа
+//-- true - есть, false-нет
+Function SpDocs_SomeIsInUse(pNRec : comp; pTiDk : word) : boolean;
+{
+  SpDocs_SomeIsInUse := true;
+
+  loSpDocs._loop SpDocs2 where (( pTiDk == SpDocs2.TiDk and pNRec == SpDocs2.cDoc ))
+    if SpDocs_isInUse(loSpDocs.SpDocs2.nRec)
+      Exit;
+
+  SpDocs_SomeIsInUse := false;
+}
+
+Function SpDocs_Delete(nRecDoc : comp; nTiDk : word; isVis : boolean) : word;
+var ret : word;
+{
+  SpDocs_Delete := 1;
+
+  if ( SpDocs_SomeIsInUse(nRecDoc, nTiDk) )
+    {
+      if ( isVis )
+        message('Записи спецификации документа используются'#13
+              + 'в спецификациях других документов.'#13
+              + 'Удаление невозможно.', OkButton);
+      Exit;
+    }
+
+  while (loSpDocs.GetFirst fastfirstrow SpDocs where (( nRecDoc == SpDocs.cDoc and nTiDk == SpDocs.TiDk )) = tsOK) do
+    {
+      ret := delete_current_SpDocsEx(loSpDocs.SpDocs.nRec, isVis, false);
+
+      if ( ret <> tsOk )
+        {
+          SpDocs_Delete := ret;
+          Exit;
+        }
+    }
+
+  SpDocs_Delete := tsOk;
+}
+
+Function Insert_current_SpDocs(var SpDocsPos : #TSpDocsP) : word;
+var
+  ret    : word;
+
+  tmpK
+, OldKol : double;
+{
+//-- данная ф-ия работает только с таблицей SpDocs
+//-- стандартная функция вставки SpDocs
+//-- для работы с SpDocs надо использовать только ее т.к. она
+//-- модифицирует остаток SpDocs-а по которому сформирован текущий
+  if ( SpDocsPos.Code = '' )
+    SpDocsPos.Code := GetSpDocsCodeNext(SpDocsPos.cDoc, SpDocsPos.TiDk);
+
+  SpDocsPos.Ostatok := fEdIzm.ConvertToUchEd(SpDocsPos.Kol, SpDocsPos.cOtpEd);
+  SpDocsPos.Empty   := GetEmpty(SpDocsPos.Ostatok);
+
+  if ( SpDocsPos.cMCUsl <> 0 )
+    SpDocsPos.Summa := DogRound(SpDocsPos.cVal <> 0, SpDocsPos.Price * SpDocsPos.Kol);
+//-- Это временная доп проверка, чтобы поле корректно заполнялось
+  if ( ( SpDocsPos.FilialNo <> 0 ) AND ( SpDocsPos.FilialNo <> 1 ) )
+    SpDocsPos.FilialNo := 0;
+
+  SpDocs.BufferP := type$p_SpDocs(SpDocsPos);
+
+  ret := insert current SpDocs;
+
+  tmpK := SpDocs.Kol;
+
+  if ( ret = tsOk )
+   {
+     UpdateDEIKolSpDocs(SpDocs.Buffer, 2, 0, SpDocs.Kol, 0, SpDocs.TiDK);
+     SpDocs_UpDate_UpDoc(SpDocs.nRec, tmpK, SpDocs.cOtpEd, true);
+   }
+
+  if ( tmpK <> SpDocs.Kol )
+    {
+      OldKol := SpDocs.Kol;
+
+      SpDocs.Kol := tmpK;
+
+      UpdateDEIKolSpDocs(SpDocs.Buffer, 2, OldKol, tmpK, 0, SpDocs.TiDK);
+
+      SpDocs.Ostatok := fEdIzm.ConvertToUchEd(SpDocs.Kol, SpDocs.cOtpEd);
+      SpDocs.Summa   := DogRound(SpDocs.cVal <> 0, SpDocs.Price * SpDocs.Kol);
+      SpDocs.Empty   := GetEmpty(SpDocs.Ostatok);
+
+      ret := UpDate current SpDocs;
+    }
+
+  SpDocsPos := SpDocs.BufferP;
+
+  Insert_current_SpDocs := ret;
+}
+
+Function UpDate_current_SpDocs(var SpDocsPos : #TSpDocsP) : word;
+var
+  ret    : word;
+
+  tmpK
+, OldKol : double;
+{
+//-- стандартная функция модификации SpDocs
+//-- для работы с SpDocs надо использовать только ее т.к. она
+//-- модифицирует остаток SpDocs-а по которому сформирован текущий
+  tmpK   := SpDocsPos.Kol;
+  OldKol := SpDocsPos.Kol;
+
+  Ch_KolSpDocs(SpDocsPos.nRec, tmpK, SpDocsPos.cOtpEd);
+
+  SpDocs_UpDate_UpDoc(SpDocsPos.nRec, tmpK, SpDocsPos.cOtpEd, false);
+
+  SpDocsPos.Kol := tmpK;
+
+  if ( SpDocsPos.cMCUsl <> 0 )
+    SpDocsPos.Summa := DogRound(SpDocsPos.cVal <> 0, SpDocsPos.Price * SpDocsPos.Kol);
+
+  SpDocs_RecalcOst(SpDocsPos.nRec, tmpK);
+
+  SpDocsPos.Ostatok := fEdIzm.ConvertToUchEd(SpDocsPos.Kol, SpDocsPos.cOtpEd) - tmpK;
+  SpDocsPos.Empty   := GetEmpty(SpDocsPos.Ostatok);
+  SpDocs.BufferP    := type$p_SpDocs(SpDocsPos);
+
+  ret := UpDate current SpDocs;
+
+  if ( OldKol <> SpDocs.Kol )
+   UpdateDEIKolSpDocs(SpDocs.Buffer, 2, OldKol, SpDocs.Kol, 0, SpDocs.TiDK);
+
+  SpDocsPos := SpDocs.BufferP;
+
+  UpDate_current_SpDocs := ret;
+}
+
+//-- возвращает цену и сумму для SpDocs
+//-- ф-ия сделана из-за того что в SpDocs для наряд-заказов нет цены
+//-- и цену надо брать из позиций договора(кал плана) по которому сформировано
+Function getSpDocsPrice(pSpDocs
+                      , pDoc
+                      , pOtpEd : comp;
+                    var Prc
+                      , Sum    : double;
+                    var pVal
+                      , pGrNal : comp
+                       ) : boolean;
+var
+  ret      : word;
+  pUpDoc   : comp;
+  tmp_TiDk : word;
+{
+  getSpDocsPrice := false;
+
+  Prc := 0; Sum := 0; pVal := 0; pGrNal := 0;
+
+  ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( pSpDocs == SpDocs.nRec ));
+
+  if ( ret <> tsOk )
+    Exit;
+
+  if ( wGetTune('Doc.NZ.EditCen') = 1 )
+  {
+    Prc    := loSpDocs.SpDocs.Price;
+    Sum    := loSpDocs.SpDocs.Summa;
+    pGrNal := loSpDocs.SpDocs.cGrNal;
+
+    getSpDocsPrice := true;
+
+    Exit;
+  }
+
+  if ( loSpDocs.SpDocs.TiDk <> 440 )
+    {
+      if ( loSpDocs.SpDocs.cOtpEd <> pOtpEd )
+       {
+         Prc := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocs.Price, loSpDocs.SpDocs.cOtpEd, pOtpEd);
+         Sum := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocs.Summa, loSpDocs.SpDocs.cOtpEd, pOtpEd);
+       }
+      else
+       {
+         Prc  := loSpDocs.SpDocs.Price;
+         Sum  := loSpDocs.SpDocs.Summa;
+       }
+
+      pGrNal := loSpDocs.SpDocs.cGrNal;
+
+      getSpDocsPrice := true;
+
+      Exit;
+    }
+
+  pUpDoc := loSpDocs.SpDocs.cUpDoc;
+
+  while (loSpDocs.GetFirst fastfirstrow SpDocsUp where (( pUpDoc == SpDocsUp.nRec )) = tsOk) do
+    {
+      if ( loSpDocs.SpDocsUp.TiDk <> 440 )
+        {
+          if ( loSpDocs.SpDocsUp.cOtpEd <> pOtpEd )
+           {
+             Prc := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocsUp.Price, loSpDocs.SpDocsUp.cOtpEd, pOtpEd);
+             Sum := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocsUp.Summa, loSpDocs.SpDocsUp.cOtpEd, pOtpEd);
+           }
+          else
+           {
+             Prc  := loSpDocs.SpDocsUp.Price;
+             Sum  := loSpDocs.SpDocsUp.Summa;
+           }
+
+          pGrNal := loSpDocs.SpDocsUp.cGrNal;
+
+          getSpDocsPrice := true;
+
+          Exit;
+        }
+
+      pUpDoc := loSpDocs.SpDocsUp.cUpDoc;
+    }
+
+  ret := loSpDocs.GetFirst fastfirstrow NZakaz where (( pDoc == NZakaz.nRec ));
+
+  if ( loSpDocs.NZakaz.cDogovor = 0 )
+    Exit;
+
+//-- ищем цену для позиции в пункте кал плана
+  if ( loSpDocs.NZakaz.cCalPlan <> 0 )
+    {
+      tmp_TiDk := 403;
+
+      loSpDocs._loop SpDocsUp where(( loSpDocs.NZakaz.cCalPlan == SpDocsUp.cDoc and
+                                      tmp_TiDk                 == SpDocsUp.TiDk ))
+        {
+          if ( ( loSpDocs.SpDocs.PrMC = loSpDocs.SpDocsUp.PrMC ) AND ( loSpDocs.SpDocs.cMCUsl = loSpDocs.SpDocsUp.cMCUsl ) )
+            {
+              if ( loSpDocs.SpDocsUp.cOtpEd = pOtpEd )
+               {
+                 Prc  := loSpDocs.SpDocsUp.Price;
+                 Sum  := loSpDocs.SpDocsUp.Summa;
+               }
+              else
+               {
+                 Prc := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocsUp.Price, loSpDocs.SpDocsUp.cOtpEd, pOtpEd);
+                 Sum := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocsUp.Summa, loSpDocs.SpDocsUp.cOtpEd, pOtpEd);
+               }
+
+              pGrNal := loSpDocs.SpDocsUp.cGrNal;
+
+              GetSpDocsPrice := true;
+
+              Exit;
+            }
+        }
+      Exit;
+    }
+
+//-- ищем цену для позиции в пункте договора или соглашения
+  var tmpDog : comp; tmpDog := 0;
+
+  if ( loSpDocs.NZakaz.cAppDogovor <> 0 )
+    tmpDog := loSpDocs.NZakaz.cAppDogovor
+  else
+    if (loSpDocs.NZakaz.cDogovor <> 0)
+      tmpDog := loSpDocs.NZakaz.cDogovor;
+
+  if ( tmpDog <> 0 )
+    {
+      ret := loSpDocs.GetFirst fastfirstrow Dogovor where (( tmpDog == Dogovor.nRec ));
+
+      if ( ret = tsOk )
+        tmp_TiDk := loSpDocs.Dogovor.TiDk
+      else
+        Exit;
+
+      loSpDocs._loop SpDocsUp where((tmpDog == SpDocsUp.cDoc and tmp_TiDk == SpDocsUp.TiDk ))
+        {
+          if ( ( loSpDocs.SpDocs.PrMC = loSpDocs.SpDocsUp.PrMC ) AND ( loSpDocs.SpDocs.cMCUsl = loSpDocs.SpDocsUp.cMCUsl ) )
+            {
+              if ( loSpDocs.SpDocsUp.cOtpEd = pOtpEd )
+               {
+                 Prc  := loSpDocs.SpDocsUp.Price;
+                 Sum  := loSpDocs.SpDocsUp.Summa;
+               }
+              else
+               {
+                 Prc := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocsUp.Price, loSpDocs.SpDocsUp.cOtpEd, pOtpEd);
+                 Sum := fEdIzm.ConvSellSumToSecondEd(loSpDocs.SpDocsUp.Summa, loSpDocs.SpDocsUp.cOtpEd, pOtpEd);
+               }
+
+              pGrNal := loSpDocs.SpDocsUp.cGrNal;
+
+              GetSpDocsPrice := true;
+
+              Exit;
+            }
+        }
+    }
+}
+
+Function SpDocs_Set_InUseStatus(pDoc : comp; pTiDk : word; pInUseStat : longint) : word;
+var
+  ret         : word;
+
+  tmpK
+, OldKol      : double;
+
+  piKatDopEd2 : iKatDEI;
+{
+  SpDocs_Set_InUseStatus := 0;
+
+  loSpDocs._loop SpDocs where (( pDoc == SpDocs.cDoc and pTiDk == SpDocs.TiDk ))
+    {
+      if ( loSpDocs.SpDocs.FilialNo <> pInUseStat )
+        {
+          if ( SpDocs_isUseControlKol(loSpDocs.SpDocs.cUpDoc, loSpDocs.SpDocs.TiDk, loSpDocs.SpDocs.FilialNo) )
+            { //-- был признак того, что позиция использовалась в автоматич расчетах
+              tmpK := 0;
+
+              PushPos(loSpDocs.tnSpDocs);
+
+              SpDocs_UpDate_UpDoc(loSpDocs.SpDocs.nRec, tmpK, loSpDocs.SpDocs.cOtpEd, false);
+
+              PopPos(loSpDocs.tnSpDocs);
+
+              set loSpDocs.SpDocs.FilialNo := pInUseStat;
+
+              ret := loSpDocs.UpDate current SpDocs;
+            }
+          else
+            {
+              set loSpDocs.SpDocs.FilialNo := pInUseStat;
+
+              ret := loSpDocs.UpDate current SpDocs;
+
+              tmpK := loSpDocs.SpDocs.Kol;
+
+              PushPos(loSpDocs.tnSpDocs);
+
+              SpDocs_UpDate_UpDoc(loSpDocs.SpDocs.nRec, tmpK, loSpDocs.SpDocs.cOtpEd, true);
+
+              PopPos(loSpDocs.tnSpDocs);
+
+              if ( loSpDocs.SpDocs.Kol <> tmpK )
+                {
+                  OldKol := loSpDocs.SpDocs.Kol;
+
+                  set loSpDocs.SpDocs.Kol := tmpK;
+
+                  ret := loSpDocs.UpDate current SpDocs;
+
+                  piKatDopEd2.SetDefaultDopEd(coSpDocs,                   // код таблицы спецификации
+                                              loSpDocs.SpDocs.nRec, // ссылка на запись спецификации
+                                              2,    // тип количества
+                                              loSpDocs.SpDocs.cMCUsl,     // ссылка на МЦ/Услугу
+                                              loSpDocs.SpDocs.PrMC,       // признак МЦ/Услуга
+                                              OldKol,   // старое количество в отпускных единицах
+                                              loSpDocs.SpDocs.Kol,      // новое количество в отпускных единицах
+                                              longint(0),     // параметры
+                                              loSpDocs.SpDocs.TiDk
+                                             )
+                }
+            }
+        }
+    }
+}
+
+Function disconUpDocs(pDoc : comp; pTiDk : word) : word;
+var
+  ret  : word;
+  tmpK : double;
+{
+  disconUpDocs := word(0);
+
+  loSpDocs._loop SpDocs where((pDoc == SpDocs.cDoc and pTiDk == SpDocs.TiDk ))
+    {
+      if ( loSpDocs.SpDocs.cUpDoc <> 0 )
+        {
+             tmpK := 0;
+
+             PushPos(loSpDocs.tnSpDocs);
+
+             SpDocs_UpDate_UpDoc(loSpDocs.SpDocs.nRec, tmpK, loSpDocs.SpDocs.cOtpEd, false);
+
+             PopPos(loSpDocs.tnSpDocs);
+
+             set loSpDocs.SpDocs.cUpDoc := 0;
+
+             ret := loSpDocs.UpDate current SpDocs;
+        }
+    }
+
+  disconUpDocs := word(0);
+}
+
+Function SpDocs_InsFromMarker1(pDoc      : comp;
+                               curTiDk   : word; //-- документ в который
+                               pDocSour  : comp;
+                               curTiDkSour       //-- документ из которого
+                             , pDirect   : word;
+                               FromOwner : boolean
+                              ) : word;
+var
+  ret
+, i            : word;
+
+  Marker
+, MarkerZ
+, MarkerZCount
+, MarkerKol
+, MarkerCount  : longint;
+
+  tmpKol       : double;
+
+  pickrec
+, tmpOtpEd
+, New_NRec
+, pShipment
+, pTipOtgr
+, pWayMove     : comp;
+
+  pFilialNo    : longint;
+
+  tmpPrMC      : word;
+
+  tmpMC
+, tmpGrMC
+, tmpGrNal
+, tmpPick
+, tmpDirect    : comp;
+{
+  Marker    := InitMarker('MSpDocs'   , 8, 100, 10);
+  MarkerKol := InitMarker('MSpDocsKol', 8, 100, 10);
+  MarkerZ   := InitMarker('MSpDocsZam', 8, 100, 10);
+
+  MarkerCount  := GetMarkerCount(Marker);
+  MarkerZCount := GetMarkerCount(MarkerZ);
+
+  GetDocInfoOtgr(pDoc, curTiDk, pShipment, pTipOtgr, pWayMove, pFilialNo);
+
+  for(i := 0; i <= MarkerCount; inc(i))
+    if ( GetMarker(Marker, i, pickrec) )
+      {
+        New_NRec := 0;
+
+        ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( pickrec == SpDocs.nRec ));
+
+        if (ret <> tsOk)
+          Continue;
+
+        tmpPrMC  := loSpDocs.SpDocs.PrMC;
+        tmpMC    := loSpDocs.SpDocs.cMCUsl;
+        tmpGrMC  := loSpDocs.SpDocs.cGrMCUsl;
+        tmpGrNal := loSpDocs.SpDocs.cGrNal;
+        tmpPick  := pickrec;
+        pickrec  := 0;
+
+        if ( FromOwner )
+           pickrec := tmpPick
+        else
+          {
+            loSpDocs._loop SpDocs where (( pDocSour    == SpDocs.cDoc and
+                                           curTiDkSour == SpDocs.TiDk and
+                                           tmpPrMC     == SpDocs.PrMC ))
+              {
+                if (
+                    ( tmpPrMC = loSpDocs.SpDocs.PrMC     )
+                    AND
+                    ( tmpMC   = loSpDocs.SpDocs.cMCUsl   )
+                    AND
+                    ( tmpGrMC = loSpDocs.SpDocs.cGrMCUsl )
+                   )
+                  {
+                    pickrec := loSpDocs.SpDocs.nRec;
+
+                    Break;
+                  }
+
+                if ( pickrec <> 0 )
+                  Break;
+              }
+
+            if ( pickrec = 0 )
+              loSpDocs._loop SpDocs where ((pDocSour    == SpDocs.cDoc and
+                                            curTiDkSour == SpDocs.TiDk and
+                                            tmpPrMC     == SpDocs.PrMC ))
+                {
+//-- смотрим в заменах
+                  loSpDocs._loop SpDocsUp where (( loSpDocs.SpDocs.nRec == SpDocsUp.cDoc and
+                                                   word(439)            == SpDocsUp.TiDk and
+                                                   tmpPrMC              == SpDocsUp.PrMC ))
+                    if (
+                        ( tmpPrMC = loSpDocs.SpDocsUp.PrMC     )
+                        AND
+                        ( tmpMC   = loSpDocs.SpDocsUp.cMCUsl   )
+                        AND
+                        ( tmpGrMC = loSpDocs.SpDocsUp.cGrMCUsl )
+                       )
+                      {
+                        pickrec := loSpDocs.SpDocsUp.nRec;
+
+                        Break;
+                      }
+//-- конец смотрим в заменах
+                  if ( pickrec <> 0 )
+                    Break;
+                }
+          }
+
+        if ( pickrec <> 0 )
+          {
+            if ( not GetMarker(MarkerKol, i, tmpKol) )
+              {
+                tmpKol := 0;
+
+                ret := SpDocs_InsCurentFromUpDoc(pickrec
+                                               , pDoc
+                                               , curTiDk
+                                               , true
+                                               , tmpKol
+                                               , pShipment
+                                               , pTipOtgr
+                                               , pWayMove
+                                               , pFilialNo
+                                               , pDirect
+                                               , false);
+              }
+            else
+              ret := SpDocs_InsCurentFromUpDoc(pickrec
+                                             , pDoc
+                                             , curTiDk
+                                             , false
+                                             , tmpKol
+                                             , pShipment
+                                             , pTipOtgr
+                                             , pWayMove
+                                             , pFilialNo
+                                             , pDirect
+                                             , false);
+
+            if ( ret = tsOk )
+              {
+                New_NRec := loSpDocs.SpDocs.nRec;
+
+                if ( loSpDocs.SpDocs.cMakeSp <> tmpPick )
+                  {
+                    loSpDocs.SpDocs.cMakeSp := tmpPick;
+                    ret := loSpDocs.update current SpDocs;
+                  }
+              }
+          }
+        else
+          {
+            tmpOtpEd  := 0;
+            tmpDirect := pDirect;
+
+            ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( tmppick == SpDocs.nRec ));
+
+            if ( ret = tsOk )
+              {
+                if ( pDirect = 0 )
+                  tmpDirect := loSpDocs.SpDocs.Direct;
+
+                if ( loSpDocs.SpDocs.TiDk <> 439 )
+                  tmpOtpEd := loSpDocs.SpDocs.cOtpEd
+                else
+                  {
+                    tmppick := loSpDocs.SpDocs.cDoc;
+
+                    ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( tmppick == SpDocs.nRec ));
+
+                    tmpOtpEd := loSpDocs.SpDocs.cOtpEd;
+                  }
+              }
+
+            if ( not GetMarker(MarkerKol, i, tmpKol) )
+              tmpKol := 0;
+
+            ClearBuffer(tnSpDocs);
+
+            SpDocs.cDoc      := pDoc;
+            SpDocs.TiDk      := curTiDk;
+            SpDocs.Kol       := tmpKol;
+            SpDocs.cShipment := pShipment;
+            SpDocs.cTipOtg   := pTipOtgr;
+            SpDocs.cWayMove  := pWayMove;
+            SpDocs.FilialNo  := pFilialNo;
+            SpDocs.cGrMCUsl  := tmpGrMC;
+            SpDocs.cGrNal    := tmpGrNal;
+            SpDocs.cMCUsl    := tmpMC;
+            SpDocs.PrMC      := tmpPrMC;
+            SpDocs.cMakeSp   := tmpPick;
+            SpDocs.cOtpEd    := tmpOtpEd;
+            SpDocs.Direct    := tmpDirect;
+
+            ret := insert_current_SpDocs(SpDocs.BufferP);
+
+            if ( ret = tsOK )
+              New_NRec := SpDocs.nRec;
+          }
+//-- здесь перенос замен
+        if ( ( New_NRec <> 0 ) AND ( MarkerZCount <> 0 ) )
+          {
+            ret := loSpDocs.GetFirst fastfirstrow SpDocs where (( New_NRec == SpDocs.nRec ));
+
+            if ( ret <> tsOk )
+              Continue;
+
+            SpDocs_CopyZamenFromMarker(tmppick, New_NRec, MarkerZ, TRUE);
+          }
+      }
+
+  DoneMarker(Marker   , 'MSpDocs');
+  DoneMarker(MarkerZ  , 'MSpDocsZam');
+  DoneMarker(MarkerKol, 'MSpDocsKol');
+
+  UpdateUpSpDocsRef(pDoc, curTiDk);
+
+  SpDocs_InsFromMarker1 := 0;
+}
+
+Function MakeCopySpDocsEx(nRec_OldSpDocs
+                        , cSpMc_SpDocs
+                        , nRec_NewDog    : comp;
+
+                          TiDk_Dog       : word;
+                          SaveOstatok
+                       ,  IsCopy         : boolean
+                       ) : comp;
+var
+  nRec_NewSpDocs : comp;
+  OldOstatok     : double;
+  piKAtDopEd2    : iKatDEI;
+{
+  if (GetFirst fastfirstrow SpDocs where (( nRec_OldSpDocs == SpDocs.nRec )) <> tsOk)
+    Exit;
+
+  SpDocs.nRec  := 0;
+  SpDocs.cDoc  := nRec_NewDog;
+  SpDocs.cSpMC := cSpMc_SpDocs;
+  OldOstatok   := SpDocs.Ostatok;
+
+  if IsCopy
+    SpDocs.cUpDoc := 0;
+
+  if ( insert_current_SpDocs(SpDocs.BufferP) = tsOK )
+    {
+      if ( SaveOstatok )
+        update current SpDocs set SpDocs.Ostatok := OldOstatok;
+
+      oMTRFun.CopySpecMTR(coSpDocs, nRec_OldSpDocs, coSpDocs, SpDocs.nRec);
+
+      RunInterface('CopySpDocSmeta', word(coSpDocs), nRec_OldSpDocs, word(coSpDocs), SpDocs.nRec);
+    }
+
+  nRec_NewSpDocs   := SpDocs.nRec;
+  MakeCopySpDocsEx := SpDocs.nRec;
+
+  SpDocs_CopyZamen(nRec_OldSpDocs, SpDocs.nRec);
+
+  oExtAtr.CopyAllAttr    (word(coSpDocs), nRec_OldSpDocs, SpDocs.nRec);
+  oExtCls.CopyAllClassVal(word(coSpDocs), nRec_OldSpDocs, SpDocs.nRec);
+
+  if ( ( SpDocs.PrMC = 2 ) OR ( SpDocs.PrMC = 3 ) )
+    if ( GetFirst fastfirstrow KatUsl where (( SpDocs.cMCUSL == KatUsl.nRec )) = tsOK )
+      if ( KatUsl.TYPEUSL = 1 )
+        oCalcFuns.ClcUsl_CopyFactPar(nRec_OldSpDocs, coSpDocs, SpDocs.nRec, coSpDocs);
+
+  ReCalcSpec(SpDocs.TiDk, SpDocs.cDoc);
+
+  // ---------- копируем ДЕИ
+  piKatDopEd2.CopyDopEd(coSpDocs,            // код таблицы спецификации источника
+                        nRec_OldSpDocs,      // ссылка на запись спецификации источника
+                        2,                   // тип количества источника
+                        SpDocs.Kol, // количество источника в отпускных единицах
+                        coSpDocs,            // код таблицы спецификации приемника
+                        SpDocs.nRec,// ссылка на запись спецификации приемника
+                        2,                   // тип количества приемника
+                        SpDocs.Kol, // количество приемника в отпускных единицах
+                        SpDocs.TiDk
+                       );
+}
+
+Function MakeCopySpDocs(nRec_OldSpDocs
+                      , cSpMc_SpDocs
+                      , nRec_NewDog    : comp;
+
+                        TiDk_Dog       : word;
+                        SaveOstatok    : boolean
+                       ) : comp;
+{
+  MakeCopySpDocs := MakeCopySpDocsEx(nRec_OldSpDocs, cSpMc_SpDocs, nRec_NewDog, TiDk_Dog, SaveOstatok, FALSE);
+}
+
+Procedure MakeCopySpDocsSpecificationsEx(TiDk_Dog : word; nRec_OldDog, nRec_NewDog : comp; SaveOstatok, IsCopy : boolean);
+var
+  nRec_OldSpDocs, nRec_NewSpDocs, nRec_NewSpDocs2 : comp;
+{
+  loSpDocs._loop SpDocs2 where (( comp(0)    == SpDocs2.cSpMC and
+                                 TiDk_Dog    == SpDocs2.TiDk  and
+                                 nRec_OldDog == SpDocs2.cDoc ))
+    {
+      nRec_OldSpDocs := loSpDocs.SpDocs2.nRec;
+      nRec_NewSpDocs := MakeCopySpDocsEx(loSpDocs.SpDocs2.nRec, comp(0), nRec_NewDog, TiDk_Dog, SaveOstatok, IsCopy);
+      CopyRltLinks(loSpDocs.SpDocs2.Buffer, loSpDocs.SpDocs.Buffer);
+      loSpDocs._loop SpDocsDown where (( nRec_OldSpDocs == SpDocsDown.cSpMC ))
+        {
+          nRec_NewSpDocs2 := MakeCopySpDocsEx(loSpDocs.SpDocsDown.nRec, nRec_NewSpDocs, nRec_NewDog, TiDk_Dog, SaveOstatok, IsCopy);
+          CopyRltLinks(loSpDocs.SpDocsDown.Buffer, loSpDocs.SpDocs.Buffer);
+        }
+    }
+}
+
+Procedure MakeCopySpDocsSpecifications(TiDk_Dog : word; nRec_OldDog, nRec_NewDog : comp; SaveOstatok: boolean);
+{
+  MakeCopySpDocsSpecificationsEx(TiDk_Dog, nRec_OldDog, nRec_NewDog, SaveOstatok, FALSE);
+}
+
+Function GetCurrentPosition : #TSpDocs;
+{
+  GetCurrentPosition := loSpDocs.SpDocs.Buffer;
+}
+
+Function GetCurrentPositionP : #TSpDocsP;
+{
+  GetCurrentPositionP := loSpDocs.SpDocs.BufferP;
+}
+
+Procedure ReCalcSumsUpDocs(nRecDog,
+                           cValDog : comp;
+
+                           dValDog : date;
+
+                           dSumDog,
+                           dSumNDS : double);
+var _wDirectCurDG : word;
+{
+    _wDirectCurDG := 0;
+
+  if ( GetFirst fastfirstrow Dogovor where (( nRecDog == Dogovor.nRec )) = tsOk )
+    _wDirectCurDG := Dogovor.Direct
+  else
+    Exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Пересчет сумм вышестоящих документов ...'#13, 1);
+
+  _loop IerDog where (( nRecDog == IerDog.cRec ))
+    {
+      NextVisual;
+
+      if ( IerDog.cUpRec <> nRecDog )
+        if ( GetFirst fastfirstrow Dogovor where (( IerDog.cUpRec == Dogovor.nRec )) = tsOk )
+          {
+            // shaf для "Почты России"
+            if ( Dogovor.Direct <> _wDirectCurDG )
+              Continue;
+
+            if ( Dogovor.cVal = cValDog )
+              {
+                Dogovor.Summa  := Dogovor.Summa  + dSumDog;
+                Dogovor.SumNDS := Dogovor.SumNDS + dSumNDS;
+              }
+            else
+              {
+                Dogovor.Summa  := Dogovor.Summa  + oValFunc.GetAnyCurrency(cValDog, dSumDog, dValDog, Dogovor.cVal);
+                Dogovor.SumNDS := Dogovor.SumNDS + oValFunc.GetAnyCurrency(cValDog, dSumNDS, dValDog, Dogovor.cVal);
+              }
+
+            if ( update current Dogovor = tsOk )
+              {
+                oDogFuns.UpDateInsertDogovorSoprHoz(Dogovor.Buffer);
+                oDogFuns.RecalcSchema(Dogovor.nRec);
+              }
+          }
+    }
+
+  StopVisual('', 0);
+}
+
+Function ReCalcSpecDogovor(pDogovor : comp; var sSpec : double; var sNal : double) : boolean;
+var
+  kk
+, Summa
+, SumNal
+, Total  : double;
+
+  bRes   : boolean;
+
+{
+
+  sSpec  := 0;
+  sNal   := 0;
+
+  bRes   := false;
+
+  Summa  := 0;
+  SumNal := 0;
+
+  if ( GetFirst fastfirstrow Dogovor where (( pDogovor == Dogovor.nRec )) <> tsOK )
+    Exit;
+
+  _loop SpDocs where (( Dogovor.TiDk == SpDocs.TiDk and Dogovor.nRec == SpDocs.cDoc ))
+    {
+//shaf для "Почта России"
+      if ( SpDocs.PrMC = 1 )
+        if ( GetFirst fastfirstrow KatVidD where (( Dogovor.cVidDog == KatVidD.nRec )) = tsOK )
+          if ( KatVidD.VidDog = word(1) ) // договор комиссии - сумма по услугам
+            Continue;
+
+      if ( Dogovor.Direct = 3 )
+        if ( ( SpDocs.Direct <> 2 ) OR ( ( SpDocs.PrMC <> 2 ) AND ( SpDocs.PrMC <> 3 ) ) )
+          Continue;
+
+      Summa  += SpDocs.Summa
+      SumNal += SpDocs.SumNDS;
+
+      if ( ( SpDocs.Kol = 0 ) AND ( SpDocs.Price = 0 ) AND ( SpDocs.Summa = 0) )
+        bRes := true;
+    }
+
+  case Dogovor.IsExtra of
+    0: kk := -Dogovor.Discount;
+    1: kk :=  Dogovor.Discount;
+  else
+       kk := 0;
+  end;
+
+  if ( Dogovor.IsSum = 0 )
+    {
+      Total  := Summa  * (1 + kk / 100.0);
+      SumNal := SumNal * (1 + kk / 100.0);
+    }
+  else
+    {
+      Total  := Summa + kk;
+      SumNal := SumNal * (Total / Summa);
+    }
+
+  sSpec := Total + if(Dogovor.VhodNal = 1, 0, SumNal);
+  sNal  := SumNal;
+
+  ReCalcSpecDogovor := bRes;
+}
+
+Function ReCalcSummaDogovor(pDogovor : comp) : boolean;
+var
+  SumNal
+, Total  : double;
+
+  bRes   : boolean;
+{
+  if ( GetFirst fastfirstrow Dogovor where (( pDogovor == Dogovor.nRec )) <> tsOK )
+    Exit;
+
+  if ( Dogovor.VidDog = 14 )
+    Exit;
+
+  bRes   := false;
+
+  Total  := 0;
+  SumNal := 0;
+
+  bres := ReCalcSpecDogovor(pDogovor, Total, SumNal);
+
+  case wGetTune('Dog.ReCalcSumDog') of
+  0 : {
+        ReCalcSummaDogovor := FALSE;
+        Exit;
+      }
+  2 : {
+        if (Message('Пересчитать сумму по '
+                  + if(Dogovor.cDogovor = 0, 'договору', 'соглашению')
+                  + ' №' + Dogovor.NoDoc + DateToStr(Dogovor.dDoc, ' от DD/MM/YYYY')
+                  + '?'
+                  , YesNo + mfSwapButtons) = cmNo)
+          {
+            ReCalcSummaDogovor := FALSE;
+            Exit;
+          }
+      }
+  end; // case
+
+  set Dogovor.Summa  := Total;
+  set Dogovor.SumNDS := SumNal;
+
+  if ( update current Dogovor = tsOk )
+    {
+      oDogFuns.UpDateInsertDogovorSoprHoz(Dogovor.Buffer);
+      oDogFuns.RecalcSchema(Dogovor.nRec);
+    }
+
+  ReCalcSummaDogovor := bRes;
+}
+
+Procedure CheckSpDocsOstatok(pNote, cSpDocs_ : comp; kolPrev_ : double; var kol_ : double);
+{
+
+  if ( oNotes.Notes_InUseStatus(pNote) <> 1 )
+    Exit;
+
+  if ( GetFirst fastfirstrow SpDocs where (( cSpDocs_ == SpDocs.nRec )) <> tsOK )
+    Exit;
+
+  if ( kol_ > (SpDocs.Ostatok + kolPrev_) )
+    {
+      kol_ := SpDocs.Ostatok + kolPrev_;
+
+      message('Нельзя увеличивать количество на величину,'#13
+            + 'большую остатка МЦ/услуги в договоре !');
+    }
+
+  SpDocs.Ostatok := SpDocs.Ostatok + kolPrev_ - kol_;
+
+  if ( SpDocs.Ostatok < 0 )
+    SpDocs.Ostatok := 0
+  else
+    if ( SpDocs.Ostatok > (SpDocs.Kol * fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd)) )
+      SpDocs.Ostatok := SpDocs.Kol * fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd);
+
+  update current SpDocs;
+}
+
+Procedure CheckSpDocsOstatokOnStep(pNote, cSpDocs_ : comp; Buf : TSpStep; var _KOL : double);
+var
+  kol_, kolPrev_ : double;
+{
+
+  kol_ := Buf.kolSkl * fEdIzm.GetKoefOtpEd(Buf.cOtpEd);
+
+  if ( GetFirst fastfirstrow SpStep where (( Buf.nRec == SpStep.nRec )) <> tsOK )
+    Exit;
+
+  kolPrev_ := SpStep.kolSkl * fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+
+  CheckSpDocsOstatok(pNote, cSpDocs_, kolPrev_, kol_);
+
+  _KOL := kol_ / fEdIzm.GetKoefOtpEd(Buf.cOtpEd);
+}
+
+Procedure CheckSpDocsOstatokOnSopr(pNote, cSpDocs_ : comp; Buf : TSpSopr; var _KOL : double);
+var
+  kol_, kolPrev_ : double;
+{
+
+  kol_ := Buf.kolFact * fEdIzm.GetKoefOtpEd(Buf.cOtpEd);
+
+  if ( GetFirst fastfirstrow SpSopr where (( Buf.nRec == SpSopr.nRec )) <> tsOK )
+    Exit;
+
+  kolPrev_ := SpSopr.kolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+  CheckSpDocsOstatok(pNote, cSpDocs_, kolPrev_, kol_);
+
+  _KOL := kol_ / fEdIzm.GetKoefOtpEd(Buf.cOtpEd);
+}
+
+#end //_SPDOCS_VPP

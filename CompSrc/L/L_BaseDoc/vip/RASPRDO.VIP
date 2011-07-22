@@ -1,0 +1,594 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Выбор ДО для формирования сопроводительных документов
+// (накладных и актов)
+//
+//********************************************************************************
+// Параметры:   TDOC - тип ДО, p1 - StepDoc.nRec
+
+#define OBJINT_ALGORITM
+#define OBJINT_SETGETVID
+#define OBJINT_ACCOUNT
+#include objintpl.vin
+#include oSpcNakl.vin
+
+#define _RETTARA_
+#include EditDoc.vih
+#include makenakl.vih
+#include forceGrDel.vih
+#include OMNFINIT.VIH
+#include DOfuns.vih
+#include SDfuns.vih
+
+#ifdef ATL51
+  #include GetDBase.vih
+#end
+
+#doc
+Выбор ДО для формирования сопроводительных документов
+#end
+Interface RasprDo 'Формирование сопроводительных документов по документам' EscClose, Cyan, doAccept;
+
+  Show at (1, 2, 79, 20);
+
+var iSoprDoc : iProcSoprDoc;
+#include EditDoc.Var
+#include DOfuns.var
+#include SDfuns.var
+
+Create view
+
+Var
+  ShowRaspr
+, tDoc
+, Nakl_Akt
+                  : word;
+
+  p1
+                  : comp;
+
+  dFor
+, dForA
+                  : date;
+
+  Otkaz
+, RI_do
+                  : boolean;
+
+  pMakeSoprByBuff
+                  : MakeSoprByBuffObj;
+
+As select
+  *
+
+From
+  SDocBuf
+, SpDocBuf
+, SpDocBuf_Ex
+, Pick
+, StepDoc
+, BaseDoc
+, SpStep(SpStep02)
+, KatSopr
+, SpecZatr
+
+Where
+((
+    word(32)         == Pick.wList
+and Pick.cRec        == StepDoc.nRec
+and StepDoc.cBaseDoc == BaseDoc.nRec
+and StepDoc.nRec     == SpStep.cStepDoc
+
+//------------------------------------------------------------------------------
+// подцепка для накладных
+AND StepDoc.NRec     == KatSopr.cStepDoc
+AND KatSopr.NRec     == SpSopr.cSopr
+))
+
+Order by Pick.PickNum
+;
+
+Parameters
+  tdoc  // BaseDoc.VidDoc
+, p1;   // StepDoc.nRec
+
+Form Errr('Protokol.out', 'errr') with novisual;
+
+#include do2bufer.vpp
+
+#doc
+Окно установки параметров формирования сопроводительных документов
+#end
+Window wParamEx 'Формирование сопроводительных документов' ('',, sci1Esc) doAccept, EscClose, Gray;
+  Show at (16, 4, 75, 14);
+
+Screen scrParamEx
+
+Fields
+  dFor      ('Введите дату', hcD_GetFormNa, sci1Esc)
+            : NoProtect;
+  Nakl_Akt  ('Метод создания сопроводительных документов',, sci13Esc)
+            : [LIST 'накладные и акты'
+                  , 'только накладные'
+                  , 'только акты'], Protect;
+  ShowRaspr ('Метод автоматического распределения МЦ по разрезам', hcD_GetFormNa, sci1Esc)
+            : [List 'нет', 'да', 'при наличии нескольких разрезов'], Protect;
+
+Buttons
+  cmYes,Default,, 'Ввод',   hcD_GetFormNa, sci1Esc;
+  cmCancel,,,     'Отмена', hcD_GetFormNa, sci1Esc;
+
+<<'Формирование сопроводительных документов'
+
+  `Формировать на дату:`    &.@@@@@@@@@@@
+  `Документы :`              .@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  `Показывать распределение:`.@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+    <. ~П~родолжить .>                 <.   ~О~тмена   .>
+>>
+end; //Screen
+
+HandleEvent
+
+cmYes :
+{
+  Var
+    prForm : boolean;
+
+  SaveMyDsk(Nakl_Akt, '_Nakl_Akt_forMakeNakl_');
+  SaveMyDsk (true, 'Rasprdo_vip_ParamDialog');
+
+  if ( Nakl_Akt = 2 )
+    SaveMyDsk(word(0), 'ShowRaspr'); //формировать только Акты не нужно показывать распределение
+
+  prForm := true;
+
+  RunInterface('iCheckCloseBuhPeriod', dFor, comp(0), prForm);
+
+  if ( not prForm )
+    {
+      Abort;
+      Exit;
+    }
+
+  PutCommand(cmDefault);
+}
+end; // HandleEvent window
+
+end; // window
+
+#doc
+Окно установки параметров формирования сопроводительных документов
+#end
+Window wParam 'Формирование сопроводительных документов' ('',, sci1Esc) doAccept, EscClose, Gray;
+  Show at (20, 5, 70, 11);
+
+Screen scrParam
+
+Fields
+  dFor      ('Введите дату', hcD_GetFormNa, sci1Esc)
+            : NoProtect;
+  Nakl_Akt  ('Метод создания сопроводительных документов',, sci13Esc)
+            : [LIST 'накладные и акты'
+                  , 'только накладные'
+                  , 'только акты'], Protect;
+
+Buttons
+  cmYes,Default,, 'Ввод',   hcD_GetFormNa, sci1Esc;
+  cmCancel,,,     'Отмена', hcD_GetFormNa, sci1Esc;
+
+<<'Формирование сопроводительных документов'
+
+       `Формировать на :`&.@@@@@@@@@@@
+       `Документы :`.@@@@@@@@@@@@@@@@@
+
+       <.~П~родолжить.>       <. ~О~тмена .>
+
+>>
+end; //Screen
+
+HandleEvent
+
+cmYes :
+{
+  Var
+    prForm : boolean;
+
+  SaveMyDsk(Nakl_Akt, '_Nakl_Akt_forMakeNakl_');
+  SaveMyDsk (true, 'Rasprdo_vip_ParamDialog');
+
+  if ( Nakl_Akt = 2 )
+    SaveMyDsk(word(0), 'ShowRaspr');//формировать только Акты не нужно показывать распределение
+
+  prForm := true;
+
+  RunInterface('iCheckCloseBuhPeriod', dFor, comp(0), prForm);
+
+  if ( not prForm )
+    {
+      Abort;
+      Exit;
+    }
+
+  PutCommand(cmDefault);
+}
+
+end; // HandleEvent window
+
+end; // window
+
+Procedure DoMakeNakl;
+{
+  delete all SDocBuf;
+  delete all SpDocBuf;
+
+  FillNaklBuffer;
+  if( (tdoc=501)or(tdoc=502) )
+  {
+    if(SDocBuf.cPodrTo<>comp(0))
+    {
+      iSoprDoc.PdrIzgAv( SDocBuf.cPodrTo, SDocBuf.cMolTo, word(2), word(0) );
+      update current SDocBuf;
+    };//if
+  };//if
+
+  StartNewVisual( vtNumericVisual
+                , vfTimer + vfBreak + vfConfirm
+                , ''#3'Создание буфера документа...'
+                , 1
+                );
+
+//------------------------------------------------------------------------------
+  var 
+    vbAktByZremFromNakl
+  , vwTune
+  : word;
+
+  vbAktByZremFromNakl := 0;
+  vwTune := 0;
+
+//------------------------------------------------------------------------------
+  // ТОЛЬКО для заявки на ремонт 550
+  if (tdoc = 550)
+  {
+    // если формируем акты
+    if (Nakl_Akt = 0) OR (Nakl_Akt = 2)
+    {
+      case BaseDoc.Direct of
+        0: vwTune := wGetTune('Doc.Remont.AktRemSS_From') ;
+        1: vwTune := wGetTune('Doc.Remont.AktRemFrom')    ;
+        2: vwTune := wGetTune('Doc.Remont.AktRemZak_From');
+      end;
+
+      // по накладным
+!      if (vwTune = 1) OR (vwTune = 2)
+!      {
+        vbAktByZremFromNakl := vwTune;
+!      }
+
+      // нет
+!      if (vwTune = 3)
+!      {
+!        vbAktByZremFromNakl := 2;
+!      }
+
+    }
+  }
+  
+//------------------------------------------------------------------------------
+  // исключение - акты по накладным
+  if ((vbAktByZremFromNakl = 1)
+   OR (vbAktByZremFromNakl = 2))
+  {
+    StopVisual('', 0);
+    // если кроме актов еще надо создавать накладные.
+    SaveMyDsk (true, 'Rasprdo_vip_ParamDialog');
+
+    if (Nakl_Akt = 0)
+    {
+      // укажем что формировать только накладные!
+      SaveMyDsk(1, '_Nakl_Akt_forMakeNakl_');
+
+      _loop SpStep
+      {
+        if ( not NextVisual )
+          if ( Message(''#3'Прервать формирование ?', Confirmation+YesNo) = cmYes )
+            {
+              StopVisual('', 0);
+              Exit;
+            }
+                                                                                                             
+        FillSpNaklBuffer;
+      }
+
+      SaveMyDsk(dForA, 'dFormAkt');
+
+      Otkaz := (pMakeSoprByBuff.MakeDocument( dFor
+                                            , Errr.Handle
+                                            , SDocBuf.Name
+                                            , word(1+2+4)
+                                            ) = 4 );
+    }
+
+    // после формирования накладных - теперь формируем акты по накладным
+    
+    // укажем что формировать только акты!
+    SaveMyDsk(2, '_Nakl_Akt_forMakeNakl_');
+
+    delete all SpDocBuf;
+    
+    update current SDocBuf set SDocBuf.cKatSopr := 0;
+
+//------------------------------------------------------------------------------
+    if ((vbAktByZremFromNakl = 1)
+     OR (vbAktByZremFromNakl = 2)
+       )
+    {
+      _LOOP KatSopr
+      {
+        if ((KatSopr.VidSopr = 551))// OR (KatSopr.VidSopr = 552))
+        {
+          // перебор спецухи всех накладных
+          _LOOP SpSopr
+          {
+            if ( not NextVisual )
+              if ( Message(''#3'Прервать формирование ?', Confirmation+YesNo) = cmYes )
+                {
+                  StopVisual('', 0);
+                  Exit;
+                }
+                                                                                                                 
+            FillSpNaklBuffer2;
+
+          }
+        }
+      }
+
+//------------------------------------------------------------------------------
+      // теперь услуги возьмем из заявки
+      if (vbAktByZremFromNakl = 2)
+      {
+        _LOOP SpStep
+        {
+          // только услуги
+          if (SpStep.PrMC <> 1)
+          {
+            if ( not NextVisual )
+              if ( Message(''#3'Прервать формирование ?', Confirmation+YesNo) = cmYes )
+                {
+                  StopVisual('', 0);
+                  Exit;
+                }
+
+            FillSpNaklBuffer;
+          }
+        }
+      }
+//------------------------------------------------------------------------------
+    
+      SaveMyDsk(2, 'vwAktNoSpec');
+    }
+
+    SaveMyDsk(dForA, 'dFormAkt');
+
+    Otkaz := (pMakeSoprByBuff.MakeDocument( dFor
+                                          , Errr.Handle
+                                          , SDocBuf.Name
+                                          , word(1+2+4)
+                                          ) = 4 );
+
+    SaveMyDsk(0, 'vwAktNoSpec');
+
+    // восстановим переменную
+    SaveMyDsk(Nakl_Akt, '_Nakl_Akt_forMakeNakl_');
+  }
+
+//------------------------------------------------------------------------------
+  if (vbAktByZremFromNakl = 0)
+  {
+    _loop SpStep
+    {
+      if ( not NextVisual )
+        if ( Message(''#3'Прервать формирование ?', Confirmation+YesNo) = cmYes )
+          {
+            StopVisual('', 0);
+            Exit;
+          }
+
+      FillSpNaklBuffer;
+    }
+
+    StopVisual('', 0);
+
+    SaveMyDsk(dForA, 'dFormAkt');
+
+    Otkaz := (pMakeSoprByBuff.MakeDocument( dFor
+                                          , Errr.Handle
+                                          , SDocBuf.Name
+  //                                      , word(1+2+if(BaseDoc.VidDoc = 201, 4, 0)) ) = 4)
+                                          , word(1+2+4)
+                                          ) = 4 );
+  }
+}
+
+//==============================================================================
+
+HandleEvent
+
+cmInit :
+{
+  Abort;
+
+  if ( ReadMyDsk(Nakl_Akt, '_Nakl_Akt_forMakeNakl_', false) ) {}
+
+  //сбросить флаг сохраненного курса
+  SaveMyDsk(false, 'MakeSoprByBuff_GetCurse');
+    //признак, что пришли из rasprdo.vip
+  SaveMyDsk(true, 'Rasprdo_vip');
+
+  Otkaz := false;
+  RI_do := ( p1 <> 0 ); // попали сюда из "операции" или из РИ ДО
+
+    //записываем в DSK handle выходной формы, чтобы прочитать в makeprixnakl
+    // (если понадобится)
+  SaveMyDsk (Errr.Handle, 'fProt');
+
+  delete safe Pick;
+
+  if ( (p1 <> 0) and (RecordExists StepDoc where (( p1 == StepDoc.nRec )) = tsOk) )
+    {
+      Insert Pick set Pick.wList := 32
+                    , Pick.cRec  := p1;
+    }
+  else
+    {
+      p1 := 0;
+      // при пометке не предупреждать, что нет задолженности по платежам
+
+      SaveMyDsk(word(1),'GetDBase_wParam');
+
+      if ( tDoc = 501 or tDoc = 502 )  // Производство
+        {
+          if ( RunInterface('GetLZK', comp(0), tDoc, comp(0), word(1), word(1)) <> cmDefault )
+            Exit;
+        }
+      else
+        if ( RunInterface( 'GetDBase'
+                         , false
+                         , word(0)
+                         , tDoc
+                         , comp(0)
+                         , p1
+                         , comp(0)
+                         , double(0)
+                         ) <> cmDefault )
+          Exit;
+
+      p1 := 0; // первый раз будет мессага с запросом на формирование
+    }
+
+//  Установка параметров формирования
+  dFor := Cur_Date;
+
+  if ( (tDoc <> 101) and (tDoc <> 102) and (tDoc <> 111) and (tDoc <> 1410))
+    {
+      if ( not ReadMyDsk(ShowRaspr, 'RasprDo_ShowRaspr', false) )
+        ShowRaspr := 1;
+
+      if ( RunWindowModal(wParamEx) = cmCancel )
+        Exit;
+
+      SaveMyDsk(ShowRaspr, 'RasprDo_ShowRaspr');
+      SaveMyDsk(ShowRaspr, 'ShowRaspr');
+    }
+  else
+    {
+      SaveMyDsk(word(0), 'ShowRaspr');
+
+      if (  ((tDoc=101) and boGetTune('Doc.Buy.dSopr=DO'))
+         or ((tDoc=111) and boGetTune('Doc.Buy.dAkt=DO'))
+         or ((tDoc=211) and boGetTune('Doc.Sell.dAkt=DO'))
+         or ((tDoc=201) and boGetTune('Doc.Sell.dSopr=DO'))
+         or ((tDoc=1410) and boGetTune('Doc.Wood.Journ.dSopr=DO'))
+         or ((tDoc=1420) and boGetTune('Doc.Wood.Nakl.dSopr=DO'))
+         )
+        {}
+      else
+        if ( RunWindowModal(wParam) = cmCancel )
+          Exit;
+    }
+
+  LoadVipRef(pMakeSoprByBuff, 'MakeSoprByBuff');
+
+  _loop Pick
+    {
+      if ( tDoc = 501 )
+        {
+          if ( wGetTune('Manuf.MakeSoprExecStat') = word(1) )
+            if ( BaseDoc.Status <> word(2) )
+              {
+                Errr.write( ''#3'Документ № '
+                          + BaseDoc.NoDoc
+                          + ' имеет статус отличный от "исполняемого"'
+                          );
+                Continue;
+              }
+        }
+
+      if ( RecordExists SpStep <> tsOk )
+        {
+          Errr.write(''#3'В документе № ' + BaseDoc.NoDoc + ' отсутствует спецификация');
+          Continue;
+        }
+
+      if ( tDoc <> 101 AND tDoc <> 1410)
+        {
+          DoMakeNakl;
+
+//******************* VTL_K - копирование параметров ДЕИ ************************
+
+          if ( GetLast KatSopr where ((  SDocBuf.cStepDoc == KatSopr.cStepDoc
+                                     and tDoc             == KatSopr.VidSopr
+                                     )) = tsOk )
+            {
+              do
+                {
+                  RunInterface('InsDEIPar', KatSopr.nRec);
+                }
+              while ( GetPrev KatSopr where (( SDocBuf.cStepDoc == KatSopr.cStepDoc )) = tsOk );
+            }
+
+          if ( Otkaz )
+            Break;
+        }
+      else
+        DoMakeNakl;
+    }
+
+  //сбросить флаг сохраненного курса
+  SaveMyDsk(false, 'MakeSoprByBuff_GetCurse');
+
+  if ( (RI_do) and (GetLast KatSopr where (( SDocBuf.cStepDoc == KatSopr.cStepDoc )) = tsOk) )
+    RunInterface('SeeNakl', SDocBuf.cStepDoc)
+  else  // пакетный режим
+    if ( Errr.Contain )
+      if ( not Errr.Error )
+        Errr.ShowFile('Протокол формирования сопроводительных документов');
+      else
+        Errr.AbortForm;
+
+  SaveMyDsk(false, 'Rasprdo_vip');
+  SaveMyDsk(false, 'Rasprdo_vip_ParamDialog');
+}
+
+end; // HandleEvent
+
+End. // Interface
+
+GetFormNaEx DIALOG
+
+Fields
+  myd       ('Введите дату', hcD_GetFormNa, scGalDial)
+            : date [, 'DD/MM/YYYY'];
+  ShowRaspr ('Метод автоматического распределения МЦ по разрезам', hcD_GetFormNa, scGalDial)
+            : word, save;
+
+Buttons
+  cmOk,Default,, 'Ввод',   hcD_GetFormNa, scGalDial;
+  cmCancel,,,    'Отмена', hcD_GetFormNa, scGalDial;
+
+<<'Формирование сопроводительных документов'
+
+         `Формировать на :`&.@@@@@@@@@@@
+
+  ┌───────── Показывать распределение ──────────────┐
+  │  (.) Нет                                       `│
+  │  (.) Да                                        `│
+  │  (.) Показывать при наличии нескольких разрезов`│
+  └─────────────────────────────────────────────────┘
+
+         <.~П~родолжить.>       <. ~О~тмена .>
+>>

@@ -1,0 +1,216 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+Table STRUCT MTabFindKSopr "Таблица в памяти"
+  (
+    NRec          : comp,
+    dSopr         : Date,
+    nSopr         : string,
+    summa         : string[30],
+    VidSopr       : word
+  )
+With Index
+  (
+    TMP00indexmem = NRec(Unique, Surrogate, Journal)
+   , TMP01indexmem = summa+dSopr+nSopr
+   , TMP02indexmem = VidSopr
+  );
+
+//********************************************************************************
+
+#doc
+Назначение:
+  Поиск документа по общей сумме по документу на таблице KatSopr
+
+Параметры:
+  TypeSopr - вид сопроводительного документа
+  c1       - ссылка на сопроводительный документ
+  result   - результат посика
+#end
+
+//********************************************************************************
+
+Interface iFindKSopr, AlwaysReturn, cacheable;
+
+Create view
+var
+  c1                : comp;//KatSopr.nRec
+  result            : boolean;
+  begDate, endDate   : Date;
+  TypeSopr, prRound  : word;
+
+from
+  KatSopr, MTabFindKSopr
+
+where
+ ((
+    TypeSopr == KatSopr.VidSopr
+  ))
+
+ bounds dMainBound = TypeSopr == KatSopr.VidSopr AND
+                     begDate <<= KatSopr.dSopr   AND
+                     endDate >>= KatSopr.dSopr
+
+ bounds mtabVidSopr = TypeSopr == MTabFindKSopr.VidSopr
+;
+
+parameters TypeSopr, c1, result;
+
+#include fsround.vpp //округление
+
+Function MakeTMPTable: boolean;
+{
+ MakeTMPTable := FALSE;
+ var bul: boolean;
+ if ReadMyDsk(bul, '_delTMPTable_iFindKSopr_', FALSE) AND (bul = TRUE)
+   {
+    delete all MTabFindKSopr;
+    MakeTMPTable := TRUE;
+    Exit;
+   }
+  if (not IsValid(#MTabFindKSopr))
+      MakeTMPTable := TRUE;
+}//Function MakeTMPTable: boolean;
+
+Procedure buildTMPTable;
+{
+   if (MakeTMPTable)
+    {
+//     Message('создаю временную таблицу');
+     StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+     'Формирую временную таблицу.', 1);
+     begDate := dGetTune('User.dFilter1');
+     endDate := dGetTune('User.dFilter2');
+
+    if (boGetTune('User.UseFilter') = 1)
+     if ((begDate<>date(0, 0, 0) AND (endDate<>date(0, 0, 0)) AND begDate<= endDate))
+         PushBounds(tbdMainBound);
+
+      if not ReadMyDsk(prRound, '_prRound_iFindKSopr_', FALSE) prRound := 1;
+
+      _LOOP KatSopr
+      {
+        ClearBuffer(#MTabFindKSopr);
+         MTabFindKSopr.nRec   := KatSopr.nRec;
+         MTabFindKSopr.VidSopr := KatSopr.VidSopr;
+         MTabFindKSopr.dSopr  := KatSopr.dSopr;
+         MTabFindKSopr.nSopr  := KatSopr.nSopr;
+         if (prRound = 1) //учитывать правила округления
+           {
+            MTabFindKSopr.summa := DoubleToStr(if(KatSopr.cVal = 0,
+                                                 FsRoundRub(KatSopr.Summa),
+                                                 FsRoundVal(KatSopr.SumVal)),
+                                              '666666666666666666666666666.88');
+           }else
+           {
+            MTabFindKSopr.summa := DoubleToStr(if(KatSopr.cVal = 0,
+                                                 (KatSopr.Summa),
+                                                 (KatSopr.SumVal)),
+                                              '666666666666666666666666666.88');
+           }
+//         Message('MTabFindKSopr.summa = '+MTabFindKSopr.summa);
+        if insert current MTabFindKSopr<>tsOk{};
+        if not NextVisual Break;
+      }
+     StopVisual('', 0);
+    }
+}//Procedure buildTMPTable;
+
+Procedure procFindKSopr;
+var
+  Res, oldprRound: word;
+  findSumma      : string[30];
+{
+  ReadMyDsk(findSumma, '_findSumma_iFindKSopr_', FALSE);
+  oldprRound := prRound;
+  Res := RunDialog(DlgFindKatSoprSumma, findSumma, prRound);
+   if (Res = cmCancel)
+   {
+     result := TRUE;
+     Exit;
+   }
+
+  SaveMyDsk(findSumma, '_findSumma_iFindKSopr_');
+  SaveMyDsk(prRound, '_prRound_iFindKSopr_');
+
+  if (oldprRound<>prRound)
+   {
+    SaveMyDsk(true, '_delTMPTable_iFindKSopr_');
+    buildTMPTable;
+   }
+  else
+    SaveMyDsk(false, '_delTMPTable_iFindKSopr_');
+
+
+  case Res of
+    cmValue1:
+      {
+        if GetFirst MTabFindKSopr where (( (findSumma) == MTabFindKSopr.summa )) <> tsOk
+          {
+            Message('Документ не найден!', Information);
+          }else
+          {
+             c1 := MTabFindKSopr.nRec;
+             SaveMyDsk(MTabFindKSopr.nRec, '_MTabFindKSopr_nRec_');
+          }
+
+      }
+    cmValue2:
+      {
+        var tmpnRec: comp;
+        if ReadMyDsk(tmpnRec, '_MTabFindKSopr_nRec_', FALSE)
+         if GetFirst MTabFindKSopr where (( tmpnRec == MTabFindKSopr.nRec)) <> tsOk{};
+
+        if GetNext MTabFindKSopr where (( (findSumma) == MTabFindKSopr.summa )) <> tsOk
+          {
+            Message('Поиск закончен!', Information);
+          }else
+          {
+             c1 := MTabFindKSopr.nRec;
+             SaveMyDsk(MTabFindKSopr.nRec, '_MTabFindKSopr_nRec_');
+          }
+
+      }
+    cmValue3:
+      {
+        result := TRUE;
+      }
+  end;
+}//Procedure procFindKSopr;
+
+HandleEvent
+cmInit:
+  {
+   result := FALSE;//переменная для прекращения поиска
+   PushBounds(tbmtabVidSopr);//обеспечить поиск в разных документах
+   buildTMPTable;
+   procFindKSopr;
+   Abort;
+  }
+end;
+End.
+
+DlgFindKatSoprSumma DIALOG
+Size 56, 7
+HELPLINE 'Сумма для поиска документа'
+HelpCtx   hci_nakl_Vvod_Sym_Poisk;
+STATUSCTX sci1Esc
+Fields
+  fndSumma ('Укажите два знака после запятой согласно формату'): string[30];
+  prRound ('Настройка позволяет учитывать/не учитывать правила округления'): word;
+Buttons
+  cmValue1, Default, CloseOwner, 'Найти первый документ', , sci1Esc;
+  cmValue2, , CloseOwner, 'Найти следующий документ', , sci1Esc;
+  cmvalue3, , CloseOwner, 'Прекратить поиск', , sci1Esc;
+<<'Введите сумму для поиска документа'
+
+      `Сумма для поиска документа(формат 9999.99)`
+           .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+            [.] Учитывать правила округления`
+
+  <.Найти ~п~ервый.> <.Найти ~с~ледующий.> <.~В~ыход.>
+>>

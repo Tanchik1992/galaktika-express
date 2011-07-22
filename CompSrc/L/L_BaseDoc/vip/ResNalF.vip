@@ -1,0 +1,292 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - документы-основания
+// Операция интерактивного резервирования
+//******************************************************************************
+
+#include oEdIzm.vih
+
+#doc
+Интерфейс интерактивного резервирования
+#end
+Interface ResNalF 'Выберите резервы для перенаправления' EscClose, cyan, doAccept;
+  Show at (, 5, 100, 23);
+
+#include oEdIzm.var
+
+Create view
+var
+//------------------------------------------------------------------------------
+  OldKol
+, SKol
+, KolTreb
+, Vybor
+, KoefDo
+, KoefNew
+                : double;
+//------------------------------------------------------------------------------
+  cOtp
+, KodT
+, spNrec
+, SklOt
+                : comp;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if (tNalF.KolF = 0, '-', '+')
+    ( FieldName = IsVyb )
+//------------------------------------------------------------------------------
+, KolTreb - Vybor
+    ( FieldName = OstVyb )
+//------------------------------------------------------------------------------
+, PrintNumber(BaseDoc.Descr, BaseDoc.NoDoc)
+    ( FieldName = StrNum )
+//------------------------------------------------------------------------------
+
+, BaseDoc.dDoc
+, BaseDoc.NoDoc
+, KatOrg.Name
+, SpStep.SrokRes
+, KatOtpEd.Name
+, tNalF.KolF
+, tNalF.Kol
+, tNalF.cMC
+
+From
+  KatOtpEd
+, KatMC
+, tNalf(tNalF03)
+, BaseDoc
+, KatOrg
+, SpStep
+, SpStep SpStepC
+, KatOtpEd KatOtpEd2
+
+Where
+((
+     TNalF.cSpStep    == SpStep.NRec
+AND  SpStep.cOtpEd    == KatOtpEd2.NRec
+AND  SpStep.cStepDoc  == StepDoc.NRec
+AND  StepDoc.cBaseDoc == BaseDoc.NRec
+AND  cOtp             == KatOtpEd.NRec
+AND  SpStep.cMCUSL    == KatMC.NRec
+AND  BaseDoc.cOrg     == KatOrg.NRec
+))
+
+Bounds
+  PoStep = KodT == tNalf.cMC ordered by tNalF.dParty
+;
+
+//******************************************************************************
+Parameters
+  cOtp,         // единица ДО
+  KolTreb,
+  KodT,
+  SpNrec,
+  SklOt
+;
+
+//******************************************************************************
+// проверка на наличие хотя бы одной списанной отгрузки
+
+Function IsOtgr: boolean; //false если есть
+{
+  IsOtgr := TRUE;
+}
+
+
+//******************************************************************************
+
+Procedure MakeRes; // процедура формирования массива резерва
+{
+  if (BaseDoc.Status <> 2)
+  OR (Not IsOtgr)
+  OR (BaseDoc.VidDoc <> 201)
+  OR (BaseDoc.VidDoc <> 1420)
+  OR (BaseDoc.cParty <> SklOt)
+    Exit;
+
+  SKol := 0;
+
+  KoefDo := fEdIzm.GetKoefOtpEd(cOtp);
+
+  ResetBounds(#SpStep);
+
+  _LOOP spstep where ((word(1)   == SpStep.PrMC AND
+                       KodT      == SpStep.cMCUsl AND
+                       double(0) << SpStep.Reserv))
+   if (spNrec <> SpStep.NRec)
+     {
+       ClearBuffer(#tNalF);
+
+       tNalF.cPodr := SpNrec;
+       tNalF.cMol := BaseDoc.NRec;
+       tNalF.dParty := sub_date(date(1, 1, 2222), SpStep.dDoc);
+       tNalF.cMC := KodT;
+
+       KoefNew := fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+
+       tNalF.Kol := SpStep.Reserv * KoefNew / KoefDo;
+       TNalF.KolF := 0;
+       tNalF.cSpStep := SpStep.NRec;
+
+       insert current tnalf;
+
+       sKol := sKol + tNalF.Kol;
+
+       if (sKol > (3 * KolTreb))  // при условии 3-х кратного превышения
+         Break;
+     }
+
+  SetBounds(#SpStep);
+}
+
+//******************************************************************************
+
+Panel ptNalF
+  Table tNalF
+
+Browse PickNal ('', hcAllVPick, sci1EnEsc)
+  Show at (, , , 11);
+
+Fields
+//------------------------------------------------------------------------------
+  IsVyb         #3''
+                : [1],  Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  BaseDoc.dDoc  #3'Дата',
+                : [10, 'DD/MM/YYYY'], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  StrNum        #3'Номер ДО'
+                : [10], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name   #3'Покупатель'
+                : [10], Skip;
+//------------------------------------------------------------------------------
+  KatOtpEd.Abbr #3'ЕдИзм'
+                : [5],  Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  SpStep.Kol    #3'Количество'#13#3'по ДО'
+                : [10], [prSignsInKol], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  KolF          #3'Направить' ('Количество для перенаправления резерва')
+                : [10], [prSignsInKol], NoAutoSize;
+//------------------------------------------------------------------------------
+  Kol           #3'Резерв'
+                : [10], [prSignsInKol], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  SrokRes       #3'Срок'#13#3'резерва'
+                : [10, 'DD/MM/YYYY'], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+end; // Browse
+
+//******************************************************************************
+
+Screen sctNalF;
+  Show at (, 12, , );
+
+Fields
+  KolTreb  : Skip;
+  Vybor    : Skip;
+  OstVyb   : Skip;
+<<
+
+ Всего требуется  .@@@@@@@@@@@@@@@@@
+ Выбрано          .@@@@@@@@@@@@@@@@@
+ Осталось выбрать .@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+//******************************************************************************
+
+HandleEvent
+
+cmCheckField:
+  case CurField of
+  //--------------
+    #KolF:
+      {
+        fEdIzm.CheckKolDiskret(KolF, KatOtpEd.NRec, TRUE, TRUE);
+
+        OldKol := double(OldFieldValue);
+
+        if (tNalF.KolF > tNalF.Kol)
+          {
+            Message('Нельзя перенаправлять больше, чем в резерве по ДО!', Warning + CancelButton);
+            set tNalF.KolF := tNalF.Kol;
+          }
+
+        Vybor := Vybor + (tNalF.KolF - OldKol);
+      }
+  //--------------
+  end; //case
+
+cmUpdateRecord:
+  update current tnalf;
+
+end; //HandleEvent
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+cmInit:
+  {
+// KolTreb - количество дополнительно требующееся
+// для удовлетворения полного резервирования (в единице исходного ДО)
+// KodT - NRec товара для резервирования
+
+   Vybor := 0;
+
+   MakeRes;
+
+   if (sKol < KolTreb)
+     {
+       Message('Нет достаточных резервов для перенаправления '+ KatMC.Name +'!', Information);
+       Abort;
+     }
+   else
+     {
+       SetWindowTitle(wnMainWindow, 'Выберите позиции для перенаправления резерва '+ KatMC.Name + ' '+ KatMC.BarKod);
+       PushBounds(tbPoStep);
+     }
+  }
+
+cmDefault:
+  {
+    UpdateTable;
+
+    var VybKol: double;   VybKol := 0;
+
+    _LOOP tnalf
+      VybKol := VybKol + tNalF.KolF;
+
+    if (VybKol <> KolTreb)
+      {
+        if (Message('Выбранное количество не соответствует требуемому!'#13'Продолжить?', YesNo) = Yes)
+          Abort
+        else
+          _LOOP tnalf
+            if (tNalF.cPodr = spNrec)
+              delete current tnalf;
+      }
+    else
+      _LOOP tnalf
+        if (tNalF.KolF = 0)
+          delete current tnalf
+        else
+          {
+            KoefDo  := if (KatOtpEd.Koef  <> 0, KatOtpEd.Koef,  1);
+            KoefNew := if (KatOtpEd2.Koef <> 0, KatOtpEd2.Koef, 1);
+
+            tNalF.Kol := KoefDo / KoefNew;
+
+            update current tnalF;
+          }
+  }
+
+end; // HandleEvent
+End. // Interface
+
+//******************************************************************************

@@ -1,0 +1,152 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.8 - логистика
+// Управление договорами
+// Просмотр счетов по договору/соглащению/ПКП
+//********************************************************************************
+
+// Обьектный интерфейс - стрелочник вызовов интерфейсов редактирования
+#include EditDoc.vih
+
+#doc
+Просмотр документов-оснований по договору из интерфейса пакетного формирования
+#end
+Interface ViewDObyDog 'ДО по договору' EscClose, Cyan;
+  Show at (, 1,, 13);
+
+// Переменная типа VipInterface EditDoc
+#include EditDoc.var
+
+Create view
+
+Var
+  DogNRec
+, AppDogNRec
+, PlanNRec : comp;
+
+  wasMade
+, error_   : boolean;
+
+As select
+  if(BaseDoc.cVal = 0, sGetTune('NDE.SimvRub'), KlVal.SimvolV)
+    ( FieldName = SimVolB )
+, DoubleToStr(BaseDoc.Total, '\2p[|-]36`666`666`666.88') + ' ' + SimVolB
+    ( FieldName = TotAndSimv )
+
+From
+  BaseDoc
+, KatOrg
+, KatNotes
+, KlVal
+, Dogovor AppDogovor
+
+Where
+((
+
+    BaseDoc.cDogovor    == Dogovor.nRec
+and BaseDoc.cAppDogovor == AppDogovor.nRec
+and BaseDoc.cCalPlan    == CalPlan.nRec
+
+and BaseDoc.cOrg        == KatOrg.nRec
+and BaseDoc.cNote       == KatNotes.nRec
+and BaseDoc.cVal        == KlVal.nRec
+
+))
+
+Bounds BDonDog    DogNRec    == BaseDoc.cDogovor
+
+Bounds BDonAppDog DogNRec    == BaseDoc.cDogovor    and
+                  AppDogNRec == BaseDoc.cAppDogovor
+
+Bounds BDonPlan   PlanNRec   == BaseDoc.cCalPlan
+;
+Parameters
+  DogNRec    // ссылка на договор
+, AppDogNRec // ссылка на соглашение
+, PlanNRec;  // ссылка на ПКП
+
+//-----------------------------------------------------------------
+Browse browse0 (, hcDObyDog, sci14Esc)
+  Show at (,,, 7);
+  Table BaseDoc;
+Fields
+  KatNotes.sName #3'Статус'    ('Статус документа.',) : [6], Protect;
+  GetVidBaseDocName(BaseDoc.VidDoc)
+                 #3'Вид документа' ('Вид документа (закупка, продажа)',) : [20] , Protect;
+  BaseDoc.dDoc   #3'Дата'      ('Дата документа.',)  : [10,'DD/MM/YYYY'], Protect;
+  BaseDoc.Descr  #3'Дескр.'    ('Дескриптор(идентификатор) пользователя.',) : [5], Skip;
+  BaseDoc.NoDoc  #3'№ докум.'  ('Номер документа.',)    :  [8], Protect;
+  KatOrg.Name    #3'Контрагент'('Контрагент.',)         : [19], Protect;
+  TotAndSimv     #3'Сумма'     ('Сумма по документу.',) : [12], Protect;
+end; // browse
+HandleEvent //panel0
+end; // he panel 0
+
+screen sc1
+  Show at (, 8,,)
+  Table BaseDoc
+
+Fields
+ Dogovor.NoDoc    + ' от ' + string(Dogovor.dDoc)    : Skip;
+ AppDogovor.NoDoc + ' от ' + string(AppDogovor.dDoc) : Skip;
+ CalPlan.NoDoc                                       : Skip;
+<<
+ Договор    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Соглашение .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Пункт плана.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+HandleEvent // interface
+
+cmInit:
+  {
+    if ( GetFirst Dogovor where (( DogNRec == Dogovor.nRec )) = tsOK )
+      if ( PlanNRec <> 0 )
+        PushBounds(tbBDonPlan)
+      else
+        if ( AppDogNRec <> 0 )
+          PushBounds(tbBDonAppDog)
+        else
+          PushBounds(tbBDonDog);
+
+    if ( GetFirst BaseDoc <> tsOk )
+      {
+        if ( PlanNRec <> 0 )
+          message('Нет счетов, сформированных по пункту календарного плана')
+        else
+          if ( AppDogNRec <> 0 )
+            message('Нет счетов, сформированных по соглашению')
+          else
+            message('Нет счетов, сформированных по договору');
+
+        Abort;
+        Exit;
+      }
+
+    if ( GetFirst Dogovor = tsOk )
+      if ( PlanNRec <> 0 )
+        SetTitle('Счета по ПКП № ' + CalPlan.NoDoc + ' договора № ' + Dogovor.NoDoc + ' от ' + string(Dogovor.dDoc))
+      else
+        SetTitle('Счета по договору № ' + Dogovor.NoDoc + ' от ' + string(Dogovor.dDoc));
+  }
+
+cmEdit:
+  {
+    if ( not isValid(#BaseDoc) )
+      Exit;
+
+    iEditDoc.RunEditBaseDoc(BaseDoc.VidDoc, BaseDoc.nRec);
+
+    ReReadRecord(#BaseDoc);
+
+    if ( RecordExists BaseDoc <> tsOK )
+      {
+        message('Нет счетов, сформированных по договору', Information);
+        CloseInterface(cmCancel);
+      }
+  }
+
+end; // handleEvent interface
+
+end.

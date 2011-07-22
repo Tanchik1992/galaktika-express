@@ -1,0 +1,1963 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика. Управление договорами
+// Отчет о ходе исполнения договора. Просмотр документов
+//********************************************************************************
+// Фильтры передаюся через DSK посредством параметра интерфейса DskParams,
+// в который передается набор констант, соответствующих каждому фильтру
+// (или группе фильтров), который нужно использовать. Т.е. в DSK не обяза-
+// тельно определять значения ВСЕХ фильтров, а только тех, которые хотите
+// использовать и в DskParams передать константу этого фильтра - признак
+// того, что этот фильтр (или группу фильтров) нужно использовать.
+
+//───────────────────┬───────────────────┬──────────────────────────────────────
+//                   │                   │     НАИМЕНОВАНИЕ ПАРАМЕРТОВ В DSK
+//     ФИЛЬТРЫ       │     КОНСТАНТЫ     ├───────────────────┬──────────────────
+//                   │                   │МАСКА ПРИМЕНЯЕМОСТИ│ЗНАЧЕНИЕ ПАРАМЕТРА
+//───────────────────┴───────────────────┴───────────────────┴──────────────────
+//
+//-- Группа 1 ------------------------------------------------------------------
+// по группе дескр.    vcGetDog_DesGr      'GetDAK_DesGr_e'    'GetDAK_DesGr'   - string
+// по дескр.           vcGetDog_Descr      'GetDAK_Descr_e'    'GetDAK_Descr'   - string
+// по дате(dDoc, dInput)vcGetDog_Date       'GetDAK_Date_e'     'GetDAK_begDate' - date
+//                                                             'GetDAK_endDate' - date
+// по сроку действ.    vcGetDog_DateSrok   'GetDAK_DateSrok_e' 'GetDAK_begDateSrok' - date
+//                                                             'GetDAK_endDateSrok' - date
+//
+//-- Группа 2 ------------------------------------------------------------------
+// по собств. орг-ции  vcGetDog_MyOrg      'GetDAK_MyOrg_e'    'GetDAK_MyOrg'   - NRec
+// по контрагенту (Гр) vcGetDog_Kontr      'GetDAK_Kontr_e'    'GetDAK_Kontr'   - NRec маркер 'MGetDocs_Kontr'
+// по грузоотправителю vcGetDog_GruzFrom   (только для CalPlan)'GetDAK_GruzFrom'- NRec
+// по грузополучателю  vcGetDog_GruzTo     (только для CalPlan)'GetDAK_GruzTo'  - NRec
+// по плательщику (Гр) vcGetDog_Plat       'GetDAK_Plat_e'     'GetDAK_Plat'    - NRec маркер 'MGetDocs_Plat'
+// по получателю  (Гр) vcGetDog_Pol        'GetDAK_Pol_e'      'GetDAK_Pol'     - NRec маркер 'MGetDocs_Pol'
+// по валюте           vcGetDog_Valut      'GetDAK_Valut_e'    'GetDAK_Valut'   - NRec
+//
+//-- Группа 3 ------------------------------------------------------------------
+// по программе        vcGetDog_Progr      'GetDAK_Progr_e'    'GetDAK_Progr'   - NRec
+// по виду док.   (Гр) vcGetDog_VidDoc     'GetDAK_VidDoc_e'   'GetDAK_VidDoc'  - NRec маркер 'MKatVidD'
+// по статусу (номеру) vcGetDog_Status     'GetDAK_Status_e'   'GetDAK_Status'  - NRec
+// по KatNotes    (Гр) vcGetDog_KatStatus  'GetDAK_KatStatus_e''GetDAK_KatStatus' - NRec
+//
+//-- Группа 4 ------------------------------------------------------------------
+// по договору         vcGetDog_Dogovor                        'GetDAK_Dogovor' - NRec
+// по соглашению       vcGetDog_AppDog      'GetDAK_Dogovor' + 'GetDAK_AppDog'  - NRec
+// по кал. плану       vcGetDog_CalPlan                        'GetDAK_CalPlan' - NRec
+//
+//-- Группа 5 ------------------------------------------------------------------
+// наличие к.плана     vcGetDog_ExistKP - оставляет только те договоры и соглашения,
+//                                        у которых есть КП
+//-- Группа 6 ------------------------------------------------------------------
+// история замен       vcGetDog_Zamena  - оставляет только историю замен договоров,
+//                                        по отношению к pDogovor
+//──────────────────────────────────────────────────────────────────────────────
+// Примечание: МАСКА ПРИМЕНЯЕМОСТИ: 0 - применять фильтр ко всем документам
+//                                  1 - только к договорам
+//                                  2 - только к соглашениям
+//                                  4 - только к пунктам календарного плана
+//
+// (Гр) - возможен групповой фильтр. Если ЗНАЧЕНИЕ ПАРАМЕТРА = 0 или не задано
+// то пытается читать из соответствующего маркера. В противном случае
+// ЗНАЧЕНИЕ ПАРАМЕТРА воспринимается как NRec для одиночного фильтра.
+//
+// Пример заполнения DSK находится в setdsk.vpp - можно просто его скопировать
+// в свой интерфейс и подставить нужные параметры
+//********************************************************************************
+
+#define GetDocs2_VIP
+
+#include DocSort.tbl
+
+#include DocSort.vih
+#include DogFuns.vih
+#include notes.vih
+#include KatStroy.vih
+#include aktsver.vih
+#include DOfuns.vih
+#include FltDog.rec // TFilterDog
+#include t_SumDoc.tbl
+#include MTRFuncs.vih
+#include ThemeFuncs.vih
+
+//******************************************************************************
+
+#doc
+Отчет о ходе исполнения договора. Просмотр документов
+#end
+Interface GetDocs2 'Просмотр документов' (, , sci1Esc) EscClose, Cyan;
+  Show at (, , 135, 27);
+
+//******************************************************************************
+
+var oDocSort: iDocSortObj;
+
+#include gdocs0.vpp
+
+#include DOfuns.var
+#include DogFuns.var
+#include MTRFuncs.var
+
+var oThemeFuncs: iThemeFuncs;
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string; Forward;
+
+//******************************************************************************
+
+Create view
+Var
+//*****************
+  pDogovor
+, pAppDogovor
+, Node
+, pNode
+    : comp;
+//*****************
+  DskParams
+    : longint;
+//*****************
+  Save_Table,
+  Save_Format
+    : byte;
+//*****************
+  isBrowse
+    : boolean;
+//*****************
+  s_SimvRub
+    : string;
+//*****************
+  vwUKS
+    : word;
+//*****************
+  FilterInfo
+    : TFilterDog;
+//*****************
+
+As select
+//*****************************************************************************************************************
+  if(BaseDoc.cVal = 0, s_SimvRub, KlVal1.SimVolV)
+    ( FieldName = SimVolB)
+//*****************************************************************************************************************
+, if(KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal)
+    ( FieldName = Sum )
+//*****************************************************************************************************************
+, if(KatSopr.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal2.SimVolV)
+    ( FieldName = Valut )
+//*****************************************************************************************************************
+, if(nZakaz.Prior = 0, 'нормальный', if(nZakaz.Prior = 1, 'высокий', if(nZakaz.Prior = 2, 'низкий', '!некорр!')))
+    ( FieldName = nZakazPrior )
+//*****************************************************************************************************************
+, if(nZakaz.TypeDoc = 0, 'О', if(nZakaz.TypeDoc = 1, 'Г', if(nZakaz.TypeDoc = 2, 'Д', 'Н')))
+    ( FieldName = nZakazTypeShort )
+//*****************************************************************************************************************
+, if (SGetDocs.VidPlan = 100, '',
+    if (((SGetDocs.Direct mod 2) = 1) AND (SGetDocs.VidPlan <> 2) OR
+        ((SGetDocs.Direct mod 2) = 0) AND (SGetDocs.VidPlan =  2), '1->2', '2->1'))
+    ( FieldName = sDirect )
+//*****************************************************************************************************************
+, if(IsValid(tnSGetDocs),
+    if(SGetDocs.wDocType = 1,
+      if(SGetDocs.cZamena = 0, 'Договор', 'Отм. Договор'),
+      if(SGetDocs.wDocType = 2,
+        if(SGetDocs.cZamena = 0, 'Уточн. Соглашение', 'Отм. Соглашение'),
+        if(SGetDocs.VidPlan = 100, 'КП обобщенный',
+        if(SGetDocs.VidPlan = 1, 'КП мц/услуги', 'КП финансовый')))), '')
+    ( FieldName = sDocType )
+//*****************************************************************************************************************
+, if(BaseFin.cVal = 0, s_SimvRub, KlVal3.SimvolV)
+    ( FieldName = ValutFin )
+//*****************************************************************************************************************
+, if(BaseFin.cVal = 0, BaseFin.Summa, BaseFin.SumVal)
+    ( FieldName = SumFin )
+//*****************************************************************************************************************
+, if(SpDocs.cMCUsl = 0, '',
+    if((SpDocs.prMC = 1) OR
+       (SpDocs.prMC = 4) OR
+       (SpDocs.prMC = 5), if(IsValid(tnKatMC), KatMC.Name, '? MC ' + string(SpDocs.cMCUsl)),
+    if((SpDocs.prMC = 2) OR
+       (SpDocs.prMC = 3), if(IsValid(tnKatUsl), KatUsl.Name, '? Услуга ' + string(SpDocs.cMCUsl)), '')))
+    ( FieldName = SpDogName )
+//*****************************************************************************************************************
+, if(SpDocs.cGrMCUsl = 0, '',
+    if((SpDocs.prMC = 1) OR
+       (SpDocs.prMC = 4) OR
+       (SpDocs.prMC = 5), if(IsValid(tnGroupMC), GroupMC.Name, '? Группа МЦ ' + string(SpDocs.cGrMCUsl)),
+    if((SpDocs.prMC = 2) OR
+       (SpDocs.prMC = 3), if(IsValid(tnGroupUsl), GroupUsl.Name, '? Группа услуг ' + string(SpDocs.cGrMCUsl)), '')))
+    ( FieldName = SpDogGrName )
+//*****************************************************************************************************************
+, if(SGetDocs.cVal = 0, s_SimvRub, DogVal.SimVolV)
+    ( FieldName = ValDogovor )
+//*****************************************************************************************************************
+, if(SGetDocs.cValRas = 0, s_SimvRub, RasVal.SimVolV)
+    ( FieldName = ValRasDogovor )
+//*****************************************************************************************************************
+, if(((KatSopr.VidSopr > 500) AND (KatSopr.VidSopr < 600)), '', KatNotes2.Name)
+    ( FieldName = StatusKSTxt )
+//*****************************************************************************************************************
+, if(tmpSumsTiDk.cVal = comp(0), s_SimvRub, KlVal_Sums.SimvolV)
+    ( FieldName = SimvValSums )
+//*****************************************************************************************************************
+, if (ReStruDolg.cVal = comp(0), s_SimvRub, ReStruVal.SimvolV)
+    ( FieldName = ValutRestru )
+//*****************************************************************************************************************
+, if(IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ': ' + SmetaStroy.Name, '')
+    ( FieldName = SmetaMy )
+//*****************************************************************************************************************
+, if(IsValid(tnSmetaSpec), string(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') ' + SmetaSpec.Name, '')
+    ( FieldName = SmetaSpMy )
+//*****************************************************************************************************************
+, if ((Iski.TiDk = word(701)) OR (Iski.TiDk = word(713)), 'дебиторская',
+    if ((Iski.TiDk = word(711)) OR (Iski.TiDk = word(714)), 'кредиторская',''))
+    (FieldName = TipIska)
+//*****************************************************************************************************************
+, if (IsValid(tnKatKlass), KatKlass.Name, '')
+    (FieldName = VidDoc)
+//*****************************************************************************************************************
+, if ((ReStruDolg.TiDk = word(89)) OR (ReStruDolg.TiDk = word(91)), 'дебиторская',
+    if ((ReStruDolg.TiDk = word(90)) OR (ReStruDolg.TiDk = word(92)), 'кредиторская',''))
+    (FieldName = TipRestDolg)
+//*****************************************************************************************************************
+, GetKAUField(1)  ( FieldName = vsKau1 )
+, GetKAUField(2)  ( FieldName = vsKau2 )
+, GetKAUField(3)  ( FieldName = vsKau3 )
+, GetKAUField(4)  ( FieldName = vsKau4 )
+, GetKAUField(5)  ( FieldName = vsKau5 )
+, GetKAUField(6)  ( FieldName = vsKau6 )
+, GetKAUField(7)  ( FieldName = vsKau7 )
+, GetKAUField(8)  ( FieldName = vsKau8 )
+, GetKAUField(9)  ( FieldName = vsKau9 )
+, GetKAUField(10) ( FieldName = vsKau10 )
+//******************************************************************************
+
+From
+  CalPlan
+, ResOtgr
+, BaseFin
+, BaseDoc
+, KatSopr
+, KatDoc   KatDoc2
+, NZakaz
+, StatLog(StatLog02)
+, AktSver(AktSver02)
+, SpDocs(SpDocs02)
+, DocSchem(DocSchem02)
+, KatNazna
+, Persons
+, KatDoc
+, KlPrice
+, KatOtpEd
+, KatPodr
+, MarPunkt
+, PlPor
+, StepDoc
+, SpSopr
+, KatOrg
+, KatOrg   KatOrg1
+, KatOrg   KatOrg2
+, KatOrg   KatOrg3
+, KatOrg   KatOrg4
+, KatOrg   KatOrgF
+, KatOrg   KatOrgT
+, KlVal    KlVal1
+, KlVal    KlVal2
+, KlVal    KlVal3
+, KlVal    SpVal
+, KlVal    DogVal
+, KlVal    RasVal
+, KatNotes
+, KatNotes KatNotes1
+, KatNotes KatNotes2
+, KatNotes KatNotes3
+, KatNotes KatNotes4
+, KatNotes OldNotes
+, KatNotes NewNotes
+, KatNotes KatNotesDog
+, KlShtraf
+, KlShtraf KlShtrafPlat
+, SGetDocs
+, KatMC
+, KatUsl
+, GroupMC
+, GroupUsl
+, SGetDocs SGetDocs_s
+, SGetDocs SGetDocsOwner
+, SGetDocs PKP
+, SGetDocs SGetDocsDop
+, SGetDocsZam
+, IerDog
+, IerCalPl
+, KatVidD  KatVidD1
+, KatVidD  fltKatVidD
+, SpSchem
+, SpSchem SpSchemDop
+, KatStroy
+, FPCO     OtvPodr
+// для исков
+, Iski(Iski03)
+, KatNotes KatNotesIsk
+, KatNotes KatNotesCourt
+, tmpSumsTiDk
+, KlVal    KlVal_Sums
+, KatDoc   KatDoc_Sums
+// реструктуризация долга
+, Veksl    ReStruDolg
+, KatNotes KatNotesRestru
+, KlVal    ReStruVal
+, SortTable
+, SoprHoz
+, SpDocSmeta
+, SmetaStroy
+, SmetaSpec
+, SpDocs   SpDocsSmet
+, SpDocs   SpDocsMTR
+, KatOtpEd KatOtpEdSmeta
+, KatKlass
+, SaldTune
+, SpecMTR
+
+Where
+((
+//***********************************************
+    Node                 == SGetDocs.cOwner
+AND SGetDocs.nRec        == SGetDocs_s.cOwner
+AND SGetDocs.cOwner      == SGetDocsOwner.nRec
+AND SGetDocs.cNazna      == KatNazna.nRec
+AND SGetDocs.nRec        == AttrDog.cDogovor
+AND AttrDog.cOtv_My      == Persons.nRec
+AND SGetDocs.nRec        == SGetDocsZam.cDogovor
+AND StatLog.DocType      == KatDoc.TiDkGal
+AND AttrDog.cPodr        == OtvPodr.nRec
+AND SGetDocs.cOrg        == KatOrg.nRec
+AND SGetDocs.cNote       == KatNotes.nRec
+AND SGetDocs.cVidDog     == KatVidD.nRec
+//***********************************************
+AND BaseFin.cOrg         == KatOrg1.nRec
+AND BaseFin.cVal         == KlVal3.nRec
+AND BaseDoc.cOrg         == KatOrg2.nRec
+AND KatSopr.cOrg         == KatOrg3.nRec
+AND KatSopr.VidSopr      == KatDoc2.TiDkGal
+AND NZakaz.cOrg          == KatOrg4.nRec
+AND BaseDoc.cVal         == KlVal1.nRec
+AND KatSopr.cValut       == KlVal2.nRec
+AND BaseDoc.cNote        == KatNotes1.nRec
+AND KatSopr.cNote        == KatNotes2.nRec
+AND NZakaz.cNote         == KatNotes3.nRec
+AND StatLog.cOldNote     == OldNotes.nRec
+AND StatLog.cNewNote     == NewNotes.nRec
+AND SGetDocs.nRec        == AktSver.cDogovor
+AND AktSver.cNote        == KatNotes4.nRec
+AND SGetDocs.cShtrafShip == KlShtraf.nRec
+AND SGetDocs.cShtrafPlat == KlShtrafPlat.nRec
+AND SGetDocs.cPriceLs    == KlPrice.nRec
+AND SGetDocs.cVal        == DogVal.nRec
+AND SGetDocs.cValRas     == RasVal.nRec
+//***********************************************
+AND SpDocs.cVal          == SpVal.nRec
+AND SpDocs.cOtpEd        == KatOtpEd.nRec
+AND SpDocs.cMCUsl        == KatMC.nRec
+AND SpDocs.cMCUsl        == KatUsl.nRec
+AND SpDocs.cGrMCUsl      == GroupMC.nRec
+AND SpDocs.cGrMCUsl      == GroupUsl.nRec
+AND coSpDocs             == SpDocSmeta.coTable
+AND SpDocs.nRec          == SpDocSmeta.cSpec
+AND SpDocSmeta.cSmeta    == SmetaStroy.nRec
+AND SpDocSmeta.cPosition == SmetaSpec.nRec
+AND SpDocsSmet.cOtpEd    == KatOtpEdSmeta.nRec
+//***********************************************
+AND if(SGetDocs.wDocType = 4, SGetDocs.cCalPlan, SGetDocs.nRec)
+                         == SpSchem.cDoc
+AND if(SGetDocs.wDocType = 4, word(403), SGetDocs.TiDk)
+                         == SpSchem.TiDk
+AND DocSchem.nRec       /== SpSchem.cSchem AND ( vwUKS = DocSchem.TiDkGal )
+AND DocSchem.cDoc        == KatStroy.nRec
+// иски
+AND SGetDocs.cDogovor    == Iski.cDogovor
+AND Iski.cNoteIsk        == KatNotesIsk.nRec
+AND Iski.cNoteCourt      == KatNotesCourt.nRec
+//***********************************************
+AND tmpSumsTiDk.TiDkGal  == KatDoc_Sums.TiDkGal
+AND tmpSumsTiDk.cVal     == KlVal_Sums.nRec
+// реструктуризация долга
+AND word(89)            <<= ReStruDolg.TiDk (NoIndex)
+AND word(92)            >>= ReStruDolg.TiDk (NoIndex)
+AND SGetDocs.cDogovor    == ReStruDolg.cPol (NoIndex)
+AND ReStruDolg.cVal      == ReStruVal.nRec
+AND ReStruDolg.cVEKSSTAT == KatNotesReStru.nRec
+AND ReStruDolg.cVidVeks  == KatKlass.NRec
+//********************************************
+AND coSpDocs             == SpecMTR.coTable
+AND SpDocs.nRec          == SpecMTR.cSpec
+AND SpecMTR.cSaldTune    == SaldTune.nRec
+//***********************************************
+))
+
+//*****************************************************************************
+Bounds BaseFin_4_Dogovor    = IerDog.cRec == BaseFin.cDogovor
+
+Bounds BaseFin_4_AppDogovor = IerDog.cRec == BaseFin.cAppDogovor (NoIndex)
+
+Bounds BaseFin_4_CalPlan_D  = IerCalPl.cDogovor == BaseFin.cDogovor
+
+Bounds BaseFin_4_CalPlan_A  = IerCalPl.cDogovor == BaseFin.cAppDogovor (NoIndex)
+//*****************************************************************************
+Bounds BaseDoc_4_Dogovor    = IerDog.cRec == BaseDoc.cDogovor
+
+Bounds BaseDoc_4_AppDogovor = IerDog.cRec == BaseDoc.cAppDogovor (NoIndex)
+
+Bounds BaseDoc_4_CalPlan    = IerCalPl.cRec == BaseDoc.cCalPlan
+//*****************************************************************************
+Bounds KatSopr_4_Dogovor    = IerDog.cRec == KatSopr.cDogovor
+
+Bounds KatSopr_4_AppDogovor = IerDog.cRec == KatSopr.cAppDogovor
+
+Bounds KatSopr_4_CalPlan_D  = IerCalPl.cDogovor == KatSopr.cDogovor AND
+                              IerCalPl.cRec     == KatSopr.cCalPlan (NoIndex)
+
+Bounds KatSopr_4_CalPlan_A  = IerCalPl.cDogovor == KatSopr.cAppDogovor AND
+                              IerCalPl.cRec     == KatSopr.cCalPlan (NoIndex)
+//*****************************************************************************
+Bounds NZakaz_4_Dogovor     = IerDog.cRec == NZakaz.cDogovor
+
+Bounds NZakaz_4_AppDogovor  = IerDog.cRec == NZakaz.cAppDogovor
+
+Bounds NZakaz_4_CalPlan     = IerCalPl.cRec == NZakaz.cCalPlan
+//*****************************************************************************
+Bounds StatLog_4_Dogovor    = SGetDocs.cDogovor    == StatLog.cDoc AND
+                              word(400)            == StatLog.DocType
+
+Bounds StatLog_4_AppDogovor = SGetDocs.cAppDogovor == StatLog.cDoc AND
+                              word(401)            == StatLog.DocType
+
+Bounds StatLog_4_CalPlan    = SGetDocs.cCalPlan    == StatLog.cDoc AND
+                              word(403)            == StatLog.DocType
+//*****************************************************************************
+Bounds SpDocs_4_Dogovor    = SGetDocs.cDogovor    == SpDocs.cDoc AND
+                             word(400)            == SpDocs.TiDk
+
+Bounds SpDocs_4_AppDogovor = SGetDocs.cAppDogovor == SpDocs.cDoc AND
+                             word(401)            == SpDocs.TiDk
+
+Bounds SpDocs_4_CalPlan    = SGetDocs.cCalPlan    == SpDocs.cDoc AND
+                             word(403)            == SpDocs.TiDk
+//*****************************************************************************
+Bounds byIski              = word(711)           >>= Iski.TiDk (NoIndex)
+//*****************************************************************************
+Bounds byPretIski          = word(713)           <<= Iski.TiDk (NoIndex)
+//*****************************************************************************
+
+#include GetDocs.ord
+
+;
+
+Parameters
+  pDogovor
+, pAppDogovor
+, DskParams
+, FilterInfo
+;
+
+Form frm0('GetDocs2.OUT', 'GetDocs2') With NoVisual;
+
+//******************************************************************************
+
+#include gdocs2.vpp // на таблице в памяти
+#include d_a_we_1.vpp
+
+//*****************************************************************************
+
+#include ShowKau.vpp
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string;
+{
+  GetKAUField := #ShowKau(if(pNum = 1, SaldTune.wObj, SaldTune.wKau[pNum - 1]), if(pNum = 1, SpecMTR.cObj, SpecMTR.cKau[pNum - 1]));
+}
+
+//******************************************************************************
+
+#ifdef ComponentVersion
+ToolBar
+    F_Common::tbBuhFilter
+  , F_Common::tbPrintDoc
+  , F_BuhRep::tbTreeControl
+;
+#else
+ToolBar
+    tbBuhFilter
+  , tbPrintDoc
+  , tbTreeControl
+;
+#end
+
+Tree trTreeTables ('Выбор документа', , sci1EscTree);
+  Show at (, , , 12);
+  Table SGetDocs;
+Fields
+//*****************************************************************************
+  sDocType       #3'Документ'
+                 ('Договор, соглашение или пункт календарного плана')
+                 : [19], Protect, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.DesGr #3'Группа'
+                 ('Код группы пользователей')
+                 : [5], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.Descr #3'Дескр.'
+                 ('Дескриптор(идентификатор) пользователя')
+                 : [5], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.NoDoc #3'Номер', #3'документа'
+                 ('Внутренний номер')
+                 : [9], Protect, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.dDoc  #3'Дата', #3'заключения'
+                 ('Дата заключения договора/соглашения/пункта календарного плана')
+                 : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.dBeg  #3'Начало', #3'действия'
+                 ('Начальная дата периода исполнения')
+                 : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.dEnd  #3'Окончание', #3'действия'
+                 ('Конечная дата периода исполнения')
+                 : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  if(SGetDocs.VidPlan = 100, '', KatNotes.sName)
+                 #3'Статус', #3'документа'
+                 : [ 9], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  sDirect        #3'Вид'
+                 ('"1->2" - документ на продажу; "2->1" - документ на закупку')
+                 : [4], Protect, NoAutoSize, Centered;
+//*****************************************************************************
+  KatOrg.Name    #3'Контрагент' ('Контрагент документа'): [22], Protect;
+//*****************************************************************************
+  if(SGetDocs.VidPlan = 100, 0, SGetDocs.Summa)
+                 #3'Сумма'
+                 ('Общая (планируемая) сумма')
+                 : [18, '\2p[|-]3666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  SGetDocs.DogVal #3'Вал.'
+                 : [4], Skip, NoAutoSize, { Font = {Italic = TRUE}};
+//*****************************************************************************
+end;
+
+Browse brTables ('Выбор документа', , sci1Esc);
+  Show at (, , , 12);
+  Table SGetDocs;
+Fields
+//*****************************************************************************
+  sDocType       #3'Документ'
+                 ('Договор, соглашение или пункт календарного плана')
+                 : [19], Protect, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.DesGr #3'Группа'
+                 ('Код группы пользователей')
+                 : [5], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.Descr #3'Дескр.'
+                 ('Дескриптор(идентификатор) пользователя')
+                 : [5], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.NoDoc #3'Номер', #3'документа'
+                 ('Внутренний номер')
+                 : [9], Protect, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.dDoc  #3'Дата', #3'заключения'
+                 ('Дата заключения договора/соглашения/пункта календарного плана')
+                 : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.dBeg  #3'Начало', #3'действия'
+                 ('Начальная дата периода исполнения')
+                 : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  SGetDocs.dEnd  #3'Окончание', #3'действия'
+                 ('Конечная дата периода исполнения')
+                 : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  if(SGetDocs.VidPlan = 100, '', KatNotes.sName)
+                 #3'Статус', #3'документа'
+                 : [ 9], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  sDirect        #3'Вид'
+                 ('"1->2" - документ на продажу; "2->1" - документ на закупку')
+                 : [4], Protect, NoAutoSize, Centered;
+//*****************************************************************************
+  KatOrg.Name    #3'Контрагент' ('Контрагент документа'): [22], Protect;
+//*****************************************************************************
+  if(SGetDocs.VidPlan = 100, 0, SGetDocs.Summa)
+                 #3'Сумма'
+                 ('Общая (планируемая) сумма')
+                 : [18, '\2p[|-]3666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  SGetDocs.DogVal #3'Вал.'
+                 : [4], Skip, NoAutoSize, { Font = {Italic = TRUE}};
+//*****************************************************************************
+end;
+
+TabbedSheet BOTTOM tshMain
+  Show at (, 13, , );
+
+Browse brTabStatLog 'Статусы' ('', , sci1Esc);
+  Table StatLog;
+Fields
+//*****************************************************************************
+  StatLog.DesGr    #3'Группа'
+                   ('Код группы пользователей')
+                   : [6], Protect, NoAutoSize;
+//*****************************************************************************
+  StatLog.Descr    #3'Дескр.'
+                   ('Дескриптор(идентификатор) пользователя')
+                   : [5], Protect, NoAutoSize;
+//*****************************************************************************
+  StatLog.dOper    #3'Дата'
+                   ('Дата')
+                   : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  StatLog.TimeOper #3'Время'
+                   ('Время')
+                   : [5, 'HH: MM'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  OldNotes.Name    #3'Старый', #3'статус'
+                   ('Старый статус')
+                   : [18], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  NewNotes.Name    #3'Новый', #3'статус'
+                   ('Новый статус')
+                   : [18], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  StatLog.Comment  #3'Пояснение', #3'к изменению статуса'
+                  ('Пояснение к изменению статуса документа')
+                  : [20], Protect;
+//*****************************************************************************
+end;
+
+Browse brTabSpDocs 'Спецификация' ('', , sci1Esc);
+  Table SpDocs;
+Fields
+//*****************************************************************************
+  SpDocs.CODE     #3'№', 'п/п'
+                  : [4] , Skip, Centered, NoAutoSize;
+//*****************************************************************************
+  SpDocs.PrMC     #3'Тип'
+                  : [3], Skip, Centered, NoAutoSize,
+                  [LIST 1 'Т', 'У', 'УП', 'ДС', 'ГП'];
+//*****************************************************************************
+  SpDogGrName     #3'Группа'
+                  ('Группа МЦ/Услуги')
+                  : [10], Protect;
+//*****************************************************************************
+  SpDogName       #3'Продукция'
+                  ('Наименование МЦ/Услуги')
+                  : [20], Protect;
+//*****************************************************************************
+  KatOtpEd.Abbr   #3'ЕдИзм'
+                  ('Единица измерения')
+                  : [5], Protect, NoAutoSize, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  if(SpDocs.Direct = 1, '1-2', '2-1')
+                  #3'Вид'
+                  : [4], Skip, Centered, NoAutoSize;
+//*****************************************************************************
+  SpDocs.Price    #3'Цена'
+                  ('Цена в валюте')
+                  : [13.2], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  SpDocs.Kol      #3'Количество'
+                  ('Количество')
+                  : [12.3], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  SpDocs.Summa    #3'Сумма'
+                  ('Стоимость в валюте')
+                  : [13.2], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  SpDocs.SumNDS   #3'Налоги'
+                  ('Налоги')
+                  : [13.2], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  SpVal.SimvolV   #3'Вал.'
+                  ('Валюта')
+                  : [4], Protect, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  SpDocs.Period   #3'Период', #3'отгрузки'
+                  ('Период отгрузки МЦ/услуг', , )
+                  : [8], Centered, NoAutoSize, Skip,
+                  [LIST 0 'нет', 'расчетный', 'год', 'квартал', 'месяц', 'неделя', 'день'];
+//*****************************************************************************
+  SaldTune.Name   #3'Объект ЦУ': [10], Protect, NoAutoSize;
+  vsKau1          #3'КАУ 1'    : [12], Protect, NoAutoSize;
+  vsKau2          #3'КАУ 2'    : [12], Protect, NoAutoSize;
+  vsKau3          #3'КАУ 3'    : [12], Protect, NoAutoSize;
+  vsKau4          #3'КАУ 4'    : [12], Protect, NoAutoSize;
+  vsKau5          #3'КАУ 5'    : [12], Protect, NoAutoSize;
+  vsKau6          #3'КАУ 6'    : [12], Protect, NoAutoSize;
+  vsKau7          #3'КАУ 7'    : [12], Protect, NoAutoSize;
+  vsKau8          #3'КАУ 8'    : [12], Protect, NoAutoSize;
+  vsKau9          #3'КАУ 9'    : [12], Protect, NoAutoSize;
+  vsKau10         #3'КАУ 10'   : [12], Protect, NoAutoSize;
+//*****************************************************************************
+  SmetaMy         #3'Смета'
+                  ('Локальная смета: "Номер": "Наименование"')
+                  : [20], Protect, NoAutoSize;
+//*****************************************************************************
+  SmetaSpMy       #3'Спецификация сметы'
+                  ('Спецификация сметы: "№ п/п" ("Код") "Наименование"')
+                  : [20], Protect, NoAutoSize;
+//*****************************************************************************
+end;  //Browse
+
+Browse brTabAktSver 'Акт сверки' ('', , sci14Esc);
+  Table AktSver;
+Fields
+//*****************************************************************************
+  AktSver.DesGr      #3'Группа'
+                     ('Код группы пользователей')
+                     : [6], Protect, NoAutoSize, Centered;
+//*****************************************************************************
+  AktSver.Descr      #3'Дескр.'
+                     ('Дескриптор(идентификатор) пользователя')
+                     : [6], Protect, NoAutoSize, Centered;
+//*****************************************************************************
+  AktSver.NoDoc_Ext  #3'Номер', #3'входящий'
+                     ('Входящий номер')
+                     : [15], Protect, NoAutoSize;
+//*****************************************************************************
+  AktSver.Nodoc      #3'Номер', #3'внутренний'
+                     ('Внутренний номер')
+                     : [15], Protect, NoAutoSize;
+//*****************************************************************************
+  AktSver.dDoc       #3'Дата'
+                     ('Дата заключения')
+                     : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  AktSver.dBeg       #3'Начало', #3'действия'
+                     ('Дата начала действия')
+                     : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  AktSver.dEnd       #3'Окончание', #3'действия'
+                     ('Дата окончания действия')
+                     : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  KatNotes4.sName    #3'Статус'
+                     ('Статус документа')
+                     : [8], Skip, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  AktSver.SaldoIn    #3'Сальдо', #3'входящее'
+                     ('Входящие сальдо на начало периода')
+                     : [20.2, '\2p[|-]3666`666`666`666.88'], Skip, NoAutoSize, LessNull;
+//*****************************************************************************
+  AktSver.SaldoOut   #3'Сальдо', #3'исходящее'
+                     ('Исходящие сальдо на конец периода')
+                     : [20.2, '\2p[|-]3666`666`666`666.88'], Skip, NoAutoSize, LessNull;
+//*****************************************************************************
+end; // Browse brAktSverMain
+
+Screen scrTabShtraf 'Санкции' ('', , sci1Esc);
+  Table SGetDocs;
+Fields
+//*****************************************************************************
+  if(IsValid(#KLShtraf), KLShtraf.Name, 'не предусмотрен')
+                    ('Наименование штрафа по отгрузке'): Protect;
+//*****************************************************************************
+  if(IsValid(#KLShtrafPlat), KLShtrafPlat.Name, 'не предусмотрен')
+                    ('Наименование штрафа по оплате'): Protect;
+//*****************************************************************************
+Buttons
+  cmValue2, Default, , 'Отобразить информацию по штрафам в развернутом виде', , sci1Esc;
+<<
+
+ `Штраф за несвоевременную отгрузку` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Штраф за несвоевременную оплату`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   <. Подробнее ... .>
+>>
+end; // Screen scShtraf
+
+Embedded brTabBaseFin 'Платежи' Interface oDocSort.wTabBaseFin;
+end;
+
+Embedded brTabBaseDoc 'Документы-основания' Interface oDocSort.wTabBaseDoc;
+end;
+
+Embedded brTabKatSopr 'Сопроводительные документы' Interface oDocSort.wTabKatSopr;
+end;
+
+Embedded brTabNZakaz 'Наряд-заказы' Interface oDocSort.wTabNZakaz;
+end;
+
+Screen scrTabDebts 'Взаиморасчеты' (, , sci1Esc);
+  Table SGetDocs;
+Fields
+  ValDogovor           ('Валюта договора'): Protect;
+  SGetDocs.dValCurse   ('Дата курса цен'): ['DD/MM/YYYY'], Protect;
+  ValRasDogovor        ('Валюта взаиморасчетов документа'): Protect;
+  SGetDocs.MethodPrice ('Методика определения цен по договору')
+    : [LIST 'счету', 'прайс-листу', 'спецификации'], Skip;
+  KlPrice.Name ('Прайс-лист для определения цены по договору'): Protect;
+  SGetDocs.VhodNal ('Входимость налогов в цену МЦ/услуги')
+    : [LIST 1 'входят', 'не входят'], Skip, { Font = { Bold = TRUE}};
+  SGetDocs.MaxDebts    ('Максимальная задолженность по договору'): [, '\2p[|-]3666`666`666`666.88'], Protect;
+  SGetDocs.TekDebts    ('Текущий баланс по договору'): [, '\2p[|-]3666`666`666`666.88'], Protect;
+<<
+`Денежная единица договора`      .@@@@@@@@`Курс на дату`.@@@@@@@@@@@@
+`Денежная единица взаиморасчетов`.@@@@@@@@
+
+`Цены согласно`.@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+`Налоги`.@@@@@@@@@@ в цену товара
+
+`Максимальная задолженность`     .@@@@@@@@@@@@@@@@@@
+`Текущий баланс`                 .@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Browse brZamen  'История замен' (, , sci1Esc);
+  Table SGetDocsZam;
+Fields
+  SGetDocsZam.NameDog 'Номер документа': Protect, { Font = { Bold = (SGetDocsZam.Ind = 0) } };
+end;
+
+Browse brTabStroy 'Объекты строительства' (, , sci148Esc);
+Table DocSchem;
+Fields
+  KatStroy.Name #3'Наименование' ('Наименование объекта строительства'): [ 20], Protect;
+  KatStroy.Code #3'Код'          ('Код объекта строительства')         : [ 20], Protect;
+end;
+
+Browse brTabTheme 'Заказы НИОКР' (, , sci14Esc);
+Table DocSchem;
+Fields
+  oThemeFuncs.GetThemeNumber(DocSchem.cDoc) #3'Номер'        ('Номер заказа НИОКР')       : [ 15], Protect;
+  oThemeFuncs.GetThemeName(DocSchem.cDoc)   #3'Наименование' ('Наименование заказа НИОКР'): [ 40], Protect;
+end;
+
+Browse brTabIski 'Исковые заявления' (, , sci14Esc);
+  Table Iski;
+Fields
+//*****************************************************************************
+  TipIska             #3'Задолженность'
+                      ('Характер задолженности искового заявления')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  KatNotesIsk.sName   #3'Статус', #3'заявления'
+                      ('Статус искового заявления')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  Iski.dDoc           #3'Дата', #3'подачи'
+                      ('Дата подачи иска')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  Iski.NoDoc          #3'№ искового', #3'заявления'
+                      ('Регистрационный номер искового заявления')
+                      : [10], Protect, NoAutoSize;
+//*****************************************************************************
+  Iski.SumIsk         #3'Сумма долга', #3'по заявлению'
+                      ('Сумма долга по исковому заявлению')
+                      : [16, '\2p[|-]366`666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  KatNotesCourt.sName #3'Статус', #3'решения'
+                      ('Статус решения суда')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  Iski.dCourt         #3'Дата', #3'решения'
+                      ('Дата решения суда')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  Iski.NoCourt        #3'Номер', #3'дела'
+                      ('Номер дела')
+                      : [6] , Protect, NoAutoSize;
+//*****************************************************************************
+  Iski.SumIskOK       #3'Сумма долга', #3'по решению'
+                      ('Сумма долга по исковому заявлению')
+                      : [16, '\2p[|-]366`666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  Iski.dAkt           #3'Дата', #3'акта'
+                      ('Дата акта о невозможности взыскания долга')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  Iski.NoAkt          #3'Номер акта', #3'о невзыскании'
+                      ('Номер акта о невозможности взыскания долга')
+                      : [10], Protect;
+//*****************************************************************************
+end;
+
+Browse brTabPretIski 'Претензии' (, , sci14Esc);
+  Table Iski;
+Fields
+//*****************************************************************************
+  TipIska             #3'Задолженность'
+                      ('Характер задолженности по претензии')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  KatNotesIsk.sName   #3'Статус', #3'претензии'
+                      ('Статус претензии')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  Iski.dDoc           #3'Дата', #3'подачи'
+                      ('Дата подачи претензии')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  Iski.NoDoc          #3'№ претензии'
+                      ('Регистрационный номер претензии')
+                      : [10], Protect, NoAutoSize;
+//*****************************************************************************
+  Iski.SumIsk         #3'Сумма долга', #3'по претензии'
+                      ('Сумма долга по претензии')
+                      : [16, '\2p[|-]366`666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  KatNotesCourt.sName #3'Статус', #3'решения'
+                      ('Статус решения суда')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+  Iski.dCourt         #3'Дата', #3'решения'
+                      ('Дата решения суда')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  Iski.NoCourt        #3'Номер', #3'дела'
+                      ('Номер дела')
+                      : [6] , Protect, NoAutoSize;
+//*****************************************************************************
+  Iski.SumIskOK       #3'Сумма долга', #3'по решению'
+                      ('Сумма долга по претензии')
+                      : [16, '\2p[|-]366`666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+  Iski.dAkt           #3'Дата', #3'акта'
+                      ('Дата акта о невозможности взыскания долга')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+  Iski.NoAkt          #3'Номер акта', #3'о невзыскании'
+                      ('Номер акта о невозможности взыскания долга')
+                      : [10], Protect;
+//*****************************************************************************
+end;
+
+Browse brReStruDolg 'Реструктуризация долга' (, , sci14Esc);
+  Table ReStruDolg;
+Fields
+//*****************************************************************************
+    VidDoc
+                      #3'Вид документа'
+                      ('Вид документа.')
+                      : [20], Protect, { Font = { Italic = TRUE } };
+//*****************************************************************************
+    TipRestDolg
+                      #3'Задолженность'
+                      ('Характер задолженности.')
+                      : [8], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+    if(IsValid(tnRestruDolg), KatNotesReStru.Name, '')
+                      #3'Статус'
+                      ('Статус документа.')
+                      : [20], Protect, Centered, { Font = { Italic = TRUE } };
+//*****************************************************************************
+    ReStruDolg.DatVip #3'Составлен'
+                      ('Дата составления соглашения.')
+                      : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//*****************************************************************************
+    ReStruDolg.NoDoc  #3'Номер документа'
+                      ('Номер документа.')
+                      : [10], Protect;
+//*****************************************************************************
+    if(ReStruDolg.cVal = 0, ReStruDolg.Sum, ReStruDolg.SumV)
+                      #3'Сумма'
+                      ('Сумма задолженности.')
+                      : [14, 2, '\2p[|-]3666`666`666`666`666.88'], Protect, NoAutoSize, LessNull;
+//*****************************************************************************
+    ValutRestru       #3'Вал.'
+                      ('Валюта соглашения.')
+                      : [4], Skip, NoAutoSize, { Font = { Italic = TRUE } };
+//*****************************************************************************
+end;
+
+end; // TabbedSheet
+
+Screen scWaitScreen;
+  Show at (, 13, , );
+<<
+
+  Идет выборка данных...
+>>
+end;
+
+Procedure InsertIntoSortTable(wTable: longint; pDogovor, pAppDog, pCalPlan: comp; dDate: date; sNum: string; pDoc: comp);
+{
+  if ( RecordExists SortTable where (( wTable   == SortTable.VidDoc      AND
+                                       pDogovor == SortTable.cDogovor    AND
+                                       pAppDog  == SortTable.cAppDogovor AND
+                                       pCalPlan == SortTable.cCalPlan    AND
+                                       pDoc     == SortTable.cRec
+                                    )) = tsOk )
+    Exit;
+
+  insert SortTable set
+    SortTable.VidDoc      := wTable,
+    SortTable.cDogovor    := pDogovor,
+    SortTable.cAppDogovor := pAppDog,
+    SortTable.cCalPlan    := pCalPlan,
+    SortTable.SortName    := DateToStr(dDate, 'YYYY.MM.DD ') + sNum,
+    SortTable.cRec        := pDoc;
+}
+
+Procedure ProcessOneDoc;
+{
+  case Save_Format of
+  // BaseFin
+    1:  _LOOP BaseFin
+          {
+            if ( SGetDocs.wDocType = 4 ) // ПКП
+                AND
+             Not ((IerCalPl.cRec = BaseFin.cCalPlan) AND not SGetDocs.IsFinPKP or
+                  (IerCalPl.cRec = BaseFin.cKatSopr) AND     SGetDocs.IsFinPKP)
+               Continue;
+
+            InsertIntoSortTable(coBaseFin
+                              , BaseFin.cDogovor
+                              , BaseFin.cAppDogovor
+                              , if(SGetDocs.IsFinPKP, BaseFin.cKatSopr, BaseFin.cCalPlan)
+                              , BaseFin.dDoc
+                              , BaseFin.NoDoc
+                              , BaseFin.nRec
+                               );
+          }
+  // BaseDoc
+    2:  _LOOP BaseDoc
+          InsertIntoSortTable(coBaseDoc
+                            , BaseDoc.cDogovor
+                            , BaseDoc.cAppDogovor
+                            , BaseDoc.cCalPlan
+                            , BaseDoc.dDoc
+                            , BaseDoc.NoDoc
+                            , BaseDoc.nRec
+                             );
+  // KatSopr
+    3:  _LOOP KatSopr
+          InsertIntoSortTable(coKatSopr
+                            , KatSopr.cDogovor
+                            , KatSopr.cAppDogovor
+                            , KatSopr.cCalPlan
+                            , KatSopr.dSopr
+                            , KatSopr.NSopr
+                            , KatSopr.nRec
+                             );
+  // NZakaz
+    4:  _LOOP NZakaz
+          InsertIntoSortTable(coNZakaz
+                            , NZakaz.cDogovor
+                            , NZakaz.cAppDogovor
+                            , NZakaz.cCalPlan
+                            , NZakaz.dDoc
+                            , NZakaz.NoDoc
+                            , NZakaz.nRec
+                             );
+  end;
+}
+
+Function GetVidDoc: longint;
+{
+  case Save_Format of
+    1: GetVidDoc := coBaseFin;
+    2: GetVidDoc := coBaseDoc;
+    3: GetVidDoc := coKatSopr;
+    4: GetVidDoc := coNZakaz;
+  else
+       GetVidDoc := 0;
+  end;
+}
+
+Procedure RebuildSortTable;
+var
+  pDog: comp;
+{
+  if ( GetVidDoc = 0 )
+    Exit;
+
+  pDog := if(SGetDocs.cAppDogovor = 0, SGetDocs.cDogovor, SGetDocs.cAppDogovor);
+
+  case SGetDocs.wDocType of
+  //**********
+    1, 2:
+      _LOOP IerDog where (( pDog == IerDog.cUpRec ))
+        ProcessOneDoc;
+  //**********
+    4:
+      _LOOP IerCalPl where (( pDog == IerCalPl.cDogovor AND SGetDocs.cCalPlan == IerCalPl.cUpRec ))
+        ProcessOneDoc;
+  //**********
+  else
+    Exit;
+  end;
+}
+
+Function ChangeTable: boolean;
+{
+  ChangeTable :=(Save_Table <> SGetDocs.wDocType);
+  Save_Table  := SGetDocs.wDocType;
+}
+
+Procedure Make_Filters(_tb1: longint);
+{
+  PushBounds(_tb1);
+}
+
+Function SelectBoundsForFilter(_tb1, _tb2, _tb3: longint): longint;
+{
+  case SGetDocs.wDocType of
+  // 'Договор'
+    1: SelectBoundsForFilter := _tb1;
+  // 'Соглашение'
+    2: SelectBoundsForFilter := _tb2;
+  // 'Календарный план'
+    4: SelectBoundsForFilter := _tb3;
+  end;
+}
+
+Procedure ReRead_Filters_Only(Save_Format_: byte);
+{
+  case Save_Format_ of
+  // BaseFin
+    1:
+      {
+        ReSetBounds(#BaseFin);
+        Make_Filters(SelectBoundsForFilter(tbBaseFin_4_Dogovor
+                                         , tbBaseFin_4_AppDogovor
+                                         , if(SGetDocs.cAppDogovor = 0, tbBaseFin_4_CalPlan_D, tbBaseFin_4_CalPlan_A)));
+      }
+  // BaseDoc
+    2:
+      {
+        ReSetBounds(#BaseDoc);
+        Make_Filters(SelectBoundsForFilter(tbBaseDoc_4_Dogovor, tbBaseDoc_4_AppDogovor, tbBaseDoc_4_CalPlan));
+      }
+  // KatSopr
+    3:
+      {
+        ReSetBounds(#KatSopr);
+        Make_Filters(SelectBoundsForFilter(tbKatSopr_4_Dogovor
+                                         , tbKatSopr_4_AppDogovor
+                                         , if(SGetDocs.cAppDogovor = 0, tbKatSopr_4_CalPlan_D, tbKatSopr_4_CalPlan_A)));
+      }
+  // NZakaz
+    4:
+      {
+        ReSetBounds(#NZakaz);
+        Make_Filters(SelectBoundsForFilter(tbNZakaz_4_Dogovor, tbNZakaz_4_AppDogovor, tbNZakaz_4_CalPlan));
+      }
+  // StatLog
+    5:
+      {
+        ReSetBounds(#StatLog);
+        Make_Filters(SelectBoundsForFilter(tbStatLog_4_Dogovor, tbStatLog_4_AppDogovor, tbStatLog_4_CalPlan));
+      }
+  // SpDocs
+    8:
+      {
+        ReSetBounds(#SpDocs);
+        Make_Filters(SelectBoundsForFilter(tbSpDocs_4_Dogovor, tbSpDocs_4_AppDogovor, tbSpDocs_4_CalPlan));
+      }
+  // Iski
+    12,14:
+      {
+        if (BoundActive(tbbyIski))
+          SubBounds(tbbyIski);
+
+        if (BoundActive(tbbyPretIski))
+          SubBounds(tbbyPretIski);
+
+        if (Save_Format_ = 12)
+          AddBounds(tbbyIski);
+        else
+          AddBounds(tbbyPretIski);
+      }
+  end; // case
+}
+
+Procedure ReRead_Filters(On_TabbedSheet: boolean);
+{
+  // если не поменялась таблица и не поменялась закладка
+  // т.е. ограничения не нужно перенакладывать
+  if ( not ( On_TabbedSheet OR ChangeTable ) )
+    {
+      oDocSort.OnChangeDocument(SGetDocs.cDogovor, SGetDocs.cAppDogovor, SGetDocs.cCalPlan);
+      RedrawPanel(#SGetDocs);
+      Exit;
+    }
+
+  SetFormat(scWaitScreen);
+
+  ReRead_Filters_Only(Save_Format);
+  oDocSort.OnChangeDocument(SGetDocs.cDogovor, SGetDocs.cAppDogovor, SGetDocs.cCalPlan);
+
+  case Save_Format of
+  // BaseFin
+    1: SetFormat(brTabBaseFin);
+  // BaseDoc
+    2: SetFormat(brTabBaseDoc);
+  // KatSopr
+    3: SetFormat(brTabKatSopr);
+  // NZakaz
+    4: SetFormat(brTabNZakaz);
+  // StatLog
+    5:
+      {
+        RereadRecord(#StatLog);
+        SetFormat(brTabStatLog);
+      }
+   // AktSver
+    6:
+      {
+        RereadRecord(#AktSver);
+        SetFormat(brTabAktSver);
+      }
+  // Shtraf
+    7: SetFormat(scrTabShtraf);
+  // SpDocs
+    8:
+      {
+        RereadRecord(#SpDocs);
+        SetFormat(brTabSpDocs);
+      }
+  // Debts
+    9: SetFormat(scrTabDebts);
+  // Zamen
+    10:
+      {
+        RereadRecord(#SGetDocsZam);
+        SetFormat(brZamen);
+      }
+  // Stroy
+    11:
+      {
+        vwUKS := 454;
+
+        if ( GetFirst DocSchem = tsOk )
+          {}
+
+        RescanPanel(#DocSchem);
+        SetFormat(brTabStroy);
+      }
+  // Иски
+    12:
+      {
+        RereadRecord(#Iski);
+        SetFormat(brTabIski);
+      }
+  // Реструктуризация долга
+    13:
+      {
+        RereadRecord(#ReStruDolg);
+        SetFormat(brReStruDolg);
+      }
+  // претензии
+    14:
+      {
+        RereadRecord(#Iski);
+        SetFormat(brTabPretIski);
+      }
+  // Заказы НИОКР
+    15:
+      {
+        vwUKS := 431;
+
+        if ( GetFirst DocSchem = tsOk )
+          {}
+
+        RescanPanel(#DocSchem);
+        SetFormat(brTabTheme);
+      }
+  end;
+
+  RedrawPanel(#SGetDocs);
+}
+
+#include gdocs2pr.vpp //функции печати
+
+Function GetDocTreeType: byte;
+{
+  if ( RecordExists SGetDocs_s <> tsOk )
+    GetDocTreeType := ntfText
+  else
+    GetDocTreeType := if(TreeNodeIsOpen(trTreeTables), ntfOpen, ntfClose);
+}
+
+#define SHOW_NOTES_ICONS
+#include DogIcons.vpp
+#include gdocs2_1.vpp
+
+Function NeedCalcSums(VidDoc: longint): boolean;
+{
+  case VidDoc of
+    coBaseDoc: NeedCalcSums := GetSumsBD;
+    coKatSopr: NeedCalcSums := GetSumsKS;
+    coBaseFin: NeedCalcSums := GetSumsBF;
+  end;
+}
+
+function GetCurSGetDocsDop(Param : word) : boolean;
+{
+  Var pDog  : comp;
+  Var pTiDk : word;
+
+  GetCurSGetDocsDop := TRUE;
+
+  pDog  := if(SGetDocsDop.cCalPlan <> 0, SGetDocsDop.cCalPlan
+                                       , if (SGetDocsDop.cAppDogovor <> 0, SGetDocsDop.cAppDogovor
+                                                                         , SGetDocsDop.cDogovor));
+  pTiDk := if(SGetDocsDop.cCalPlan <> 0, word(403)
+                                       , if (SGetDocsDop.cAppDogovor <> 0, word(401)
+                                                                         , word(400)));
+  if ( Param = 2)
+    Delete SpSchemDop where ((   pDog          == SpSchemDop.cDoc
+                             AND pTiDk         == SpSchemDop.TiDk
+                             AND DocSchem.nRec == SpSchemDop.cSchem ));
+  else
+    _LOOP SpDocsMTR where ((   pTiDk == SpDocsMTR.TiDk
+                           AND pDog  == SpDocsMTR.cDoc ))
+      if ( oMTRFun.GetObjUKS(coSpDocs, SpDocsMTR.nRec) = DocSchem.cDoc )
+        {
+          GetCurSGetDocsDop := FALSE;
+
+          Exit;
+        }
+}
+
+function LookStroyDocs(cNode : comp;
+                       Param : word   // 1 - проверка на наличие объектов строительста в спецификации
+                       ): boolean ;   // 2 - отвязка объекта
+{
+  LookStroyDocs := TRUE;
+
+  _LOOP SGetDocsDop where (( cNode == SGetDocsDop.cOwner ))
+    {
+      LookStroyDocs := GetCurSGetDocsDop(Param);
+
+      if not LookStroyDocs
+        Exit;
+
+      PushPos(#SGetDocsDop);
+
+      LookStroyDocs := LookStroyDocs(SGetDocsDop.nRec, Param);
+
+      PopPos(#SGetDocsDop);
+
+      if not LookStroyDocs
+        Exit;
+    }
+}
+
+//******************************************************************************
+
+Panel aaa;
+  Table SGetDocs;
+
+HandleEvent
+
+cmPositionChanged :
+  if ( ( CurTable = #SGetDocs ) and ( Save_Format = 11 ) )
+    {
+      if (GetFirst fastfirstrow DocSchem = tsOk) {};
+      ReScanPanel(#DocSchem);
+    }
+
+cmIdle:
+  ReRead_Filters(false);
+
+end; // HandleEvent
+
+end; // Panel
+
+HandleEvent // Interface
+
+cmTreeTop:
+  Node := 0;
+
+cmTreeUp:
+  Node := SGetDocs.cOwner;
+
+cmTreeDown:
+  Node := SGetDocs.nRec;
+
+cmTreeNodeType:
+  {
+    var DocTreeType: byte;
+    DocTreeType := GetDocTreeType;
+
+    if ( SGetDocs.VidPlan = 100 )
+      {
+        TreeSetNodeType(trTreeTables, DocTreeType);
+        Exit;
+      }
+
+    TreeSetNodeType(trTreeTables,
+                    DocTreeType,
+                    GetDocTreeIconEx(if(SGetDocs.wDocType = 1, word(400),
+                                     if(SGetDocs.wDocType = 2, word(401), word(403))),
+                                     KatNotes.Status,
+                                     DocTreeType,
+                                     KatNotes.nRec));
+  }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(trTreeTables, SGetDocs.cOwner);
+
+cmInit:
+  {
+    if (DemoMode)
+      if (oDogFuns.TooMuchDogovors)
+        {
+          Abort;
+          Exit;
+        }
+
+    vwUKS := 454;
+
+    SetOrder(tiByDate);
+    SetColumnSorting(trTreeTables, #SGetDocs.dDoc, 1);
+
+    delete all SortTable;
+
+    GetVipRef(oDocSort, 'iDocSort');
+
+    BindEvent(ShowSums        , oDocSort.ShowSums);
+    BindEvent(NeedCalcSums    , oDocSort.NeedCalcSums);
+    BindEvent(RebuildSortTable, oDocSort.RebuildSortTable);
+    BindEvent(GetVidDoc, oDocSort.GetVidDoc);
+
+    SetHelpAndStatusConText(scShtrafOtg     , #KLShtraf.Name    , sci1Esc, 'DogSatisfaction');
+    SetHelpAndStatusConText(scShtrafOtgRefin, #KLShtraf.Name    , sci1Esc, 'DogSatisfaction');
+    SetHelpAndStatusConText(scShtrafPlt     , #KLShtrafPlat.Name, sci1Esc, 'DogSatisfaction');
+    SetHelpAndStatusConText(scShtrafPltRefin, #KLShtrafPlat.Name, sci1Esc, 'DogSatisfaction');
+
+    SetWindowHelpCtx(hcDogovorViewDocs, wnMainWindow);
+
+    InitDocIconsArray;
+
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    ReSetBounds(#SGetDocs);
+
+    Init_DSK_Params;
+
+    case wGetTune('Doc.Visible') of
+      dcOwnOnly:
+        {
+          sDescr := sGetTune('User.Descr');
+          sDesgr := sGetTune('User.DesGr');
+
+          DskParams := DskParams OR vcGetDog_Descr OR vcGetDog_DesGr;
+        }
+      dcGrpRead, dcGrpModif:
+        {
+          sDesgr := sGetTune('User.DesGr');
+
+          DskParams := DskParams OR vcGetDog_DesGr;
+        }
+    end;
+
+    if ( not MakeTree )
+      {
+        Abort;
+        Exit;
+      }
+
+    if ( RecordsInTable(#SGetDocs) = 0 )
+      {
+        Message('Ошибка формирования отчета!'#13#13
+              + 'Возможно некорректная таблица описателя иерархии договоров.'#13
+              + 'Проведите проверку КОУ (иерархия договоров/ПКП)', Error);
+        Abort;
+        Exit;
+      }
+
+    if ( not Lic_ItemExists('SmetaDocs') )
+      {
+        ClearFieldState(#SmetaMy,   sfVisible);
+        ClearFieldState(#SmetaSpMy, sfVisible);
+      }
+
+    var datechanged: boolean;
+
+    if ( not ReadMyDsk(Save_Format, 'GetDocs2_Save_Format', datechanged) )
+      Save_Format := 1;
+
+    if ( (DskParams and vcGetDog_Zamena) = 0 )
+      {
+        PutCommand(cmValFld1);
+
+        if ( Save_Format > 15 )
+          Save_Format := 1;
+      }
+    else
+      {
+        SetTitle('Отчет о ходе исполнения договора');
+        SetWindowHelpCtx(hcdg_oper_otchet, wnMainWindow);
+      }
+
+    case Save_Format of
+      1: SetFormat(brTabBaseFin);
+      2: SetFormat(brTabBaseDoc);
+      3: SetFormat(brTabKatSopr);
+      4: SetFormat(brTabNZakaz );
+      5: SetFormat(brTabStatLog);
+      6: SetFormat(brTabAktSver);
+      7: SetFormat(scrTabShtraf);
+      8: SetFormat(brTabSpDocs );
+      9: SetFormat(scrTabDebts );
+     10: SetFormat(brZamen     );
+     11: SetFormat(brTabStroy  );
+     12: SetFormat(brTabIski   );
+     13: SetFormat(brReStruDolg);
+     14: SetFormat(brTabPretIski);
+     15:
+       if oThemeFuncs.NIOKR_Used
+         {
+           vwUKS := 431;
+
+           SetFormat(brTabTheme);
+         }
+    end;
+
+    if ( GetFirst SGetDocs where (( pAppDogovor == SGetDocs.nRec )) <> tsOk )
+      if ( GetFirst SGetDocs where (( pDogovor == SGetDocs.nRec )) <> tsOk )
+        {}
+
+    pNode := SGetDocs.nRec;
+
+    SetBounds(#SGetDocs);
+
+    if ( not TreeJumpToRecord(trTreeTables, pNode) ) // в зависимости от фикса атлантиса
+      TreeGetLast(trTreeTables);
+
+    RereadRecord(#SGetDocs);
+
+    isBrowse := FALSE;
+
+    SelectField(#SGetDocs.NoDoc);
+
+    Save_Table := 100;
+
+    ReRead_Filters(FALSE);
+
+    if ( not UKS_Used )
+      SetTabbedSheetVisible(brTabStroy, FALSE);
+
+    SetTabbedSheetVisible(brTabTheme, oThemeFuncs.NIOKR_Used);
+
+    if ( (DskParams and vcGetDog_Zamena) <> 0 )
+      DisableCommand(cmFilterSave);
+  }
+
+cmValFld1:
+  {
+    SetTabbedSheetVisible(scrTabDebts, FALSE);
+    SetTabbedSheetVisible(brZamen    , FALSE);
+  }
+
+cmValue2:
+  RunWindow(wiShtraf);
+
+cmDefault:
+  if isBrowse
+    {
+
+      isBrowse := FALSE;
+      var _nrec: comp;
+      _nrec := SGetDocs.nRec;
+
+      SetBounds(#SGetDocs);
+
+      TreeJumpToRecord(trTreeTables, _nrec);
+
+      SetFormat(trTreeTables);
+
+      Abort;
+      Exit;
+    }
+
+cmDone:
+  SaveMyDsk(Save_Format, 'GetDocs2_Save_Format');
+
+cmChangeTabbedSheetFormat: // + GetCurrentFormat
+  {
+    case Target of
+      brTabBaseFin : Save_Format := 1;
+      brTabBaseDoc : Save_Format := 2;
+      brTabKatSopr : Save_Format := 3;
+      brTabNZakaz  : Save_Format := 4;
+      brTabStatLog : Save_Format := 5;
+      brTabAktSver : Save_Format := 6;
+      scrTabShtraf : Save_Format := 7;
+      brTabSpDocs  : Save_Format := 8;
+      scrTabDebts  : Save_Format := 9;
+      brZamen      : Save_Format := 10;
+      brTabStroy   : Save_Format := 11;
+      brTabIski    : Save_Format := 12;
+      brReStruDolg : Save_Format := 13;
+      brTabPretIski: Save_Format := 14;
+      brTabTheme   : Save_Format := 15;
+    end;
+
+    ReRead_Filters(TRUE);
+  }
+
+cmEdit:
+  case CurTable of
+  //***********
+    #AktSver:
+      {
+        if ( not IsValid(#AktSver) )
+          Exit;
+
+        RunInterface('AktSver', AktSver.cDogovor);
+
+        RereadRecord(#AktSver);
+      }
+  //***********
+    #DocSchem:
+      {
+        if ( not IsValid(#DocSchem) )
+          Exit;
+
+        RunInterface('KatStroy', KatStroy.nRec, FALSE, 0, FALSE, FALSE, false);
+
+        RereadRecord(#DocSchem);
+      }
+  //***********
+    #Iski:
+      {
+        if ( not IsValid(#Iski) )
+          Exit;
+
+        RunInterface('Iski', Iski.TiDk, Iski.nRec);
+
+        RereadRecord(#Iski);
+      }
+  //***********
+    #ReStruDolg:
+      {
+        if ( not IsValid(#ReStruDolg) )
+          Exit;
+
+        RunInterface('Veksl', ReStruDolg.TiDk, ReStruDolg.nRec, integer(-1), word(0), comp(0));
+
+        RereadRecord(#ReStruDolg);
+      }
+  end;
+
+cmDelete:
+  case CurTable of
+    #DocSchem:
+      {
+        if ( not IsValid(#DocSchem) )
+          Exit;
+
+        if ( GetFirst FastFirstRow SGetDocsDop where (( SGetDocs.nRec == SGetDocsDop.nRec )) = tsOk ) {}
+
+        if not GetCurSGetDocsDop(1)
+          {
+            Message(  'В спецификации документа присутствуют позиции связанные с текущим объектом строительства.'#13
+                    + 'Удаление невозможно!', Information);
+            Exit;
+          }
+
+        if not LookStroyDocs(SGetDocsDop.nRec, 1)
+          {
+            Message(  'В спецификации подчиненного документа присутствуют позиции связанные с текущим объектом строительства.'#13
+                    + 'Удаление невозможно!', Information);
+            Exit;
+          }
+
+        if (Message('Отвязать объект строительства?', Information + YesNo) <> cmYes)
+          Exit;
+
+        if ( GetFirst FastFirstRow SGetDocsDop where (( SGetDocs.nRec == SGetDocsDop.nRec )) = tsOk ) {}
+
+        GetCurSGetDocsDop(2);
+        LookStroyDocs(SGetDocs.nRec, 2);
+
+        if ( GetNext DocSchem <> tsOk )
+          if ( GetPrev DocSchem <> tsOk )
+            if ( GetFirst DocSchem <> tsOk )
+              {}
+
+        RescanPanel(#DocSchem);
+      }
+  end;
+
+cmOpenSearch:
+  if ( ( ( CurField = #SGetDocs.dDoc ) OR ( CurField = #SGetDocs.NoDoc ) ) AND ( not isBrowse ) )
+    {
+      isBrowse := TRUE;
+      ReSetBounds(#SGetDocs);
+      SetFormat(brTables);
+    }
+
+cmCloseSearch:
+  if isBrowse
+    {
+      isBrowse := FALSE;
+
+      var _nrec: comp;
+      _nrec := SGetDocs.nRec;
+
+      Node  := SGetDocs.cOwner;
+
+      SetBounds(#SGetDocs);
+
+      TreeJumpToRecord(trTreeTables, _nrec);
+
+      SetFormat(trTreeTables);
+    }
+
+cmShowAll: // Раскрыть все ветки
+  {
+    if isBrowse
+      Exit;
+
+    var sav_NRec: comp;
+    sav_NRec := SGetDocs.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, 'Раскрытие всех веток...', 1);
+
+    if TreeGetFirst(trTreeTables)
+      do
+        {
+          NextVisual;
+          TreeOpenNode(trTreeTables);
+        }
+      while TreeGetNext(trTreeTables);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(trTreeTables, sav_NRec);
+
+    RescanPanel(#SGetDocs);
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    if isBrowse
+      Exit;
+
+    var sav_NRec: comp;
+
+    while ( SGetDocs.cOwner <> 0 ) do
+      TreeJumpToRecord(trTreeTables, SGetDocs.cOwner);
+
+    sav_NRec := SGetDocs.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, 'Сворачивание всех веток...', 1);
+
+    if TreeGetFirst(trTreeTables)
+      do
+        {
+          NextVisual;
+          TreeCloseNode(trTreeTables);
+        }
+      while TreeGetNext(trTreeTables);
+
+    StopVisual('', 0);
+
+    TreeJumpToRecord(trTreeTables, sav_NRec);
+
+    RescanPanel(#SGetDocs);
+  }
+
+cmHotKeys:
+  if ( not isBrowse ) // находимся в дереве
+   {
+     case CurTable of
+     //**************
+       #SGetDocs:
+         PutHotCommand(RunMenu('mnuGetDocs2'));
+     //**************
+       #BaseDoc:
+         PutHotCommand(RunMenu('mnuTabBaseDoc'));
+     //**************
+       #KatSopr, #BaseFin, #Iski, #ReStruDolg:
+         PutHotCommand(RunMenu('mnuCalcSumsDoc'));
+     end
+   }
+
+cmPrintDoc:
+  if ( not isBrowse ) // находимся в дереве
+    PrintCurrentRec;
+
+cmFilterSave: // <Alt+B>
+  {
+    var OldDskParams: word;
+    var pCurPos: comp;
+
+    OldDskParams := DskParams;
+
+    pNode   := Node;
+    pCurPos := SGetDocs.nRec;
+
+    if ( FilterInfo.Filter <> 0 )
+      {
+        var Marker: longint;
+
+        if ( (FilterInfo.Filter and 1) <> 0 )
+          {
+            DskParams := DskParams or vcGetDog_Date;
+
+            SaveMyDsk(FilterInfo.dBeg, 'GetDAK_begDate');
+            SaveMyDsk(FilterInfo.dEnd, 'GetDAK_endDate');
+          }
+
+        if ( (FilterInfo.Filter and 2) <> 0 )
+          {
+            DskParams := DskParams or vcGetDog_Kontr;
+
+            Marker := InitMarker('MGetDocs_Kontr', 8, 100, 10);
+            ClearMarker(Marker);
+            InsertMarker(Marker, FilterInfo.pOrg);
+            DoneMarker(Marker, 'MGetDocs_Kontr');
+          }
+
+        if ( (FilterInfo.Filter and 4) <> 0 )
+          {
+            var oNotes: iNotes;
+
+            DskParams := DskParams or vcGetDog_KatStatus;
+
+            Marker := InitMarker('MGetDocs_Stat', 8, 100, 10);
+            ClearMarker(Marker);
+            InsertMarker(Marker, oNotes.GetFirstNote(400, FilterInfo.Status));
+            DoneMarker(Marker, 'MGetDocs_Stat');
+          }
+
+        if ( (FilterInfo.Filter and 128) <> 0 )
+          {
+            DskParams := DskParams or vcGetDog_Descr;
+
+            SaveMyDsk(FilterInfo.sDescr, 'GetDAK_Descr');
+          }
+
+        if ( (FilterInfo.Filter and 256) <> 0 )
+          {
+            DskParams := DskParams or vcGetDog_DesGr;
+
+            SaveMyDsk(FilterInfo.sDesGr, 'GetDAK_DesGr');
+          }
+
+        if ( (FilterInfo.Filter and 512) <> 0 )
+          {
+            DskParams := DskParams or vcGetDog_CurPodr;
+
+            SaveMyDsk(FilterInfo.pCurPodr, 'GetDAK_CurPodr');
+          }
+
+        if ( (FilterInfo.Filter and 64) <> 0 )
+          {
+            DskParams := DskParams or vcGetDog_VidDoc;
+
+            Marker := InitMarker('MGetDocs_VidD', 8, 100, 10);
+            ClearMarker(Marker);
+            InsertMarker(Marker, FilterInfo.pVidDog);
+
+            if FilterInfo.UseIerVidDog
+              _LOOP KatVidD1
+                {
+                  if ( ( KatVidD1.cOwner = 0 ) OR ( KatVidD1.nRec = FilterInfo.pVidDog ) )
+                    Continue;
+
+                  var pCurVD: comp; pCurVD := KatVidD1.nRec;
+
+                  while ( GetFirst FastFirstRow fltKatVidD where (( pCurVD == fltKatVidD.nRec )) = tsOk ) do
+                    {
+                      if ( fltKatVidD.nRec = FilterInfo.pVidDog )
+                        {
+                          InsertMarker(Marker, KatVidD1.nRec);
+                          Break;
+                        }
+
+                      pCurVD := fltKatVidD.cOwner;
+                    }
+                }
+
+            DoneMarker(Marker, 'MGetDocs_VidD');
+          }
+      }
+
+    if ( RunInterface('BegFil', word(4), double(0), word(0), DskParams) <> cmCancel )
+      {
+        delete all SGetDocs;
+
+        ReSetBounds(#SGetDocs);
+
+        FilterInfo.Filter := 0;
+
+        Init_DSK_Params;
+        MakeTree;
+
+        Node := 0;
+        TreeGetFirst(trTreeTables);
+
+        if ( GetFirst SGetDocs = tsOk )
+          SetBounds(#SGetDocs)
+        else
+          {
+            Message('Нет документов, удовлетворяющих фильтру!', Information);
+
+            DskParams := OldDskParams;
+
+            delete all SGetDocs;
+
+            ReSetBounds(#SGetDocs);
+
+            Init_DSK_Params;
+            MakeTree;
+
+            Node := 0;
+            SetBounds(#SGetDocs);
+
+            set Node := pNode;
+            TreeJumpToRecord(trTreeTables, pCurPos);
+          }
+
+        ReRead_Filters(FALSE);
+      }
+
+    RescanPanel(#SGetDocs);
+  }
+
+#include GetDocs.han
+
+end; // HandleEvent Interface
+
+End. // Interface
+
+#doc
+Локальное меню главного окна интерфейса <link Interface L_Dogovor::GetDocs2>L_Dogovor::GetDocs2 - Отчет о ходе исполнения договора. Просмотр документов</link>
+#end
+mnuGetDocs2 Menu
+{
+//**************************************************
+- 'Установка фильтров'
+  , cmFilterSave
+  , 'Установить/снять фильтр по договорам'
+  , hci_dogov_Filtr_Prosm, 'Alt+B', kbAltB, sci1Esc;
+//**************************************************
+-----------;
+//**************************************************
+- 'Печать'
+  , cmPrintDoc
+  , 'Печать текущих документов'
+  , , 'Ctrl+P', kbCtrlP, sci1Esc;
+//**************************************************
+-----------;
+//**************************************************
+- 'Раскрыть все ветки'
+  , cmShowAll
+  , 'Разворачивает все дерево документов'
+  , , 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//**************************************************
+- 'Свернуть все ветки'
+  , cmHideAll
+  , 'Сворачивает все дерево документов'
+  , , 'Ctrl+''-''', kbCtrlGrayMinus, sci1Esc;
+//**************************************************
+}

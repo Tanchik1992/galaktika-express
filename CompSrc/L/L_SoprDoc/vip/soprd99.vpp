@@ -1,0 +1,536 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - накладные на продажу
+// процедуры/функции из soprdoc.vip
+//******************************************************************************
+
+#include sopruzb.vpp //процедуры для формирования повагонных накладных
+
+
+Window EditTextRepr 'Примечание' escclose;
+  Show at(2, 12, 78, 19);
+
+Panel paEditTextRField
+  Table DocInfo;
+
+Text DocInfo.TextData;
+
+HandleEvent
+
+cmInsertRecord:
+  insert current DocInfo;
+
+cmUpdateRecord:
+  update current DocInfo;
+
+cmDeleteRecord:
+  if( Message('Удалить примечание?', Warning + YesNo) = cmYes )
+    delete current DocInfo;
+end; // HandleEvent
+end; // Panel
+end; // Window
+
+#include 4DocPRN.vpp
+
+#include Sopconst.inc  // Константы для сопроводительных документов
+#include saldomcs.vpp  // Тригеры для SpOrder
+#include getmolsk.vpp  // (VOLOD) получения МОЛ по умолчанию для склада
+#include dlg_dog.vpp   // контроль долга по договору
+#include soprc08.vpp
+
+#ifdef _CheckKon_VIH_
+var oCheckKon: CheckKonObj;
+#else
+#include checkkon.vpp //проверка максимальной задолженности
+#end
+
+//******************************************************************************
+
+Function GetTTNpunktDefault: comp;  // возвращает NPunkts.Nrec только если он один подвязан к KatSopr.cGruzTo
+{
+  GetTTNpunktDefault := 0;
+  if (GetFirst FastFirstRow NPunkts where ((KatSopr.cGruzTo == NPunkts.cOrg)) = tsOk)
+    {
+      var tmpNRec: comp;    tmpNRec := NPunkts.NRec;
+
+      if (GetNext FastFirstRow NPunkts where ((KatSopr.cGruzTo == NPunkts.cOrg)) <> tsOk)
+        GetTTNpunktDefault := tmpNRec;
+    }
+}
+
+//******************************************************************************
+
+Procedure OnInitInsMcInfo; // Абстрактная
+{
+}
+
+//******************************************************************************
+
+Procedure RasNeotg(var Neotg: double);
+{
+  Neotg := 1;
+}
+
+//******************************************************************************
+
+#include isres.vpp   // Проверка резерва
+
+//******************************************************************************
+
+Function OnAfterMakeBaseDoc: boolean;
+{
+  OnAfterMakeBaseDoc := isRes(KatSopr.dSopr);
+  OnAfterMakeBaseDoc := TRUE; //ПИР 3.7546
+}
+
+//******************************************************************************
+
+#include soprgen.vpp  // Общие процедуры для всех сопроводительных документов
+#include pickzatr.vpp // выбор затраты
+#include soprval.vpp  // Модуль обработки валюты
+#include naklgen.vpp  // Модуль обработки для накладных
+#include nneword.vpp  // Автоинкремент номеров складских ордеров
+#include delord.vpp   // Модуль удаления складских ордеров по накладной
+#include soprrash.vpp // Молуль для обработки расходных накладных
+#include deldres.vpp  // Удаление DoRes
+#include WrInPut.vpp  // формирование заказа в Автотранспорте
+#include CopNal.vpp   // c налогов
+#include NCopOrdB.vpp // без распределения
+
+//******************************************************************************
+
+Function GetRashDate: Date;
+{
+  GetRashDate := To_Days(0);
+
+  var Dat: Date;   Dat := if (KatSopr.dOpr <> date(0, 0, 0), KatSopr.dOpr, KatSopr.dSopr);
+
+  if (RunDialog(GetFormNa, Dat) = cmCancel)
+    Exit;
+
+  GetRashDate := Dat;
+}
+
+//******************************************************************************
+
+#include makerash.vpp  // Модуль формирования складских ордеров
+#include rcsum.vpp     // Перерасчет суммы по накладной
+#include soprnald.vpp  // Функции обработки налогов
+
+//******************************************************************************
+
+Procedure OnAfterInsertSpSoprFromPrice;
+{
+}
+
+//******************************************************************************
+
+#include soprc07.vpp // OnBeforeClearSpSopr; // Перекрытие абстракта
+
+//******************************************************************************
+
+Procedure OnAfterInsertSpSopr; // Абстрактная
+{
+  NalogsFromSpStep;
+}
+
+//******************************************************************************
+//-- public-функция для пересчета налога при формировании накладной по ДО
+Procedure _SetTypeSopr(wSopr: word);
+{
+  TypeSopr := wSopr;
+}
+
+//******************************************************************************
+
+Procedure _OnAfterInsertSpSopr(pKatSopr: comp;pSpSopr: comp);
+{
+  if GetFirst FastFirstRow KatSopr where ((pKatSopr == KatSopr.NRec)) <> tsOk
+    Exit;
+
+  SelectPanel(#KatSopr);
+
+  RereadRecord(#KatSopr);
+
+  if GetFirst SpSopr where ((pSpSopr == SpSopr.NRec)) <> tsOk
+    Exit;
+
+  RereadRecord(#SpSopr);
+  if GetFirst SpStep where ((SpSopr.cSpStep == SpStep.NRec)) <> tsOk
+    {};
+
+  OnAfterInsertSpSopr;
+}
+
+//******************************************************************************
+
+procedure ChangeNoDocBaseDoc;
+var
+  wTune: word;
+{
+  if (NOT IsValid(#BaseDoc))
+    Exit;
+
+  wTune := 0;
+
+  case KatSopr.VidSopr of
+    201 : wTune := wGetTune('Oper.Sell.Nakl.DO=NUMSOPR');
+    1421: wTune := wGetTune('Doc.Wood.Nakl.DO=NUMSOPR');
+  end;
+
+  case wTune of
+    0: Exit;
+    1: {};
+    2: if ( Message('Изменить номер ДО по номеру накладной?', YesNo + Confirmation) <> cmYes )
+         Exit;
+  end;
+
+  oDOfuns.ChangeNoDoc(BaseDoc.nRec, KatSopr.NSopr);
+  RereadRecord(#BaseDoc);
+}
+
+//******************************************************************************
+
+#include insstds.vpp  // Стандартная обработка выборов МЦ по счету
+
+//******************************************************************************
+
+#ifdef  PEMOHT_MAMOHT
+#include insmc.vpp    // ремонт
+#else
+ #include insmc_n.vpp  // Вставка МЦ по документу (через MakeNakl)
+#end
+
+//******************************************************************************
+
+#include soprc00.vpp //ckecksumma
+#include soprc01.vpp //ckecksumma
+#include soprc04.vpp   // Удаление спецификации накладной
+
+#include insmc0.vpp    // общие функции для  insmc1.vpp , insmc2.vpp
+#include insmc1.vpp    // заполнение накладной по НЗ
+#include insmc2.vpp    // заполнение накладной по договор-соглашение-кал.план
+
+#include schkres.vpp   // Для проверки
+
+#include soprc03.vpp
+
+#include soprc16.vpp
+
+#include prn_org.vpp  // Александр Крахотко 14-01-98  16: 44: 39
+#include prnrashn.vpp // Печать накладной
+#include copySopr.vpp  // Копирование документа
+
+//******************************************************************************
+
+Function OnSchFactSumm(Value: double): double;
+{
+  OnSchFactSumm := if (KatSopr.VidSopr = 203, -Value, Value);
+}
+
+//******************************************************************************
+
+#include schffun.vpp   // Поддержка счетов-фактур
+#include gmckat.vpp    // Выбор материальных ценностей из каталога МЦ
+#include gmcprl.vpp    // Выбор материальных ценностей из прайса
+#ifdef _SMETA_IN_SOPR_
+#include gSmetKS.vpp   // Выбор МЦ/Усл из смет
+#end
+
+//******************************************************************************
+
+Procedure SetDateExp;
+var Tune_Export_Attr1     : string;
+    Tune_Export_DateExp   : boolean;
+    Tune_Export_KS_Status : comp;
+    dAttrExp : Date;
+    iExtAttr : iExtAttr;
+{
+  Tune_Export_KS_Status := coGetTune('Nalog.Rus.Export.KS_Status');
+  if (KatSopr.cNote <> Tune_Export_KS_Status)   //проверка на экспорт
+    Exit;
+
+  Tune_Export_DateExp := boGetTune('Nalog.Rus.Export.DateExpEqualDateNakl');
+  if (not Tune_Export_DateExp)
+    Exit;
+
+  Tune_Export_Attr1 := sGetTune('Nalog.Rus.Export.Attr1');
+  dAttrExp := iExtAttr.dGetAttr(coKatSopr, KatSopr.Nrec, Tune_Export_Attr1);
+
+  if (longint(dAttrExp) = 0)
+    iExtAttr.dSetAttr(coKatSopr, KatSopr.Nrec, Tune_Export_Attr1, KatSopr.dSopr);
+  else
+  {
+    if (dAttrExp <> KatSopr.dSopr)
+      if (Message('Дата экспорта не совпадает с датой документа.'#13+
+                  'Изменить значение внешнего атрибута "' + Tune_Export_Attr1 + '"?', YesNo) = cmYes)
+        iExtAttr.dSetAttr ( coKatSopr, KatSopr.Nrec, Tune_Export_Attr1, KatSopr.dSopr );
+  }
+}
+
+//******************************************************************************
+
+Function BeforeDeleteKatSopr(pNRec: comp; isWarnings, isVisual: boolean): boolean;
+{
+  BeforeDeleteKatSopr := FALSE;
+
+  if (ConditionActive(tcPrnGrSopr))
+    PopCondition(tcPrnGrSopr);
+  
+  if GetFirst FastFirstRow KatSopr where ((pNRec == KatSopr.Nrec)) <> tsOk
+    Exit;
+
+  if (isVisual)
+    StartNewVisual(vtRotateVisual, vfTimer, 'Подготовка документа к удалению...', 1);
+
+  if (NOT IsDelOrder)
+    {
+      if (isVisual)
+        StopVisual('', 0);
+
+      Exit;
+    }
+
+  if (not CanDelOrdEx(isWarnings, false))
+    {
+      if (isVisual)
+        StopVisual('', 0);
+
+      Exit;
+    }
+
+  if (isVisual)
+    SetVisualHeader('Удаление ордеров');
+
+  if (not DeleteOrders(isWarnings))
+    {
+      if (isVisual)
+        StopVisual('', 0);
+
+      Exit;
+    }
+
+  if IsValid(#StepDoc) AND (wGetTune('Reserv.PrSchSklad') = 0)
+    {
+      if (isVisual)
+        SetVisualHeader('Снятие резервов');
+
+      _LOOP SpSopr
+        if (GetSpStep)
+          DelDoRes;
+    }
+
+  if (isVisual)
+    StopVisual('', 0);
+
+  _LOOP SpSopr where((KatSopr.Nrec == SpSopr.cSopr))
+     OnBeforeClearSpSopr;
+
+  if GetFirst FastFirstRow KSopr where ((KatSopr.NRec == KSopr.cKatSopr)) <> tsOk
+    {
+      BeforeDeleteKatSopr := TRUE;
+      Exit;
+    }
+
+  var MesStr: string;
+
+  if KSopr.VidSopr = 114
+    MesStr := 'Данной накладной соответствуют акты приемки.'#13'Удалить их?'
+  else
+    MesStr := 'Данной накладной соответствуют сопутствующие услуги.'#13'Удалить акты на данные услуги?';
+
+  var prizn : boolean;
+  prizn := TRUE;
+  If not (KSopr.VidSopr = 114 OR KSopr.VidSopr = 111)
+    Update KSopr where ((KatSopr.NRec == KSopr.cKatSopr))
+      set KSopr.cKatSopr := 0;
+  else
+    {
+      if isWarnings
+        prizn := (Message(MesStr, YesNo) = cmYes)
+
+      if not prizn
+        Update KSopr where ((KatSopr.NRec == KSopr.cKatSopr))
+          set KSopr.cKatSopr := 0;
+      else
+        {
+          var objDel: objDelSopr;
+          if (not LoadVipRef(objDel, 'DelSopr'))
+            {
+              Message('Не загрузился интерфейс objDelSopr.'#10#13 +
+                       'Удаление отменено', mfError);
+              Exit;
+            }
+
+          if (isVisual)
+            StartNewVisual(vtNumericVisual, vfTimer, 'Удаляются документы: ', 1);
+
+          _LOOP KSopr where ((KatSopr.NRec == KSopr.cKatSopr))
+            {
+              if (isVisual)
+                NextVisual;
+
+              objDel.DeleteSopr(KSopr.NRec, FALSE, FALSE);
+            }
+
+          if (isVisual)
+            StopVisual('', 0);
+        }
+    }
+  BeforeDeleteKatSopr := TRUE;
+}
+
+//******************************************************************************
+
+Function CanChSklad: boolean; // Возможность изменения склада отпуска
+{
+  CanChSklad := TRUE;
+
+  if (GetFirst FastFirstRow StepDoc where ((KatSopr.cStepDoc == StepDoc.NRec)) = tsOk)
+    if (GetFirst FastFirstRow BaseDoc where ((StepDoc.cBaseDoc == BaseDoc.NRec)) = tsOk)
+      if (BaseDoc.cParty <> 0)
+        CanChSklad := Message('Разрез СКЛАД-МОЛ-ПАРТИЯ не должен отличаться от разреза в ДО '+
+                              'при установленной настройке: '#13+
+                              GetTuneName('RESERV.PRSCHSKLAD') + ' = "складу".'#13#13+
+                              'Продолжить?', YesNo) = cmYes
+}
+
+//******************************************************************************
+
+Function CanChangeRazrez: boolean; // Возможность измеения разреза
+{
+  CanChangeRazrez := TRUE;
+
+#ifdef GAL8_1
+#ifdef _USE_SERIAL_
+  if ( not oSerialMove.CanChangeRzSopr(KatSopr.nRec) )
+    {
+      Message('В накладной введены серийные номера. Изменить разрез невозможно.');
+      CanChangeRazrez := false;
+      Exit;
+    }
+#end
+#end
+
+  if ((KatSopr.VidSopr = 201) OR (KatSopr.VidSopr = 202) OR (KatSopr.VidSopr = 1421))
+    case  wGetTune('Reserv.PrSchSklad') of
+    //------------------------------------
+      1:
+          CanChangeRazrez := CanChSklad;
+    //------------------------------------
+      2:
+          _LOOP SpStep where ((KatSopr.cStepDoc == SpStep.cStepDoc))
+            if (SpStep.Reserv > 0)
+              {
+                CanChangeRazrez := Message('Разрез СКЛАД-МОЛ-ПАРТИЯ не должен отличаться от разреза в ДО '+
+                                        'при установленной настройке: '#13+
+                                         GetTuneName('RESERV.PRSCHSKLAD') + ' = "складскому разрезу".'#13#13+
+                                        'Продолжить?', YesNo) = cmYes
+                Break;
+              };
+    //------------------------------------
+    end;
+}
+
+//******************************************************************************
+
+Procedure PrintAnyDocument;
+{
+  var SelType: word; SelType := 0;
+  if (RunDialog(GetTypePrintNakl, SelType) = cmCancel)
+    Exit;
+
+  if (not UpdateTable)
+    Exit;
+
+  case SelType of
+  //-------------
+    0: PrintDocument;
+  //-------------
+    1: PrintDocument_1;
+  //-------------
+    2: PrintDocument_2;
+  //-------------
+    3: PrintDocument_3;
+  //-------------
+    4: PrintDoubleTTN;
+  //-------------
+  end; // case
+
+  RescanPanel(#KatSopr);
+} // Procedure PrintAnyDocument
+
+//******************************************************************************
+
+Function MakeOrder2(Nrec_KatSopr: comp;Nrec_SklOrder: comp): boolean;
+{
+  MakeOrder2 := FALSE;
+
+  IF (NRec_KatSopr <> 0)
+    If GetFirst KatSopr where((Nrec_KatSopr == KatSopr.Nrec)) <> tsOk
+      {
+        Message('Накладная не найдена. Операция формирования ордера прервана.');
+        Exit;
+      }
+
+#ifdef _CheckKon_VIH_
+  if NullVipRef(oCheckKon)
+    GetVipRef(oCheckKon, 'KatOrg');
+
+  if (not oCheckKon.CheckDolgKon(if(KatSopr.cOrg<>0, KatSopr.cOrg, KatSopr.cOrgBase),
+                                    KatSopr.dsopr,
+                                 if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal), KatSopr.cVal))
+#else
+  if (not CheckDolgKon(if(KatSopr.cOrg<>0, KatSopr.cOrg, KatSopr.cOrgBase),
+                          KatSopr.dsopr,
+                       if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal), KatSopr.cVal))
+#end
+    Exit;
+
+  MakeRashOrd2(Nrec_SklOrder);
+
+  MakeOrder2 := TRUE;
+}
+
+//******************************************************************************
+
+#ifdef __SKYSHOP__
+Procedure SetStateSpecOk(KS: comp);
+{
+  if not UpdateTable
+    Exit;
+
+  var LL: SkyDOObj;
+
+  GetVipRef(LL, 'SkyDO');
+  if LL.CanSetNaklStateSpecOk(KS)
+    {
+      LL.SetNaklStateSpecOk(KS);
+    }
+}
+#end //__SKYSHOP__
+
+//******************************************************************************
+
+#include PrnSertif.vpp // Печать сертификатов партий
+#include soprcomm.vpp
+#include wspdocn2.vpp // Окно с редактированием налогов
+
+//******************************************************************************
+
+Procedure RecalcSoprDoc;
+{
+  var rksMarker: longint;   rksMarker := InitMarker('RecalcKatSopr', 8, 10, 5);
+
+  var i: word;
+  var cNRec: comp;
+
+  For (i := 0; i < GetMarkerCount(rksMarker); inc(i))
+    if GetMarker(rksMarker, i, cNRec)
+      if (GetFirst KatSopr where ((cNRec == KatSopr.NRec)) = tsOk)
+        CheckSumma(true);
+
+  DoneMarker(rksMarker, '');
+}
+
+//******************************************************************************

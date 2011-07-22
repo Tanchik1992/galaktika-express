@@ -1,0 +1,722 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Анализирует НЗ и устаналивает требуемую дату курса валюты нужное значение при
+// необходимости выдает запрос на ввод даты, по которой рассчитывать курс
+//******************************************************************************
+
+#ifndef _INSMC1_VPP
+#define _INSMC1_VPP
+
+#include DEIfuns.var
+#include LinkGrPl.var
+#include SDfuns.var
+
+// Сервисная штука для определения количества в предыдущих накладных
+// по данному НЗ
+Create view cvPrevKolCounter
+var
+  pSpDocs: comp;
+from
+  SpSopr,
+  KatSopr,
+  AttrDog
+where
+((
+  pSpDocs      == SpSopr.cSpNZakaz and
+  SpSopr.cSopr == KatSopr.NRec
+));
+
+Function NZ_PreviursKolSopr:double;
+var PrevKol : double;
+var TempKol : double;
+var FoundSopr: boolean;
+var CrosKoef: double; // Для анализа по ценам.
+var acNZakaz, kNRec: comp;
+{
+  PrevKol := 0;
+  NZ_PreviursKolSopr := 0;
+  if (SpDocs.PrMC <> TMCUSL)
+    Exit;
+  cvPrevKolCounter.pSpDocs := SpDocs.NRec;
+  acNZakaz := KatSopr.cNZakaz;
+  kNRec := KatSopr.NRec;
+  cvPrevKolCounter._loop SpSopr
+  {
+     if (cvPrevKolCounter.SpSopr.cSopr = kNrec) continue;
+     if (cvPrevKolCounter.GetFirst fastfirstrow KatSopr <> tsOK) continue;
+     if (acNZakaz <> cvPrevKolCounter.KatSopr.cNZakaz) continue;
+     TempKol := 0;
+     FoundSopr := cvPrevKolCounter.SpSopr.PrMC = SpDocs.PrMC;
+     if (FoundSopr)
+       {
+         FoundSopr := ((SpDocs.cMCUSl  = 0) or
+                      ((SpDocs.cMCUSl != 0) and
+                       (SpDocs.cMCUSl  = cvPrevKolCounter.SpSopr.cMCUsl)));
+       }
+     if (not FoundSopr)
+       if (cvPrevKolCounter.SpSopr.cSpNZakaz <> 0)
+         Continue;
+     if (FoundSopr)
+       {
+         TempKol := cvPrevKolCounter.SpSopr.KolFact;
+         CrosKoef := 1;
+         if (cvPrevKolCounter.SpSopr.cOtpEd <> SpDocs.cOtpEd)
+           {
+             CrosKoef :=  fEdIzm.GetKoefOtpEd(cvPrevKolCounter.SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd);
+             TempKol := TempKol * CrosKoef;
+           }
+
+       }
+     PrevKol := PrevKol + TempKol;
+  }
+  NZ_PreviursKolSopr := PrevKol;
+}
+
+// Установка нужной цены при вставке позиции из НЗ
+function OnInsertSpSopr_SpNZak(TipMon:word;Curse : double;var pGrNal:comp) : boolean;
+var sPrice: double;
+    myPrice,mySumma:double;
+    myVal : comp;
+    bRet : boolean;
+{
+ OnInsertSpSopr_SpNZak := false;
+ if (SpDocs.PrMC <> TMCUSL) Exit;
+ OnInsertSpSopr_SpNZak := true;
+ if (SpDocs.PrMC > 2) Exit;
+ if (SpDocs.Kol <> 0)
+   {
+     bRet := oSpDocs.GetSpDocsPrice(SpDocs.NRec,NZakaz.NRec,SpSopr.cOtpEd,myPrice,mySumma,myVal,pGrNal);
+     sPrice :=myPrice;
+     Case TipMon of
+       1:
+         {
+           if (Curse <> 0)
+             set SpSopr.VPrice := sPrice / Curse
+           else
+             set SpSopr.Vprice := 0;
+           set SpSopr.Price := sPrice;
+         }
+       2:
+         {
+           set SpSopr.Price := sPrice * Curse;// * (1 + (BaseDoc.DopProc / 100));
+           set SpSopr.VPrice := sPrice;
+         }
+       3:
+         {
+           set SpSopr.Price := sPrice * Curse;
+           set SpSopr.VPrice := sPrice;
+         }
+       else
+         {
+           if (Curse <> 0)
+             set SpSopr.VPrice := sPrice / Curse
+           else
+             set SpSopr.Vprice := 0;
+           set SpSopr.Price := sPrice;
+         }
+     end;
+     if (KatSopr.cValut = 0) SpSopr.VPrice := 0;
+   }
+ else
+   {
+     SpSopr.Price := 0;
+     SpSopr.VPrice := 0;
+   }
+ SpSopr.rVPrice := SpSopr.VPrice;
+ SpSopr.rPrice := SpSopr.Price;
+ OnInsertSpSopr_SpNZak := SpSopr.KolFact > 0;
+}
+
+! Обработчик формирования стандартного буфера записи позиции накладной для вставки
+//
+procedure InsMC_MakeSpSoprBufferSpNZak(var STRN:double;var STVN:double;var SNDS:double;var SVNDS:double;DoKol: double; Curse: double; TipMon:word);
+var
+  pGrNal:comp;
+  Simple: boolean;
+{
+  Simple := false;
+  if (SpDocs.cGrMCUsl<>0) and (SpDocs.cMCUsl=0)
+    {if Runinterface(PickByGrMCUsl, SpDocs.cGrMCUsl, SpDocs.prMC,
+                                    DoKol*fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd),
+                                    SpDocs.cOtpEd) =cmCancel
+       exit;
+    }
+  else
+    {
+      Simple := true;
+      p1.delete safe Pick;
+      p1.ClearBuffer(p1.tnPick);
+      p1.Pick.wList  := 800;
+      p1.Pick.cRec   := SpDocs.cMCUsl;
+      p1.Pick.PickKol:= DoKol;
+      p1.insert current Pick;
+    }
+  p1._LOOP Pick
+  {
+    DefaultSpSopr;
+    SpSopr.Kol    := p1.pick.PickKol;
+    SpSopr.cMCUSL := p1.pick.cRec;
+    SpSopr.PrMC   := SpDocs.PrMC;
+    if Simple
+      SpSopr.cOtpEd := SpDocs.cOtpEd;
+             //количество не надо преобразовывать,
+             //т.к. количество и так в опт.ед = SpDocs.cOtpEd
+    else
+      SpSopr.cOtpEd := fEdIzm.GetAktOtpEdNrec(SpSopr.cMCUsl, SpSopr.prMC)
+             //количество не надо преобразовывать,
+             //т.к. в Pick количество хранится в активной отп. ед., т.е. в KatOtpEd.nRec
+
+    SpSopr.cParty  := 0;
+    SpSopr.ProcUb  := 0;
+    SpSopr.KolFact := SpSopr.Kol;
+    SpSopr.cPriceList := SpDocs.cPriceLs;
+    SpSopr.cSpStep := 0;
+    SpSopr.ManualTax := 0;   //SpStep.ManualTax;
+    SpSopr.cSpNZakaz := SpDocs.NRec;
+    SpSopr.KolOpl  := SpSopr.Kol; //* (1 - (SpStep.ProcUb / 100));
+    SpSopr.cCellVal := SpDocs.cMoveCell; //--единица подвижного состава
+    SpSopr.cResOtgr := SpDocs.cResOtgr;  //--ресурс отгрузки
+    if ((SpDocs.PrMC = 1) or (SpDocs.PrMC = 4) or (SpDocs.PrMC = 5))
+    {
+      if (GetFirst fastfirstrow KatMC where ((SpDocs.cMCUsl == KatMC.NRec)) = tsOk)
+      {
+        SpSopr.ProcUb := oSDfuns.GetNormUbFromKatalog(SpSopr.VidSopr, 0, KatMC.NormUb);
+        SpSopr.Netto  := KatMC.Massa;
+        SpSopr.mTara  := KatMC.mTara;
+      }
+    }
+    if (OnInsertSpSopr_SpNZak(TipMon,Curse,pGrNal))
+      {
+        SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec,coSpSopr);
+        if (Insert Current SpSopr = tsOk)
+        {
+         if ( SpStep.PrMC = 1 )
+          {
+            oDEIfuns.CopyDEISpDocsToSpSopr(SpDocs.NRec, SpSopr.NRec, SpSopr.VidSopr, word(2), SpDocs.Kol, word(1), SpSopr.KolFact);
+            oDEIfuns.CopyDEISpDocsToSpSopr(SpDocs.NRec, SpSopr.NRec, SpSopr.VidSopr, word(2), SpDocs.Kol, word(2), SpSopr.Kol);
+            oDEIfuns.CopyDEISpDocsToSpSopr(SpDocs.NRec, SpSopr.NRec, SpSopr.VidSopr, word(2), SpDocs.Kol, word(3), SpSopr.KolOpl);
+          }
+          NextVisual;
+          STRN := STRN + (SpSopr.Price * SpSopr.KolOpl);
+          STVN := STVN + (SpSopr.VPrice * SpSopr.KolOpl);
+//-- здесь добавляются налоги к позиции спецификации
+          if (pGrNal <> 0)
+            {
+              RecalcNalogs(pGrNal,0);
+            }
+          else
+            {
+              if (SpDocs.PrMC = 1)
+                {
+                  if (GetFirst KatMC where((SpSopr.cMCUSL==KatMC.NRec))=tsOk)
+                    {
+                      RecalcNalogs(KatMC.cGrNal,0);
+                    }
+                }
+              else
+                {
+                  if (GetFirst KatUsl where((SpSopr.cMCUSL==KatUsl.NRec))=tsOk)
+                    {
+                      RecalcNalogs(KatUsl.cGrNal,0);
+                    }
+                }
+            }
+          if UpDate current SpSopr <> tsOK {};
+          SNDS := SNDS + SpSopr.SumNDS;
+          SVNDS := SVNDS + SpSopr.SumVNDS;
+        }
+        else
+          Message(''#3'Ошибка вставки позиции документ.',Error);
+      }
+  }
+} // function InsMC_MakeSpSoprBuffer
+
+//-- заполнение SpSopr из SpNZak
+procedure InsMC_StdSpNZak(var STRN:double;var STVN:double;var SNDS:double;var SVNDS:double;KolDoc:double;TipMon:word;Curse:double);
+var SKol: double;
+{
+  sKol := KolDoc; //SpDocs.kol;
+  if (oNotes.Notes_InUseStatus(KatSopr.cNote) = 1)
+    Case KatSopr.VidSopr of
+     502,
+     503,
+     203,
+     102,
+     512 : sKol := NZ_PreviursKolSopr;
+     else  sKol := sKol - NZ_PreviursKolSopr;
+    end; // case
+
+  InsMC_MakeSpSoprBufferSpNZak(STRN,STVN,SNDS,SVNDS,sKol,Curse,TipMon);
+} // function InsMC_StdHandle
+
+
+
+//-- заполнение KatSopr из Dogovor
+function FillKatSoprByDogovor(var wTipMoney:word):word;
+var ret : word;
+{
+  ret := 1;
+  if (NZakaz.cDogovor <> 0)
+    ret := GetFirst Dogovor where((NZakaz.cDogovor==Dogovor.NRec));
+  if (ret <> tsOk)
+    {
+      FillKatSoprByDogovor := ret;
+      exit;
+    }
+  set KatSopr.cVal    := Dogovor.cVal;
+  set KatSopr.cValut  := Dogovor.cVal;
+  set KatSopr.cOrg    := Dogovor.cPlat;
+  set KatSopr.VhodNal := Dogovor.VhodNal;
+  set KatSopr.dPrice  := Dogovor.dValCurse;
+#ifdef KUZBASS
+      KatSopr.cNazna  := Dogovor.cNazna;
+#end
+!  dCur                := Dogovor.dValCurse;
+!  Cur                 := Dogovor.ValCurse;
+  wTipMoney           := Dogovor.TipMoney;
+
+  FillKatSoprByDogovor := ret;
+}
+
+//-- заполнение KatSopr из AppDogovor
+function FillKatSoprByAppDogovor:word;
+var ret : word;
+{
+  ret := 1;
+  if (NZakaz.cAppDogovor <> 0)
+    ret := GetFirst Dogovor where((NZakaz.cAppDogovor==Dogovor.NRec));
+  if (ret <> tsOk)
+    {
+      FillKatSoprByAppDogovor := ret;
+      exit;
+    }
+  set KatSopr.cVal    := Dogovor.cVal;
+  set KatSopr.cValut  := Dogovor.cVal;
+  set KatSopr.cOrg    := Dogovor.cPlat;
+  set KatSopr.VhodNal := Dogovor.VhodNal;
+  set KatSopr.dPrice  := Dogovor.dValCurse;
+#ifdef KUZBASS
+      KatSopr.cNazna  := Dogovor.cNazna;
+#end
+!  dCur                := Dogovor.dValCurse;
+!  Cur                 := Dogovor.ValCurse;
+
+  FillKatSoprByAppDogovor := ret;
+}
+
+//-- заполнение KatSopr из CalPlan
+function FillKatSoprByCalPlan:word;
+var ret : word;
+{
+  ret := 1;
+  if (NZakaz.cCalPlan <> 0)
+    ret := GetFirst CalPlan where((NZakaz.cCalPlan==CalPlan.NRec));
+  if (ret <> tsOk)
+    {
+      FillKatSoprByCalPlan := ret;
+      exit;
+    }
+  set KatSopr.cVal    := CalPlan.cVal;
+  set KatSopr.cValut  := CalPlan.cVal;
+  set KatSopr.cOrg    := CalPlan.cPlat;
+  set KatSopr.VhodNal := CalPlan.VhodNal;
+  set KatSopr.dPrice  := CalPlan.dValCurse;
+#ifdef KUZBASS
+      KatSopr.cNazna  := CalPlan.cNazna;
+#end
+!  dCur                := CalPlan.dValCurse;
+!  Cur                 := CalPlan.ValCurse;
+
+  FillKatSoprByCalPlan := ret;
+}
+
+function FillKatSoprByNZakaz(var dCur:date;var Cur:double;var wTipMoney:word):word;
+var ret : word;
+    ret1: word;
+{
+  // возвратные накладные в консигнации
+  if (KatSopr.VidSopr = 102) OR (KatSopr.VidSopr = 203)
+  {
+    set KatSopr.cGruzFrom := NZakaz.cGrPol;
+    set KatSopr.cGruzTo   := NZakaz.cGrOtp;
+  }
+  else
+  {
+    set KatSopr.cGruzFrom := NZakaz.cGrOtp;
+    set KatSopr.cGruzTo   := NZakaz.cGrPol;
+  }
+
+  set KatSopr.Name := '';
+  set KatSopr.cOrgBase  := NZakaz.cOrg;
+      KatSopr.cOrgPlat  := KatSopr.cOrgBase;
+!#ifdef PIR_102_36567
+      KatSopr.Name := oSDfuns.SetKatSoprName( coNZakaz, NZakaz.nRec, FALSE );
+!#end
+//  set KatSopr.cPodrFrom := NZakaz.cPodrForm;
+
+//  set KatSopr.TTNPunkt  := NZakaz.cPolPunkt; // пункт разгрузки
+//  set KatSopr.TTNPunktp := NZakaz.cOtpPunkt; // пункт погрузки
+
+  if (NZakaz.cDogovor <> 0)
+    { //-- НЗ сформирован по договору или т.д.
+      ret1:= FillKatSoprByDogovor(wTipMoney);
+      ret := FillKatSoprByAppDogovor;
+      ret := FillKatSoprByCalPlan;
+    }
+  else
+    { //-- НЗ отвязаный, ни по чем не сформирован
+      set KatSopr.cOrg    := NZakaz.cOrg;
+      set KatSopr.VhodNal := if(wGetTune('Doc.Sell.Nalog')  = 1, 1, 2); //накл. на продажу
+      set KatSopr.cNazna  := coGetTune('Doc.cNazna');
+      set KatSopr.cValut  := 0;
+      set KatSopr.cVal    := 0;
+    }
+  Cur := NZ_SetDefaultCross(wTipMoney,KatSopr.cVal);
+  FillKatSoprByNZakaz := 0;
+}
+
+function FillTTNDocByNZakaz:word;
+var ret : word;
+    newTTN : boolean;
+{
+  ret := 1;
+  FillTTNDocByNZakaz := ret;
+  if (not isValid(#KatSopr)) exit;
+  if (not isValid(#NZakaz)) exit;
+  ret := GetFirst TTNDoc where ((coKatSopr    == TTNDoc.wTable and
+                                 KatSopr.NRec == TTNDoc.cDoc
+                               ));
+  if (ret = tsOk)
+    newTTN := false
+  else
+    newTTN := true;
+  if (newTTN)
+    {
+      ClearBuffer(#TTNDoc);
+      TTNDoc.wTable := coKatSopr;
+      TTNDoc.cDoc   := KatSopr.NRec;
+    }
+  set TTNDoc.cPunktR   := NZakaz.cPunktR; // пункт разгрузки
+  set TTNDoc.cPunktP   := NZakaz.cPunktP; // пункт погрузки
+  set TTNDoc.cMarAvt   := NZakaz.cMarAvt; // маршрут
+  set TTNDoc.cShipment := NZakaz.cShipment; // способ отгрузки
+  set TTNDoc.cTipOtg   := NZakaz.cTipOtg; // базис отгрузки
+  if (newTTN)
+    ret := insert current TTNDoc
+  else
+    ret := update current TTNDoc;
+  FillTTNDocByNZakaz := ret;
+}
+//-- проверка входит ли данная позиция спецификации НЗ в Распоряжение на отгр
+Function checkForOtgOrd(pSpNZak:comp;pSpOtgOrd:comp;var dKolfact:double):boolean;
+var ret : word;
+{
+  ret := GetFirst SpNzRasp where((pSpNZak == SpNzRasp.cSpNZak and
+                                  pSpOtgOrd==SpNzRasp.cSpOtgOrd
+                                ));
+  if (ret = tsOk)
+    {
+      dKolFact := SpNzRasp.KolFact;
+      checkForOtgOrd := true;
+    }
+  else
+    {
+      dKolFact := 0;
+      checkForOtgOrd := false;
+    }
+}
+function Delete_cur_KatSopr(pNRec:comp):word;
+var ret : word;
+{
+  Delete_cur_KatSopr := 0;
+  ret := GetFirst KatSopr where ((pNRec == KatSopr.NRec));
+  if (ret <> tsOk) exit;
+
+  DelLastNumD(TypeSopr,KatSopr.NSopr);
+  oStatlog.StatLog_Delete (100,KatSopr.NRec) ; //-- удаление статусов
+  ret := oSDfuns.KatSopr_Delete(KatSopr.nRec);
+  Delete_cur_KatSopr := ret;
+}
+
+
+// Стандатрная вставка позиций матценностей при формировании накладной по НЗ
+// если pSpOtgOrd=0, то формирование просто по НЗ
+// если pSpOtgOrd<>0, то формирование по НЗ по распоряжению на отгрузку
+// если NZakaz2KatSopr = false, то в pKatSopr код ошибки
+//                      ( 1 - НЗ групповой, нельзя по нему формировать )
+//                      ( 2 - НЗ не в статусе исполняемый              )
+Function NZakaz2KatSopr(pNZakaz:comp;pSpOtgOrd:comp;var pKatSopr:comp):boolean;
+var ret : word;
+    StRN, StVN, Curse : double;
+    dCurse : date;
+    TipMon : word;
+    sNDS, svNDS : double;
+    MustRCSumm : boolean;
+    KolDoc : double;
+    pOtgOrder : comp;
+{
+  NZakaz2KatSopr := false;
+  pKatSopr := 0;
+//-- ищем НЗ по которому будем формировать
+  if (GetFirst NZakaz where ((pNZakaz == NZakaz.NRec)) <> tsOk)
+     Exit;
+  if (NZakaz.TypeDoc = 1)
+    { //-- НЗ групповой, по нему нельзя формировать
+      pKatSopr := 1;
+      exit;
+    }
+  if (NZakaz.Status <> 1)
+    { //-- НЗ не в статусе исполняемый по нему нельзя формировать
+      pKatSopr := 2;
+      exit;
+    }
+//-- ищем распоряжение на отгрузку по которому будем формировать
+  pOtgOrder := 0;
+  if (pSpOtgOrd <> 0)
+    {
+      ret := GetFirst SpOtgOrd where ((pSpOtgOrd == SpOtgOrd.NRec));
+      if (ret=tsOk)
+        pOtgOrder := SpOtgOrd.cOtgOrder
+      else
+       Exit;
+    }
+
+//-- Первоначальное заполнение KatSopr
+
+//  ClearBuffer(#KatSopr);
+
+  if (pSpOtgOrd <> 0)
+    { var NDD : string;
+      if (wGetTune('FN.AvtoNum') <> 1)
+        set KatSopr.NSopr := GetLastNumD(201);
+      else
+        {
+          PushPos(#KatSopr);
+          ResetBounds(#KatSopr);
+          if (GetLast KatSopr where ((word(201) == KatSopr.VidSopr and
+                               Year(Cur_Date) == KatSopr.YearSopr)) = tsOk)
+            NDD := NextNumStr(KatSopr.NSopr)
+          else
+            NDD := '000001';
+          SetBounds(#KatSopr);
+          PopPos(#KatSopr);
+          KatSopr.NSopr := NDD;
+        }
+      set KatSopr.NRec    := 0;
+      set KatSopr.VidSopr := 201;
+      set KatSopr.TipSopr := 2;
+      set KatSopr.dSopr   := Cur_Date;
+      set KatSopr.YearSopr:= year(Cur_Date);
+      set KatSopr.Status  := 1-wGetTune('Doc.Sell.SoprStatus');
+    //  set KatSopr.cNote   := oNotes.GetFirstNote(100,KatSopr.Status);
+      set KatSopr.Descr   := NZakaz.Descr;
+      set KatSopr.DesGr   := NZakaz.DesGr;
+
+      if oStatUser.Descr_Stat_U(true, word(201), KatSopr.Descr, KatSopr.cNote)
+        {
+          KatSopr.Status := KatNotes.Status;
+        }
+      else
+        {
+          set KatSopr.cNote := oNotes.GetFirstNote(100,KatSopr.Status);
+        }
+    }
+  set KatSopr.cNZakaz     := pNzakaz;
+  set KatSopr.cOtgOrder   := pOtgOrder;
+  set KatSopr.cDogovor    := NZakaz.cDogovor;
+  set KatSopr.cAppDogovor := NZakaz.cAppDogovor;
+  set KatSopr.cCalPlan    := NZakaz.cCalPlan;
+  set KatSopr.cOtvPodr    := DefaultBaseCO;
+  if boGetTune('Oper.fpCODog2Docs')
+    if (NZakaz.cCalPlan <> 0)
+      set KatSopr.cOtvPodr := CalPlan.cOtvPodr
+    else
+      {
+        var pDog : comp;
+        pDog := if(NZakaz.cAppDogovor = 0, NZakaz.cDogovor, NZakaz.cAppDogovor);
+        if (cvPrevKolCounter.GetFirst fastfirstrow AttrDog
+                 where (( pDog == AttrDog.cDogovor )) = tsOK)
+          set KatSopr.cOtvPodr := cvPrevKolCounter.AttrDog.cPodr;
+      }
+
+  FillKatSoprByNZakaz(dCurse,Curse,TipMon);
+  if (pSpOtgOrd <> 0)
+   {
+    ret := insert current KatSopr;
+    iGrPl.InsSpGrPlD_Default(KatSopr.VidSopr,  // тип документа системный
+                             KatSopr.nRec,     //ссылка на документ
+                             KatSopr.cOrg      //ссылка на контрагента
+                            );
+   }
+  else
+    if (not UpDateTable) exit;
+
+  pKatSopr := KatSopr.NRec;
+
+  FillTTNDocByNZakaz;  //-- заполнение(и формирование) TTNDoc для KatSopr
+  if (not prepareInsSpSopr(Curse,TipMon,false))
+    {
+      exit;
+    }
+//  OnInitInsMCInfo; // Абстракный
+  MustRCSumm := false;
+  StRN := 0;    StVN := 0;
+  SNDS := 0;    SVNDS := 0;
+ StartNewVisual(vtNumericVisual,vfTimer,
+       ''#3'Создание спецификации накладной: '#13#3,1);
+  InitNalServ;
+ var OldTMCUSL: word;
+ OldTMCUSL := TMCUSL;
+//-- формируем спецификацию накладной
+  _loop SpDocs where ((KatSopr.cNZakaz == SpDocs.cDoc and
+                       word(440)       == SpDocs.TiDk))
+    {
+#ifdef _AKTUSL_VIP
+      if (SpDocs.PrMC < 2) Continue;
+#end
+      TMCUSL := SpDocs.PrMC;
+      if (pSpOtgOrd = 0)
+        { //-- формирование просто по НЗ
+          KolDoc := SpDocs.kol;
+        }
+      else
+        {
+          if (checkForOtgOrd(SpDocs.NRec,pSpOtgOrd,KolDoc) = false)
+            continue;
+        }
+      InsMC_StdSpNZak(STRN,STVN,SNDS,SVNDS,KolDoc,TipMon,Curse);
+    }
+  TMCUSL := OldTMCUSL;
+  StopVisual('',0);
+//  OnDoneInsMcInfo;
+
+//-- Проверяем для новой накладной, если в накладной нет спецификации
+//-- то удаляем заголовок новой накладной
+  if (pSpOtgOrd <> 0)
+    {
+      ret := GetFirst SpSopr where ((KatSopr.NRec == SpSopr.cSopr));
+      if (ret <> tsOk)
+        {
+          Delete_cur_KatSopr(KatSopr.NRec);
+          pKatSopr := 0;
+          NZakaz2KatSopr := false;
+          DoneNalServ;
+          exit;
+        }
+    }
+
+//-- применяем скидку из договора
+  MakeSpecSkidka(STRN,STVN,SNDS,SVNDS,TipMon,Curse);
+  DoneNalServ;
+//-- пересчет сумм по накладной
+  if (MustRcSumm) {}
+//    RecalcSumm(false)
+  else
+    {
+      if (KatSopr.VhodNal = 1)
+        {
+          KatSopr.Summa := FSRoundRub(STRN);
+          set KatSopr.SumVal := FSRoundVal(STVN);
+        }
+      else
+        {
+          KatSopr.Summa := FSRoundRub(STRN + SNDS);
+          set KatSopr.SumVal := FSRoundRub(STVN + SVNDS);
+        }
+      set KatSopr.sNalogs := SNDS;
+      set KatSopr.sVNalogs := SVNDS;
+    }
+
+  ret := Update_Current_KatSopr;
+
+  RereadRecord(#SpSopr);
+  NZakaz2KatSopr := true;
+}
+
+Function MakeKatSoprFromNZakaz:boolean;
+var maskNZak : word;
+    pKatSopr : comp;
+    oldNZ    : comp;
+    Marker : longint;         // указатель на маркер
+    MarkerCount, i : longint; // счетчики записей в маркере
+    pickrec : comp;
+{
+MakeKatSoprFromNZakaz:=false;
+  SaveMyDsk(comp(0),'_Insmc0_KatSopr_nRec');
+  maskNZak := 1 + 4 + 8 + 16; //-- можно выбирать только исполняемые НЗ
+  oldNZ := KatSopr.cNZakaz;
+
+  Marker := InitMarker('NZakaz',8,100,10);
+  ClearMarker(Marker);
+  DoneMarker(Marker,'NZakaz');
+  delete all novisual Pick;
+  if RunInterface('GetSomNZakaz',
+                  maskNZak,   // 0 - выбирать все документы, иначе битовая маска запрещенных статусов документов
+                  word(0),  // 0 - выбирать все документы, иначе битовая маска запрещенных типов документов
+                  false,     // TRUE - груповой выбор FALSE - только один/ ЕСЛИ возвращает TRUE-помечены все распоряжения!
+                  KatSopr.cNZakaz, // возвражаемый указатель на наряд-заказ
+                  false,  // показывать записи одного уровня-true, false- нет
+                  comp(0),      // ссылка на влдельца уровня(действует если OneLevel = true)
+                  comp(0),   // если не ноль, то фильтр по пункту погрузки
+                  comp(0),   // если не ноль, то фильтр по контрагенту
+                  comp(0)    // если не ноль, то фильтр по грузополучателю
+                  ) = cmCancel  // если там Cancel - то и здесь Cancel
+    {
+    Abort;
+    Exit;
+    }
+  delete safe Pick;
+  StartNewVisual(vtRotateVisual, vfTimer,
+               ''#3'Формирование элементов выбора ...'#13#3, 1);
+  Marker:=InitMarker('NZakaz',8,100,10);
+  MarkerCount:=GetMarkerCount(Marker);
+  for(i:=0;i<MarkerCount;i:=i+1)
+  { if GetMarker(Marker,i,pickrec)
+    { Pick.wList := 440;
+      Pick.PickKol:=i;
+      Pick.cRec:=pickrec;
+      insert current Pick;
+    }
+    NextVisual;
+  }
+  DoneMarker(Marker,'NZakaz');
+  StopVisual('',0);
+  PutCommand(cmDefault);
+
+  //if (RunInterface(PickNZak,maskNZak,word(0),false,KatSopr.cNZakaz,false,comp(0),comp(0),comp(0),comp(0))=cmCancel)
+  //  Exit;
+
+    set KatSopr.cStepDoc := 0;
+
+  if (GetFirst NZakaz
+                where ((KatSopr.cNZakaz == NZakaz.NRec)) <> tsOk)
+   {
+     Message(''#3'Ошибка в данных при выборе наряд-заказа...',CancelButton);
+     set KatSopr.cNZakaz := oldNZ;
+     Exit;
+   }
+
+#ifdef _AKTUSL_VIP
+     IF GetFirst SpDocs where  ((KatSopr.cNZakaz == SpDocs.cDoc and
+                                 word(440)       == SpDocs.TiDk and
+                                   (SpDocs.PrMc > 1)
+                                  )) <>TsOk{
+       message('В наряд-заказе услуги не найдены');
+       set KatSopr.cNZakaz := oldNZ;
+       Exit;
+     }
+#end
+  if (not NZakaz2KatSopr(KatSopr.cNZakaz,comp(0),pKatSopr))
+    {
+      case (pKatSopr) of
+        1:
+          {
+            message('Нельзя формировать накладную по групповому наряд-заказу');
+            set KatSopr.cNZakaz := oldNZ;
+          }
+      end;
+    }
+MakeKatSoprFromNZakaz:=true;
+}
+#end //_INSMC1_VPP

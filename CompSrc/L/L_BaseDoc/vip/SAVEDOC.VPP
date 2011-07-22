@@ -1,0 +1,172 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.0 - логистика
+// сохранение и восстановление документа-основания включая спецификацию
+//********************************************************************************
+
+cmSaveDoc :
+  {
+    UpDateTable;
+
+    if ( BaseDoc.NRec <> 0 )
+      {
+        SavedNRec := BaseDoc.NRec;
+        message('Запомнен документ с номером "' + BaseDoc.NoDoc + '"', Information);
+      }
+  }
+
+//********************************************************************************
+
+cmValue10 :
+  {
+    if (GetFirst BaseDoc where ((SavedNRec == BaseDoc.NRec)) = tsOk)
+      {
+#ifdef __vschet__
+        // контроль задолженности по договорам контрагента
+        if ( not iDolg_DG.ControlDolg_DG_4BaseDoc(BaseDoc.cOrg,
+                                                  if (BaseDoc.cAppDogovor <> 0, BaseDoc.cAppDogovor, BaseDoc.cDogovor),
+                                                  BaseDoc.Total,
+                                                  BaseDoc.cVal,
+                                                  word(1)) )
+          {
+            Abort;
+            Exit;
+          }
+#end
+
+        // проверка возможности отпуска контрагенту
+        if (wGetTune('Doc.DolgKontr') <> 0)
+          {
+#ifdef _CheckKon_VIH_
+            if NullVipRef(oCheckKon)
+              GetVipRef(oCheckKon, 'KatOrg');
+
+            if (not oCheckKon.CheckDolgKon(BaseDoc.cOrg, BaseDoc.dDoc, BaseDoc.Total, BaseDoc.cVal))
+#else
+            if (not CheckDolgKon(BaseDoc.cOrg, BaseDoc.dDoc, BaseDoc.Total, BaseDoc.cVal))
+#end
+              {
+                abort;
+                exit;
+              }
+          }
+      }
+
+    var nRecDO_New : comp;
+
+    nRecDO_New := CopyDO(SavedNRec, naltype, comp(0), false, word(0));
+
+    if (nRecDO_New <> comp(0))
+      if (GetFirst BaseDoc where (( nRecDO_New == BaseDoc.NRec )) = tsOk)
+        InsertDoSoprHoz;
+
+    ReScanPanel(CurTable);
+    ReScanPanel(#SpStep);
+  }
+
+cmValue34:
+  {
+    if ( Message('Выполнить копирование помеченных документов-оснований?', Information + YesNo) <> cmYes )
+      exit;
+
+    var NeedMes, KolDO : word;
+
+    NeedMes := 0;
+    KolDO   := 0;
+
+    if ( wGetTune('Doc.SaveNoDO') = word(2) )
+      if (
+          (tipDO = 201) AND (wGetTune('Oper.UniqNoDOsell') = 0)
+          or
+          (tipDO = 101) AND (wGetTune('Oper.UniqNoDObuy') = 0)
+          or
+          (tipDO = 1410) AND (wGetTune('Doc.Wood.NarAkt.UniqNoDObuy') = 0)
+          or
+          (tipDO = 1420) AND (wGetTune('Doc.Wood.Schet.UniqNoDObuy') = 0)
+          or
+          ( (tipDO <> 101) AND (tipDO <> 201) AND (tipDO <> 1410) AND (tipDO <> 1420) )
+         )
+        if (Message('Сохранить старые номера документов-оснований?', Information + YesNo) = cmYes)
+          NeedMes := word(2);
+        else
+          NeedMes := word(1);
+
+    _LOOP Pick where (( word(15) == Pick.wList ))
+      if ( GetFirst FastFirstRow BaseDocC where (( Pick.cRec == BaseDocC.nRec )) = tsOk )
+        if ( tipDO = BaseDocC.VidDoc )
+          {
+#ifdef __vschet__
+            // контроль задолженности по договорам контрагента
+            if ( not iDolg_DG.ControlDolg_DG_4BaseDoc(BaseDocC.cOrg,
+                                                      if (BaseDocC.cAppDogovor <> 0, BaseDocC.cAppDogovor, BaseDocC.cDogovor),
+                                                      BaseDocC.Total,
+                                                      BaseDocC.cVal,
+                                                      word(1)) )
+              Continue;
+#end
+            // проверка возможности отпуска контрагенту
+            if (wGetTune('Doc.DolgKontr') <> 0)
+              {
+#ifdef _CheckKon_VIH_
+                if NullVipRef(oCheckKon)
+                  GetVipRef(oCheckKon, 'KatOrg');
+
+                if (not oCheckKon.CheckDolgKon(BaseDocC.cOrg, BaseDocC.dDoc, BaseDocC.Total, BaseDocC.cVal))
+#else
+                if (not CheckDolgKon(BaseDocC.cOrg, BaseDocC.dDoc, BaseDocC.Total, BaseDocC.cVal))
+#end
+                  Continue;
+              }
+
+            var nRecDO_New : comp;
+
+            nRecDO_New := CopyDO(Pick.cRec, naltype, comp(0), false, word(0), NeedMes);
+
+            if (nRecDO_New <> comp(0))
+              if (GetFirst BaseDoc where (( nRecDO_New == BaseDoc.NRec )) = tsOk)
+                InsertDoSoprHoz;
+
+            KolDO++;
+          }
+
+    if (KolDO > 0)
+      PutCommand(cmUnSelectall);
+
+    ReScanPanel(CurTable);
+    ReScanPanel(#SpStep);
+  }
+
+//********************************************************************************
+
+cmRestoreDoc :
+  {
+    if not boGetTune('Doc.ModDo')
+      {
+        message(''#3'Настройка ограничивает Ваши права по использованию данной функции!',
+                Information);
+        Exit;
+      }
+
+    if DemoMode
+      {
+        var pRecChecker : RecChecker;
+        if not pRecChecker.CheckBaseDocRecords(tipDO)
+          Exit;
+      }
+
+    _LOOP Pick where (( word(15) == Pick.wList ))
+      if ( GetFirst FastFirstRow BaseDocC where (( Pick.cRec == BaseDocC.nRec )) = tsOk )
+        if ( tipDO = BaseDocC.VidDoc )
+          {
+            PutCommand(cmValue34);
+            Exit;
+          }
+
+    if (SavedNRec = 0)
+      message('Нет сохраненных документов.'#13 +
+              'Запомните сначала документ при помощи Ctrl+F2 либо пометки', OkButton+Information);
+    else
+      PutCommand(cmValue10);
+  }
+
+//********************************************************************************

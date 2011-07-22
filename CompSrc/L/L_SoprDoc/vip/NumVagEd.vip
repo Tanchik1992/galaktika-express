@@ -1,0 +1,272 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 2000,   корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.73                                                      ║
+ ║ Назначение    : Интерфейс редактирования каталога номеров ед.подв.состава ║
+ ║ Ответственный : Полежай Алексей Геннадьевич                               ║
+ ║ Параметры     : есть                                                      ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Интерфейс редактирования каталога номеров ед.подв.состава
+
+Параметры:
+  cRec    - ссылка на запись каталога номеров
+  wAction - 0 - редактирование, 1 - создание новой записи
+#end
+
+//******************************************************************************
+
+Interface NumVagEd 'Редактирование номеров единиц подвижного состава' EscClose, AlwaysReturn;
+Show at (,,70,12);
+create view vNumVagEd
+var cRec: comp;  //параметр
+    wAction: word; //параметр
+    cCurRec: comp;
+    sCurNum: string[20];
+    cCurMov: comp;
+from
+  Vagon,
+  MoveCell,
+  WayMove
+  , Transp
+where
+((
+  Vagon.cMoveCell == MoveCell.nRec  and
+  Vagon.cWayMove  == WayMove.nRec   and
+#ifdef Gal7_1
+  Vagon.cTransp   == Transp.nRec    and
+#end
+  word(coVagon)   == AllMemo.wTable and
+  Vagon.nRec      == AllMemo.cRec
+))
+bounds bySelectedRec = cRec == Vagon.nRec
+
+bounds bySameNumber = cCurMov == Vagon.cMoveCell and
+                      sCurNum == Vagon.Num       and
+                      (cCurRec <> Vagon.nRec)
+;
+Parameters cRec,    //ссылка на запись каталога номеров
+           wAction; //0 - edit, 1 - new
+
+
+Screen scNumVagEd (,hcOKatalEPSNum,);
+  show at (,,,9);
+table Vagon;
+fields
+  MoveCell.Name (''): protect, PickButton
+  ,{ Font = { BackColor = if( ( not IsValid(#MoveCell) ), ColorNeed, 0 )}};
+  WayMove.Name (''): protect, PickButton;
+#ifdef Gal7_1
+  Vagon.Num (''): noprotect, PickButton;
+  Vagon.ZavNom (''): noprotect, PickButton;
+#else
+  Vagon.Num (''): noprotect;
+  Vagon.ZavNom (''): noprotect;
+#end
+  Vagon.dReg (''): noprotect;
+  Vagon.tReg (''): ['HH:MM'], noprotect;
+  Vagon.Massa (''): noprotect;
+  Vagon.Netto (''): noprotect;
+  Vagon.CodeProbe (''): noprotect;
+<<
+
+ Единица подвижного состава     .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Способ транспортировки         .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ Бортовой номер   .@@@@@@@@@@@@  Заводской номер   .@@@@@@@@@@@@
+ Дата регистрации .@@@@@@@@@@@@  Время регистрации .@@@@@@@@@@@@
+
+ Вес тары .@@@@@@@  Вес нетто .@@@@@@@ Код пробы .@@@@@@@@@@@@@@
+
+>>
+end; // screen sc
+
+
+
+
+//-------------------------Примечание------------------------------------
+Panel pMemo;
+  show at (,10,,)
+  table AllMemo;
+  text  AllMemo.Mem;
+HandleEvent
+
+cmCheckRecord :
+  {
+    AllMemo.wTable := coVagon;
+    AllMemo.cRec := Vagon.nRec;
+  }
+cmInsertRecord :
+  {
+    if (insert current AllMemo = tsOK){};
+    Vagon.cAllMemo := AllMemo.nRec;
+  }
+cmDeleteRecord :
+{
+  if (delete current AllMemo = tsOK){};
+}
+
+cmUpdateRecord :
+{
+  if (update current AllMemo = tsOK){};
+}
+
+End; // HandleEvent
+End; // panel
+//----------------------END---Примечание---------------------------------
+
+panel pnVagon;
+table Vagon;
+
+HandleEvent
+
+cmCheckRecord:
+{
+  if (not isValid(#MoveCell))
+  {
+    message(''#3'Выберите единицу подвижного состава или удалите запись!',
+            Information);
+    SelectField(#MoveCell.Name);
+    PutCommand(cmPick);
+    abort;
+    exit;
+  };
+
+  PushPos(#Vagon);
+  cCurRec := Vagon.nRec;
+  sCurNum := Vagon.Num;
+  cCurMov := Vagon.cMoveCell;
+  PushBounds(tbbySameNumber);
+
+  if (GetFirst Vagon = tsOK)
+  {
+    if (message(''#3'Уже существует единица подвижного состава с таким'#13#3 +
+                'номером. Хотите откорректировать запись?',
+                Warning + YesNo) = Yes)
+    {
+      SelectField(#Vagon.Num);
+      abort;
+    }
+  }
+
+  PopBounds(tbbySameNumber);
+  PopPos(#Vagon);
+}
+
+cmInsertRecord:
+{
+  if (insert current Vagon = tsOK){};
+};
+
+cmUpdateRecord:
+{
+  if (update current Vagon = tsOK){};
+};
+
+cmPick:
+{
+  case (CurField) of
+  #MoveCell.Name:
+  {
+    if (RunInterface('GetMoveCellMC', Vagon.cMoveCell) = tsOK)
+    {
+      set Vagon.cMoveCell := Vagon.cMoveCell;
+#ifdef Gal7_1
+      set Vagon.cTransp   := 0;
+#end
+    }
+  }
+  #WayMove.Name:
+  {
+    if (RunInterface('GetWayMove', Vagon.cWayMove) = tsOK)
+    {
+      set Vagon.cWayMove = Vagon.cWayMove;
+    }
+  }
+#ifdef Gal7_1
+  #Vagon.Num ,
+  #Vagon.ZavNom:
+    if RunInterface('Get_AllTC', Vagon.cMoveCell,Vagon.ctransp) <> cmcancel
+    {
+      set Vagon.cTransp := Vagon.cTransp;
+      set Vagon.Num     := Transp.Nomer;
+      set Vagon.ZavNom  := Transp.ZavNom;
+    }
+#End
+  end;
+  RescanPanel(#Vagon);
+}
+#ifdef Gal7_1
+cmCheckField:
+ case CurField of
+  #Vagon.Num ,
+  #Vagon.ZavNom:
+    If  GetFirst Transp = tsok
+         Set Vagon.cTransp := 0;
+ end;
+#End
+
+end; //he
+
+end; //panel
+
+HandleEvent
+
+cmInit:
+{
+  if (wAction = 0)
+  {
+    PushBounds(tbbySelectedRec)
+  }
+  else
+  {
+    PutCommand(cmInsert);
+  }
+}
+
+cmInsert:
+ {
+  PopBounds(tbbySelectedRec);
+ }
+
+cmCancel:
+ {
+  if (isNew and (not IsModified))
+   {cRec := 0
+    CloseInterface(cmDefault); }
+  else if (UpdateTable)
+   {cRec := Vagon.nRec;
+    CloseInterface(cmDefault); }
+  stop;
+ }
+
+cmClose:
+ {
+  if (isNew and (not IsModified))
+   {cRec := 0
+    CloseInterface(cmDefault); }
+  else if (UpdateTable)
+   {cRec := Vagon.nRec;
+    CloseInterface(cmDefault); }
+  stop;
+ }
+
+cmDelete:
+{
+  if (message('Удалить текущую запись?', YesNo + Confirmation) = Yes)
+  {
+    if (delete current AllMemo = tsOK){};
+    if (delete current Vagon = tsOK){};
+    CloseInterface(cmDefault);
+  }
+}
+
+end;
+End.

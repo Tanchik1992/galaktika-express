@@ -1,0 +1,406 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.70 - логистика
+// Объединение позиций спецификации сопроводительного док-та
+//********************************************************************************
+
+// Параметры  : pSpSopr  - NRec  SpSopr'а
+
+#include oMnfDOPr.vih
+#include notes.vih
+#include oDEI.vih   //Функции доп.ед.изм. (iKatDopEd)
+#include oEdIzm.vih
+#include SpNext.vih
+#include SDfuns.vih
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.vih           // функции целевого учета
+#end
+
+//********************************************************************************
+
+#doc
+Назначение:
+  Объединение позиций спецификации сопроводительного док-та
+
+Параметры:
+  pSpSopr  - ссылка на позицию сопроводительного документа
+#end
+
+//********************************************************************************
+
+Interface Svert 'Объединение позиций спецификации сопроводительного документа' doAccept, EscClose, Cyan;
+
+  Show at (,,, 29);
+
+#include oEdIzm.Var
+#include SpNext.var
+#include SDfuns.var
+#ifdef __MTR_TO_SPEC__
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+#end
+
+Create view
+
+Var
+  pSpSopr
+, pKatSopr
+              : comp;
+
+  cTerminate
+, wPar
+              : word;
+
+ oNotes
+              : iNotes;
+
+As Select
+ if (SpSopr2.prMC = 1, KatMC.Name, KatUsl.Name)
+                                                     ( FieldName = fName )
+
+From
+  KatSopr
+, SpSopr
+, Synonym SpSopr SpSopr2
+, Synonym SpSopr SpSopr3
+, Synonym SpSopr SpSopr_work
+, TTNDoc
+, Synonym TTNDoc TTNDoc2
+, SklOrder
+, KatMC
+, Synonym KatMC KatMC2
+, KatUsl
+, SoprOrdB
+, Synonym SoprOrdB SoprOrdB2
+, SpDocNal
+, SpObjAcc
+
+Where
+((
+    SpSopr2.cSopr  == KatSopr.nRec
+and SpSopr2.cMCUsl == KatMC.nRec
+and SpSopr.cMCUsl  == KatMC2.nRec
+and SpSopr2.cMCUsl == KatUsl.nRec
+and coSpSopr       == TTNDoc2.wTable
+and SpSopr2.nRec   == TTNDoc2.cDoc
+and SpSopr2.nRec   == SoprOrdB2.cSpSopr
+and KatSopr.nRec   == SpSopr.cSopr
+and KatSopr.nRec   == SklOrder.cSopr
+and SpSopr.nRec    == SpSopr3.nRec
+and coSpSopr       == TTNDoc.wTable
+and SpSopr.nRec    == TTNDoc.cDoc
+and SpSopr.nRec    == SoprOrdB.cSpSopr
+))
+
+Bounds OneUnion pSpSopr  == SpSopr2.nRec
+Bounds AllUnion pKatSopr == SpSopr2.cSopr
+;
+
+Parameters
+  pSpSopr
+;
+
+#doc
+  Параметры объединения
+#end
+
+Window winParamUnion 'Параметры объединения'  EscClose, doAccept, Gray;
+  Show at (17, 7, 63, 14);
+
+Screen scrwinParamUnion (, hcUnionSpecification, sci1Esc)
+
+Fields
+  wPar ('Параметры объединения',,), NoProtect;
+
+Buttons
+  cmYes, Default,, 'Продолжить';
+  cmCancel,,,      'Отмена';
+<<
+
+  [.]  только по текущей МЦ/Услуге         `
+  [.]  учитывать единицу подвижного состава`
+  [.]  при объединении рассчитывать средний вес`
+
+  <. Продолжить .>  <.   Отмена   .>
+>>
+end;
+
+HandleEvent
+
+cmInit :
+{
+  Var
+    DateChanged : boolean;
+
+  if ( not ReadMyDsk(wPar, 'Svert_Par', DateChanged) )
+    wPar := 3;
+}
+
+cmYes :
+{
+  SaveMyDsk(wPar, 'Svert_Par');
+  PutCommand(cmDefault);
+}
+
+end;
+end;
+
+//=========================================================================
+HandleEvent  //'he Interface
+//=========================================================================
+
+cmInit :
+{
+  Var
+    mKol
+  , mKolFact
+  , mKolOpl
+  , mNetto
+  , mMTara
+  , mSumAvt
+  , mKOLGRM
+              : double;
+
+  Var
+    cAllCount
+  , cCount
+  , cCount0
+              : longint;
+
+  Var
+    cZatr
+  , cZatr2
+              : comp;
+
+  cTerminate := cmCancel;
+
+  if ( GetFirst SpSopr2 where (( pSpSopr  == SpSopr2.nRec )) <> tsOk )
+    {
+      //Message(''#3'Ошибка поиска в таблице SpSopr2', Error + CancelButton);
+      Abort;
+      Exit;
+    }
+
+  if ( not IsValid(tnKatSopr) )
+    {
+      Message(''#3'Ошибка поиска в таблице KatSopr', Error + CancelButton);
+      Abort;
+      Exit;
+    }
+
+  if ( IsValid(tnSklOrder) )
+    {
+      Message( ''#3'Данный сопроводительный документ уже проведен по складу.'#13#3
+             + 'Объединять позиции нельзя');
+      Abort;
+      Exit;
+    }
+
+  if ( RunWindowModal(winParamUnion) = cmCancel )
+    {
+      Abort;
+      Exit;
+    }
+
+  set pKatSopr := KatSopr.nRec;
+
+  if ( (wPar and 1) = 1 )
+    PushBounds(tbOneUnion)
+  else
+    PushBounds(tbAllUnion);
+
+  cAllCount:= 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer, ''#3'Просмотрено позиций спецификации: ', 1);
+
+//  Var i: word;
+//  for (i := GetFirst SpSopr2; i = tsOk; i := GetNext SpSopr2)
+
+  _loop STDCACHE SpSopr2
+    if (   ((SpSopr2.ManualTax = Word(0)) or (SpSopr2.PrVoz <> 0))
+       and (not IsValid(tnTTNDoc2))
+       and (not IsValid(tnSoprOrdB2))
+       )
+      {
+        NextVisual;
+
+        mKol     := SpSopr2.Kol;
+        mKolFact := SpSopr2.KolFact;
+        mKolOpl  := SpSopr2.KolOpl;
+
+        mNetto   := SpSopr2.Netto * mKolFact;
+        mMTara   := SpSopr2.MTara * mKolFact;
+
+        mKOLGRM  := SpSopr2.KOLGRM;
+        mSumAvt  := SpSopr2.SumAvt;
+        cCount   := 0;
+        cCount0  := 0;
+        cZatr2   := 0;
+
+#ifndef __MTR_TO_SPEC__
+        if ( GetFirst SpecZatr where ((  coSpSopr     == SpecZatr.coTable
+                                     and SpSopr2.nRec == SpecZatr.cSpec
+                                     )) = tsOk )
+          cZatr2 := SpecZatr.cAddSumTune;
+#else
+        cZatr2 := oMTRFun.GetKitKau(coSpSopr, SpSopr2.NRec);
+#end
+
+        _loop SpSopr
+          {
+            cZatr := 0;
+
+#ifndef __MTR_TO_SPEC__
+            if ( GetFirst SpecZatr where ((  coSpSopr    == SpecZatr.coTable
+                                         and SpSopr.nRec == SpecZatr.cSpec
+                                         )) = tsOk )
+              cZatr := SpecZatr.cAddSumTune;
+#else
+            cZatr := oMTRFun.GetKitKau(coSpSopr, SpSopr.NRec);
+#end
+
+            if (   (SpSopr.prMC = SpSopr2.prMC)
+               and (SpSopr.cMCUsl = SpSopr2.cMCUsl)
+               )
+              {
+                cCount0 := cCount0 + 1;
+
+                if (   (SpSopr.cOtpEd           = SpSopr2.cOtpEd)
+                   and (Round(SpSopr.ProcUb, 7) = Round(SpSopr2.ProcUb, 7))               // Round до 7 знаков ПиР 101.30072
+                   and (SpSopr.cUKS             = SpSopr2.cUKS)
+                   and (cZatr                   = cZatr2)
+                   and (Round(SpSopr.rPrice, 7)  = Round(SpSopr2.rPrice, 7))
+                   and (SpSopr.cVal             = SpSopr2.cVal)
+                   and (Round(SpSopr.rVPrice, 7) = Round(SpSopr2.rVPrice, 7))
+                   and (SpSopr.cParty           = SpSopr2.cParty)
+                   and (SpSopr.cResOtgr         = SpSopr2.cResOtgr)
+                   and (   (( wPar and 2 )      = 2)
+                       and (SpSopr.cCellVal     = SpSopr2.cCellVal)                //'ед.подв.состава
+                       and (SpSopr.nVagon       = SpSopr2.nVagon)
+                       or  ((wPar and 2)        = 0)
+                       )
+                   and (SpSopr.nKvit            = SpSopr2.nKvit)
+                   and (SpSopr.cMasEd           = SpSopr2.cMasEd)                  //'ед.массы
+                   and (SpSopr.cMasVid          = SpSopr2.cMasVid)                 //'способ опред.веса
+                   and (SpSopr.cOtpEdGRM        = SpSopr2.cOtpEdGRM)               // ед.измерения груз.мест
+                   and (Round(SpSopr.Netto, 7)  = Round(SpSopr2.Netto, 7) OR (wPar AND 4) = 4) // вес НЕТТО
+                   and (Round(SpSopr.MTara, 7)  = Round(SpSopr2.MTara, 7) OR (wPar AND 4) = 4) // вес ТАРА
+
+                   and (SpSopr.nRec            <> SpSopr2.nRec)                    //'не сама себя нашла
+                   and ((SpSopr.ManualTax       = Word(0)) or (SpSopr.PrVoz <> 0)) //'налоги автомтатом
+                   and (not IsValid(tnTTNDoc))                                     //'нет ссылки на ТТН
+                   and (not IsValid(tnSoprOrdB))                                   //'нет распределения
+                   )
+                  {
+                    // mKol     := mKol     + SpSopr.Kol;
+
+                    mKolFact := mKolFact + SpSopr.KolFact;
+                    mKolOpl  := mKolOpl  + SpSopr.KolOpl;
+
+                    mNetto   := mNetto   + SpSopr.Netto * SpSopr.KolFact;
+                    mMTara   := mMTara   + SpSopr.MTara * SpSopr.KolFact;
+
+                    mKOLGRM  := mKOLGRM  + SPSOPR.KOLGRM;
+                    mSumAvt  := mSumAvt  + SpSopr.SumAvt;
+
+                    //Kamila - Сохранение распределения----------------------------------
+                    Update SpObjAcc where ((  toSpSopr    == SpObjAcc.TypeObj
+                                          and SpSopr.nRec == SpObjAcc.cObject
+                                          ))
+                                    set SpObjAcc.cObject := SpSopr2.nRec;
+
+                    if ( Katsopr.Vidsopr = 508 or Katsopr.Vidsopr = 502 or Katsopr.Vidsopr = 505 )
+                      {
+                        if ( GetFirst SpSopr_work where ((  Katsopr.nRec == SpSopr_work.cGPSopr
+                                                        and SpSopr.nRec  == SpSopr_work.cSpSopr
+                                                        )) = tsOk )
+                          do
+                            Update current SpSopr_work set SpSopr_work.cSpSopr := SpSopr2.nRec;
+                          while ( GetFirst SpSopr_work where ((  Katsopr.nRec == SpSopr_work.cGPSopr
+                                                             and SpSopr.nRec  == SpSopr_work.cSpSopr
+                                                             )) = tsOk );
+                      }
+
+                    //-------------------------------------------------------------------
+
+                    if ( IsValid(tnSpSopr3) )
+                      {
+                        Delete NoVisual SpDocNal where ((  SpSopr3.nRec    == SpDocNal.cSpDoc
+                                                       and KatSopr.VidSopr == SpDocNal.TipDoc
+                                                       ));
+
+                        if ( oSDfuns.SpSopr_Delete(SpSopr3.nRec) <> tsOk )
+                          {
+                            Message(''#3'Ошибка удаления в таблице SpSopr3', Error + CancelButton);
+                            Abort;
+                            Exit;
+                          }
+                      }
+                    else
+                      {
+                        Message(''#3'Ошибка поиска в таблице SpSopr3', Error + CancelButton);
+                        Abort;
+                        Exit;
+                      }
+
+                    cCount := cCount + 1;
+                  }
+              }
+          }
+
+        if ( cCount > 0 )  //'если хотя бы одно совпадение
+          {
+            cAllCount := cAllCount + cCount + 1;
+            SpSopr2.Kol     := mKol;
+            SpSopr2.KolFact := mKolFact;
+            SpSopr2.KolOpl  := mKolOpl;
+
+            SpSopr2.Netto   := mNetto / mKolFact;
+            SpSopr2.MTara   := mMTara / mKolFact;
+            SpSopr2.SumAvt  := mSumAvt;
+            SpSopr2.KOLGRM  := mKOLGRM;
+
+            if ( wPar < 2 )
+              {
+                SpSopr2.cCellVal := 0;
+                SpSopr2.nVagon   := '';
+              }
+
+            if ( Update Current SpSopr2 <> tsOk )
+              {
+                Message(''#3'Ошибка обновления в таблице SpSopr2', Error + CancelButton);
+                Abort;
+                Exit;
+              }
+          }
+
+      } //'_loop'
+
+  StopVisual('', 0);
+
+  if ( cAllCount > 0 )  //'если хотя бы одно совпадение
+    {
+      oSpNext.UpdateSpDocsNpp(SpSopr2.cSopr, coSpSopr);
+      Message(''#3'Объединено позиций спецификации: ' + String(cAllCount));
+
+      cTerminate := cmOk;
+      PutCommand(cmDefault);
+    }
+  else
+    {
+      if ( cCount0 <= 1 )
+        Message(''#3'Других позиций не найдено.', Information + OkButton)
+      else
+        Message(''#3'Объединять позиции нельзя из-за несовпадения атрибутов.', Information + OkButton);
+
+      Abort;  //'нормальный выход
+    }
+}
+
+cmDefault :
+{
+  CloseInterface(cTerminate);
+}
+
+end;  //'he Interface
+
+End.  //'Interface

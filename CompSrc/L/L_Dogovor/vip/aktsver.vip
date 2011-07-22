@@ -1,0 +1,782 @@
+!
+!  (c) 1987 Корпорация ГАЛАКТИКА
+!
+!  Проект        : ГАЛАКТИКА
+!  Система       : Оперативный контур
+!  Версия        : 5.50
+!  Назначение    : Акты сверки договоров
+!  Ответственный : Александр Валерьевич Крахотко
+!
+!  Параметры     : НЕТ
+!
+!--------------------------------------------------------------------------
+!
+
+#include notes.vih
+#include statlog.vih
+#include ofpmacro.vpp
+
+#include AktSver.vih
+
+#doc
+Акты сверки договоров
+#end
+Interface AktSver 'Акты сверки'
+  ('Выбор, просмотр и редактирование актов сверки',,sci17Esc)
+  EscClose,
+  Cyan ;
+  show at (6,0,74,31);
+create view loGetAktSver
+var
+  pAktSver,
+  pDogovor : comp ;
+  sSelDO1Name,
+  sSelDocOtgr1Name,
+  sSelDocPlat1Name,
+  sSelDO2Name,
+  sSelDocOtgr2Name,
+  sSelDocPlat2Name : string ;
+  NoSetDefault : boolean;
+  s_SimvRub : string;
+  MarkerAkt : longint;
+  oStatlog : vipStatlog;
+  oNotes: iNotes;
+from
+   AktSver                            (Normal)
+  ,synonym AktSver AktSver_s
+  ,DocSver                            (Normal)
+  ,Dogovor
+  ,SoprHoz
+  ,KatVidD
+  ,KatOrg
+  ,synonym KatOrg KatOrg1
+  ,KlVal
+  ,CursVal
+  ,KatNotes
+  , Synonym KlVal KlValDog
+where
+  ((
+      AktSver.cDogovor    ==   Dogovor.nRec
+  and Dogovor.cVidDog     ==   KatVidD.nRec
+  and Dogovor.cMyOrg      ==   KatOrg.nRec
+  and Dogovor.cOrg        ==   KatOrg1.nRec
+  and Dogovor.cValRas     ==   KlVal.nRec
+  and Dogovor.cVal        ==   KlValDog.NRec
+
+  and AktSver.nRec        ==   DocSver.cAktSver
+  and AktSver.cNote       ==   KatNotes.nRec
+  and DocSver.cSoprHoz    ==   SoprHoz.nRec
+  ))
+Bounds Dogovor
+      pDogovor            ==   AktSver.cDogovor
+;
+
+Parameters
+  pDogovor
+;
+
+form frm_AS('as.OUT','AktSver');
+
+#include DogIcons.vpp
+
+function UpDateInsertAktSver : word ;
+  { var strComment : string[80];
+    var wres : word;
+
+  // добавить транзакцию по модификации суммы вышестоящей записи
+    wres := tsOk;
+    if (isNew)
+      {
+        wres := insert current AktSver ;
+
+        strComment := 'Оформляется новый акт сверки';
+        if (wres = tsOk)
+          wres := oStatlog.StatLog_Insert(word(402), AktSver.nRec, strComment);
+
+        if (wres = tsOk)
+          SetNew(false);
+      }
+    else
+      {
+        wres := update current AktSver;
+      }
+
+    UpDateInsertAktSver := wres;
+  }
+
+function SetPosition(pAktSver: comp): boolean;
+{
+  SetPosition := GetFirst AktSver where (( pAktSver == AktSver.nRec )) = tsOK;
+  RereadRecord(#AktSver);
+}
+
+function DeleteAktSver : word ;
+  { var wres : word;
+
+  // транзакция !!
+    wres := tsOk;
+    wres := oStatlog.StatLog_Delete(word(402), AktSver.nRec);
+
+    if (wres = tsOk)
+      wres := delete DocSver where (( AktSver.nRec == DocSver.cAktSver ));
+
+    if (wres = tsOk)
+      wres := delete current AktSver;
+
+    DeleteAktSver := wres;
+  }
+
+
+procedure DocSverPrint( _nkontr: word );
+var
+  dtmp: double;
+  nSelect: word;
+{
+  dtmp := 0 ;
+  nSelect := 0;
+  _loop DocSver where ((    AktSver.nRec == DocSver.cAktSver
+                        and _nkontr      == DocSver.TiDkSver))
+    {
+      if (GetFirst SoprHoz <> tsOk) {};
+
+      frm_AS.write ( SoprHoz.NoDoc );
+      frm_AS.write ( SoprHoz.DatOb );
+      frm_AS.write ( DocSver.SumVal );
+      dtmp := dtmp + DocSver.SumVal ;
+      nSelect := nSelect + 1;
+    }
+  if nSelect = 0 {
+    frm_AS.SkipFormat ( 3 );
+    frm_AS.PutEvent ( feBreak );
+    frm_AS.SkipFormat ( 1 );
+  }
+  else {
+    frm_AS.PutEvent ( feBreak );
+    frm_AS.write ( dtmp );
+  }
+}
+
+procedure AktSverPrint;
+{
+  frm_AS.write ( AktSver.nRec );
+  frm_AS.write ( AktSver.NoDoc );
+  frm_AS.write ( AktSver.dDoc );
+  frm_AS.write ( KatOrg.Name+' и '+KatOrg1.Name );
+
+  frm_AS.write ( Dogovor.NoDoc );
+  frm_AS.write ( Dogovor.dDoc );
+  frm_AS.write (DoubleToStr(Dogovor.Summa, '\2p[|-]3666`666`666`666`666.88'));
+  frm_AS.write (if (Dogovor.cVal = 0, sGetTune('NDE.SimvRub'), KlValDog.SimVolV));
+  frm_AS.write ( if (Dogovor.cValRas=0,sGetTune('NDE.SimvRub'),KlVal.SimvolV) );
+
+  frm_AS.write ( AktSver.dBeg );
+  frm_AS.write ( AktSver.dEnd );
+  frm_AS.write ( DoubleToStr ( AktSver.SaldoIn, '\2p[|-]36,666,666,666.88' ));
+
+  frm_AS.write ( KatVidD.Role1 );
+  frm_AS.write ( KatOrg.Name );
+  DocSverPrint ( 12 );
+  DocSverPrint ( 11 );
+  DocSverPrint ( 13 );
+
+  frm_AS.write ( KatVidD.Role2 );
+  frm_AS.write ( KatOrg1.Name );
+  DocSverPrint ( 22 );
+  DocSverPrint ( 21 );
+  DocSverPrint ( 23 );
+
+  frm_AS.write ( DoubleToStr ( AktSver.SaldoOut, '\2p[|-]36,666,666,666.88' ));
+}
+
+procedure AktSverPrintFromMarker;
+{
+  var cAkt : comp;
+  var MarkerCount : word;
+  var i    : word;
+
+  MarkerAkt := InitMarker('AktSver', 8, 100, 10);
+
+  MarkerCount := GetMarkerCount(MarkerAkt);
+
+  if (MarkerCount > 0)
+    {
+      for ( i := 0; i < MarkerCount; i := i+1 )
+        {
+          if GetMarker(MarkerAkt, i, cAkt)
+            {
+              if (GetFirst AktSver where (( cAkt == AktSver.nRec )) = tsOK)
+                AktSverPrint;
+            }
+        }
+
+      if (not frm_AS.Error)
+        frm_AS.ShowFile ( 'Акт сверки (CN.OUT)' )
+      else
+        frm_AS.AbortForm;
+    }
+
+  DoneMarker(MarkerAkt, 'AktSver');
+}
+
+function AktSverCalc(    _nkontr: word; //
+                      var _value: double;
+                      var _name : string
+                    ) : boolean ;
+{
+  var dtmp : double ;
+  var nSelect : word ;
+  var dStat: word ;
+
+  dtmp := 0 ;
+  nSelect := 0;
+  _name := '';
+
+  StartNewVisual(vtRotateVisual, vfTimer,
+                 ''#3'Расчет суммы ...'#13#3,1);
+  _loop DocSver where ((    AktSver.nRec == DocSver.cAktSver
+                        and _nkontr      == DocSver.TiDkSver))
+    {
+      NextVisual ;
+
+      if (GetFirst SoprHoz <> tsOk) {};
+
+      dtmp := dtmp + DocSver.SumVal ;
+      nSelect := nSelect + 1 ;
+      if (nSelect = 1)
+        _name := '№ '+SoprHoz.NoDoc+' от '+string(SoprHoz.DatOb)
+      else
+        _name := 'групповой выбор ('+string(nSelect)+')';
+    }
+  StopVisual('',0) ;
+  AktSverCalc := dtmp <> _value ;
+  _value := dtmp ;
+}
+
+procedure AktSverSelectDoc(_get  : boolean;  // TRUE - вызывать интерфейс
+                           _nPick : word ) ;  //
+{
+  if (not UpDateTable) Exit ;
+  if (_get)
+     RunInterface ('GetDocSver',AktSver.nRec,_nPick) ;
+
+  CASE _nPick OF
+    11 : {
+           if (AktSverCalc(11,AktSver.SumOtgr1,sSelDocOtgr1Name))
+             set AktSver.SumOtgr1 := AktSver.SumOtgr1 ;
+         }
+    12 : {
+           if (AktSverCalc(12,AktSver.SumDO1,sSelDO1Name))
+             set AktSver.SumDO1 := AktSver.SumDO1 ;
+         }
+    13 : {
+           if (AktSverCalc(13,AktSver.SumPlat1,sSelDocPlat1Name))
+             set AktSver.SumPlat1 := AktSver.SumPlat1 ;
+         }
+    21 : {
+           if (AktSverCalc(21,AktSver.SumOtgr2,sSelDocOtgr2Name))
+             set AktSver.SumOtgr2 := AktSver.SumOtgr2 ;
+         }
+    22 : {
+           if (AktSverCalc(22,AktSver.SumDO2,sSelDO2Name))
+             set AktSver.SumDO2 := AktSver.SumDO2 ;
+         }
+    23 : {
+           if (AktSverCalc(23,AktSver.SumPlat2,sSelDocPlat2Name))
+             set AktSver.SumPlat2 := AktSver.SumPlat2 ;
+         }
+  END; // CASE
+
+  var dtmp : double ;
+
+!  dtmp := AktSver.SaldoIn + AktSver.SumOtgr1 + AktSver.SumDO1 + AktSver.SumPlat1
+!                          - AktSver.SumOtgr2 - AktSver.SumDO2 - AktSver.SumPlat2 ;
+
+  dtmp := AktSver.SaldoIn + AktSver.SumOtgr1 + AktSver.SumPlat1
+                          - AktSver.SumOtgr2 - AktSver.SumPlat2 ;
+
+  if (AktSver.SaldoOut<>dtmp)
+    set AktSver.SaldoOut := dtmp ;
+}
+
+Window wiAktSverEdit 'Акт сверки' ('Редактирование акта сверки')
+  show at (,,,22);
+Screen scAktSverEdit(,hcDogCompActEdit,sci1378Esc)
+  Table AktSver;
+Fields
+  KatNotes.Name      ('Статус документа',,) : protect ;
+  AktSver.DesGr      ('Код группы пользователей',,) : protect;
+  AktSver.Descr      ('Дескриптор (идентификатор) пользователя',,) : protect;
+  AktSver.NoDoc_Ext  ('Входящий номер акта') : noprotect;
+  AktSver.dInput     ('Дата создания акта') : [10,'DD/MM/YYYY'], noprotect;
+  AktSver.NoDoc      ('Внутренний номер') : [8], noProtect;
+  AktSver.dDoc       ('Дата заключения') : [10,'DD/MM/YYYY'], noprotect;
+  AktSver.dBeg       ('Дата начала действия') : [10,'DD/MM/YYYY'], noprotect;
+  AktSver.dEnd       ('Дата окончания действия') : [10,'DD/MM/YYYY'], noprotect;
+  Dogovor.NoDoc      ('Номер договора',,) : skip ;
+  Dogovor.dDoc       ('Дата договора',,) : [10,'DD/MM/YYYY'], skip ;
+  if (Dogovor.cValRas=0,s_SimvRub,KlVal.SimvolV) ('Валюта взаиморасчетов по договору') : skip ;
+  KatVidD.Role1      ('Роль контрагента 1') : skip;
+  KatOrg.Name        ('Наименование контрагента') : skip;
+  AktSver.SumDO1     ('Сумма по счета/документам-основаниям контрагента 1',,)
+                       : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  sSelDO1Name        ('Выбранные документы',,) : protect ;
+  AktSver.SumOtgr1   ('Сумма по сопроводительным документам контрагента 1',,)
+                       : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  sSelDocOtgr1Name   ('Выбранные документы',,) : protect ;
+  AktSver.SumPlat1   ('Сумма по платежным документам контрагента 1',,)
+                       : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  sSelDocPlat1Name   ('Выбранные документы',,) : protect ;
+
+  KatVidD.Role2      ('Роль контрагента 2') : skip;
+  KatOrg1.Name       ('Наименование контрагента') : skip;
+  AktSver.SumDO2     ('Сумма по счета/документам-основаниям контрагента 2',,)
+                       : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  sSelDO2Name        ('Выбранные документы',,) : protect ;
+  AktSver.SumOtgr2   ('Сумма по сопроводительным документам контрагента 2',,)
+                       : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  sSelDocOtgr2Name   ('Выбранные документы',,) : protect ;
+  AktSver.SumPlat2   ('Сумма по платежным документам контрагента 2',,)
+                       : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  sSelDocPlat2Name   ('Выбранные документы',,) : protect ;
+
+  AktSver.SaldoIn    ('Входящие сальдо на период',,) : [18.2, '\2p[|-]3666`666`666`666.88'], noprotect ;
+  AktSver.SaldoOut   ('Исходящие сальдо на период') : [18.2, '\2p[|-]3666`666`666`666.88'], skip ;
+<<
+
+ Группа&Дескр.& Входящий №& Дата ввода &  Статус.@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ .@@@@@@.@@@@@@ .@@@@@@@@@@ .@@@@@@@@@@@
+            Акт .@@@@@@@@@@ .@@@@@@@@@@@за период с.@@@@@@@@@@@по.@@@@@@@@@@@
+    по договору .@@@@@@@@@@ .@@@@@@@@@@@          Валюта взаиморасчетов.@@@@@
+
+ Контрагент 1.@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                               сумма               выбрано документов
+     счета/документы-основания.@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@
+    сопроводительные документы.@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@
+           платежные документы.@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ Контрагент 2.@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                               сумма               выбрано документов
+     счета/документы-основания.@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@
+    сопроводительные документы.@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@
+           платежные документы.@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ Сальдо на начало периода     .@@@@@@@@@@@@@@@@@@@
+ Сальдо на конец  периода     .@@@@@@@@@@@@@@@@@@@
+
+>>
+end ; // Screen scAktSverEdit
+
+HandleEvent // wiAktSverEdit
+
+cmInit :
+  {
+    ProtectRecord ( #AktSver, false );
+    if (UpDateInsertAktSver <> tsOk)  {}
+
+    AktSverSelectDoc(FALSE,11);
+    AktSverSelectDoc(FALSE,12);
+    AktSverSelectDoc(FALSE,13);
+    AktSverSelectDoc(FALSE,21);
+    AktSverSelectDoc(FALSE,22);
+    AktSverSelectDoc(FALSE,23);
+
+    if UpdateTable {};
+    RescanPanel(#AktSver);
+    ProtectRecord ( #AktSver, AktSver.Status > 0 );
+  }
+
+cmDone :
+  {
+    if (UpDateInsertAktSver <> tsOk)  {}
+  }
+
+cmHotKeys :
+  PutHotCommand(RunMenu('mnuAktSverEdit')) ;
+
+cmPrintDoc:
+  {
+    MarkerAkt := InitMarker('AktSver', 8, 100, 10);
+    ClearMarker(MarkerAkt);
+
+    InsertMarker(MarkerAkt, AktSver.nRec);
+
+    AktSverPrint;
+
+    DoneMarker(MarkerAkt, 'AktSver');
+
+    if ( not frm_AS.Error )
+      frm_AS.ShowFile('Акт сверки (CN.OUT)');
+    else
+      frm_AS.AbortForm;
+  }
+
+cmNal :
+  {
+    var cAkt : comp;
+
+    if (AktSver.Status = 0)
+      {
+        ProtectRecord ( #AktSver, false );
+        if (UpDateInsertAktSver <> tsOk) {}
+        if (UpdateTable) {}
+
+        cAkt := AktSver.nRec;
+
+        if (RunInterface('AktForm', cAkt) <> cmCancel)
+          {
+            if (GetFirst AktSver where ((cAkt == AktSver.nRec)) <> tsOk) {}
+
+            AktSverSelectDoc(FALSE,11);
+            AktSverSelectDoc(FALSE,12);
+            AktSverSelectDoc(FALSE,13);
+            AktSverSelectDoc(FALSE,21);
+            AktSverSelectDoc(FALSE,22);
+            AktSverSelectDoc(FALSE,23);
+          }
+
+        if UpdateTable {};
+        RescanPanel(#AktSver);
+        ProtectRecord ( #AktSver, AktSver.Status > 0 );
+      }
+    else
+      {
+        Message(''#3'Автоматическое формирование акта сверки'#13#3''+
+                ' разрешено только в статусе "оформляемый"!',Information+OkButton)
+      }
+  }
+
+cmPlansNo  :
+ if (CurTable = #AktSver)
+   {
+    if (not UpdateTable) Exit;
+    RunInterface(AktsverP, AktSver.NRec);
+   }
+
+end;
+
+end ; // Window wiAktSverEdit
+
+Tree   brAktSverMain
+  ('Выберите документ и нажмите <ENTER>',hcDogCompActs,sci178EnEsc)
+  show at (,,,25);
+  Table AktSver;
+Fields
+  AktSver.DesGr      'Группа'     ('Код группы пользователей') : [4], protect;
+  AktSver.Descr      'Дескриптор' ('Дескриптор (идентификатор) пользователя') : [4], protect;
+  AktSver.NoDoc_Ext  'Вх.номер'   ('Входящий номер') :[8], protect;
+  AktSver.Nodoc      'Номер'      ('Внутренний номер') : [8], Protect;
+  AktSver.dDoc       'Дата'       ('Дата заключения') : [10,'DD/MM/YYYY'], protect;
+  AktSver.dBeg       'С'          ('Дата начала действия') : [10,'DD/MM/YYYY'], protect;
+  AktSver.dEnd       'ПО'         ('Дата окончания действия') : [10,'DD/MM/YYYY'], protect;
+  KatNotes.sName     'Статус'     ('Статус документа') : [1], skip ;
+end ; // browse brAktSverMain
+Screen  scAktSverMain
+  show at (,26,,30);
+  Table AktSver;
+Fields
+  Dogovor.NoDoc      ('Номер договора') : skip ;
+  Dogovor.dDoc       ('Дата договора') : [10,'DD/MM/YYYY'], skip ;
+  KatVidD.Name       ('Вид договора') : skip ;
+  KatVidD.Role1      ('Роль контрагента 1') : skip;
+  KatOrg.Name        ('Наименование контрагента') : skip;
+  KatVidD.Role2      ('Роль контрагента 2') : skip;
+  KatOrg1.Name       ('Наименование контрагента') : skip;
+<<
+  Договор №.@@@@@@@@@@@от.@@@@@@@@@@@@@Вид договора.@@@@@@@@@@@@@@@@@@
+  Контрагент 1.@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Контрагент 2.@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen scAktSverMain
+
+
+Panel paAktSver
+  Table AktSver ;
+HandleEvent // paAktSver
+cmTreeNodeType :
+  {
+     TreeSetNodeType(brAktSverMain,
+                     ntfText,
+                     GetDocTreeIcon(word(402), AktSver.Status, ntfText));
+  }
+
+cmInsert :
+  {
+    if (CurWindow=-1)
+      PutCommand(cmDefault);
+  }
+
+cmDefault :
+  {
+    if (CurWindow=-1)
+      {
+        RunWindow(wiAktSverEdit) ;
+      }
+  }
+
+cmProtectedInput:
+  if Curfield = #KatNotes.Name {
+    ProtectRecord ( #AktSver, false );
+    PutCommand ( cmPick );
+    Stop;
+  }
+
+cmPick :
+  {
+    if (UpDateInsertAktSver <> tsOk)  { Abort; Exit; }
+
+    CASE  CurField OF
+      #KatNotes.Name :
+        { var wMaska : word;
+
+          wMaska := 0;
+          if (RunInterface('StatLog',
+                            word(1),
+                            AktSver.NRec,
+                            word(402),
+                            AktSver.Status,
+                            AktSver.cNote,
+                            wMaska) <> cmCancel)
+            set AktSver.Status := AktSver.Status ;
+          if UpdateTable {}
+          ProtectRecord ( #AktSver, AktSver.Status > 0 );
+        }
+      #AktSver.Descr : RunInterface(GetDescr, AktSver.Descr, AktSver.DesGr, word(0));
+      #AktSver.DesGr : RunInterface(GetGrDescr, AktSver.DesGr,false,false,comp(0));
+      #AktSver.SumOtgr1 : AktSverSelectDoc(FALSE,11) ;
+      #sSelDocOtgr1Name : AktSverSelectDoc(TRUE ,11) ;
+      #AktSver.SumDO1   : AktSverSelectDoc(FALSE,12) ;
+      #sSelDO1Name      : AktSverSelectDoc(TRUE ,12) ;
+      #AktSver.SumPlat1 : AktSverSelectDoc(FALSE,13) ;
+      #sSelDocPlat1Name : AktSverSelectDoc(TRUE ,13) ;
+      #AktSver.SumOtgr2 : AktSverSelectDoc(FALSE,21) ;
+      #sSelDocOtgr2Name : AktSverSelectDoc(TRUE ,21) ;
+      #AktSver.SumDO2   : AktSverSelectDoc(FALSE,22) ;
+      #sSelDO2Name      : AktSverSelectDoc(TRUE ,22) ;
+      #AktSver.SumPlat2 : AktSverSelectDoc(FALSE,23) ;
+      #sSelDocPlat2Name : AktSverSelectDoc(TRUE ,23) ;
+      #AktSver.SaldoIn  :
+        {
+          var dtmp : double ;
+          dtmp := AktSver.SaldoIn ;
+          PushPos(#AktSver) ;
+          if (GetPrev AktSver = tsOk)
+            if (AktSver.SaldoIn<>0)
+              {
+              if (Message(''#3'Заменить имеющиеся значение входящего сальдо ?',YesNo)=Yes)
+                dtmp := AktSver.SaldoOut ;
+              }
+            else
+              dtmp := AktSver.SaldoOut ;
+          PopPos(#AktSver) ;
+          if (AktSver.SaldoIn<>dtmp)
+            set AktSver.SaldoIn := dtmp ;
+        }
+    END; // CASE
+    ReScanPanel(CurTable) ;
+  }
+
+cmCheckField :
+  { var dtmp : double ;
+
+    CASE  CurField OF
+      #AktSver.SumDO1   : AktSverSelectDoc(FALSE,12) ;
+      #AktSver.SumDO2   : AktSverSelectDoc(FALSE,22) ;
+      #AktSver.SumOtgr1 :
+        {
+          if (sSelDocOtgr1Name <> '')
+            AktSverSelectDoc(FALSE,11) ;
+        }
+      #AktSver.SumPlat1 :
+        {
+          if (sSelDocPlat1Name <> '')
+            AktSverSelectDoc(FALSE,13) ;
+        }
+      #AktSver.SumOtgr2 :
+        {
+          if (sSelDocOtgr2Name <> '')
+            AktSverSelectDoc(FALSE,21) ;
+        }
+      #AktSver.SumPlat2 :
+        {
+          if (sSelDocPlat2Name <> '')
+            AktSverSelectDoc(FALSE,23) ;
+        }
+      #AktSver.dDoc :
+        {
+          if (AktSver.dDoc < AktSver.dEnd)
+          {
+            Message('Дата окончания периода не должна превышать дату акта сверки.', Warning);
+            Abort;
+            Exit;
+          }
+        }
+      #AktSver.dEnd :
+        {
+          if (AktSver.dDoc < AktSver.dEnd)
+            {
+              Message('Дата окончания периода не должна превышать дату акта сверки.', Warning);
+              Abort;
+              Exit;
+            }
+
+          if (AktSver.dEnd < AktSver.dBeg)
+            {
+              Message('Дата окончания периода не должна быть меньше даты начала периода.', Warning);
+              Abort;
+              Exit;
+            }
+        }
+      #AktSver.dBeg :
+        {
+          if (AktSver.dEnd < AktSver.dBeg)
+            {
+              Message('Дата начала периода не должна превышать дату окончания периода.', Warning);
+              Abort;
+              Exit;
+            }
+        }
+    END; // CASE
+
+    dtmp := AktSver.SaldoIn + AktSver.SumOtgr1 + AktSver.SumPlat1
+                            - AktSver.SumOtgr2 - AktSver.SumPlat2 ;
+
+    if (AktSver.SaldoOut<>dtmp)
+      set AktSver.SaldoOut := dtmp ;
+  }
+
+cmSetDefault :
+  {
+!    PutCommand(cmEdit) ;
+
+    if (NoSetDefault)
+      {
+        Stop;
+        Exit;
+      }
+
+    ClearBuffer(#AktSver) ;
+    AktSver.cDogovor := pDogovor;
+    AktSver.dInput   := cur_date;
+    AktSver.dDoc     := cur_date;
+    AktSver.dBeg     := Date(1, Month(Cur_Date), Year(Cur_Date));
+    AktSver.dEnd     := Cur_date;
+    AktSver.cVal     := Dogovor.cValRas ;
+    AktSver.DesGr    := sGetTune('User.DesGr');
+    AktSver.Descr    := sGetTune('User.Descr');
+    AktSver.cNote    := oNotes.GetFirstNote(402, AktSver.Status);
+
+    if ( GetLast AktSver_s
+                 where (( AktSver.cDogovor == AktSver_s.cDogovor ))
+                 ordered by index AktSver02 = tsOK )
+      {
+        var tmpS : string;
+        tmpS := AktSver_s.NoDoc;
+        if ( trim(tmpS) = '' )
+          tmpS := '00001';
+
+        set AktSver.NoDoc := NextNumStr(tmpS);
+      }
+    else
+      set AktSver.NoDoc := '00001';
+  }
+
+cmInsertRecord :
+  {
+    if (UpDateInsertAktSver <> tsOk)  {}
+  }
+
+cmUpDateRecord :
+  {
+    if (UpDateInsertAktSver <> tsOk)  {}
+  }
+
+cmDelete:
+    ProtectRecord ( #AktSver, false );
+
+cmDeleteRecord :
+  {
+    if (Message(''#3'Удалить Акт ?',YesNo)=Yes) {
+      if (DeleteAktSver <> tsOk)
+        ProtectRecord ( #AktSver, AktSver.Status > 0 );
+    }
+    else
+      ProtectRecord ( #AktSver, AktSver.Status > 0 );
+  }
+
+cmPositionChanged :
+  {
+    ProtectRecord ( #AktSver, false );
+
+    if (CurWindow = wiAktSverEdit)
+      {
+        if (UpDateInsertAktSver <> tsOk)  {}
+
+        AktSverSelectDoc(FALSE,11);
+        AktSverSelectDoc(FALSE,12);
+        AktSverSelectDoc(FALSE,13);
+        AktSverSelectDoc(FALSE,21);
+        AktSverSelectDoc(FALSE,22);
+        AktSverSelectDoc(FALSE,23);
+
+        if UpdateTable {};
+        RescanPanel(#AktSver);
+      }
+
+    ProtectRecord ( #AktSver, AktSver.Status > 0 );
+  }
+
+cmHotKeys :
+  PutHotCommand(RunMenu('mnuAktSver')) ;
+
+end ; // HandleEvent panel paAktSver
+end; // panel paAktSver
+
+HandleEvent // Interface GetAktSver
+
+cmInit :
+  {
+    NoSetDefault := false;
+    InitDocIconsArray;
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    oValFunc.InitVal ;
+    if (pDogovor<>0)
+      PushBounds(tbDogovor) ;
+    if (GetFirst AktSver <> tsOk)
+      PutCommand(cmInsert) ;
+  }
+
+cmCancel :
+  {
+    if (isNew)
+      NoSetDefault := true
+    else
+      {
+        if (UpDateInsertAktSver <> tsOk) {}
+      }
+  }
+
+cmPrintDoc:
+  {
+    AktSverPrint;
+
+    if (not frm_AS.Error)
+      frm_AS.ShowFile ( 'Акт сверки (CN.OUT)' )
+    else
+      frm_AS.AbortForm;
+  }
+
+end ; // HandleEvent Interface GetAktSver
+end. // Interface GetAktSver
+
+mnuAktSver Menu
+{
+- 'Печать акта сверки',cmPrintDoc,'Печать акта сверки',hcDogovAktSverkiPrint,'Ctrl-P',kbCtrlP,sci1Esc;
+}
+
+mnuAktSverEdit Menu
+{
+- 'Автоматическое формирование акта сверки',cmNal,'Автоматическое формирование акта сверки',hcDogovAktSverkiAvtoMake,'Alt-F',kbAltF,sci1Esc;
+- 'Печать акта сверки',cmPrintDoc,'Печать акта сверки',hcDogovAktSverkiPrint,'Ctrl-P',kbCtrlP,sci1Esc;
+- 'Специальная печать акта сверки ',cmPlansNo,'Печать акта сверки по группам платежных средств',hcdg_spepech,'Alt-P',kbAltP,sci1Esc;
+}

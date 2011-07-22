@@ -1,0 +1,631 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - договоры
+// Функции для Формирование распоряжений на отгрузку
+//******************************************************************************
+
+Procedure FieldsOption_Edit;
+{
+  var b:  boolean;  b := ((OtgOrder.Status > 0) AND (OtgOrder.Status < 5));
+
+  SetFieldProtected(#OtgOrder.NoDoc  , b);
+  SetFieldProtected(#OtgOrder.dDoc   , b);
+  SetFieldProtected(#OtgOrder.dFrom  , b);
+  SetFieldProtected(#OtgOrder.dTo    , b);
+  SetFieldProtected(#OtgOrder.DocNote, b);
+
+  RedrawPanel(#OtgOrder);
+}
+
+//******************************************************************************
+
+Procedure P_OtgOrder_SetDefault;
+{
+  ClearBuffer(#OtgOrder);
+  OtgOrder.cOwner := varAltIns;
+  OtgOrder.IsLeaf := 1;
+  OtgOrder.DesGr  := sGetTune('User.DesGr');
+  OtgOrder.Descr  := sGetTune('User.Descr');
+  OtgOrder.dInput := Cur_Date;
+  OtgOrder.dDoc   := Cur_Date;
+  OtgOrder.dFrom  := Cur_Date;
+  OtgOrder.dTo    := Cur_Date;
+  ROtg_Sh_NoDoc(OtgOrder.DesGr, MarPunktSyn_P.Code, OtgOrder.dFrom, OtgOrder.Status, OtgOrder.NoDoc);
+  if ( InsertType = 1 )
+    {
+      InsertType := 0;
+      OtgOrder.Status := 5;
+    }
+
+  OtgOrder.cNote  := oNotes.GetFirstNote(word(441), OtgOrder.Status);
+
+  FieldsOption_Edit;
+}
+
+//******************************************************************************
+
+Procedure RaspOtgr_Main_HotKeys;
+{
+  if UpdateTable
+    case CurTable of
+    //--------------
+      #OtgOrder:
+        {
+          if (Format_Main = 1)
+            {
+              DisableCommand(cmShowAll);
+              DisableCommand(cmHideAll);
+            }
+
+          PutHotCommand(RunMenu('mnuROtg'));
+
+          EnableCommand(cmShowAll);
+          EnableCommand(cmHideAll);
+        }
+    //--------------
+    end;
+}
+
+//******************************************************************************
+
+Procedure RaspOtgr_Edit_HotKeys;
+{
+  case CurTable of
+  //--------------
+    #OtgOrder:
+      {
+        if ( OtgOrder.Status = 5 )
+          PutHotCommand(RunMenu('mnuROtgCanceledEdit'))
+        else
+          PutHotCommand(RunMenu('mnuROtgEdit'));
+      }
+  //--------------
+    #SpOtgOrd:
+      if UpdateTable
+        PutHotCommand(RunMenu('mnuROtgSpEdit'));
+  //--------------
+    #SpNZRasp:
+      if UpdateTable
+        PutHotCommand(RunMenu('mnuROtgSpNZEdit'));
+  end;
+}
+
+//******************************************************************************
+
+Procedure P_ROtg_PickClass;
+{
+  case CurTable of
+  //--------------
+    #OtgOrder:
+      RunInterface(ExClassifier, Word(CurTableCode), OtgOrder.NRec);
+  //--------------
+    #SpOtgOrd:
+      RunInterface(ExClassifier, Word(CurTableCode), SpOtgOrd.NRec);
+  //--------------
+    #SpNZRasp:
+      RunInterface(ExClassifier, Word(CurTableCode), SpNZRasp.NRec);
+  //--------------
+  end;
+}
+
+//******************************************************************************
+
+Procedure P_ROtg_PickAttr;
+{
+  case CurTable of
+  //--------------
+    #OtgOrder:
+      RunInterface(Attribute, Word(CurTableCode), OtgOrder.NRec);
+  //--------------
+    #SpOtgOrd:
+      RunInterface(Attribute, Word(CurTableCode), SpOtgOrd.NRec);
+  //--------------
+    #SpNZRasp:
+      RunInterface(Attribute, Word(CurTableCode), SpNZRasp.NRec);
+  //--------------
+  end;
+}
+
+//******************************************************************************
+
+Procedure Copy_To_Down; // создает документ взамен, аналогично текущему
+{
+  if (GetFirst OtgOrderSyn where ((OtgOrder.NRec == OtgOrderSyn.NRec)) = tsOk)
+    {
+      OtgOrderSyn.IsLeaf := 0;
+      update current OtgOrderSyn;
+      OtgOrderSyn.NRec   := 0;
+      OtgOrderSyn.IsLeaf := 1;
+      OtgOrderSyn.cOwner := OtgOrder.NRec;
+      OtgOrderSyn.DesGr  := sGetTune('User.DesGr');
+      OtgOrderSyn.Descr  := sGetTune('User.Descr');
+      OtgOrderSyn.dInput := Cur_Date;
+      OtgOrderSyn.dDoc   := Cur_Date;
+      OtgOrderSyn.dFrom  := Cur_Date;
+      OtgOrderSyn.dTo    := 0;
+      OtgOrderSyn.Status := 0;
+      OtgOrderSyn.NoDoc  := GetLastNumD(441);
+      OtgOrderSyn.cNote  := oNotes.GetFirstNote(word(441), OtgOrderSyn.Status);
+      insert current OtgOrderSyn;
+    }
+
+  var piKatDopEd2  : iKatDEI;
+  var Kol_SpNZRasp: double;
+
+  _LOOP SpOtgOrd
+    {
+     if (GetFirst SpOtgOrdSyn where ((SpOtgOrd.NRec == SpOtgOrdSyn.NRec)) = tsOk)
+       {
+         SpOtgOrdSyn.NRec      := 0;
+         SpOtgOrdSyn.cOtgOrder := OtgOrderSyn.NRec;
+         insert current SpOtgOrdSyn;
+       }
+
+     _LOOP SpNZRasp
+        if (GetFirst SpNZRaspSyn where ((SpNZRasp.NRec == SpNZRaspSyn.NRec)) = tsOk)
+          {
+            Kol_SpNZRasp          := SpNZRaspSyn.Kolfact;
+            SpNZRaspSyn.NRec      := 0;
+            SpNZRaspSyn.cSpOtgOrd := SpOtgOrdSyn.NRec;
+
+            if (GetFirst SpDocsSyn where ((SpNZRaspSyn.cSpNZak == SpDocsSyn.NRec)) = tsOk)
+              SpNZRaspSyn.KolFact := SpDocsSyn.Kol - KolFact_OtgOrder(SpDocsSyn.NRec, 1 + 2, comp(0)); // 1 - оформляемые 2 - исполняемые
+
+            if (SpNZRaspSyn.KolFact < 0)
+              SpNZRaspSyn.KolFact := 0;
+
+            insert current SpNZRaspSyn;
+            piKatDopEd2.CopyDopEd(coSpNZRasp,            // код таблицы спецификации источника
+                                  SpNZRasp.NRec,         // ссылка на запись спецификации источника
+                                  1,                     // тип количества источника
+                                  Kol_SpNZRasp,          // количество источника в отпускных единицах
+                                  coSpNZRasp,            // код таблицы спецификации приемника
+                                  SpNZRaspSyn.NRec,      // ссылка на запись спецификации приемника
+                                  1,                     // тип количества приемника
+                                  SpNZRaspSyn.Kolfact,  // количество приемника в отпускных единицах
+                                  word(441)
+                                 );
+          }
+    }
+
+  case Format_Main of
+  //-----------------
+    0:
+      TreeJumpToRecord(trOtgOrderMain, OtgOrderSyn.NRec);
+  //-----------------
+    1:
+      if (GetFirst OtgOrder where ((OtgOrderSyn.NRec == OtgOrder.NRec)) = tsOk)
+        { }
+  //-----------------
+  end;
+
+  RereadRecord(#OtgOrder);
+  SetModified(True);
+
+  FieldsOption_Edit;
+}
+
+//******************************************************************************
+// Формирование распоряжения на отгрузку взамен данного
+Function Down_OtgOrder: boolean;
+Var
+   varStatus  : word;
+   varNode    : comp;
+{
+  Down_OtgOrder := FALSE;
+  if (OtgOrder.IsLeaf = 0)
+    {
+      Message('Формирование более одного документа взамен невозможно.', Information);
+      Exit;
+    }
+
+  varStatus := OtgOrder.Status;
+  varNode   := OtgOrder.cNote;
+  if (varStatus <> 3)
+    if (Message('Изменить статус текущего распоряжения на <Отмененный>?'#13+
+                'Для другого состояния формирование документа взамен невозможно.', YesNo) = cmYes)
+      if (RunInterface(StatLog, word(0), OtgOrder.NRec, word(441), varStatus, varNode, word(0)) = cmCancel)
+        { } // маску передать StatLog с активной 1 кнопкой
+
+  if (varStatus <> 3)
+    Exit;
+
+  set OtgOrder.Status := varStatus;
+  set OtgOrder.cNote  := varNode;
+  if (not UpdateTable)
+    Exit;
+
+  if (Message('Скопировать информацию текущего распоряжения на отгрузку?', YesNo) = cmYes)
+    Copy_To_Down
+  else
+    {
+      varAltIns := OtgOrder.NRec;
+      PutCommand(cmInsert);
+    }
+
+  Down_OtgOrder := TRUE;
+} // Function Down_OtgOrder
+
+//******************************************************************************
+
+Function Insert_SpOtgOrd(Choice: boolean): boolean; //Выбор и подстановка Н-З
+var
+//------------------------------------------------------------------------------
+  varInValid
+, varWasTwice
+, varNotItPunktP
+, varNotItStatus
+                : boolean;
+//------------------------------------------------------------------------------
+  varNRec
+, NZ
+                : comp;
+//------------------------------------------------------------------------------
+  varD1
+, varD2
+                : Date;
+//------------------------------------------------------------------------------
+{
+  Insert_SpOtgOrd  := FALSE;
+  varWasTwice      := FALSE;
+  varNotItPunktP   := FALSE;
+  varNotItStatus   := FALSE;
+  var pPunktP, pKontr2, pGruzTo: comp;
+
+  var MarkerNZ, MarkerCount, i: longint;
+  MarkerNZ := InitMarker('NZakaz', 8, 100, 10);
+
+  ClearMarker(MarkerNZ);
+
+  DoneMarker(MarkerNZ, 'NZakaz');
+
+  pPunktP := OtgOrder.cPunktP;
+  pKontr2 := 0;
+  pGruzTo := 0;
+
+  var status_mask: word;  status_mask := if( OtgOrder.Status = 5, word(1000+3), word(1000+1));
+
+  if (RunInterface('GetSomNZakaz',
+                    status_mask,
+                    Word(0),
+                    not Choice,
+                    NZ,
+                    boolean(False),
+                    Comp(0),
+                    pPunktP,
+                    pKontr2,
+                    pGruzTo
+                  ) <> cmCancel)
+    {
+      varInValid := IsValid(#SpOtgOrd);
+      if (varInValid)
+        if Choice
+          Delete_SpOtgOrd(SpOtgOrd.NRec)
+        else
+          PushPos(#SpOtgOrd);
+
+      var pickrec: comp;
+      MarkerNZ    := InitMarker('NZakaz', 8, 100, 10);
+      if Choice
+        InsertMarker(MarkerNZ, NZ);
+      MarkerCount := GetMarkerCount(MarkerNZ);
+
+      For ( i := 0; i<MarkerCount; i := i+1 )
+        {
+        if (not GetMarker(MarkerNZ, i, pickrec)) Continue;
+         // проверка на дублируемость
+         if (GetFirst SpOtgOrdSyn where ((    OtgOrder.NRec == SpOtgOrdSyn.cOtgOrder
+                                          AND pickrec       == SpOtgOrdSyn.cNZakaz
+                                        )) = tsOk)
+           {
+             if (not varWasTwice)
+               Message('Некоторые позиции уже имеются в распоряжении.'#13'Они не будут добавлены.', Information);
+
+             varWasTwice := TRUE;
+             Continue;
+           }
+
+         if (GetFirst NZakazSyn where ((pickrec == NZakazSyn.NRec)) = tsOk)
+           {
+             if ( OtgOrder.Status = 5 ) //отмененные
+               {
+                 if (NZakazSyn.Status <> word(3))
+                   {
+                     if (not varNotItStatus)
+                       Message('Некоторые позиции имеют статус отличный от "Отмененный"'#13+
+                               'Они не будут добавлены.', Information);
+
+                     varNotItStatus := TRUE;
+                     Continue;
+                   }
+               }
+             else
+               {
+                 if (NZakazSyn.Status <> word(1))
+                   {
+                     if (not varNotItStatus)
+                       Message('Некоторые позиции имеют статус отличный от "Исполняемый"'#13+
+                               'Они не будут добавлены.', Information);
+
+                     varNotItStatus := TRUE;
+                     Continue;
+                   }
+               }
+
+             if ( (OtgOrder.cPunktP <> 0) AND
+                  (OtgOrder.cPunktP <> NZakazSyn.cPunktP) )
+               {
+                 if (not varNotItPunktP)
+                   Message('В некоторых позициях пункт погрузки не соответствует распоряжению.'#13+
+                           'Они не будут добавлены.', Information);
+
+                 varNotItPunktP := TRUE;
+                 Continue;
+               }
+
+             if (NZakazSyn.TypeDoc <> 0) // обычный Н/З
+               if (NZakazSyn.TypeDoc = 2) // детальный Н/З
+                 {
+                  // Если есть в Распоряжениях на Отгрузку его Групповой Н/З - то не добавять
+                  if (GetFirst SpOtgOrdSyn where ((
+                                                   NZakazSyn.cOwner == SpOtgOrdSyn.cNZakaz (NoIndex)
+                                                 )) = tsOk)
+                    {
+                     if (GetFirst OtgOrderSyn where ((SpOtgOrdSyn.cOtgOrder == OtgOrderSyn.NRec)) = tsOk)
+                       { }
+
+                     Message('Групповой Н/З ' +
+                             'для детального Н/З ' + f_sNumDate(NZakazSyn.NoDoc,NZakazSyn.dDoc) + ''#13 +
+                             'был включен в Распоряжение ' + f_sNumDate(OtgOrderSyn.NoDoc, OtgOrderSyn.dDoc) + ''#13 +
+                             'Детальный Н/З не будет добавлен.', Information);
+                     Continue;
+                    }
+                 }
+               else
+                 if (NZakazSyn.TypeDoc = 1) // групповой Н/З
+                   {
+                     varNRec := NZakazSyn.NRec;
+                     if (GetFirst NZakazSyn where ((varNRec == NZakazSyn.cOwner)) = tsOk)
+                       {
+                         Message('Групповой Н/З ' + f_sNumDate(NZakazSyn.NoDoc, NZakazSyn.dDoc) + 'имеет детальные Н/З.'#13 +
+                                 'Групповой Н/З не будет добавлен.', Information);
+
+                         Continue;
+                       }
+                   }
+           }
+
+         set OtgOrder.cPunktP  := if(OtgOrder.cPunktP = 0, pPunktP, OtgOrder.cPunktP );
+
+         set OtgOrder.cOrgForm := if(OtgOrder.cOrgForm = 0, pKontr2, OtgOrder.cOrgForm);
+
+         if (not UpdateTable) Exit;
+         ClearBuffer(#SpOtgOrd);
+         SpOtgOrd.cOtgOrder := OtgOrder.NRec;
+         SpOtgOrd.cNZakaz   := pickrec;
+
+         if (GetLast SpOtgOrdSyn where ((OtgOrder.NRec == SpOtgOrdSyn.cOtgOrder)) = tsOk)
+           SpOtgOrd.Code := NextNumStr(SpOtgOrdSyn.Code)
+         else
+           SpOtgOrd.Code := '0001';
+
+         insert current SpOtgOrd;
+         // + все позиций SpNZRasp = все по Н/З
+         var piKatDopEd2: iKatDEI;
+
+         _LOOP SpDocsSyn where ((word(440) == SpDocsSyn.TiDk
+                                        AND SpOtgOrd.cNZakaz == SpDocsSyn.cDoc
+                                      ))
+             {
+               ClearBuffer(#SpNZRasp);
+               SpNZRasp.cSpOtgOrd := SpOtgOrd.NRec;
+               SpNZRasp.cSpNZak   := SpDocsSyn.NRec;
+               SpNZRasp.KolFact   := SpDocsSyn.Kol - KolFact_OtgOrder(SpDocsSyn.NRec, 1 + 2, comp(0)); // 1 - оформляемые 2 - исполняемые
+               if (SpNZRasp.KolFact < 0)
+                 SpNZRasp.KolFact := 0;
+               insert current SpNZRasp;
+              piKatDopEd2.CopyDopEd(coSpDocs,               // код таблицы спецификации источника
+                                    SpDocsSyn.NRec,         // ссылка на запись спецификации источника
+                                    2,                     // тип количества источника
+                                    SpDocsSyn.Kol,          // количество источника в отпускных единицах
+                                    coSpNZRasp,         // код таблицы спецификации приемника
+                                    SpNZRasp.NRec,      // ссылка на запись спецификации приемника
+                                    1,                     // тип количества приемника
+                                    SpNZRasp.Kolfact,    // количество приемника в отпускных единицах
+                                    word(441)
+                                   );
+             }
+        }
+
+      if (varInValid) AND not Choice
+        PopPos(#SpOtgOrd)
+      else
+        if (GetFirst SpOtgOrd = tsOk)
+          { }
+
+      //Сравнение интервала действия выбранного(ых) Н-З
+      //и текущего распоряжения
+      varD1 := StrToDate('00/00/0000', 'DD/MM/YYYY');
+      varD2 := StrToDate('00/00/0000', 'DD/MM/YYYY');
+
+      For ( i := 0; i<MarkerCount; i := i+1 )
+        {
+          if (not GetMarker(MarkerNZ, i, pickrec))
+            Continue;
+
+          if (GetFirst nZakaz where ((pickrec == nZakaz.NRec )) = tsOk)
+            {
+              varD1 := nZakaz.dBeg;
+              varD2 := nZakaz.dEnd;
+
+              _LOOP nZakaz where (( pickrec == nZakaz.NRec ))
+                {
+                  if (varD1 > nZakaz.dBeg)
+                    varD1 := nZakaz.dBeg;
+
+                  if (varD2 < nZakaz.dEnd)
+                    varD2 := nZakaz.dEnd;
+                }
+            }
+        }
+
+      if (varD1 < OtgOrder.dFrom) OR (varD2 > OtgOrder.dTo)
+        if (Message('Интервал действия выбранных наряд-заказов (c '+DateToStr(varD1, 'DD/MM/YYYY')+
+                    +' по '+DateToStr(varD2, 'DD/MM/YYYY')+
+                    +') превышает интервал распоряжения. Исправить.', YesNo+Information) = Yes)
+            {
+              set OtgOrder.dFrom := varD1;
+              set OtgOrder.dTo := varD2;
+              UpdateTable;
+            }
+
+      DoneMarker(MarkerNZ, 'NZakaz');
+    }
+
+  RereadRecord(#SpOtgOrd);
+  Insert_SpOtgOrd := TRUE;
+} // Function Insert_SpOtgOrd
+
+
+//******************************************************************************
+
+Procedure SetWinTitle(num: word);
+{
+  var Tit: string;  Tit := 'Распоряжения на отгрузку';
+
+  case (num) of
+  //-----------
+     1: Tit := Tit + '. Фильтр (дескриптор пользователя)';
+  //-----------
+     2: Tit := Tit + '. Фильтр (группа пользователей)';
+  //-----------
+     3: Tit := Tit + '. Фильтр (дата: '+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY')+')';
+  //-----------
+     4: {
+          Tit := Tit + '. Фильтр(дата: '+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+          Tit := Tit + '; дескриптор пользователя)';
+        }
+  //-----------
+     5: {
+          Tit := Tit + '. Фильтр(дата: '+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+          Tit := Tit + '; группа пользователей)';
+        }
+  //-----------
+  end;
+
+  SetTitle(Tit);
+}
+// Установка дескрипторов на накладную
+// и переключение форматов
+
+//******************************************************************************
+
+Procedure SetDocBounds; // Установка ограничений по документу
+{
+  Format_Main := 1;
+
+  if (isFilter)
+    case DscVisible of
+    //----------------
+      dcAllModif,
+      dcOwnModifAllRead,
+      dcGrpModifAllRead:
+          { //дата
+            PushBounds(tbByDate);
+            SetWinTitle(3);
+          }
+    //----------------
+      dcOwnOnly:
+          {  //дата+дескриптор
+            PushBounds(tbByDateDsc);
+            SetWinTitle(4);
+          }
+    //----------------
+      dcGrpRead,
+      dcGrpModif:
+           { //дата+группа
+             PushBounds(tbByDateGrDsc);
+             SetWinTitle(5);
+           }
+    //----------------
+    end;
+  else
+    case DscVisible of
+    //----------------
+      dcAllModif,
+      dcOwnModifAllRead,
+      dcGrpModifAllRead:
+          { // нет
+            SetWinTitle(0);
+          }
+    //----------------
+      dcOwnOnly:
+          { // дескриптор
+            PushBounds(tbByDescr);
+            SetWinTitle(1);
+          }
+    //----------------
+      dcGrpRead,
+      dcGrpModif:
+          { // группа
+            PushBounds(tbByGrDsc);
+            SetWinTitle(2);
+          }
+    //----------------
+    end;
+}
+
+
+//******************************************************************************
+
+Procedure ChangeViewFormat( first: boolean );
+{
+  if (not UpdateTable)
+    Exit;
+
+  if BoundActive(tbSorterBnd)
+    PopBounds(tbSorterBnd);
+
+  if (Format_Main = 0)
+    {
+      Format_Main := 1;
+      SetFormat(brOtgOrderMain);
+      if ( not first )
+        {
+          ResetBounds(#OtgOrder);
+          if (((DscVisible = dcAllModif       ) or
+               (DscVisible = dcOwnModifAllRead) or
+               (DscVisible = dcGrpModifAllRead)) AND not isFilter)
+            PushBounds(tbSorterBnd);
+        }
+    }
+  else
+    {
+      if (((DscVisible = dcAllModif       ) or
+           (DscVisible = dcOwnModifAllRead) or
+           (DscVisible = dcGrpModifAllRead)) AND not isFilter)
+        {
+          var ROtg_comp: comp;
+          Format_Main := 0;
+          ROtg_comp := OtgOrder.NRec;
+          SetFormat(trOtgOrderMain);
+          SetBounds(#OtgOrder);
+          ProcessCommand(cmTreeUp);
+          TreeJumpToRecord(myTree, ROtg_comp);
+        }
+      else
+        {
+          Format_Main := 1;
+          SetFormat(brOtgOrderMain);
+          Message('Включены фильтры.'#13'Переключение формата невозможно.');
+        }
+    }
+
+  RescanPanel(#OtgOrder);
+
+  var tmpDsk: word;  tmpDsk := Format_Main;
+
+  SaveMyDsk(tmpDsk, 'ROtg_ViewFormat');
+}
+
+//******************************************************************************

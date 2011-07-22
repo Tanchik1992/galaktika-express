@@ -1,0 +1,213 @@
+// корректировка оплаченного кол-ва с ученом дискретности отп.единицы измерения
+Procedure ChekSpSoprKolOpl (var My_ProcUb: double; My_KolFact: double; var My_KolOpl: double);
+var 
+  pKatEd : comp;
+  Old_My_KolOpl: double;
+{
+  Old_My_KolOpl := My_KolOpl;
+  My_KolOpl := My_KolFact * (1 - My_ProcUb / 100);
+
+  if (Old_My_KolOpl = My_KolOpl)
+    Exit;
+
+  Old_My_KolOpl := My_KolOpl;
+
+  pKatEd := if(GetFirst fastfirstrow KatEd = tsOK, KatEd.nRec, comp(0));
+  fEdIzm.CheckKolDiskretAll (My_KolOpl, SpSopr.cOtpEd, pKatEd, TRUE, FALSE);
+
+  if (Old_My_KolOpl <> My_KolOpl)
+  {
+    My_ProcUb := 100 * (1 - My_KolOpl / My_KolFact);
+    Message('Отпускная единица дискретна.'#10#13 +
+            'Изменено количество к оплате: ' + string(My_KolOpl) + '.'#10#13 +
+            'Установлен процент убыли: ' + string(My_ProcUb) + '.')
+  }
+}
+//проверка количества в сопроводительных документах
+!
+!
+!
+Function CheckSpSoprKolRet (My_TipField : word;    //меняем поле:
+                        var My_ProcUb   : double;  //1
+                        var My_KolFact  : double;  //2
+                        var My_KolOpl   : double;  //3
+                        var My_Kol      : double   //4
+                           ): boolean;
+{
+  CheckSpSoprKolRet := True;
+  case My_TipField of
+   // SpSopr.ProcUb
+   1: 
+   {
+     if (My_ProcUb < 100)
+       ChekSpSoprKolOpl(My_ProcUb, My_KolFact, My_KolOpl)
+     else
+     {
+       My_ProcUb := 0;
+       My_KolOpl := My_KolFact;
+     }
+   }
+   // SpSopr.KolFact
+   2: 
+   {
+     if (My_Kol = 0) and (My_KolOpl = 0)//пир 101.20033
+       My_Kol := My_KolFact;
+
+     if (My_KolFact = 0)
+     {
+       My_ProcUb := 0;
+       My_KolOpl := My_KolFact;
+     }
+     else 
+       ChekSpSoprKolOpl(My_ProcUb, My_KolFact, My_KolOpl)
+   }
+   // SpSopr.KolOpl
+   3: 
+   { 
+     if (My_KolOpl = 0)
+     {
+       My_KolOpl := My_KolFact * (1 - My_ProcUb / 100)
+     }
+     else
+     {
+       if (My_KolFact <> 0)
+         My_ProcUb := 100 * (1 - My_KolOpl / My_KolFact);
+
+       if (My_KolOpl > My_KolFact)
+         if (KatSopr.TipSopr = 2)// для документов сбыта
+         {
+           case wGetTune('Doc.Sell.ChkKolOpl') of
+             // запрещать превышение кол-ва оплаченного над фактическим
+             0: {
+               Message('Запрещен ввод количества к оплате превышающего количество фактическое.'#10#13 +
+                       'См. настройку:'#10#13 +
+                       GetTuneName ('Doc.Sell.ChkKolOpl'));
+               My_ProcUb := 0;
+               My_KolOpl := My_KolFact;
+             }
+             // разрешать превышение кол-ва оплаченного над фактическим
+             1: {
+             }
+             // разрешать с предупреждением
+             2: {
+               Message('Количество к оплате превышает фактическое количество.'#10#13 +
+                       'Устанавливается процент убыли: ' + string(My_ProcUb));
+             }
+           end;
+         }
+         else
+         {
+           My_ProcUb := 0;
+           My_KolOpl := My_KolFact;
+         }
+     }
+   }
+   // SpSopr.Kol
+   4: 
+   {
+     My_Kol := My_Kol;
+   }
+ end;
+}
+!
+!
+!
+Procedure CheckSpSoprKol2(iField: integer); //с параметром
+var MyField00 : word;
+{
+  MyField00 := 0
+  Case iField of
+   #SpSopr.ProcUb  : MyField00 := 1;
+   #SpSopr.KolFact : MyField00 := 2;
+   #SpSopr.KolOpl  : MyField00 := 3;
+   #SpSopr.Kol     : MyField00 := 4;
+  end;
+  CheckSpSoprKolRet(MyField00,SpSopr.ProcUb,SpSopr.KolFact
+                             ,SpSopr.KolOpl,SpSopr.Kol);
+  set SpSopr.ProcUb  := SpSopr.ProcUb;
+  set SpSopr.KolFact := SpSopr.KolFact;
+  set SpSopr.KolOpl  := SpSopr.KolOpl;
+  set SpSopr.Kol     := SpSopr.Kol;
+}
+!
+!
+! Проверка введенного количества по документу
+Procedure CheckSpSoprKol;
+{
+ CheckSpSoprKol2(CurField);
+}
+!
+!
+!
+Procedure CheckSpSoprKolFakt;
+{
+ CheckSpSoprKol2(#SpSopr.KolFact);
+}
+!
+!
+!
+Function SoprCheckKolDiskretAll(var Kol :Double; cOtpEd :Comp; cEd :Comp;
+                            okRound :Boolean; okVis :Boolean):Boolean;
+{
+  SoprCheckKolDiskretAll := TRUE;
+
+  if (KatSopr.VidSopr = 110)
+  {
+    if not boGetTune('OPER.Smeta.KontrolNedVelich')
+      SoprCheckKolDiskretAll := fEdIzm.CheckKolDiskretAll(Kol, cOtpEd, cEd, okRound, okVis);
+  }
+  else
+    SoprCheckKolDiskretAll := fEdIzm.CheckKolDiskretAll(Kol, cOtpEd, cEd, okRound, okVis);
+}
+!
+!
+!
+Procedure CheckAndMakeKol;
+var
+  pKatEd : comp;
+  oKolChecker : vipSpDocs;
+{
+ oKolChecker.CheckSpDocsOstatokOnSopr(KatSopr.cNote, SpSopr.cSpDocs, TSpSopr(SpSopr.Buffer), SpSopr.KolFact);
+
+ pKatEd := if(GetFirst fastfirstrow KatEd = tsOK, KatEd.nRec, comp(0));
+ case CurField of
+  #SpSopr.KolFact:
+    SoprCheckKolDiskretAll(SpSopr.KolFact, SpSopr.cOtpEd, pKatEd, True, True);
+  #SpSopr.Kol:
+    SoprCheckKolDiskretAll(SpSopr.Kol, SpSopr.cOtpEd, pKatEd, True, True);
+  #SpSopr.KolOpl:
+    SoprCheckKolDiskretAll(SpSopr.KolOpl, SpSopr.cOtpEd, pKatEd, True, True);
+ else
+    {
+     SoprCheckKolDiskretAll(SpSopr.KolFact, SpSopr.cOtpEd, pKatEd, True, True);
+     CheckSpSoprKol2(#SpSopr.KolFact);
+     Exit;
+    }
+ end;
+
+   CheckSpSoprKol;
+}
+!
+!
+!
+Procedure CheckAndMakeKolParam(p1:boolean;p2:boolean;iFields:integer);
+var pKatEd : comp;
+{
+ pKatEd := if(GetFirst fastfirstrow KatEd = tsOK, KatEd.nRec, comp(0));
+ case iFields of
+  #SpSopr.KolFact:
+    SoprCheckKolDiskretAll(SpSopr.KolFact, SpSopr.cOtpEd, pKatEd, p1, p2);
+  #SpSopr.Kol:
+    SoprCheckKolDiskretAll(SpSopr.Kol, SpSopr.cOtpEd, pKatEd, p1, p2);
+  #SpSopr.KolOpl:
+    SoprCheckKolDiskretAll(SpSopr.KolOpl, SpSopr.cOtpEd, pKatEd, p1, p2);
+ else
+    {
+     SoprCheckKolDiskretAll(SpSopr.KolFact, SpSopr.cOtpEd, pKatEd, p1, p2);
+     CheckSpSoprKol2(#SpSopr.KolFact);
+     Exit;
+    }
+ end;
+
+   CheckSpSoprKol2(iFields);
+}

@@ -1,0 +1,1342 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Общие процедуры формирования платежных документов по ДО
+//********************************************************************************
+
+#include DOfuns.var
+#include valfunc.var
+#ifdef _OBJNALF_VIH_
+  var iNalF : Nalog_Fin;
+#end
+#include aStatUser.var
+//******************************************************************************
+
+Const
+  _Sh_PlPor_varMaxGroup = 9; // Аккуратно меняйте на этом завязаны алгоритмы
+End;
+
+//******************************************************************************
+
+Var
+//------------------------------------------------------------------------------
+  _Sh_PlPor_varFld      // BaseDoc.NRec
+                        // Дата      - Сортировка 1
+                        // Приоритет - Сортировка 2
+                        // Контрагент
+                        // Валюта
+                        // Собственный банк
+                        // Банк контрагента
+                        // Грузоотправителя
+                        // Грузополучателя
+                : array[0..10] of word;
+//------------------------------------------------------------------------------
+  _Sh_PlPor_varFldLst   // - Сортировка, BaseDoc.NRec перемещен в конец
+                : array[0..9] of word;
+//------------------------------------------------------------------------------
+  _Sh_PlPor_varOld      // - Сортировка, BaseDoc.NRec перемещен в конец
+                : array[0..6] of comp;
+//------------------------------------------------------------------------------
+  _Sh_PlPor_wList       // !!! обязательно заполнить
+                : word;
+//------------------------------------------------------------------------------
+  _Sh_PlPor_varDate
+                : Date;
+//------------------------------------------------------------------------------
+  _Sh_PlPor_ValDo       // тип ПП для задания TiDk - в валюте ДО (31), в НДЕ (1)
+                : word;
+//------------------------------------------------------------------------------
+  _Sh_PlPor_UseMaxDate
+                : boolean;
+//------------------------------------------------------------------------------
+
+//******************************************************************************
+
+Create view _Sh_PlPor
+
+Var
+//------------------------------------------------------------------------------
+  myTiDkGal
+, myTiDkUser
+, varFor
+, varEnterCm
+                : word;
+//------------------------------------------------------------------------------
+  myCash
+, mySpCash
+, varBaseDoc
+                : comp;
+//------------------------------------------------------------------------------
+  varNomEnter
+                : boolean;
+//------------------------------------------------------------------------------
+  varTbl     // для выбора
+, varTblLst  // для группировки
+                : longint;
+//------------------------------------------------------------------------------
+  varInt
+                : integer;
+//------------------------------------------------------------------------------
+
+From
+  BaseDoc
+, SoprHoz
+, PaySchem
+, CalPlan
+, KatBank
+, KlVal
+, CashBank
+, SpGrSch
+, PlPor
+, KatOrg
+, KatNalog
+, Dogovor
+
+Where
+((
+       varBaseDoc            == BaseDoc.NRec
+
+  AND  BaseDoc.NRec          == StepDoc.cBaseDoc
+  AND  BaseDoc.NRec          == BaseFin.cBaseDoc
+
+  AND  word(_Sh_PlPor_wList) == Pick.wList
+  AND  BaseDoc.NRec          == Pick.cRec
+))
+;
+
+//******************************************************************************
+
+Form FrmSh_PlPor('Sh_PlPor.Out', 'Sh_PlPor') with NoVisual;
+
+//******************************************************************************
+
+Procedure FrmSh_PlPor_Beg(varGroup, varSort: word; varDate: Date; varUseMaxDate: boolean);
+{
+  FrmSh_PlPor.Write(if(varUseMaxDate, ' "оплатить до"|', '')
+                  + if(varDate = ZeroDate, 'документа', DateToStr(varDate, 'DD/MM/YYYY')));
+
+  For(_Sh_PlPor.varInt := 0; _Sh_PlPor.varInt <= (_Sh_PlPor_varMaxGroup - 4); inc(_Sh_PlPor.varInt))
+    if ( (varGroup AND word(Exp(_Sh_PlPor.varInt * Ln(2)))) <> 0 ) // Это поле в группировке участвует
+      FrmSh_PlPor.Write('X')
+    else
+      FrmSh_PlPor.Write('.');
+
+  case varSort of
+  //------------------------------------------------------------------------------
+    0: FrmSh_PlPor.Write('По убыванию даты');
+  //------------------------------------------------------------------------------
+    1: FrmSh_PlPor.Write('По возрастанию даты');
+  //------------------------------------------------------------------------------
+    2: FrmSh_PlPor.Write('По приоритету');
+  //------------------------------------------------------------------------------
+  end; //case
+}
+
+//******************************************************************************
+
+Procedure FrmSh_PlPor_Head;
+{
+  FrmSh_PlPor.Write(_Sh_PlPor.PlPor.NRec);
+  FrmSh_PlPor.Write(_Sh_PlPor.PlPor.NoDok);
+  FrmSh_PlPor.Write(_Sh_PlPor.PlPor.DatVip);
+
+  var sT: string;  sT := iAutoFit.MessAutoFit;
+
+  if sT = '' OR _Sh_PlPor.BaseDoc.cDogovor <> 0
+    FrmSh_PlPor.Write('')
+  else
+    FrmSh_PlPor.Write(' ('+sT+') ');
+}
+
+//******************************************************************************
+
+var pKatOrg: KatOrgObj;
+
+
+//******************************************************************************
+
+Procedure FrmSh_PlPor_Line;
+{
+  FrmSh_PlPor.Write(_Sh_PlPor.BaseDoc.NRec);
+  FrmSh_PlPor.Write(_Sh_PlPor.BaseDoc.NoDoc);
+  FrmSh_PlPor.Write(_Sh_PlPor.BaseDoc.dDoc);
+
+  GetVipRef(pKatOrg, 'KatOrg');
+
+  FrmSh_PlPor.Write(pKatOrg.GetKatOrgName(_Sh_PlPor.BaseDoc.cOrg, koOnTune));
+  FrmSh_PlPor.Write(_Sh_PlPor.BaseDoc.Total);
+  FrmSh_PlPor.Write(_Sh_PlPor.Pick.PickKol);
+
+  if ( _Sh_PlPor.BaseDoc.cVal = 0 )
+    FrmSh_PlPor.Write(sGetTune('NDE.SimvRub'))
+  else
+    if ( _Sh_PlPor.GetFirst FastFirstRow KlVal where (( BaseDoc.cVal == KlVal.NRec )) = tsOk )
+      FrmSh_PlPor.Write(_Sh_PlPor.KlVal.SimVolV)
+    else
+      FrmSh_PlPor.SkipFormat(1);
+} // Procedure FrmSh_PlPor_Line
+
+//******************************************************************************
+
+Procedure FrmSh_PlPor_Foot;
+{
+  FrmSh_PlPor.Write(if(_Sh_PlPor.PlPor.cVal = 0, '0', '1'));
+  FrmSh_PlPor.Write(_Sh_PlPor.PlPor.SumPlat);
+  FrmSh_PlPor.Write(sGetTune('NDE.SimvRub'));
+
+  if ( _Sh_PlPor.PlPor.cVal = 0 )
+    FrmSh_PlPor.SkipFormat(2)
+  else
+    {
+      FrmSh_PlPor.Write(_Sh_PlPor.PlPor.SumPlatV);
+      if ( _Sh_PlPor.GetFirst FastFirstRow KlVal where (( PlPor.cVal == KlVal.NRec )) = tsOk )
+        FrmSh_PlPor.Write(_Sh_PlPor.KlVal.SimVolV)
+      else
+        FrmSh_PlPor.SkipFormat(1);
+    }
+}
+
+//******************************************************************************
+// Сумма сформированных платежей по документу
+Function _Sh_PlPor_CalcSumma(varNRec: comp; varDate: Date): double;
+Var
+//------------------------------------------------------------------------------
+  varSumm
+, varDOCourse
+                : double;
+//------------------------------------------------------------------------------
+  vardPlat
+                : Date;
+//------------------------------------------------------------------------------
+{
+  varSumm             := 0;
+  _Sh_PlPor_CalcSumma := 0;
+
+  // т.к. если невалидна таблица BaseDoc то сравнение с полем NRec дает FALSE
+  if ( varNRec <> _Sh_PlPor.varBaseDoc )
+    {
+      _Sh_PlPor.varBaseDoc := varNRec;
+
+      if ( _Sh_PlPor.GetFirst FastFirstRow BaseDoc <> tsOk )
+        Exit;
+    }
+
+  _Sh_PlPor._LOOP BaseFin
+    {
+      if ( _Sh_PlPor.BaseFin.prShtraf = 1 )
+        Continue;
+
+      if ( _Sh_PlPor.BaseDoc.cVal = 0 )
+        varSumm := varSumm + if(_Sh_PlPor.BaseFin.Direct = 2, 1, (-1)) * _Sh_PlPor.BaseFin.Summa
+      else
+        if (_Sh_PlPor.BaseFin.cVal = _Sh_PlPor.BaseDoc.cVal)
+          varSumm := varSumm + if(_Sh_PlPor.BaseFin.Direct = 2, 1, (-1)) * _Sh_PlPor.BaseFin.SumVal
+        else
+          {
+            case PlPor_Curse of
+            //------------------------------------------------------------------------------
+            // По курсу ДО
+              0:
+                {
+                  if ( _Sh_PlPor.BaseDoc.dValCurse <> ZeroDate )
+                    {
+                      vardPlat    := _Sh_PlPor.BaseDoc.dValCurse;
+                      varDOCourse := _Sh_PlPor.BaseDoc.ValCurse;
+                    }
+                  else
+                    varDOCourse := 0;
+                 }
+            //------------------------------------------------------------------------------
+            // По курсу на дату ДО
+              1:
+                {
+                  vardPlat    := _Sh_PlPor.BaseDoc.dDoc;
+                  varDOCourse := 0;
+                }
+            //------------------------------------------------------------------------------
+            // По курсу на дату оплаты
+              2:
+                {
+                  vardPlat    := if (varDate = ZeroDate, _Sh_PlPor.BaseDoc.dDoc, varDate);
+                  varDOCourse := 0;
+                }
+            //------------------------------------------------------------------------------
+            end;
+
+            if ( ( _Sh_PlPor.BaseDoc.TipMoney = 2 ) AND ( _Sh_PlPor.BaseFin.cVal = 0 ) )
+              varSumm := varSumm + if(_Sh_PlPor.BaseFin.Direct = 2, 1, (-1))
+                                 * oValFunc.CalcValRubMoney( _Sh_PlPor.BaseDoc.cVal
+                                                           , vardPlat
+                                                           , varDOCourse
+                                                           , _Sh_PlPor.BaseDoc.DopProc
+                                                           , _Sh_PlPor.BaseFin.Summa
+                                                           )
+            else
+              varSumm := varSumm + if(_Sh_PlPor.BaseFin.Direct = 2, 1, (-1))
+                                 * oValFunc.GetAnyCurrency( _Sh_PlPor.BaseFin.cVal
+                                                          , _Sh_PlPor.BaseFin.Summa
+                                                          , vardPlat
+                                                          , _Sh_PlPor.BaseDoc.cVal
+                                                          );
+          }
+    }
+
+  varSumm := if (_Sh_PlPor.BaseDoc.Direct = 2, 1, (-1)) * varSumm;
+
+  _Sh_PlPor_CalcSumma := varSumm;
+}
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_Init_Tbl;
+{
+  if ( _Sh_PlPor.delete Pick where (( word(_Sh_PlPor_wList) == Pick.wList )) = tsOk )
+    {
+    }
+
+  _Sh_PlPor.varTbl     := TblInitNew(50, 50);
+  _Sh_PlPor_varFld[10] := TblNewField(_Sh_PlPor.varTbl, ftLongInt);
+
+  TblEndKey(_Sh_PlPor.varTbl);
+
+  For(_Sh_PlPor.varInt := 0; _Sh_PlPor.varInt <= _Sh_PlPor_varMaxGroup; inc(_Sh_PlPor.varInt))
+    _Sh_PlPor_varFld[_Sh_PlPor.varInt] := TblNewField(_Sh_PlPor.varTbl, ftComp);
+
+  _Sh_PlPor.varTblLst    := TblInitNew(50, 50);
+  _Sh_PlPor_varFldLst[9] := TblNewField(_Sh_PlPor.varTblLst, ftLongInt);
+
+  For(_Sh_PlPor.varInt := 0; _Sh_PlPor.varInt <= (_Sh_PlPor_varMaxGroup - 1); inc(_Sh_PlPor.varInt))
+    _Sh_PlPor_varFldLst[_Sh_PlPor.varInt] := TblNewField(_Sh_PlPor.varTblLst, ftComp);
+
+  TblEndKey(_Sh_PlPor.varTblLst);
+
+  if ( ( _Sh_PlPor.varTbl = 0 ) OR ( _Sh_PlPor.varTblLst = 0 ) )
+    Message('Не создалась виртуальная таблица.', Information);
+}
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_Done_Tbl;
+{
+  if (_Sh_PlPor.delete Pick where (( word(_Sh_PlPor_wList) == Pick.wList )) = tsOk )
+    {
+      TblDeleteTable(_Sh_PlPor.varTbl);
+      TblDeleteTable(_Sh_PlPor.varTblLst);
+    }
+}
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_Ins_In_Tbl(varNRec: comp; varMarkNo: word; MrkKol: double);
+{
+  _Sh_PlPor.varBaseDoc := varNRec;
+
+  if ( _Sh_PlPor.GetFirst FastFirstRow BaseDoc <> tsOk )
+    Exit;
+
+  TblClearBuffer(_Sh_PlPor.varTbl);
+
+  TblSfLongInt(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[10], varMarkNo);                             //номер пометки
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[0] , _Sh_PlPor.BaseDoc.NRec);                // BaseDoc.NRec
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[1] , comp(To_Days(_Sh_PlPor.BaseDoc.dDoc))); // Дата - Сортировка1
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[2] , comp(_Sh_PlPor.BaseDoc.Prior));         // Приоритет - Сортировка1
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[3] , _Sh_PlPor.BaseDoc.cOrg);                // Контрагент
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[4] , _Sh_PlPor.BaseDoc.cVal);                // Валюта
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[5] , _Sh_PlPor.BaseDoc.cMyBank);             // Собственный банк
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[6] , _Sh_PlPor.BaseDoc.cBank);               // Банк контрагента
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[7] , _Sh_PlPor.BaseDoc.cGrOtpr);             // Грузоотправителя
+  TblSfComp   (_Sh_PlPor.varTbl, _Sh_PlPor_varFld[8] , _Sh_PlPor.BaseDoc.cGrPol);              // Грузополучателя
+
+  // Тип BaseDoc.TipMoney = 1 (рублевый) 2 (валютно-рублевый) 3 (валютный)
+  if ( _Sh_PlPor.BaseDoc.TipMoney = 2 )
+    TblSfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[9], comp(2));
+
+  if ( TblInsertCurrent(_Sh_PlPor.varTbl) <> tsOk )
+    Message('Проблемы с вставкой в виртуальную таблицу.', Information);
+
+  _Sh_PlPor.ClearBuffer(_Sh_PlPor.tnPick);
+
+  _Sh_PlPor.Pick.PickNum := varMarkNo;
+  _Sh_PlPor.Pick.wList   := word(_Sh_PlPor_wList);
+  _Sh_PlPor.Pick.cRec    := _Sh_PlPor.BaseDoc.NRec;
+  _Sh_PlPor.Pick.PickKol := MrkKol;
+
+  _Sh_PlPor.Insert current Pick;
+} // Procedure Ins_In_Tbl
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_Del_In_Tbl(varNRec: comp);
+{
+  _Sh_PlPor.varBaseDoc := varNRec;
+
+  if (_Sh_PlPor.GetFirst FastFirstRow BaseDoc <> tsOk ) // это нужно для позиционирования Pick
+    Exit;
+
+  TblClearBuffer(_Sh_PlPor.varTbl);
+
+  TblSfLongInt(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[10], _Sh_PlPor.Pick.PickNum);
+
+  if ( TblGetEqual(_Sh_PlPor.varTbl) )
+    {
+      if ( TblDeleteCurrent(_Sh_PlPor.varTbl) <> tsOk )
+        Message('Проблемы с удалением в виртуальной таблице.', Information);
+    }
+  else
+    Message('Проблемы с поиском в виртуальной таблице.', Information);
+
+  _Sh_PlPor.Delete current Pick;
+}
+
+//******************************************************************************
+
+Function NeedNewNazn: boolean;
+{
+  var ter: word;
+
+  NeedNewNazn := ((NeedNaznForType(_Sh_PlPor.PlPor.TiDkGal) AND
+                 (iObjNDTunes.wGetBuhTune(cgBuh_MkShbl, _Sh_PlPor.PlPor.TiDkGal, tEr) <> 0)))
+}
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_ReCalcSum(SumPlPor
+                            , NDS            : double;
+                              NameNalog      : string;
+                          var PlPor_cVal     : comp;
+                          var PlPor_SumPlat
+                            , PlPor_SumPlatV: double;
+                          var PlPor_NamePl3  : string);
+Var
+  myDate   : Date;
+
+  myCourse
+, SumR
+, SumV     : double;
+{
+  SumR           := 0;
+  SumV           := 0;
+  PlPor_cVal     := 0;
+  PlPor_SumPlat  := 0;
+  PlPor_SumPlatV := 0;
+  myDate         := _Sh_PlPor.PlPor.DatVip;
+
+  // TipMoney = 1 (рублевый) 2 (валютно-рублевый) 3 (валютный)
+  case _Sh_PlPor.BaseDoc.TipMoney of
+  //------------------------------------------------------------------------------
+    1:
+      {
+        PlPor_SumPlat := oDOfuns.DoRoundNDE(_Sh_PlPor.BaseDoc.VidDoc, SumPlPor);
+
+        if ( ( PlPor_NamePl3 = '' ) AND ( NDS > 0 ) )
+          {
+            SumR := (PlPor_SumPlat / _Sh_PlPor.BaseDoc.Total) * NDS;
+            SumR := oDOfuns.DoRoundNDE(_Sh_PlPor.BaseDoc.VidDoc, SumR);
+            if ( NOT NeedNewNazn )
+              PlPor_NamePl3 := 'Сумма ' + NameNalog + GetStrSumma(TRUE, SumR) + ' ' + sGetTune('NDE.SimvRub');
+         }
+      }
+  //------------------------------------------------------------------------------
+    else
+      {
+        if ( _Sh_PlPor.BaseDoc.TipMoney = 2 )
+          {
+            case PlPor_Curse of
+            //==============================================================================
+            // По курсу ДО
+              0:
+                {
+                  if ( _Sh_PlPor.BaseDoc.dValCurse <> ZeroDate )
+                    {
+                      myDate   := _Sh_PlPor.BaseDoc.dValCurse;
+                      myCourse := _Sh_PlPor.BaseDoc.ValCurse;
+                    }
+                  else
+                    myCourse := 0;
+                }
+            //==============================================================================
+            // По курсу на дату ДО
+              1:
+                {
+                  myDate   := _Sh_PlPor.BaseDoc.dDoc;
+                  myCourse := 0;
+                }
+            //==============================================================================
+            // По курсу на дату оплаты
+              2:
+                {
+                  if ( _Sh_PlPor_UseMaxDate AND ( _Sh_PlPor.StepDoc.dOplMax <> ZeroDate ) )
+                    myDate := _Sh_PlPor.StepDoc.dOplMax
+                  else
+                    myDate := if (_Sh_PlPor_varDate = ZeroDate, _Sh_PlPor.BaseDoc.dDoc, _Sh_PlPor_varDate);
+
+                  myCourse := 0;
+                }
+            //==============================================================================
+            end;
+
+            PlPor_SumPlat := oValFunc.CalcRubValMoney(TRUE
+                                          , _Sh_PlPor.BaseDoc.cVal
+                                          , myDate
+                                          , myCourse
+                                          , _Sh_PlPor.BaseDoc.DopProc
+                                          , SumPlPor);
+         }
+       else
+         {
+           oValFunc.CheckSumVal(_Sh_PlPor.BaseDoc.cVal, myDate, PlPor_SumPlat, SumPlPor);
+
+           PlPor_cVal     := _Sh_PlPor.BaseDoc.cVal;
+           PlPor_SumPlatV := SumPlPor;
+         }
+
+       PlPor_SumPlat  := oDOfuns.DoRoundNDE(_Sh_PlPor.BaseDoc.VidDoc, PlPor_SumPlat);
+
+       if ( ( PlPor_NamePl3 = '' ) AND ( NDS > 0 ) )
+         {
+           SumR := 0;
+           SumV := (SumPlPor / _Sh_PlPor.BaseDoc.Total) * NDS;
+
+           oValFunc.CheckSumVal(_Sh_PlPor.BaseDoc.cVal, myDate, SumR, SumV);
+
+           SumR := oDOfuns.DoRoundNDE(_Sh_PlPor.BaseDoc.VidDoc, SumR);
+
+           if ( NOT NeedNewNazn )
+             PlPor_NamePl3 := 'Сумма ' + NameNalog + GetStrSumma(TRUE, SumR) + ' ' + sGetTune('NDE.SimvRub');
+         }
+      }
+  //------------------------------------------------------------------------------
+  end;
+} // Procedure _Sh_PlPor_ReCalcSum
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_End_Plat(var PlPor_cVal: comp; var PlPor_SumPlat, PlPor_SumPlatV: double);
+{
+// формирование BaseFin
+  _Sh_PlPor.ClearBuffer(_Sh_PlPor.tnBaseFin);
+
+  _Sh_PlPor.BaseFin.cSoprHoz    := _Sh_PlPor.GetNextNrec(_Sh_PlPor.tnSoprHoz, 0);
+  _Sh_PlPor.BaseFin.cVal        := PlPor_cVal;
+  _Sh_PlPor.BaseFin.Summa       := PlPor_SumPlat;
+  _Sh_PlPor.BaseFin.SumVal      := PlPor_SumPlatV;
+  _Sh_PlPor.BaseFin.FilialNo    := _Sh_PlPor.PlPor.FilialNo;
+  if (_Sh_PlPor.BaseDoc.VidDoc = 211 or _Sh_PlPor.BaseDoc.VidDoc = 111)
+    _Sh_PlPor.BaseFin.cPredoplDO  := _Sh_PlPor.BaseDoc.NRec;
+  _Sh_PlPor.BaseFin.cBaseDoc    := _Sh_PlPor.BaseDoc.NRec;          // tNrec    "для связи с документом-основанием"
+  _Sh_PlPor.BaseFin.cStepDoc    := _Sh_PlPor.StepDoc.NRec;          // tNrec    "для связи с этапом докум-основан "
+  _Sh_PlPor.BaseFin.cDogovor    := _Sh_PlPor.BaseDoc.cDogovor;
+  _Sh_PlPor.BaseFin.cAppDogovor := _Sh_PlPor.BaseDoc.cAppDogovor;
+  _Sh_PlPor.BaseFin.cCalPlan    := _Sh_PlPor.BaseDoc.cCalPlan;
+  _Sh_PlPor.BaseFin.TipDoc      := _Sh_PlPor.PlPor.TiDk;            // word = 1   "тип фин.-кассового документа     "
+  _Sh_PlPor.BaseFin.TiDkGal     := _Sh_PlPor.PlPor.TiDkGal;         // word = 1   "тип фин.-кассового документа     "
+  _Sh_PlPor.BaseFin.cPlPor      := _Sh_PlPor.PlPor.NRec;            // tNrec    "ссылка на платежный документ     "
+  _Sh_PlPor.BaseFin.NoDoc       := _Sh_PlPor.PlPor.NoDok;           // s20 плат "номер сопр. расч. документа      "
+  _Sh_PlPor.BaseFin.NamePl      := _Sh_PlPor.BaseDoc.Name;          // s80      "назначение платежа из фин.док.   "
+  _Sh_PlPor.BaseFin.cOrg        := _Sh_PlPor.BaseDoc.cOrg;
+  _Sh_PlPor.BaseFin.Direct      := if((PrDoc_VidDoc = word(101)) OR (PrDoc_VidDoc = word(111)) OR (PrDoc_VidDoc = word(1411)), 2, 1);
+                                                                    // word     "направление корреспонденции      "
+  _Sh_PlPor.BaseFin.Descr       := _Sh_PlPor.PlPor.Descr;
+  _Sh_PlPor.BaseFin.Desgr       := _Sh_PlPor.PlPor.Desgr;
+
+// определяем финансовый ПКП по товарному, если однозначное соответствие,
+// то записываем ссылку в BaseFin
+  var cFinPlan, cTovPlan: comp;
+  cFinPlan := 0;
+  cTovPlan := 0;
+
+  if ( _Sh_PlPor.BaseDoc.cCalPlan <> 0 )
+    if (_Sh_PlPor.GetFirst FastFirstRow CalPlan where (( BaseDoc.cCalPlan == CalPlan.NRec )) = tsOk )
+      if ( _Sh_PlPor.CalPlan.DirectMc <> 0 ) //если ПКП - товарный
+        {
+          cTovPlan := _Sh_PlPor.BaseDoc.cCalPlan;
+
+          if (_Sh_PlPor.GetFirst FastFirstRow PaySchem where (( BaseDoc.cCalPlan == PaySchem.cMCPlan )) = tsOk )
+            {
+              cFinPlan := _Sh_PlPor.PaySchem.cCalPlan;
+
+              if (_Sh_PlPor.GetNext FastFirstRow PaySchem where (( BaseDoc.cCalPlan == PaySchem.cMCPlan )) = tsOk )
+                cFinPlan := 0;
+            }
+        }
+      else
+        {
+          cFinPlan := _Sh_PlPor.BaseDoc.cCalPlan;
+
+          if (_Sh_PlPor.GetFirst FastFirstRow PaySchem where ((_Sh_PlPor.BaseDoc.cCalPlan == PaySchem.cCalPlan )) = tsOk )
+            {
+              cTovPlan := _Sh_PlPor.PaySchem.cMCPlan;
+
+              if (_Sh_PlPor.GetNext FastFirstRow PaySchem where (( _Sh_PlPor.BaseDoc.cCalPlan == PaySchem.cCalPlan )) = tsOk )
+                cTovPlan := 0;
+            }
+        }
+
+  _Sh_PlPor.BaseFin.cKatSopr := cFinPlan;
+  _Sh_PlPor.BaseFin.cCalPlan := cTovPlan;
+
+  if ( _Sh_PlPor.insert current BaseFin = tsOk )
+    // формирование SoprHoz
+    iSynch.SynchSoprHoz(_Sh_PlPor.BaseFin.BufferP);
+} // Procedure _Sh_PlPor_End_Plat
+
+//******************************************************************************
+
+Function _Sh_PlPor_Form_Plat: boolean;
+Var
+//------------------------------------------------------------------------------
+  varBaseDoc_NDS
+, varPlPor_SumPlat
+, varPlPor_SumPlatV
+                : double;
+//------------------------------------------------------------------------------
+  varPlPor_cVal
+, varcNalogNDS
+                : comp;
+//------------------------------------------------------------------------------
+  varNameNalog
+                : string;
+//------------------------------------------------------------------------------
+{
+  var _TiDk_Gal, _TiDk_User: word;
+
+  // определение _TiDk_Gal & _TiDk_User
+  case PrDoc_VidDoc of
+    90, 93:
+      {
+        _TiDK_User := word(2);
+        _TiDK_Gal := _TiDK_User;
+      }
+    91, 92:
+      {
+        _TiDK_User := word(1);
+        _TiDK_Gal := _TiDK_User;
+      }
+  //------------------------------------------------------------------------------
+    101, 111, 1411:
+      {
+        case _Sh_PlPor_ValDo of
+        //==============================================================================
+        // формировать в валюте документа
+          0:
+            {
+              if ( ( _Sh_PlPor.BaseDoc.TipMoney = 3 ) AND ( _Sh_PlPor.BaseDoc.cVal <> 0 ) )
+                _TiDK_User := word(31)
+              else
+                _TiDK_User := word(1);
+            }
+        //==============================================================================
+        //  в НДЕ
+          1:  _TiDK_User := word(1);
+        //==============================================================================
+        // по запросу
+          2:
+            {
+              _TiDK_User := word(1);
+
+              if ( ( _Sh_PlPor.BaseDoc.TipMoney = 3 ) AND ( _Sh_PlPor.BaseDoc.cVal <> 0 ) )
+                if ( Message('Сформировать валютный платеж для ДО ' +
+                             f_sNumDate(_Sh_PlPor.BaseDoc.NoDoc, _Sh_PlPor.BaseDoc.dDoc) + '?', YesNo) = cmYes )
+                  _TiDK_User := word(31)
+            }
+        //==============================================================================
+        end;
+
+        #ifdef __SKYSHOP__
+        if ( _Sh_PlPor.BaseDoc.VidDoc = 202 )
+          _TiDK_User := word(8);
+        #end
+
+        _TiDK_Gal := _TiDK_User;
+      }
+
+  //------------------------------------------------------------------------------
+    201, 211, 1421:
+      {
+        _TiDK_User := word(32);
+
+        #ifdef __SKYSHOP__
+        if ( _Sh_PlPor.BaseDoc.VidDoc = 202 )
+          _TiDK_User := word(7)
+        #end
+
+        _TiDK_Gal := _TiDK_User;
+      }
+  //------------------------------------------------------------------------------
+    else
+      {
+        Message('Обработка этого вида документа не предусмотрена!', Information);
+        Exit;
+      }
+  //------------------------------------------------------------------------------
+  end; //case
+
+  var _bufPlPor: TPlPor;
+
+  _Sh_PlPor_Form_Plat := piPlPor.PlPor_Fill( _bufPlPor, _TiDk_Gal, _TiDk_User, _Sh_PlPor.BaseDoc.dDoc, 0);
+
+  if NOT _Sh_PlPor_Form_Plat
+    Exit;
+
+  _Sh_PlPor.PlPor.Buffer := Type$PlPor( _bufPlPor);
+
+  if _Sh_PlPor.PlPor.cPlat <> cgNrec0
+    {
+      _Sh_PlPor.PlPor.cPol      := _Sh_PlPor.BaseDoc.cOrg;    // организация получатель
+      _Sh_PlPor.PlPor.cBankPol  := _Sh_PlPor.BaseDoc.cBank;
+    }
+  else
+    {
+      _Sh_PlPor.PlPor.cPlat       := _Sh_PlPor.BaseDoc.cOrg;    // организация плательщик
+      _Sh_PlPor.PlPor.cBankPlat   := _Sh_PlPor.BaseDoc.cBank;
+    }
+
+  if _Sh_PlPor.BaseDoc.cDogovor = cgNrec0 //нет ссылки на договор
+    iAutoFit.FindAutoFit(cgBuh_AutoFitBatDO, _Sh_PlPor.PlPor.BufferP);
+
+  if ( NOT _Sh_PlPor.varNomEnter )
+    {  //только при первом проходе
+      _Sh_PlPor.myTiDkGal  := _Sh_PlPor.PlPor.TiDK;
+      _Sh_PlPor.myTiDkUser := _Sh_PlPor.myTiDkGal;
+      _Sh_PlPor.myCash     := 0;
+      _Sh_PlPor.mySpCash   := 0;
+    }
+
+  //берем организацию и счет если есть настройка и только в однорасчетности.
+  if ( NOT iDocSet.OkManyTipDoc(iDocSet.GetDocSetByTiDkGal(_Sh_PlPor.myTiDkGal)) )
+    {
+      if boGetTune('Fin.Doc.Prm.IzmRs')
+        case PrDoc_VidDoc of
+        //==============================================================================
+          101
+        , 111
+        , 1411:
+                _Sh_PlPor.PlPor.cBankPlat := _Sh_PlPor.BaseDoc.cMyBank;
+        //==============================================================================
+          201
+        , 211
+        , 1421:
+                _Sh_PlPor.PlPor.cBankPol  := _Sh_PlPor.BaseDoc.cMyBank;
+        //==============================================================================
+        end;
+    }
+  else
+    { //во многорасчетности все берется из 'SelUsDoc'
+      if ( NOT _Sh_PlPor.varNomEnter )
+        {  //только при первом проходе
+          _Sh_PlPor.varEnterCm := RunInterface('SelUsDoc', word(cgiNo)
+                                                         , _Sh_PlPor.myTiDkGal
+                                                         , _Sh_PlPor.myTiDkUser
+                                                         , _Sh_PlPor.myCash
+                                                         , _Sh_PlPor.mySpCash);
+          _Sh_PlPor.varNomEnter := TRUE;
+        }
+
+      if ( _Sh_PlPor.varEnterCm = cmCancel )
+        {
+          _Sh_PlPor_Form_Plat := FALSE;
+          Exit;
+        }
+      else
+        {
+          if ( _Sh_PlPor.myTiDkUser = 0 )
+            _Sh_PlPor.myTiDkUser := _Sh_PlPor.myTiDkGal;
+
+          if ( _Sh_PlPor.GetFirst FastFirstRow CashBank where (( _Sh_PlPor.myCash == CashBank.NRec )) = tsOk )
+            if ( _Sh_PlPor.CashBank.cPodr <> 0 )
+              case PrDoc_VidDoc of
+              //------------------------------------------------------------------------------
+                101, 111, 1411:
+                  {
+                    _Sh_PlPor.PlPor.cBankPlat := _Sh_PlPor.CashBank.cPodr;
+
+                    if ( _Sh_PlPor.GetFirst KatBank where (( CashBank.cPodr == KatBank.NRec )) = tsOk )
+                       _Sh_PlPor.PlPor.cPlat := _Sh_PlPor.KatBank.cORG;
+                  }
+              //------------------------------------------------------------------------------
+                201, 211, 1421:
+                  {
+                    _Sh_PlPor.PlPor.cBankPol  := _Sh_PlPor.CashBank.cPodr;
+
+                    if ( _Sh_PlPor.GetFirst KatBank where (( CashBank.cPodr == KatBank.NRec )) = tsOk )
+                       _Sh_PlPor.PlPor.cPol := _Sh_PlPor.KatBank.cORG;
+                  }
+              //------------------------------------------------------------------------------
+              end;
+        }
+    }
+
+  var pDogovor: comp;
+
+  pDogovor := if(_Sh_PlPor.BaseDoc.cAppDogovor <> 0, _Sh_PlPor.BaseDoc.cAppDogovor, _Sh_PlPor.BaseDoc.cDogovor);
+
+  case PrDoc_VidDoc of
+    90, 91, 92, 93: _Sh_PlPor.PlPor.cPlatNew := 0;
+    else
+      if ( _Sh_PlPor.GetFirst FastFirstRow Dogovor where (( pDogovor == Dogovor.nRec )) = tsOk )
+        if ( _Sh_PlPor.BaseDoc.cOrg <> if(PrDoc_VidDoc < 200, _Sh_PlPor.Dogovor.cPol, _Sh_PlPor.Dogovor.cPlat) )
+          _Sh_PlPor.PlPor.cPlatNew := if(PrDoc_VidDoc < 200, _Sh_PlPor.Dogovor.cPol, _Sh_PlPor.Dogovor.cPlat);
+  end;
+
+// если пользователь выбрал формирование платежки в другой Р/С
+  if _Sh_PlPor.myTiDkUser <> _bufPlPor.TiDk
+  {
+    //сначало удалим номер в старом разрезе
+    piPlPor.PlPor_DeleteNumber(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.TiDk, _Sh_PlPor.PlPor.Descr, _Sh_PlPor.PlPor.NoDok);
+    _Sh_PlPor.PlPor.TiDkGal   := _Sh_PlPor.myTiDkGal;
+    _Sh_PlPor.PlPor.TiDk      := _Sh_PlPor.myTiDkUser;
+
+    // и сформируем номер в новом разрезе
+    _Sh_PlPor.PlPor.NoDok := piPlPor.PlPor_GetNewNumber( _Sh_PlPor.PlPor.TiDkGal
+                                                         , _Sh_PlPor.PlPor.TiDk
+                                                         , _Sh_PlPor.PlPor.Descr
+                                                         , _Sh_PlPor.PlPor.DatVip
+                                                         );
+  }
+  
+  if ( _Sh_PlPor_UseMaxDate AND ( _Sh_PlPor.StepDoc.dOplMax <> ZeroDate ) )
+    _Sh_PlPor.PlPor.DatVip  := _Sh_PlPor.StepDoc.dOplMax
+  else
+    _Sh_PlPor.PlPor.DatVip  := if (_Sh_PlPor_varDate = ZeroDate, _Sh_PlPor.BaseDoc.dDoc, _Sh_PlPor_varDate);
+
+  _Sh_PlPor.PlPor.YearDoc   := Year(_Sh_PlPor.PlPor.DatVip);
+
+  if ( boGetTune('Doc.NaslDescr') )
+    {
+      piPlPor.PlPor_DeleteNumber(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.TiDk, _Sh_PlPor.PlPor.Descr, _Sh_PlPor.PlPor.NoDok);
+
+      _Sh_PlPor.PlPor.Descr := _Sh_PlPor.BaseDoc.Descr;
+      _Sh_PlPor.PlPor.Desgr := _Sh_PlPor.BaseDoc.Desgr;
+
+      // очередной номер платежного документа
+      _Sh_PlPor.PlPor.NoDok := piPlPor.PlPor_GetNewNumber( _Sh_PlPor.PlPor.TiDkGal
+                                                          , _Sh_PlPor.PlPor.TiDk
+                                                          , _Sh_PlPor.PlPor.Descr
+                                                          , _Sh_PlPor.PlPor.DatVip
+                                                         );
+    }
+
+  _Sh_PlPor.PlPor.FilialNo  := lGetTune('Konsolid.FilialNo');
+
+  if ( coGetTune('Doc.cCurBaseCO') = 0 )
+    _Sh_PlPor.PlPor.cWayMove := coGetTune('BaseCO')
+  else
+    _Sh_PlPor.PlPor.cWayMove := coGetTune('Doc.cCurBaseCO');
+
+  // ссылка на группу ДО, заполнение, как во ФРО (TOLYA - для отчетов)
+  if ( _Sh_PlPor.GetFirst FastFirstRow SpGrSch
+                 where (( word(0)                == SpGrSch.wList   AND
+                          _Sh_PlPor.BaseDoc.NRec == SpGrSch.cBaseDoc )) = tsOk )
+    _Sh_PlPor.PlPor.cGroupSch := _Sh_PlPor.SpGrSch.cGroupSch
+  else
+    _Sh_PlPor.PlPor.cGroupSch := 0;
+
+  if ( ( _Sh_PlPor.PlPor.TiDkGal = 31 ) OR ( _Sh_PlPor.PlPor.TiDkGal = 33 ) )
+    _Sh_PlPor.PlPor.cGruzOtp := comp(0) // в вал. платежах это поле использ. для задания валюты расчетов
+  else
+    _Sh_PlPor.PlPor.cGruzOtp := _Sh_PlPor.BaseDoc.cGrOtpr;
+
+  _Sh_PlPor.PlPor.cGruzPol  := _Sh_PlPor.BaseDoc.cGrPol;
+  _Sh_PlPor.PlPor.cStepDoc  := _Sh_PlPor.StepDoc.NRec;
+
+  if ( NOT NeedNewNazn )
+    _Sh_PlPor.PlPor.NamePl1 := iSynch.GivenTuneNameDO
+                            + _Sh_PlPor.BaseDoc.Nodoc
+                            + DateToStr(_Sh_PlPor.BaseDoc.dDoc, ' от DD/MM/YYYY г. ')
+                            + _Sh_PlPor.BaseDoc.Name;
+
+  varBaseDoc_NDS  := 0;
+  varcNalogNDS    := coGetTune('Nalog.cNalogNDS');
+  varNameNalog    := 'налогов';
+
+  if ( Abs(_Sh_PlPor.BaseDoc.NDS) > 0.009 )
+    if ( _Sh_PlPor.GetFirst FastFirstRow KatNalog
+                   where (( varcNalogNDS == KatNalog.NRec )) = tsOk )
+      _Sh_PlPor._LOOP SpDocNal where (( BaseDoc.NRec == SpDocNal.cDoc   AND
+                         word(BaseDoc.VidDoc + 1000) == SpDocNal.TipDoc AND
+                                        varcNalogNDS == SpDocNal.cNalog))
+        {
+           varNameNalog := trim(_Sh_PlPor.KatNalog.Name);
+
+           if ( _Sh_PlPor.BaseDoc.TipMoney = 1 )
+             varBaseDoc_NDS := varBaseDoc_NDS + _Sh_PlPor.SpDocNal.SumNal
+           else
+             varBaseDoc_NDS := varBaseDoc_NDS + _Sh_PlPor.SpDocNal.SumVal;
+        }
+
+  _Sh_PlPor_ReCalcSum( _Sh_PlPor.Pick.PickKol
+                     , varBaseDoc_NDS
+                     , varNameNalog
+                     , varPlPor_cVal
+                     , varPlPor_SumPlat
+                     , varPlPor_SumPlatV
+                     , _Sh_PlPor.PlPor.NamePl3
+                     );
+
+  _Sh_PlPor.PlPor.SumPlat     := varPlPor_SumPlat;
+  _Sh_PlPor.PlPor.cVal        := varPlPor_cVal;
+  _Sh_PlPor.PlPor.SumPlatV    := varPlPor_SumPlatV;
+  _Sh_PlPor.PlPor.FilBankPol  := piPlPor.GetFilBank(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.cBankPol);
+  _Sh_PlPor.PlPor.FilBankPlat := piPlPor.GetFilBank(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.cBankPlat);
+
+  if ( IsKPPDoc(_Sh_PlPor.PlPor.TiDkGal) )
+    {
+      if ( _Sh_PlPor.GetFirst KatOrg where (( PlPor.cPlat == KatOrg.NRec )) = tsOk )
+        _Sh_PlPor.PlPor.DenoSch2 := _Sh_PlPor.KatOrg.KodPlatNDS;
+
+      if ( _Sh_PlPor.GetFirst KatOrg where (( PlPor.cPol == KatOrg.NRec )) = tsOk )
+        _Sh_PlPor.PlPor.DenoSch3 := _Sh_PlPor.KatOrg.KodPlatNDS;
+    }
+//  if iStatUser.Stat_Nastr(_Sh_PlPor.PlPor.TiDkGal)
+  iStatUser.Descr_Stat_U(true, _Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.Descr, _Sh_PlPor.PlPor.cClassBuh);
+
+  _Sh_PlPor.insert current PlPor;
+
+  _Sh_PlPor_End_Plat(varPlPor_cVal, varPlPor_SumPlat, varPlPor_SumPlatV);
+
+  iKB.ModiKontrBal(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.NRec);
+} // Function _Sh_PlPor_Form_Plat
+
+//******************************************************************************
+
+Procedure UpdateNaznPlatDoc;
+var
+  sNamePl1
+, sNamePl2
+, sNamePl3
+, sNamePl4
+, sNamePl5   : string[76];
+
+  LastFld    : byte;
+
+  SumNalog   : double;
+
+  cCulcNalog: comp;
+{
+  sNamePl1 := '';
+  sNamePl2 := '';
+  sNamePl3 := '';
+  sNamePl4 := '';
+  sNamePl5 := '';
+  SumNalog := 0;
+
+  cCulcNalog := coGetTune('Nalog.cNalogNDS');
+
+  iSynch.InitBaseFF( integer(coPlPor)
+                   , _Sh_PlPor.PlPor.TiDkGal
+                   , _Sh_PlPor.PlPor.NRec
+                   , if(_Sh_PlPor.PlPor.DatOb <> ZeroDate, _Sh_PlPor.PlPor.DatOb, _Sh_PlPor.PlPor.DatVip)
+                   );
+
+  iSynch.CheckNamePlat( integer(coPlPor)
+                      , _Sh_PlPor.PlPor.NRec
+                      , _Sh_PlPor.PlPor.TiDkGal
+                      , FALSE
+                      , cCulcNalog
+                      , double(0.0)
+                      , SumNalog
+                      , sNamePl1
+                      , sNamePl2
+                      , sNamePl3
+                      , sNamePl4
+                      );
+
+  iSynch.DoneBaseFF;
+
+  if ( _Sh_PlPor.GetFirst FastFirstRow KatNalog where (( cCulcNalog == KatNalog.NRec )) <> tsOk )
+    {
+    }
+
+  sNamePl5 := 'Сумма '
+            + if (cCulcNalog = 0, 'налогов ', trim(_Sh_PlPor.KatNalog.Name) + ' ')
+            + GetStrSumma(TRUE, SumNalog)
+            + ' '
+            + sGetTune('NDE.ShortRub');
+
+  case _Sh_PlPor.PlPor.TiDkGal of
+  //------------------------------------------------------------------------------
+    1
+  , 7
+  , 17:
+      set _Sh_PlPor.PlPor.Summa4 := SumNalog; // сумма налога
+  //------------------------------------------------------------------------------
+  end;
+
+
+  case _Sh_PlPor.PlPor.TiDkGal of
+  //------------------------------------------------------------------------------
+    3, 4 , 5, 8, 9:
+      LastFld := 3; //на 3
+  //------------------------------------------------------------------------------
+    7, 17:
+      {
+        if ( wGetTune('Country') <= 1 )
+          LastFld := 2
+        else
+          LastFld := 3;
+      }
+  //------------------------------------------------------------------------------
+    else
+      LastFld := 4; //на 4
+  //------------------------------------------------------------------------------
+  end; // case
+
+
+  //назначение платежа
+  if ( sNamePl1 <> '' )
+    {
+      set
+      _Sh_PlPor.PlPor.NamePl1 := sNamePl1;
+      _Sh_PlPor.PlPor.NamePl2 := sNamePl2;
+
+      if ( ( LastFld > 2 ) OR ( sNamePl5 = '' ) )
+        _Sh_PlPor.PlPor.NamePl3 := sNamePl3;
+
+      if ( LastFld > 3 )
+        _Sh_PlPor.PlPor.NamePl4 := sNamePl4;
+    }
+
+  //налоги
+  if ( sNamePl5 <> '' )
+    case LastFld of
+    //==============================================================================
+      2: set _Sh_PlPor.PlPor.NamePl3 := sNamePl5;
+    //==============================================================================
+      3: set _Sh_PlPor.PlPor.NamePl3 := trim(_Sh_PlPor.PlPor.NamePl3 + ' ' + sNamePl5);
+    //==============================================================================
+      4: set _Sh_PlPor.PlPor.NamePl4 := trim(_Sh_PlPor.PlPor.NamePl4 + ' ' + sNamePl5);
+    //==============================================================================
+    end; // case
+
+  _Sh_PlPor.update current PlPor;
+} // Procedure UpdateNaznPlatDoc
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_Change_Plat;
+var
+  varPlPor_SumPlat
+, varPlPor_SumPlatV: double;
+
+  varPlPor_cVal     : comp;
+{
+  iKB.SaveInfoforBal(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.NRec);
+
+  _Sh_PlPor_ReCalcSum( _Sh_PlPor.Pick.PickKol
+                     , double(0)
+                     , ''
+                     , varPlPor_cVal
+                     , varPlPor_SumPlat
+                     , varPlPor_SumPlatV
+                     , _Sh_PlPor.PlPor.NamePl3);
+
+  _Sh_PlPor.PlPor.SumPlat := _Sh_PlPor.PlPor.SumPlat + varPlPor_SumPlat;
+
+  if ( varPlPor_cVal = _Sh_PlPor.PlPor.cVal ) // перестраховка(группировка по валюте обязательна)
+    _Sh_PlPor.PlPor.SumPlatV := _Sh_PlPor.PlPor.SumPlatV + varPlPor_SumPlatV
+  else
+    {
+      _Sh_PlPor.PlPor.cVal     := 0;
+      _Sh_PlPor.PlPor.SumPlatV := 0;
+    }
+
+  _Sh_PlPor.update current PlPor;
+
+  _Sh_PlPor_End_Plat(varPlPor_cVal, varPlPor_SumPlat, varPlPor_SumPlatV);
+
+  iKB.ModiKontrBal(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.NRec);
+} // Procedure _Sh_PlPor_Change_Plat
+
+//******************************************************************************
+
+Function GetMyTemplResult1(s: string; num: word): string;
+{
+  GetMyTemplResult1 := if(iTempl.GetTemplResult(num) = ''#13, s, iTempl.GetTemplResult(num));
+}
+
+//******************************************************************************
+
+Function GetMyTemplResult2(s: string; num: word): string;
+{
+  GetMyTemplResult2 := if(Trim(s) = '', GetMyTemplResult1(s, num), s);
+}
+
+//******************************************************************************
+
+Function RunTempl(cTempl: comp; wMtd: word): boolean;
+{
+  // cTempl - шаблоны... wMtd - 0 все строчки изменяем 1 - только пустые
+  var cPlp : comp;
+  cPlp := _Sh_PlPor.PlPor.Nrec
+
+  RunTempl := FALSE;
+
+  iTempl.SetFieldCol(6);
+
+  var i: word;
+  For(i := 1; i <= 3; inc(i))
+    iTempl.SetFieldLen(i, 76);
+
+  iTempl.SetFieldLen(4, 255);
+  iTempl.SetFieldLen(5, 76);
+  iTempl.SetFieldLen(6, 76);
+
+  if _Sh_PlPor.GetFirst PlPor where ((cPlp == PlPor.Nrec)) <> tsOk {} //перечитка записи нужна
+
+  if ( NOT iTempl.CulcTempl(_Sh_PlPor.PlPor.TiDkGal, _Sh_PlPor.PlPor.TiDk, _Sh_PlPor.PlPor.NRec, cTempl, FALSE) )
+    Exit;
+
+  case wMtd of
+  //==============================================================================
+    0:
+      {
+        _Sh_PlPor.PlPor.NamePl1   := GetMyTemplResult1(_Sh_PlPor.PlPor.NamePl1  , 1);
+        _Sh_PlPor.PlPor.NamePl2   := GetMyTemplResult1(_Sh_PlPor.PlPor.NamePl2  , 2);
+        _Sh_PlPor.PlPor.NamePl3   := GetMyTemplResult1(_Sh_PlPor.PlPor.NamePl3  , 3);
+        _Sh_PlPor.PlPor.NamePl4   := GetMyTemplResult1(_Sh_PlPor.PlPor.NamePl4  , 4);
+        _Sh_PlPor.PlPor.PodOtchet := GetMyTemplResult1(_Sh_PlPor.PlPor.PodOtchet, 5);
+    set _Sh_PlPor.PlPor.Tax       := GetMyTemplResult1(_Sh_PlPor.PlPor.Tax      , 6);
+
+        RunTempl := TRUE;
+      }
+  //==============================================================================
+    1:
+      {
+        _Sh_PlPor.PlPor.NamePl1   := GetMyTemplResult2(_Sh_PlPor.PlPor.NamePl1  , 1);
+        _Sh_PlPor.PlPor.NamePl2   := GetMyTemplResult2(_Sh_PlPor.PlPor.NamePl2  , 2);
+        _Sh_PlPor.PlPor.NamePl3   := GetMyTemplResult2(_Sh_PlPor.PlPor.NamePl3  , 3);
+        _Sh_PlPor.PlPor.NamePl4   := GetMyTemplResult2(_Sh_PlPor.PlPor.NamePl4  , 4);
+        _Sh_PlPor.PlPor.PodOtchet := GetMyTemplResult2(_Sh_PlPor.PlPor.PodOtchet, 5);
+    set _Sh_PlPor.PlPor.Tax       := GetMyTemplResult2(_Sh_PlPor.PlPor.Tax      , 6);
+
+        RunTempl := TRUE;
+      }
+  //==============================================================================
+  end;
+
+  _Sh_PlPor.update current PlPor;
+}
+
+//******************************************************************************
+// назначение платежа по шаблону по новому алгоритму.
+
+Procedure UpdateNewNaznPlatDoc;
+{
+  var tEr: word;
+
+  RunTempl( iObjNDTunes.coGetBuhTune(cgBuh_Shbl, _Sh_PlPor.PlPor.TiDkGal, tEr)
+          , iObjNDTunes.wGetBuhTune(cgBuh_MkMtdShbl, _Sh_PlPor.PlPor.TiDkGal, tEr)
+          );
+}
+
+//******************************************************************************
+
+//******************************************************************************
+
+Function _Sh_PlPor_The_New: boolean;
+{
+  _Sh_PlPor_The_New := _Sh_PlPor_Form_Plat;
+
+  if NOT _Sh_PlPor_The_New
+    Exit;
+
+// заполняет _Sh_PlPor_varOld новым значением
+  For( _Sh_PlPor.varInt := 0;
+       _Sh_PlPor.varInt <= (_Sh_PlPor_varMaxGroup - 3);
+       inc(_Sh_PlPor.varInt)
+     )
+    _Sh_PlPor_varOld[_Sh_PlPor.varInt] := TblGfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFld[_Sh_PlPor.varInt]);
+}
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_The_Same;
+{
+  _Sh_PlPor_Change_Plat;
+}
+
+//******************************************************************************
+
+Function _Sh_PlPor_Check_Same(varGroup: word): boolean;
+{
+  if ( varGroup = 0 )
+    _Sh_PlPor_Check_Same := FALSE
+  else
+    {
+      _Sh_PlPor_Check_Same := TRUE;
+
+      For(_Sh_PlPor.varInt := 0; _Sh_PlPor.varInt <= (_Sh_PlPor_varMaxGroup - 3); inc(_Sh_PlPor.varInt))
+        if ( (varGroup AND word(Exp(_Sh_PlPor.varInt * Ln(2)))) <> 0 ) // Это поле в группировке участвует
+          if ( _Sh_PlPor_varOld[_Sh_PlPor.varInt] <> TblGfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFld[_Sh_PlPor.varInt]) )
+            {
+              _Sh_PlPor_Check_Same := FALSE;
+              Break;
+            }
+    }
+}
+
+//******************************************************************************
+
+// varGroup(Box)         varSort: (сортировка документов внутри группы)
+//  Контрагент            0 - 'По убыванию даты'
+//  Валюта                1 - 'По возрастанию даты'
+//  Собственный банк      2 - 'По приоритету'
+//  Банк контрагента
+//  Грузоотправителя
+//  Грузополучателя
+
+Function _Sh_PlPor_Make( varGroup
+                       , varSort       : word;
+                         varDate       : Date;
+                         varUseMaxDate: boolean;
+                         varPlValDO    : word
+                       )               : boolean; // Формирование платежного требования
+{
+  _Sh_PlPor_Make := FALSE;  // ни один документ не создан
+  var varBreak: boolean; varBreak             := FALSE;
+
+  _Sh_PlPor_varDate    := varDate;
+  _Sh_PlPor_ValDo      := varPlValDo;
+  _Sh_PlPor_UseMaxDate := varUseMaxDate;
+  // Важно !!! добавить группировку по валюте
+  if ( varGroup <> 0 )
+    {
+      varGroup := varGroup OR word(Exp(word(1) * Ln(2)));
+      varGroup := varGroup OR word(Exp(word(6) * Ln(2)));
+    }
+  // Формируем varTblLst
+  // перемещаем все элементы на одно поле выше, а 1-й NRec(varTbl) ставим в конец (varTblLst)
+  if ( NOT TblGetFirst(_Sh_PlPor.varTbl) )
+    {
+      Message('Не выбран ни один документ.', Information);
+      Exit;
+    }
+
+  do
+    {
+      TblClearBuffer(_Sh_PlPor.varTblLst);
+
+      if ( varGroup = 0 )
+        TblSfLongInt(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[9], TblGfLongInt(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[10]))
+      else
+        TblSfLongInt(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[9], longint(0));
+
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[0], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[3])); // Контрагент
+      // есть идея Валюта * 10 а для вал-рубл + 1 (сугубо для сортировки)
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[1], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[4])); // Валюта
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[2], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[5])); // Собственный банк
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[3], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[6])); // Банк контрагента
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[4], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[7])); // Грузоотправителя
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[5], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[8])); // Грузополучателя
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[6], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[9])); // Тип
+      For(_Sh_PlPor.varInt := 0; _Sh_PlPor.varInt <= (_Sh_PlPor_varMaxGroup - 3); inc(_Sh_PlPor.varInt))
+        if ( (varGroup AND word(Exp(_Sh_PlPor.varInt * Ln(2)))) = 0 ) // Это поле в группировке не участвует
+          TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[_Sh_PlPor.varInt], comp(0));
+
+      case varSort of
+      //------------------------------------------------------------------------------
+        0: TblSfComp(_Sh_PlPor.varTblLst
+                    , _Sh_PlPor_varFldLst[7]
+                    , comp(To_Days(Date(1, 1, 3000))) - TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[1])
+                    ); // Сортировка
+
+      //------------------------------------------------------------------------------
+        1: TblSfComp(_Sh_PlPor.varTblLst
+                    , _Sh_PlPor_varFldLst[7]
+                    , TblGfComp(_Sh_PlPor.varTbl
+                    , _Sh_PlPor_varFld[1])
+                    ); // Сортировка
+
+      //------------------------------------------------------------------------------
+        2: TblSfComp(_Sh_PlPor.varTblLst
+                    , _Sh_PlPor_varFldLst[7]
+                    , TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[2])
+                    ); // Сортировка
+      //------------------------------------------------------------------------------
+      end; //case
+
+      TblSfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[8], TblGfComp(_Sh_PlPor.varTbl, _Sh_PlPor_varFld[0])); // BaseDoc.NRec
+
+      if ( TblInsertCurrent(_Sh_PlPor.varTblLst) <> tsOk )
+        Message('Проблемы с вставкой в виртуальную таблицу.', Information);
+    }
+  While TblGetNext(_Sh_PlPor.varTbl)
+
+  FrmSh_PlPor_Beg(varGroup, varSort, varDate, varUseMaxDate);
+
+  _Sh_PlPor.varNomEnter := FALSE;
+  _Sh_PlPor.varEnterCm  := cmCancel;
+
+  // Пробег по сгруппированной таблице
+  For(_Sh_PlPor.varInt := 0; _Sh_PlPor.varInt <= (_Sh_PlPor_varMaxGroup - 3); inc(_Sh_PlPor.varInt))
+    _Sh_PlPor_varOld[_Sh_PlPor.varInt] := comp(-2);
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Формирование платежных документов...: ', 1);
+
+  if ( TblGetFirst(_Sh_PlPor.varTblLst) )
+    do
+      {
+        _Sh_PlPor.varBaseDoc := TblGfComp(_Sh_PlPor.varTblLst, _Sh_PlPor_varFldLst[_Sh_PlPor_varMaxGroup - 1]);
+
+        if ( _Sh_PlPor.GetFirst FastFirstRow BaseDoc <> tsOk )
+          Continue;
+
+        if ( NOT NextVisual )
+          {
+            varBreak := TRUE;
+            Break;
+          }
+
+        #ifdef __SKYSHOP__
+        varBreak := (_Sh_PlPor.BaseDoc.VidDoc = 202);
+        #end
+
+        if (_Sh_PlPor_Check_Same(varGroup) )
+          _Sh_PlPor_The_Same;
+        else
+          {
+            if ( _Sh_PlPor_varOld[0] <> comp(-2) ) // не первый раз
+              {
+                FrmSh_PlPor.PutEvent(feBreak);
+                FrmSh_PlPor_Foot;
+              }
+
+            _Sh_PlPor_Make := _Sh_PlPor_The_New;
+
+            if NOT _Sh_PlPor_Make
+              {
+                varBreak := TRUE;
+                Break;
+              }
+
+            FrmSh_PlPor_Head;
+          }
+#ifdef _OBJNALF_VIH_
+        iNalf.RunInit(7, '77', _Sh_PlPor.BaseFin.cSoprHoz, false);
+#end
+        if ( NeedNewNazn )
+          UpdateNewNaznPlatDoc
+        else
+          UpdateNaznPlatDoc;
+
+        FrmSh_PlPor_Line;
+      }
+    While TblGetNext(_Sh_PlPor.varTblLst);
+
+  StopVisual('', 0);
+
+  varGroup := varGroup xor word(Exp(word(6) * Ln(2))); // т.к. пользовалель его не сбросит
+
+  FrmSh_PlPor.PutEvent(feBreak);
+
+  FrmSh_PlPor_Foot;
+
+  FrmSh_PlPor.PutEvent(feBreak);
+
+  if ( FrmSh_PlPor.Error OR varBreak )
+    FrmSh_PlPor.AbortForm
+  else
+    FrmSh_PlPor.ShowFile('Протокол формирования', TRUE);
+} // Function _Sh_PlPor_Make
+
+//******************************************************************************

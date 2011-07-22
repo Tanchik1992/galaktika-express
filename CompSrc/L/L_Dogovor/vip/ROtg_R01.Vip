@@ -1,0 +1,485 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Формирование транспортной разнарядки                      ║
+ ║ Ответственный : Славко Александр Анатольевич (SLAVKO)                     ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+#include xlReport.vih // Excel
+
+#doc
+Транспортная разнарядка на отгрузку
+#end
+Interface ROtg_R01 'Транспортная разнарядка на отгрузку' DoAccept, EscClose, Gray;
+  Show At (9,5,77,19);
+
+Var pxlrepsetup : xlrepsetup;
+
+Create View vROtg_R01
+Var
+  pXL
+               : XlsRepBuilder;
+
+  varDateBegin
+, varDateEnd
+               : date;
+
+  varcMC_Gr
+, varcWayMove
+, varcPunktP
+, varcMarAvt
+               : comp;
+
+  lstMC_Gr
+, prvid
+, RoundKolfromNastr
+               : Word;
+
+  SXLTFileName
+, sXLSFileName
+, ID
+               : string;
+
+(
+  varMC_GR
+)
+
+As Select
+  if (lstMC_Gr = Word(0), KatMCSyn.Name, GroupMCSyn.Name)
+
+From
+  OtgOrder ,
+  SpOtgOrd ,
+  NZakaz   ,
+  Dogovor  ,
+  SpDocs   ,
+  KatMC    ,
+  synonym  KatMC KatMCSyn ,
+  CellVal,
+  GroupMC  ,
+  synonym  GroupMC GroupMCSyn ,
+  WayMove  ,
+  synonym  WayMove WayMoveSyn ,
+  synonym  MarPunkt MarPunktSyn ,
+  synonym  MarPunkt MarPunktSyn_P ,
+  synonym  MarPunkt MarPunktSyn_R ,
+  MarAvt   ,
+  synonym  MarAvt MarAvtSyn ,
+  MoveCell ,
+  KatOtpEd ,
+  KatOrg   ,
+  synonym  KatOrg KatOrgSyn   ,
+  synonym  KatOrg KatOrgSyn01 ,
+  ROtg_R01 (ROtg_R0102, Build)
+Where
+((
+      varcMC_Gr        == KatMCSyn.NRec
+  and varcMC_Gr        == GroupMCSyn.NRec
+  and varcWayMove      == WayMoveSyn.NRec
+  and varcPunktP       == MarPunktSyn.NRec
+  and varcMarAvt       == MarAvtSyn.NRec
+
+  and OtgOrder.NRec    == SpOtgOrd.cOtgOrder
+  and OtgOrder.cPunktP == MarPunktSyn_P.NRec
+
+  and SpOtgOrd.cNZakaz == NZakaz.NRec
+  and NZakaz.cDogovor  == Dogovor.NRec
+  and NZakaz.cPunktR   == MarPunktSyn_R.NRec
+  and NZakaz.cMarAvt   == MarAvt.NRec
+  and NZakaz.cGrPol    == KatOrgSyn.NRec
+  and NZakaz.cOrg      == KatOrgSyn01.NRec
+  and MarAvt.cOrgAvt   == KatOrg.NRec
+
+  and SpOtgOrd.NRec    == SpNZRasp.cSpOtgOrd
+
+  and SpNZRasp.cSpNZak == SpDocs.NRec
+  and SpDocs.cMCUsl    == KatMC.NRec
+  and SpDocs.cGrMCUsl  == GroupMC.NRec
+  and SpDocs.cMoveCell == MoveCell.NRec
+  and SpDocs.cOtpEd    == KatOtpEd.NRec
+  and SpDocs.cWayMove  == WayMove.NRec
+
+#ifdef GAL7_1
+  and word(0)          == CellVal.PrMC
+#end
+  and KatMC.NRec       == CellVal.cMC
+  and MoveCell.NRec    == CellVal.cMoveCell
+));
+
+Form FrmROtg_R01('ROtg_R01.Out', 'ROtg_R01') With NoVisual;
+
+#INCLUDE G_Date.Vpp
+
+Procedure PrintItog;
+{
+  // Итоги по Единицы подвижного состава
+  // ROtg_R0102 = NameMoveCell(Length=10) + cMoveCell
+  _loop ROtg_R01 Ordered by Index ROtg_R0102
+    {
+     FrmROtg_R01.Write(Trim(String(ROtg_R01.KolMoveCell,18,RoundKolfromNastr)));
+     FrmROtg_R01.Write(ROtg_R01.NameMoveCell);
+    }
+  FrmROtg_R01.PutEvent(feBreak); // с итогов по Единицы подвижного состава
+}; // procedure PrintItog
+
+Procedure PrintReport;
+Var
+  varPrnHeader
+     : boolean;
+  varSumm
+     : double;
+{
+  varPrnHeader := False;
+  Delete ROtg_R01;
+  // Все Р на О которые действуют в заданный период
+  _loop OtgOrder where ((    varDateBegin <<= OtgOrder.dTo   (NoIndex)
+                         and varDateEnd   >>= OtgOrder.dFrom (NoIndex)
+                       ))
+    {
+     if (OtgOrder.cPunktP <> varcPunktP)
+       Continue;
+     _loop SpOtgOrd
+       {
+        if (NZakaz.cMarAvt <> varcMarAvt)
+          Continue;
+        _loop SpNZRasp
+          {
+           if (   (SpNZRasp.KolFact = 0)
+               or (SpDocs.PrMC <> word(1))
+               or (SpDocs.cWayMove  <> varcWayMove)
+              )
+             Continue;
+           if (lstMC_Gr = Word(0)) // МЦ
+             {
+              if (SpDocs.cMCUsl <> varcMC_Gr)
+                Continue;
+             }
+           else
+             {
+              if (SpDocs.cGrMCUsl <> varcMC_Gr)
+                Continue;
+             };
+           // тут проблемка когда не валидная какая нибудь таблица поля принимают случайные значения, делаю 0
+           if (not IsValid(#MoveCell))      ClearBuffer(#MoveCell);
+           if (not IsValid(#KatOtpEd))      ClearBuffer(#KatOtpEd);
+           if (not IsValid(#CellVal))       ClearBuffer(#CellVal);
+           if (not varPrnHeader)
+           {
+             if ( prvid = 0 )
+             {
+                FrmROtg_R01.Write(varDateBegin);
+                FrmROtg_R01.Write(varDateEnd);
+                FrmROtg_R01.Write(if (lstMC_Gr = Word(0),'МЦ','Группа МЦ'));
+                FrmROtg_R01.Write(if (lstMC_Gr = Word(0),KatMC.Name,GroupMC.Name));
+                FrmROtg_R01.Write(WayMove.Name);
+                FrmROtg_R01.Write(MarPunktSyn_P.Code);
+                FrmROtg_R01.Write(MarPunktSyn_P.Name);
+                FrmROtg_R01.Write(MarAvt.KodMarch);
+                FrmROtg_R01.Write(KatOrg.Code);
+                FrmROtg_R01.Write(KatOrg.Name);
+
+             };
+             else
+             {
+                Set sXLSFileName := pXL.CreateReport(sXLTFileName, TRUE);
+
+                pXL.CreateVar(sXLSFileName);
+                pXL.SetStringVar('header', CommonFormHeader);
+                pXL.SetStringVar('Период', 'за период:  с ' + DateToStr(varDateBegin,'DD/MM/YYYY')
+                                 + ' по ' + DateToStr(varDateEnd,'DD/MM/YYYY'));
+                pXL.SetStringVar('МЦ', if (lstMC_Gr = Word(0), 'МЦ:'+ KatMC.Name, 'Группа МЦ:'));
+                pXL.SetStringVar('Наим_МЦ', GroupMC.Name);
+                pXL.SetStringVar('Вид_Транспорта', WayMove.Name);
+                pXL.SetStringVar('Пункт_погрузки', MarPunktSyn_P.Code + '  ' + MarPunktSyn_P.Name);
+                pXL.SetStringVar('Маршрут', MarAvt.KodMarch);
+                pXL.SetStringVar('Трансп_орг', if (KatOrg.Code <> '', '(' + KatOrg.Code + ') '+KatOrg.Name,
+                                 KatOrg.Name));
+                pXL.PublishVar;
+                pXL.CreateTbls(sXLSFileName);
+                pXL.CreateTbl('Rotg_r01');
+                pXL.ClearTblBuffer;
+                pXL.CreateTblFld('Рсп');
+                pXL.CreateTblFld('Рсп_Период');
+                pXL.CreateTblFld('НЗ');
+                pXL.CreateTblFld('Пункт_разгрузки');
+                pXL.CreateTblFld('Грузополучатель');
+                pXL.CreateTblFld('Договор');
+                pXL.CreateTblFld('Контрагент');
+                pXL.CreateTblFld('Контр_Адрес');
+                pXL.CreateTblFld('Код_грузопол');
+                pXL.CreateTblFld('Кол_подв_сост');
+                pXL.CreateTblFld('Кол_отпускн');
+                pXL.CreateTblFld('Ед_изм_отп');
+                pXL.CreateTblFld('Ед_изм_подв_сост');
+                pXL.CreateTblFld('Строка');
+             }
+             varPrnHeader := True;
+           }
+
+           if ( prvid = 0 )
+           {
+             FrmROtg_R01.Write(OtgOrder.NRec);
+             FrmROtg_R01.Write(OtgOrder.NoDoc);
+             FrmROtg_R01.Write(KatOrgSyn.Name);
+             FrmROtg_R01.Write(KatOrgSyn.Code);
+           }
+
+           if (CellVal.Koef <> 0)
+             {
+              varSumm := (SpNZRasp.KolFact*KatOtpEd.Koef)/CellVal.Koef;
+              if (Trunc(varSumm) < varSumm)
+                varSumm := Trunc(varSumm) + 1;
+             }
+           else
+             varSumm := 0;
+
+           if ( prvid = 0 )
+             {
+                FrmROtg_R01.Write(Trim(String(varSumm,18,RoundKolfromNastr)));
+                FrmROtg_R01.Write(Trim(String(SpNZRasp.KolFact,18,RoundKolfromNastr)));
+                FrmROtg_R01.Write(OtgOrder.dFrom);
+                FrmROtg_R01.Write(OtgOrder.dTo);
+
+
+                if (IsValid(#Dogovor))
+                {
+                   FrmROtg_R01.Write(Dogovor.NoDoc);
+                   FrmROtg_R01.Write(Dogovor.dDoc); // DateToStr(Dogovor.dDoc,'DD/MM/YYYY')
+                }
+                else
+                  FrmROtg_R01.SkipFormat(2);
+
+                FrmROtg_R01.Write(MoveCell.Name);
+                FrmROtg_R01.Write(KatOtpEd.Name);
+                FrmROtg_R01.Write(NZakaz.NRec);
+                FrmROtg_R01.Write(NZakaz.NoDoc);
+                FrmROtg_R01.Write(KatOrgSyn01.Code);
+                FrmROtg_R01.Write(KatOrgSyn01.Name);
+                FrmROtg_R01.Write(NZakaz.dDoc);
+                FrmROtg_R01.Write(KatOrgSyn01.Addr);
+                FrmROtg_R01.Write(MarPunktSyn_R.Code);
+                FrmROtg_R01.Write(MarPunktSyn_R.Name);
+                FrmROtg_R01.Write(NZakaz.AddTerms);
+                // Итоги по Единицы подвижного состава
+                // ROtg_R0103 = cMoveCell
+             }
+           else
+             {
+                pXL.ClearTblBuffer;
+                pXL.SetTblStringFldValue('Рсп',  'Рсп.: ' + OtgOrder.NoDoc);
+                pXL.SetTblStringFldValue('Грузополучатель', KatOrgSyn.Name);
+                pXL.SetTblStringFldValue('Код_грузопол', KatOrgSyn.Code);
+                pXL.SetTblStringFldValue('Кол_подв_сост', Trim(String(varSumm,18,RoundKolfromNastr)));
+                pXL.SetTblStringFldValue('Кол_отпускн', Trim(String(SpNZRasp.KolFact,18,RoundKolfromNastr)));
+                pXL.SetTblStringFldValue('Ед_изм_подв_сост', MoveCell.Name);  
+                pXL.SetTblStringFldValue('Ед_изм_отп', KatOtpEd.Name);
+                pXL.SetTblStringFldValue('Рсп_Период', 'c ' + DateToStr(OtgOrder.dFrom, 'DD/MM/YYYY') +
+                                         ' по ' + DateToStr(OtgOrder.dTo, 'DD/MM/YYYY'));
+                if (IsValid(#Dogovor))
+                  {
+                     pXL.SetTblStringFldValue('Договор', 'Дог. № '+ Dogovor.NoDoc + 'от '
+                                              + DateToStr(Dogovor.dDoc, 'DD/MM/YYYY'));
+                  }
+                else
+                     pXL.SetTblStringFldValue('Договор', 'Дог. № ');
+
+                pXL.SetTblStringFldValue('НЗ', 'Н/З:  ' + NZakaz.NoDoc + ' от ' + DateToStr(NZakaz.dDoc, 'DD/MM/YYYY'));
+                pXL.SetTblStringFldValue('Контрагент', '(' + KatOrgSyn01.Code +') '+ KatOrgSyn01.Name);
+                pXL.SetTblStringFldValue('Пункт_разгрузки', '('+ MarPunktSyn_R.Code + ') ' + MarPunktSyn_R.Name);
+                pXL.SetTblStringFldValue('Контр_Адрес', KatOrgSyn01.Addr + ' ' + NZakaz.AddTerms);
+                pXL.SetTblStringFldValue('Строка', ' ');
+                pXL.InsTblRow;
+             }
+
+           if (GetFirst ROtg_R01 where ((SpDocs.cMoveCell == ROtg_R01.cMoveCell)) = tsOk)
+             {
+              ROtg_R01.KolMoveCell := ROtg_R01.KolMoveCell + varSumm;
+              Update Current ROtg_R01;
+             }
+           else
+             {
+              ClearBuffer(#ROtg_R01);
+              ROtg_R01.cMoveCell    := SpDocs.cMoveCell;
+              ROtg_R01.NameMoveCell := MoveCell.Name;
+              ROtg_R01.KolMoveCell  := varSumm;
+              Insert Current ROtg_R01;
+             };
+          }
+       }
+    }
+  if (varPrnHeader)
+    {
+       if (prvid = 0 )
+         {
+            FrmROtg_R01.PutEvent(feBreak); // с Н/З
+            PrintItog;
+            if (not FrmROtg_R01.Error)
+              FrmROtg_R01.ShowFile('')
+            else
+              FrmROtg_R01.AbortForm;
+         }
+       else
+         {
+            pXL.PublishTbl('Rotg_r01');
+            StartNewVisual(vtRotateVisual, vfTimer, 'Выгрузка данных в Excel', 1);
+            pXL.CreateTbl('Rotg_r02');
+            pXL.CreateTblFld('Итого_кол');
+            pXL.CreateTblFld('Итого_наим');
+            pXL.SetTblStringFldValue('Итого_наим', ROtg_R01.NameMoveCell);
+            pXL.SetTblStringFldValue('Итого_кол', Trim(String(ROtg_R01.KolMoveCell,18,RoundKolfromNastr)));
+            pXL.InsTblRow;
+            pXL.PublishTbl('Rotg_r02');
+            NextVisual;
+            pXL.LoadReport(sXLSFileName);
+            StopVisual('', 0);
+            pXL.DisConnectExcel;
+         }
+    }
+  else
+    Message('В документе нет позиций для печати!',Information);
+};
+
+Screen scrROtg_R01(,hcDogRaznReport,sci13EnEsc);
+ Show At (,,,);
+Fields
+  varDateBegin       ('Дата начала отчетного периода',,sci1EnEsc) : [10,'DD/MM/YYYY'],NoProtect;
+  varDateEnd         ('Дата конца  отчетного периода',,sci1EnEsc) : [10,'DD/MM/YYYY'],NoProtect;
+  lstMC_Gr (,,sci13Esc) : [LIST 'МЦ', 'Группа МЦ'],protect;
+  varMC_GR           ('МЦ/Группа МЦ',,)                           : Protect;
+  WayMoveSyn.Name    ('Способ транспортировки',,)                 : Protect;
+  MarPunktSyn.Name   ('Пункт погрузки',,)                         : Protect;
+  MarAvtSyn.KodMarch ('Код маршрута',,)                           : Protect;
+  prvid       ('Выбор формата отчета') :   [LIST 'Текст', 'Excel'], Protect;
+
+Buttons
+  cmOk,Default,,'Сформировать отчет',,sci1EnEsc;
+  cmValue14, , ,'Настройка Excel', , sci1Esc;
+  cmCancel,,,'Отказ от формирования отчета',,sci1Esc;
+<<
+
+  Период формирования: `c` .@@@@@@@@@@@ `по` .@@@@@@@@@@@
+
+ .@@@@@@@@@: .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Вид транспорта:` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Пункт погрузки:` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Код маршрута:`   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Тип отчета:`     .@@@@@@@@@@@@@@@@@@
+
+   <. ~С~формировать .>  <.Настройка шаблона.>  <.    ~О~тмена    .>
+>>
+End; // Screen
+
+HandleEvent
+cmInit :
+{
+  if (not ReadMyDsk(lstMC_Gr    ,'ROtg_R01_lstMC_Gr'   , Boolean(True))) lstMC_Gr    := 0 ;
+  if (not ReadMyDsk(varcMC_Gr   ,'ROtg_R01_varcMC_Gr'  , Boolean(True))) varcMC_Gr   := 0 ;
+  if (not ReadMyDsk(varcWayMove ,'ROtg_R01_varcWayMove', Boolean(True))) varcWayMove := 0 ;
+  if (not ReadMyDsk(varcPunktP  ,'ROtg_R01_varcPunktP' , Boolean(True))) varcPunktP  := 0 ;
+  if (not ReadMyDsk(varcMarAvt  ,'ROtg_R01_varcMarAvt' , Boolean(True))) varcMarAvt  := 0 ;
+  if (not ReadMyDsk(prvid       ,'ROtg_R01__VID'       , Boolean(True))) prvid       := 1 ;
+
+  LoadDate(varDateBegin ,'ROtg_R01_varDateBegin', varDateEnd,'ROtg_R01_varDateEnd');
+  RoundKolfromNastr := wGetTune('Round.KolSign');
+
+#ifdef Gal8_1
+  ID := 'L_Dogovor\ROtgXL';
+#else
+  ID := 'OPER\ROtgXL';
+#end
+
+  if (not ReadMyDsk (sXLTFileName, ID, Boolean(True)))
+#ifdef Atl51
+    set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+#else
+    set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+#endif
+
+  if (not ReadMyDsk(prvid,ID+'Prvid',true))
+    prvid := 0;
+
+  if ( prvid = 0 )
+    DisableCommand(cmValue14);
+  else
+    EnableCommand(cmValue14);
+
+
+  if not pxlrepsetup.checkParam(0, ID, sXLTFileName)
+    runinterface('xlrepsetup', 1, ID, sXLTFileName);
+
+  ReadMyDsk(sXLTFileName, ID, TRUE);
+
+};
+
+cmDefault : PackFields;
+
+cmvalue14: // настройка Excel печати
+{
+     runinterface('xlrepsetup',1,ID,sXLTFileName);
+     ReadMyDsk(sXLTFileName,ID,true);
+}
+
+cmCheckField :
+{
+  case CurField of
+   #prvid:
+     {
+       if ( prvid = 0 )
+         DisableCommand(cmValue14);
+       else
+         EnableCommand(cmValue14);
+     }
+  end;
+}
+
+cmPick :
+{
+  var varTmps20     : string[20];
+  case ( CurField ) of
+    #varMC_Gr :
+      {
+       if (lstMC_Gr = Word(0)) // МЦ
+         RunInterface(GetMC, varcMC_Gr)
+       else
+         RunInterface(GetGrMC,varcMC_Gr,varTmps20);
+      };
+    #WayMoveSyn.Name    : RunInterface(GetWayMove, varcWayMove);
+    #MarPunktSyn.Name   : RunInterface(Get_Item, word(1), varcPunktP);
+    #MarAvtSyn.KodMarch : RunInterface(Get_Dor,varcMarAvt,word(0),comp(0),comp(0),comp(0));
+  end;
+};
+
+cmOk :
+{
+  SaveMyDsk(lstMC_Gr    ,'ROtg_R01_lstMC_Gr');
+  SaveMyDsk(varcMC_Gr   ,'ROtg_R01_varcMC_Gr');
+  SaveMyDsk(varcWayMove ,'ROtg_R01_varcWayMove');
+  SaveMyDsk(varcPunktP  ,'ROtg_R01_varcPunktP');
+  SaveMyDsk(varcMarAvt  ,'ROtg_R01_varcMarAvt');
+  SaveDate(varDateBegin ,'ROtg_R01_varDateBegin', varDateEnd,'ROtg_R01_varDateEnd');
+  SaveMyDsk(prvid,  ID+'Prvid');
+  if (   (varDateBegin > varDateEnd)
+      or (varDateBegin = date(0,0,0))
+      or (varDateEnd   = date(0,0,0))
+     )
+    {
+     Message('Неверно задан диапазон дат.',Information);
+     Exit;
+    };
+  if (    (IsValid(#KatMCSyn) or IsValid(#GroupMCSyn))
+      and IsValid(#WayMoveSyn)
+      and IsValid(#MarPunktSyn)
+      and IsValid(#MarAvtSyn)
+     )
+    PrintReport;
+  else
+    Message('Задайте все параметры отчета.',Information);
+};
+End; // HandleEvent
+END. // Interface

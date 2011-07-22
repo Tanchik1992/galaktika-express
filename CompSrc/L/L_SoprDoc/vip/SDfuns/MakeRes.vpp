@@ -1,0 +1,257 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Контроль списания накладных
+//******************************************************************************
+
+#ifNdef __SDfuns_vip__
+#Warning Вместо использования функций из MAKERES.VPP следует использовать методы объекта из SDfuns.VIH
+#end
+
+//------------------------------------------------------------------------------
+// При контроле наличия МЦ проверяется количество зарезервированнных позиций в
+// MakeRes для предотвращения неправильной выдачи информации о наличии МЦ при
+// одновременном списании.
+// Если МЦ достаточно, формируется запись в MakeRes.
+// После формирования складских ордеров производится удаление или изменение
+// записи в MakeRes.
+//------------------------------------------------------------------------------
+
+Create view vMR
+var
+//------------------------------------------------------------------------------
+  psOwner
+, psProcess
+        : string[20];
+//------------------------------------------------------------------------------
+  pvDoc
+        : word;
+//------------------------------------------------------------------------------
+  pcDoc
+, pcMC
+, pcPodr
+, pcMol
+, pcParty
+, pcBox
+        : comp;
+//------------------------------------------------------------------------------
+  pRes
+        : double;
+//------------------------------------------------------------------------------
+From
+  MakeRes
+, KatSopr
+, KatMC
+, KatUSL
+, KatParty
+//------------------------------------------------------------------------------
+Bounds DeleteOne
+  psOwner             ==   MakeRes.sOwner    AND
+  psProcess           ==   MakeRes.sProcess  AND
+  pcMC                ==   MakeRes.cMC       AND
+  pcPodr              ==   MakeRes.cPodr     AND
+  pcMol               ==   MakeRes.cMol      AND
+  pcParty             ==   MakeRes.cParty    AND
+  pcBox               ==   MakeRes.cBox
+//------------------------------------------------------------------------------
+Bounds DeleteAll
+  psOwner             ==   MakeRes.sOwner    AND
+  psProcess           ==   MakeRes.sProcess
+;
+
+//******************************************************************************
+// функция заполнения буфера
+//
+Procedure MakeRes_SetBuffer(
+                _vDoc    : word;    // тип документа
+                _cDoc    : comp;    // NRec документа
+                _cMc     : comp;    // МЦ
+                _cPodr   : comp;    // склад
+                _cMol    : comp;    // МОЛ
+                _cParty  : comp;    // партия
+                _cBox    : comp;    // ячейка
+                _Res     : double   // учетное количество
+          );
+{
+  vMR.pvDoc   := _vDoc;
+  vMR.pcDoc   := _cDoc;
+  vMR.pcMC    := _cMC;
+  vMR.pcPodr  := _cPodr;
+  vMR.pcMol   := _cMol;
+  vMR.pcParty := _cParty;
+  vMR.pcBox   := _cBox;
+  vMR.pRes    := _Res;
+}
+
+//******************************************************************************
+// Инициализация ( вызывается перед CheckNalTov )
+//
+Procedure MakeRes_Init(
+                _sOwner    : string;    // пользователь
+                _sProcess  : string     // процесс родитель
+          );
+{
+  vMR.psProcess  := _sProcess;
+  vMR.psOwner    := _sOwner;
+
+  var SemaphoreMode: byte;
+
+  if ( IsSemaphore('Контроль списания', SemaphoreMode)) // установлен семафор - кто-то резервирует
+    {
+      vMR.PushBounds(vMR.tbDeleteAll);                  // проверяем наличие зарезервированных позиций
+      if (vMR.GetFirst MakeRes = tsOk)                  // для накладной
+        vMR.delete safe MakeRes;
+
+      vMR.PopBounds(vMR.tbDeleteAll);
+    }
+  else                                                  // не установлен семафор - никого нет
+    if (vMR.GetFirst MakeRes = tsOk)                    // проверяем наличие зарезервированных позиций
+      vMR.delete all MakeRes;
+
+  SetSemaphore('Контроль списания', sfAuto);
+}
+
+//******************************************************************************
+// функция подсчета зарезервированных
+//
+Function MakeRes_CheckRes(
+                _vDoc    : word;
+                _cDoc    : comp;
+                _cMc     : comp;
+                _cPodr   : comp;
+                _cMol    : comp;
+                _cParty  : comp;
+                _cBox    : comp
+         ): double;
+{
+   var Reserved: double;  Reserved := 0;
+
+   MakeRes_SetBuffer(_vDoc, _cDoc, _cMc, _cPodr, _cMol, _cParty, _cBox, 0);
+
+   vMR.PushBounds(vMR.tbDeleteOne);
+
+   vMR._LOOP MakeRes
+     Reserved := Reserved + vMR.MakeRes.Res;
+
+   vMR.PopBounds(vMR.tbDeleteOne);
+
+   MakeRes_CheckRes := Reserved;
+}
+
+//******************************************************************************
+// функция добавления резерва
+//
+Function MakeRes_Add(
+                _vDoc    : word;
+                _cDoc    : comp;
+                _cMc     : comp;
+                _cPodr   : comp;
+                _cMol    : comp;
+                _cParty  : comp;
+                _cBox    : comp;
+                _Res     : double
+         ): word;
+{
+  MakeRes_SetBuffer(_vDoc, _cDoc, _cMc, _cPodr, _cMol, _cParty, _cBox, _Res);
+  if (round(vMR.pRes, 10) <= 0) // резервировать можно только больше нуля
+    {
+      MakeRes_Add := 0;
+      Exit;
+    }
+
+  vMR.MakeRes.NRec     := 0;
+  vMR.MakeRes.sOwner   := vMR.psOwner;
+  vMR.MakeRes.sProcess := vMR.psProcess;
+  vMR.MakeRes.cMC      := vMR.pcMC;
+  vMR.MakeRes.cPodr    := vMR.pcPodr;
+  vMR.MakeRes.cMol     := vMR.pcMol;
+  vMR.MakeRes.cParty   := vMR.pcParty;
+  vMR.MakeRes.cBox     := vMR.pcBox;
+  vMR.MakeRes.Res      := vMR.pRes;
+  vMR.MakeRes.vDoc     := vMR.pvDoc;
+  vMR.MakeRes.cDoc     := vMR.pcDoc;
+  vMR.MakeRes.curD     := Cur_Date;
+  vMR.MakeRes.curT     := Cur_Time;
+
+  MakeRes_Add := vMR.insert current MakeRes;
+}
+
+//******************************************************************************
+// функция удаления резерва
+//
+Function MakeRes_Del(
+                _vDoc    : word;
+                _cDoc    : comp;
+                _cMc     : comp;
+                _cPodr   : comp;
+                _cMol    : comp;
+                _cParty  : comp;
+                _cBox    : comp;
+                _Res     : double
+         ): word;
+{
+  var koderror: word;  koderror := 0;
+
+  MakeRes_SetBuffer(_vDoc, _cDoc, _cMc, _cPodr, _cMol, _cParty, _cBox, _Res);
+
+  vMR.PushBounds(vMR.tbDeleteOne);
+
+  While((vMR.GetFirst MakeRes = tsOk) AND
+        (round(vMR.pRes, 10) > 0)
+       )
+    {
+      if (vMR.MakeRes.Res = 0)
+        {
+          koderror := koderror + vMR.delete current MakeRes;
+          Continue;
+        }
+
+      if (round(vMR.MakeRes.Res - vMR.pRes, 10) = 0)
+        {
+          vMR.pRes := vMR.pRes - vMR.MakeRes.Res;
+          koderror := koderror + vMR.delete current MakeRes;
+        }
+      else
+        {
+          set vMR.MakeRes.Res  := vMR.MakeRes.Res - vMR.pRes;
+          vMR.MakeRes.curD     := Cur_Date;
+          vMR.MakeRes.curT     := Cur_Time;
+          vMR.pRes := 0;
+          koderror := koderror + vMR.update current MakeRes;
+        }
+    }
+
+  vMR.PopBounds(vMR.tbDeleteOne);
+  MakeRes_Del := koderror;
+}
+
+//******************************************************************************
+// Завершение контроля и проверка на наличие оставшихся записей (вызывается после формирования складского ордера)
+//
+Function MakeRes_Done(
+                _sOwner    : string;
+                _sProcess  : string;
+                _ShowMess  : boolean    // TRUE - выводить сообщение при ошибке, FALSE - не выводить
+         ): word;
+{
+  vMR.psOwner   := _sOwner;
+  vMR.psProcess := _sProcess;
+  
+  vMR.PushBounds(vMR.tbDeleteAll);
+
+  if (vMR.GetFirst MakeRes = tsOk)
+    {
+      if ( _ShowMess )
+        Message('Спецификация документа'+
+//              ' № ' + KatSopr.NSopr +
+                ' списана не полностью...', OkButton + Warning);
+
+      MakeRes_Done := vMR.delete safe MakeRes;
+    }
+
+  vMR.PopBounds(vMR.tbDeleteAll);
+
+  ClearSemaphore('Контроль списания');
+}
+
+//******************************************************************************

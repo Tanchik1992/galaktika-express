@@ -1,0 +1,1330 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Групповой выбор спецификации документа
+// (на основе спецификации другого документа)
+//********************************************************************************
+
+#include oEdIzm.vih
+#include MTRFuncs.vih           // функции целевого учета
+#include LinkMTR2Spec.vih       // функции целевого учета
+#include setsmeta.vih
+
+#doc
+Интерфейс множественного выбора спецификации документа (на основе спецификации другого документа)
+#end
+Interface GetSomeSpDocs2 'Выбор  спецификации документов' EscClose
+                                                        , Cyan
+                                                        , DoAccept;
+  Show at (,, 112,);
+
+Table STRUCT TM_TempDescr "Таблица в памяти"
+(
+  nRec      : comp
+, cGroup    : comp
+, Code      : word
+, NotIsLeaf : word
+, cRec      : comp
+, TiDk      : word
+, cSpMC     : comp
+, cRecKat   : comp
+, Sum       : array [1..4] of double
+, Koef      : double
+, Percent   : double
+, Name      : string
+, BarKod    : string
+, GrName    : string
+, PrMC      : word
+)
+With INDEX
+(
+  TM_TempDescr01 = nRec(Unique)
+, TM_TempDescr02 = cGroup + Code + NotIsLeaf
+, TM_TempDescr03 = cRec
+, TM_TempDescr04 = cSpMC
+, TM_TempDescr05 = cGroup + TiDk
+);
+
+#include oEdIzm.var
+#include MTRFuncs.var         // oMTRFun          функции целевого учета
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string; Forward;
+
+//******************************************************************************
+
+Create view
+Var
+  pSetSmeta : iSetSmeta;
+//*********************
+  CurCode
+, TiDkOwner
+, EmptyFlt
+, TiDkFrom
+, copyZamen
+   : word;
+//*********************
+  CurGroup
+, pDocOwner
+, p1
+, pDocFrom
+, TempRec
+   : comp;
+//*********************
+  OkMulti
+, NeedCheckOE
+   : boolean;
+//*********************
+  MarkerSpDocs0
+, MarkerSpDocs
+, IndexSpDocs
+, MarkerSpDocsZam
+, MarkerKol
+, IndexKol
+   : longint;
+//*********************
+  tmpKol
+, myKol
+, tmpOst
+, d
+   : double;
+//*********************
+
+As select
+//******************************************************************************
+  if(OkMulti, if(SearchMarker(MarkerSpDocs, SpDocsFrom.nRec, IndexSpDocs), 'V', ''), '')
+    ( FieldName = Picked_From )
+//******************************************************************************
+, if(SpDocsFrom.PrMC =  1,  'Т',
+  if(SpDocsFrom.PrMC =  2,  'У',
+  if(SpDocsFrom.PrMC =  3, 'УП',
+  if(SpDocsFrom.PrMC =  4, 'ДС',
+  if(SpDocsFrom.PrMC =  5, 'ГП',
+  if(SpDocsFrom.PrMC = 10, 'Шбл',
+  if(SpDocsFrom.PrMC = 20, 'Шбл',
+                           '?')))))))
+    ( FieldName = SpDocsPr )
+//******************************************************************************
+, if (GetMarker(MarkerKol, IndexSpDocs, tmpKol), tmpKol, 0.0)
+    ( FieldName = PickedKol_From )
+//******************************************************************************
+, if(IsValid(tnSmetaStroy), SmetaStroy.NoSmet + ': ' + SmetaStroy.Name, '')
+    ( FieldName = SmetaMy )
+//******************************************************************************
+, if(IsValid(tnSmetaSpec), string(SmetaSpec.NPP) + ' (' + SmetaSpec.Code + ') ' + SmetaSpec.Name, '')
+    ( FieldName = SmetaSpMy )
+//******************************************************************************
+, GetKAUField(1)  ( FieldName = vsKau1 )
+, GetKAUField(2)  ( FieldName = vsKau2 )
+, GetKAUField(3)  ( FieldName = vsKau3 )
+, GetKAUField(4)  ( FieldName = vsKau4 )
+, GetKAUField(5)  ( FieldName = vsKau5 )
+, GetKAUField(6)  ( FieldName = vsKau6 )
+, GetKAUField(7)  ( FieldName = vsKau7 )
+, GetKAUField(8)  ( FieldName = vsKau8 )
+, GetKAUField(9)  ( FieldName = vsKau9 )
+, GetKAUField(10) ( FieldName = vsKau10 )
+
+From
+  SpDocs
+, GroupMC
+, GroupUsl
+, KatMC
+, KatUsl
+, MaskMC
+, MaskUsl
+, KatOtpEd
+, ResOtgr
+, KlVal
+, SpDocs       SpDocsFrom    //Спецификация докум продажи для сравнительного анализа
+, SpDocs       SpDocsFrom2   //Заменяемые позиции спецификации сравнительного анализа
+, SpDocs       SpDocs1
+, SpDocs       SpDocs2
+, SpDocs       SpDocs3
+, SpDocs       SpDocs4
+, Shipment     SpShipment
+, TipOtg       SpTipOtg
+, WayMove      SpWayMove
+, MoveCell
+, TM_TempDescr
+, TM_TempDescr TM_TempDescr1
+, TM_TempDescr TM_TempDescr2
+, KatStroy
+, AddSumTune
+, SmetaSpec
+, SpecZatr
+, SpDocSmeta
+, SmetaStroy
+
+Where
+((
+//*********************************************
+    pDocOwner            == SpDocs1.cDoc
+AND TiDkOwner            == SpDocs1.TiDk
+//*********************************************
+AND SpDocs1.nRec         == SpDocs2.cDoc
+AND word(439)            == SpDocs2.TiDk
+//*********************************************
+AND TM_TempDescr.cRec    == SpDocsFrom.nRec
+AND SpDocsFrom.cDoc      == SpDocs4.nRec
+AND SpDocsFrom.nRec      == SpDocs3.cSpMC
+//*********************************************
+AND SpDocsFrom.cOtpEd    == KatOtpEd.nRec
+AND SpDocsFrom.cResOtgr  == ResOtgr.nRec
+AND SpDocsFrom.cVal      == KlVal.nRec
+AND SpDocsFrom.cResOtgr  == ResOtgr.nRec
+AND SpDocsFrom.cMoveCell == MoveCell.nRec
+AND SpDocsFrom.cShipment == SpShipment.nRec
+AND SpDocsFrom.cTipOtg   == SpTipOtg.nRec
+AND SpDocsFrom.cWayMove  == SpWayMove.nRec
+//*********************************************
+AND SpDocsFrom.nRec      == SpDocsFrom2.cDoc
+AND word(439)            == SpDocsFrom2.TiDk
+//*********************************************
+AND SpDocsFrom.cUks      == KatStroy.nRec
+AND SpDocsFrom.nRec      == SpecZatr.cSpec
+AND coSpDocs             == SpecZatr.coTable
+AND SpecZatr.cAddSumTune == AddSumTune.nRec
+AND coSpDocs             == SpDocSmeta.coTable
+AND SpDocsFrom.nRec      == SpDocSmeta.cSpec
+AND SpDocSmeta.cSmeta    == SmetaStroy.nRec
+AND SpDocSmeta.cPosition == SmetaSpec.nRec
+//*********************************************
+AND coSpDocs             == SpecMTR.coTable
+AND SpDocsFrom.nRec      == SpecMTR.cSpec
+AND SpecMTR.cSaldTune    == SaldTune.nRec
+//********************************************
+))
+
+!------Используются только при cmInit Интерфейса для построения TM_TempDescr-------
+Bounds TD0 =
+        pDocFrom  == SpDocsFrom.cDoc AND
+        TiDkFrom  == SpDocsFrom.TiDk
+
+Bounds TD1 =
+        CurCode  >>= TM_TempDescr.Code AND
+        CurGroup  == TM_TempDescr.cGroup
+;
+
+//******************************************************************************
+
+Parameters
+  OkMulti    // TRUE- групповой выбор FALSE-одиночный
+, pDocOwner  // ссылка на документ из которого надо брать спецификацию
+, TiDkOwner  //  тип документа из которого надо брать спецификацию
+, p1         // ссылка на выбраную позицию при одиночном выборе
+, EmptyFlt   // -1 нет фильтра по Empty, значение поля Empty
+
+, pDocFrom   // ссылка на документ-продажи из которого надо брать
+             // спецификацию для сравнительного анализа
+, TiDkFrom   //  тип документа-продажи из которого надо брать
+             // спецификацию для сравнительного анализа
+;
+
+//********************************************************************************
+
+#include ShowKau.vpp
+
+//******************************************************************************
+
+Function GetKAUField(pNum : integer) : string;
+{
+  GetKAUField := #ShowKau(if(pNum = 1, SaldTune.wObj, SaldTune.wKau[pNum - 1]), if(pNum = 1, SpecMTR.cObj, SpecMTR.cKau[pNum - 1]));
+}
+
+//******************************************************************************
+//------Возвращает соответствующий корневой (не замененный) NRec из рабочей
+//      спецификации (SpDocs) документа поставки исходя из NRec анализируемой
+//      спецификации (SpDocsFrom или SpDocsFrom2) документа продажи-------------
+//******************************************************************************
+Function FindNRecSpDocs(sNRec: comp; var Kol: double): comp;
+var
+  _PrMC             : word;
+  _cGrMCUsl, _cMCUsl: comp;
+{
+  FindNRecSpDocs := 0;
+  Kol            := 0;
+
+  if ( GetFirst FastFirstRow SpDocs where (( sNRec == SpDocs.nRec )) = tsOk )
+    {
+      _PrMC     := SpDocs.PrMC;
+      _cGrMCUsl := SpDocs.cGrMCUsl;
+      _cMCUsl   := SpDocs.cMCUsl;
+      Kol       := SpDocs.Ostatok;
+
+      //****************************************************
+      // Ищем такой же товар/услугу в спецификации договора
+      //****************************************************
+      _LOOP SpDocs1
+         if ( ( _PrMC = SpDocs1.PrMC ) AND ( _cGrMCUsl = SpDocs1.cGrMCUsl ) AND ( _cMCUsl = SpDocs1.cMCUsl ) )
+           {
+             FindNRecSpDocs := SpDocs1.nRec;
+             Kol            := SpDocs1.Ostatok;
+
+             Exit;
+           }
+
+      //************************************************************
+      // Ищем такой же товар/услугу в заменах спецификации договора
+      //************************************************************
+      _LOOP SpDocs1
+        _LOOP SpDocs2
+          if ( ( _PrMC = SpDocs2.PrMC ) AND ( _cGrMCUsl = SpDocs2.cGrMCUsl ) AND ( _cMCUsl = SpDocs2.cMCUsl ) )
+            {
+              FindNRecSpDocs := SpDocs1.nRec;
+              Kol            := SpDocs1.Ostatok;
+
+              Exit;
+            }
+    }
+}
+
+//******************************************************************************
+//------Определяет остаток выбираемого товара, который можно еще выбрать--------
+//******************************************************************************
+Function FunOst: double;
+var
+  Ost, FunKol       : double;
+  _CountMark, i     : longint;
+  _NRec0, _NRecFind0: comp;
+{
+  FunOst := 0;
+  Ost    := 0;
+  FunKol := 0;
+
+  _NRec0 := TM_TempDescr.cRecKat;
+
+  _CountMark := GetMarkerCount(MarkerSpDocs0);
+
+  For(i := 0; i < _CountMark; i := i + 1)
+    if GetMarker(MarkerSpDocs0, i, _NRecFind0)
+      if ( _NRecFind0 = _NRec0 )
+        {
+          if ( GetFirst FastFirstRow SpDocs where (( _NRecFind0 == SpDocs.nRec )) = tsOk )
+            {}
+
+          Ost := SpDocs.Ostatok / fEdIzm.GetKoefOtpEd(SpDocsFrom.cOtpEd);
+
+          GetMarker(MarkerSpDocs, i, _NRecFind0);
+
+          if ( GetFirst FastFirstRow SpDocs where (( _NRecFind0 == SpDocs.nRec )) = tsOk )
+            {}
+
+          Ost := Ost - if(GetMarker(MarkerKol, i, FunKol)
+                        , fEdIzm.ConvertToSecondEd(FunKol, SpDocs.cOtpEd, SpDocsFrom.cOtpEd)
+                        , 0.0);
+        }
+
+  FunOst := if(f_FirstKolIsGreater(Ost, 0.0)
+              , if(f_FirstKolIsGreater(Ost, TM_TempDescr.Sum[2]), TM_TempDescr.Sum[2], Ost)
+              , 0.0);
+}
+
+//******************************************************************************
+#doc
+Окно ввода количества
+#end
+Window winGetPickKol 'Введите количество' (, , sci1Esc) EscClose, DoAccept, Gray;
+  Show at (, 7,, 10);
+
+Panel panGetPickKol
+
+Screen scrGetPickKol1 (,, sci1Esc);
+Fields
+  d                   : [prSignsInKol], Skip;
+  myKol ('Количество'): [prSignsInKol], NoProtect;
+<<
+                              Остаток .@@@@@@@@@@@@
+ Введите количество по данной позиции .@@@@@@@@@@@@
+>>
+end;
+
+Screen scrGetPickKol2;
+Fields
+  myKol ('Количество',, sci1Esc): [prSignsInKol], NoProtect;
+<<
+
+ Введите количество по данной позиции .@@@@@@@@@@@@
+>>
+end;
+
+HandleEvent
+
+cmCheckField:
+  if ( ( CurField = #myKol ) AND NeedCheckOE AND ( KatOtpEd.Diskret = 1 ) AND ( Round(myKol) <> myKol ) )
+    {
+      Message('Отпускная единица не является делимой!');
+      Abort;
+    }
+
+end;
+
+end; // Panel
+
+HandleEvent
+
+cmInit:
+  {
+    d     := FunOst;
+    myKol := 0;
+
+    if ( wGetTune('Pick.ChkGrpIns') = 2 )
+      SetFormat(scrGetPickKol2)
+    else
+      SetFormat(scrGetPickKol1);
+  }
+
+end; // of HandleEvent Window winSerach
+
+end; // of Window winSerach
+
+//******************************************************************************
+//-- Установить заголовок окна--------------------------------------------------
+//******************************************************************************
+Procedure SetMyTitle;
+{
+  if OkMulti
+    SetTitle('Групповой выбор спецификации документа (помечено: ' + string(GetMarkerCount(MarkerSpDocs)) + ')')
+  else
+    SetTitle('Выбор спецификации документа');
+}
+
+//******************************************************************************
+Procedure MarkUnmarkZamen(mypos: comp);
+{
+  _LOOP SpDocs3 where (( mypos == SpDocs3.cDoc AND word(439) == SpDocs3.TiDk ))
+    if SearchMarker(MarkerSpDocsZam, SpDocs3.nRec, IndexSpDocs)
+      DeleteMarker(MarkerSpDocsZam, SpDocs3.nRec)
+    else
+      if ( GetFirst TM_TempDescr1 where (( SpDocs3.nRec == TM_TempDescr1.cRec )) = tsOk )
+        if ( ( TM_TempDescr1.cRecKat <> 0 ) OR ( EmptyFlt = 1 ) )
+          InsertMarker(MarkerSpDocsZam, SpDocs3.nRec);
+}
+
+//******************************************************************************
+Procedure PickKol;
+{
+  case wGetTune('Pick.ChkGrpIns') of
+  //********************************
+    0:
+      {
+        d := FunOst;
+        InsertMarker(MarkerKol, if(KatOtpEd.Diskret = 1, Trunc(d), d));
+      }
+  //********************************
+    1:
+      {
+        NeedCheckOE := TRUE;
+
+        if ( RunWindowModal(winGetPickKol) = cmCancel )
+          myKol := 0;
+
+        InsertMarker(MarkerKol, if((EmptyFlt = 0) AND f_FirstKolIsGreater(myKol, d),
+                                   if(KatOtpEd.Diskret = 1, Trunc(d)    ,     d),
+                                   if(KatOtpEd.Diskret = 1, Trunc(myKol), myKol)
+                                  )
+                    );
+      }
+  //********************************
+    2:
+      {
+        InsertMarker(MarkerKol, 0);
+      }
+  //********************************
+  end;
+}
+
+//******************************************************************************
+//- Отменить выделение----------------------------------------------------------
+//******************************************************************************
+Procedure KillPick;
+{
+  ClearMarker(MarkerSpDocs0);
+  ClearMarker(MarkerSpDocs);
+  ClearMarker(MarkerKol);
+  SetMyTitle;
+}
+
+//******************************************************************************
+Procedure MySetFieldSpDocs;
+{
+  if ( not UKS_Used )
+    {
+      SetFieldVisible(#KatStroy.Name  , false);
+      SetFieldVisible(#AddSumTune.Name, false);
+    }
+
+  if ( not Lic_ItemExists('SmetaDocs') )
+    {
+      SetFieldVisible(#SmetaMy  , false);
+      SetFieldVisible(#SmetaSpMy, false);
+    }
+}
+
+//******************************************************************************
+// == == == == == == == Panel для АНАЛИЗА докум продажи == == == == == == == ==
+//******************************************************************************
+TabbedSheet TOP tshMain
+  Show at (,,, 16);
+  Table TM_TempDescr;
+
+Tree 1 brSpDocs1From 'Без переноса замен' (, hcDogViewListPos, sci1EnInsTree)
+#ifdef ATL51
+  WideOffset, DottedLines, LinesAtRoot
+#end
+;
+Fields { Font = { Color = if((TM_TempDescr.cRecKat = 0) AND (EmptyFlt = 0)
+                           , ColorError
+                           , if(Picked_From = 'V', ColorMark, 0)) } };
+//******************************************************************************
+  Picked_From
+  #3'V'
+  : [1], Skip, Centered, NoAutoSize;
+//******************************************************************************
+  SpDocsFrom.CODE
+  #3'п/н'
+  : [15], Protect, NoAutoSize;
+//******************************************************************************
+  SpDocsPr
+  #3'Тип'
+  : [3], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.GrName
+  #3'Группа'
+  : [15], Protect;
+//******************************************************************************
+  TM_TempDescr.Name
+  #3'Продукция'
+  : [20], Protect;
+//******************************************************************************
+  TM_TempDescr.BarKod
+  #3'Ном.номер' ('Номенклатурный номер / баркод')
+  : [10], Protect;
+//******************************************************************************
+  KatOtpEd.Name
+  #3'ЕдИзм'
+  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  if(if(SpDocsFrom.TiDk = 439, SpDocs4.Direct, SpDocsFrom.Direct) = 1, '1->2', '2->1')
+  #3''
+  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.Koef
+  #3'Коэффициент'
+  : [11.2, '\2p[|-]3666666.88'], Protect, LessNull;
+//******************************************************************************
+  TM_TempDescr.Percent
+  #3'Процент'
+  : [7.2, '\2p[|-]3666666.88'], Protect, LessNull;
+//******************************************************************************
+  TM_TempDescr.Sum[1]
+  #3'Количество'
+  : [10], [prSignsInKol], Protect, NoAutoSize;
+//******************************************************************************
+  PickedKol_From
+  #3'Выбрано'
+  : [10.3], Protect, NoAutoSize, LessNull;
+//******************************************************************************
+  TM_TempDescr.Sum[3]
+  #3'Цена' ('Цена в валюте')
+  : [10.2, '\2p[|-]36,666,666,666.88'], Protect, NoAutoSize;
+//******************************************************************************
+  KlVal.SimvolV
+  #3'Вал.'
+  : [4], Protect, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+ //******************************************************************************
+  SaldTune.Name   #3'Объект ЦУ' ('',, sci1378Esc): [10], Protect, NoAutoSize;
+  vsKau1          #3'КАУ 1'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau2          #3'КАУ 2'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau3          #3'КАУ 3'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau4          #3'КАУ 4'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau5          #3'КАУ 5'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau6          #3'КАУ 6'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau7          #3'КАУ 7'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau8          #3'КАУ 8'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau9          #3'КАУ 9'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau10         #3'КАУ 10'    ('',, sci1378Esc): [12], Protect, NoAutoSize;
+//******************************************************************************
+  SmetaMy         #3'Смета'     ('Локальная смета: "Номер": "Наименование"',,sci1378Esc)
+                            : [20], Protect, PickButton;
+//******************************************************************************
+  SmetaSpMy       #3'Спецификация сметы'
+                            ('Спецификация сметы: "№ п/п" ("Код") "Наименование"',,sci1378Esc)
+                            : [20], Protect, PickButton;
+//******************************************************************************
+end; // Browse
+
+Tree 1 brSpDocs1_1From 'С переносом замен' (, hcDogViewListPos, sci1EnInsTree)
+#ifdef ATL51
+  WideOffset, DottedLines, LinesAtRoot
+#end
+;
+Fields { Font = { Color = if((TM_TempDescr.cRecKat = 0) AND (EmptyFlt = 0)
+                           , ColorError, if(Picked_From = 'V', ColorMark, 0)) } };
+//******************************************************************************
+  Picked_From
+  #3'V'
+  : [1], Skip, Centered, NoAutoSize;
+//******************************************************************************
+  SpDocsFrom.CODE
+  #3'п/н'
+  : [12], Protect, NoAutoSize;
+//******************************************************************************
+  SpDocsPr
+  #3'Тип'
+  : [2], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.GrName
+  #3'Группа'
+  : [15], Protect;
+//******************************************************************************
+  TM_TempDescr.Name
+  #3'Продукция'
+  : [20], Protect;
+//******************************************************************************
+  TM_TempDescr.BarKod
+  #3'Ном.номер' ('Номенклатурный номер / баркод')
+  : [10], Protect;
+//******************************************************************************
+  KatOtpEd.Name
+  #3'ЕдИзм'
+  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  if(if(SpDocsFrom.TiDk = 439, SpDocs4.Direct, SpDocsFrom.Direct) = 1, '1->2', '2->1')
+  #3''
+  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.Sum[1]
+  #3'Количество'
+  : [10], [prSignsInKol], Protect, NoAutoSize;
+//******************************************************************************
+  PickedKol_From
+  #3'Выбрано'
+  : [10.3], Protect, NoAutoSize, LessNull;
+//******************************************************************************
+  TM_TempDescr.Sum[3]
+  #3'Цена' ('Цена в валюте')
+  : [10.2, '\2p[|-]36,666,666,666.88'], Protect, NoAutoSize;
+//******************************************************************************
+  KlVal.SimvolV
+  #3'Вал.'
+  : [4], Protect, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+//******************************************************************************
+  SaldTune.Name   #3'Объект ЦУ' ('',, sci1378Esc): [10], Protect, NoAutoSize;
+  vsKau1          #3'КАУ 1'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau2          #3'КАУ 2'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau3          #3'КАУ 3'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau4          #3'КАУ 4'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau5          #3'КАУ 5'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau6          #3'КАУ 6'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau7          #3'КАУ 7'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau8          #3'КАУ 8'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau9          #3'КАУ 9'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau10         #3'КАУ 10'    ('',, sci1378Esc): [12], Protect, NoAutoSize;
+//******************************************************************************
+  SmetaMy         #3'Смета'     ('Локальная смета: "Номер": "Наименование"',,sci1378Esc)
+                              : [20], Protect, PickButton;
+//******************************************************************************
+  SmetaSpMy       #3'Спецификация сметы'
+                                ('Спецификация сметы: "№ п/п" ("Код") "Наименование"',,sci1378Esc)
+                              : [20], Protect, PickButton;
+//******************************************************************************
+end; // Browse
+
+Browse brSpDocs2From 'Одиночный выбор' (, hcDogViewListPos, sci1EnEsc);
+  Table TM_TempDescr;
+Fields
+//******************************************************************************
+  SpDocsFrom.CODE
+  #3'п/н'
+  : [12], Protect, NoAutoSize;
+//******************************************************************************
+  SpDocsPr
+  #3''
+  : [2], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.GrName
+  #3'Группа'
+  : [15], Protect;
+//******************************************************************************
+  TM_TempDescr.Name
+  #3'Продукция'
+  : [20], Protect;
+//******************************************************************************
+  TM_TempDescr.BarKod
+  #3'Ном.номер' ('Номенклатурный номер / баркод')
+  : [10], Protect;
+//******************************************************************************
+  KatOtpEd.Name
+  #3'ЕдИзм'
+  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  if(if(SpDocsFrom.TiDk = 439, SpDocs4.Direct, SpDocsFrom.Direct) = 1, '1->2', '2->1')
+  #3''
+  : [5], Protect, Centered, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.Sum[1]
+  #3'Количество'
+  : [10], [prSignsInKol], Protect, NoAutoSize;
+//******************************************************************************
+  TM_TempDescr.Sum[3]
+  #3'Цена' ('Цена в валюте')
+  : [10.2, '\2p[|-]36,666,666,666.88'], Protect, NoAutoSize;
+//******************************************************************************
+  KlVal.SimvolV
+  #3'Вал.'
+  : [4], Protect, Centered, NoAutoSize, { Font = { Italic = TRUE } };
+//******************************************************************************
+  SaldTune.Name   #3'Объект ЦУ' ('',, sci1378Esc): [10], Protect, NoAutoSize;
+  vsKau1          #3'КАУ 1'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau2          #3'КАУ 2'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau3          #3'КАУ 3'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau4          #3'КАУ 4'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau5          #3'КАУ 5'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau6          #3'КАУ 6'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau7          #3'КАУ 7'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau8          #3'КАУ 8'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau9          #3'КАУ 9'     ('',, sci1378Esc): [12], Protect, NoAutoSize;
+  vsKau10         #3'КАУ 10'    ('',, sci1378Esc): [12], Protect, NoAutoSize;
+//******************************************************************************
+  SmetaMy         #3'Смета'     ('Локальная смета: "Номер": "Наименование"',,sci1378Esc)
+                            : [20], Protect, PickButton;
+//******************************************************************************
+  SmetaSpMy       #3'Спецификация сметы'
+                                ('Спецификация сметы: "№ п/п" ("Код") "Наименование"',,sci1378Esc)
+                            : [20], Protect, PickButton;
+//******************************************************************************
+end; // Browse
+
+end; // TabbedSheet
+
+Screen scrSpDocs3From (, hcDogViewListPos, sci1EnEsc);
+  Show at (, 17,,);
+  Table TM_TempDescr;
+Fields
+//******************************************************************************
+  TM_TempDescr.Sum[2]    : [prSignsInKol], Skip
+                               , { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  TM_TempDescr.Sum[4]    : [11.2, '\2p[|-]36,666,666,666.88'], Skip
+                               , { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  MoveCell.Name          : Skip, { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  ResOtgr.Name           : Skip, { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  SpShipment.Name        : Skip, { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  SpTipOtg.Name          : Skip, { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  SpWayMove.Name         : Skip, { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+  SpDocsFrom.ShipAddTerms: Skip, { Font = { BackColor = ColorSysWhite } };
+//******************************************************************************
+<<
+                    `Остаток`.@@@@@@@@@@@@@@@@@@@@`Сумма`.@@@@@@@@@@@@@@@@@@@@
+ `Единица подвижного состава`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Ресурс отгрузки`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Способ отгрузки`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Базис`          .@@@@@@@@@@@@@@@@@@@@`Транспорт`.@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Дополнительно`  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+//******************************************************************************
+Function GetCurTree: longint;
+{
+  GetCurTree := if(copyZamen = 1, brSpDocs1From, brSpDocs1_1From);
+}
+
+//******************************************************************************
+//-- пометить одну позицию-------------------------------------------------------
+//******************************************************************************
+Function OneMarkPick: boolean;
+var CurPos: comp;
+{
+  OneMarkPick := FALSE;
+
+  CurPos := TM_TempDescr.cRec;
+
+  InsertMarker(MarkerSpDocs0, TM_TempDescr.cRecKat);
+  InsertMarker(MarkerSpDocs , TM_TempDescr.cRec);
+
+  PickKol;
+
+  if ( copyZamen = 0 )
+    MarkUnmarkZamen(TM_TempDescr.nRec);
+
+  _LOOP TM_TempDescr1 where (( CurPos == TM_TempDescr1.cSpMc ))
+    {
+      InsertMarker(MarkerSpDocs , TM_TempDescr1.cRec);
+      InsertMarker(MarkerSpDocs0, TM_TempDescr1.cRecKat);
+
+      CurGroup := TM_TempDescr1.cSpMc;
+
+      TreeJumpToRecord(GetCurTree, TM_TempDescr1.nRec);
+
+      RescanPanel(#TM_TempDescr);
+
+      PickKol;
+
+      if ( copyZamen = 0 )
+        MarkUnmarkZamen(TM_TempDescr1.nRec);
+    }
+
+  OneMarkPick := TRUE;
+}
+
+Panel panSpDocs;
+  Table TM_TempDescr;
+
+HandleEvent
+
+cmTreeTop:
+  CurGroup := 0;
+
+cmTreeUp:
+  CurGroup := TM_TempDescr.cGroup;
+
+cmTreeDown:
+  CurGroup := TM_TempDescr.nRec;
+
+cmTreeNodeType:
+  {
+    if ( TM_TempDescr.NotIsLeaf <= (1 - copyZamen) )
+      if ( TM_TempDescr.TiDk = word(439) )
+        TreeSetNodeType(GetCurTree, ntfText, #AddComp('L_DOGOVOR')if(SpDocsFrom.cSpMC = 0, 'bmpGsSpDocsZamen', 'bmpGsSpDocsZamenMask'))
+      else
+        {
+          if ( TM_TempDescr.cSpMc <> 0 )
+            TreeSetNodeType(GetCurTree, ntfText, #AddComp('L_DOGOVOR')'bmpGsSpDocsSopUsl')
+          else
+            TreeSetNodeType(GetCurTree, 2);
+        }
+      else
+        if ( TM_TempDescr.cSpMc <> 0 )
+          if TreeNodeIsOpen(GetCurTree)
+            TreeSetNodeType(GetCurTree, ntfOpen, #AddComp('L_DOGOVOR')'bmpGsSpDocsSopUslOpen')
+          else
+            TreeSetNodeType(GetCurTree, ntfClose, #AddComp('L_DOGOVOR')'bmpGsSpDocsSopUslClose');
+  }
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(brSpDocs1From, TM_TempDescr.cGroup);
+
+end; // HandleEvent
+
+end; // Panel
+
+//******************************************************************************
+//== == == == == == == End Panel для АНАЛИЗА докум продажи == == == == == == ==
+//******************************************************************************
+
+Procedure ChangeViewFormat;
+{
+  ClearMarker(MarkerSpDocs);
+  ClearMarker(MarkerSpDocs0);
+  ClearMarker(MarkerKol);
+  ClearMarker(MarkerSpDocsZam);
+
+  CurGroup := 0;
+
+  if ( GetFirst TM_TempDescr = tsOk )
+    {}
+
+  RescanPanel(#TM_TempDescr);
+
+  if ( copyZamen =1 )
+    {
+      CurCode := 1;
+      ProcessCommand(cmTreeTop);
+
+      if ( GetFirst TM_TempDescr = tsOk )
+        {}
+
+      TreeJumpToRecord(GetCurTree, TM_TempDescr.nRec);
+    }
+  else
+    {
+      CurCode := 0;
+      ProcessCommand(cmTreeTop);
+
+      if ( GetFirst TM_TempDescr = tsOk )
+        {}
+
+      TreeJumpToRecord(GetCurTree, TM_TempDescr.nRec);
+    }
+
+  RescanPanel(#TM_TempDescr);
+}
+
+//******************************************************************************
+
+Procedure SetNameFields(wPrMC: word; pMcUsl, pGrMcUsl: comp);
+{
+  case wPrMC of
+  //******************************************************************************
+    1, 4, 5:
+      if ( GetFirst FastFirstRow KatMC where (( pMcUsl == KatMC.nRec )) = tsOk )
+        {
+          TM_TempDescr.Name   := KatMC.Name;
+          TM_TempDescr.BarKod := KatMC.BarKod;
+        }
+      else
+        TM_TempDescr.Name := if(pMcUsl = 0, '', '? MC ' + string(pMCUsl));
+  //******************************************************************************
+    2, 3:
+      if ( GetFirst FastFirstRow KatUsl where (( pMcUsl == KatUsl.nRec )) = tsOk )
+        {
+          TM_TempDescr.Name   := KatUsl.Name;
+          TM_TempDescr.BarKod := KatUsl.Kod;
+        }
+      else
+        TM_TempDescr.Name := if(pMcUsl = 0, '', '? Услуга ' + string(pMCUsl));
+  //******************************************************************************
+    10:
+      if ( GetFirst FastFirstRow MaskMC where (( pMcUsl == MaskMC.nRec )) = tsOk )
+        {
+          TM_TempDescr.Name   := MaskMC.Name;
+          TM_TempDescr.BarKod := MaskMC.BarKod;
+        }
+      else
+        TM_TempDescr.Name := if(pMcUsl = 0, '', '? Шаблон MC ' + string(pMCUsl));
+  //******************************************************************************
+    20:
+      if ( GetFirst FastFirstRow MaskUsl where (( pMcUsl == MaskUsl.nRec )) = tsOk )
+        {
+          TM_TempDescr.Name   := MaskUsl.Name;
+          TM_TempDescr.BarKod := MaskUsl.Kod;
+        }
+      else
+        TM_TempDescr.Name := if(pMcUsl = 0, '', '? Шаблон услуг ' + string(pMCUsl));
+  //******************************************************************************
+  end;
+
+  case wPrMC of
+  //******************************************************************************
+    1, 4, 5, 10:
+      if ( GetFirst FastFirstRow GroupMC where (( pGrMcUsl == GroupMC.nRec )) = tsOk )
+        TM_TempDescr.GrName := GroupMC.Name
+      else
+        TM_TempDescr.GrName := if(pGrMcUsl = 0, '', '? Группа MC ' + string(pGrMCUsl));
+  //******************************************************************************
+    2, 3, 20:
+      if ( GetFirst FastFirstRow GroupUsl where (( pGrMcUsl == GroupUsl.nRec )) = tsOk )
+        TM_TempDescr.GrName := GroupUsl.Name
+      else
+        TM_TempDescr.GrName := if(pGrMcUsl = 0, '', '? Группа услуг ' + string(pGrMCUsl));
+  //******************************************************************************
+  end;
+}
+
+//******************************************************************************
+
+HandleEvent // Interface
+
+cmInit:
+  {
+    if ( TiDkOwner <> 403 )
+      {
+        if ( GetFirst Dogovor where (( pDocOwner == Dogovor.nRec )) <> tsOK ) {}
+      }
+    else
+      if ( GetFirst CalPlan where (( pDocOwner == CalPlan.nRec )) <> tsOK ) {}
+        if ( GetFirst Dogovor where (( CalPlan.cDogovor == Dogovor.nRec )) <> tsOK ) {}
+
+    if ( (not Lic_ItemExists('CEL_UCH')) or (not boGetTune('Oper.CelUch.ShowKAU')) )
+      {
+        SetFieldVisible(#SaldTune.Name, false);
+        SetFieldVisible(#vsKau1, false);
+        SetFieldVisible(#vsKau2, false);
+        SetFieldVisible(#vsKau3, false);
+        SetFieldVisible(#vsKau4, false);
+        SetFieldVisible(#vsKau5, false);
+        SetFieldVisible(#vsKau6, false);
+        SetFieldVisible(#vsKau7, false);
+        SetFieldVisible(#vsKau8, false);
+        SetFieldVisible(#vsKau9, false);
+        SetFieldVisible(#vsKau10, false);
+      }
+
+    CurGroup  := 0;
+    copyZamen := 0;
+
+    MarkerSpDocs0   := InitMarker('MSpDocs0'  , 8, 100, 10, FALSE);
+    MarkerSpDocs    := InitMarker('MSpDocs'   , 8, 100, 10, FALSE);
+    MarkerKol       := InitMarker('MSpDocsKol', 8, 100, 10, FALSE);
+    MarkerSpDocsZam := InitMarker('MSpDocsZam', 8, 100, 10, FALSE);
+
+    ClearMarker(MarkerSpDocs0);
+    ClearMarker(MarkerSpDocs);
+    ClearMarker(MarkerKol);
+    ClearMarker(MarkerSpDocsZam);
+
+    SetFormat(if(OkMulti, if(copyZamen = 1, brSpDocs1From, brSpDocs1_1From), brSpDocs2From));
+
+    ChangeViewFormat;
+
+    if OkMulti
+      SetTabbedSheetVisible(brSpDocs2From, FALSE)
+    else
+      {
+        SetTabbedSheetVisible(brSpDocs1From  , FALSE);
+        SetTabbedSheetVisible(brSpDocs1_1From, FALSE);
+      }
+
+    ReSetBounds(#TM_TempDescr);
+    ReSetBounds(#SpDocsFrom);
+
+    delete all TM_TempDescr;
+
+    //формируем TM_TempDescr из анализируемых, находя соответствие в выбираемых
+
+    PushBounds(tbTD0);
+
+    var _N, _N2   : comp;
+    var _Kol, _Ost: double;
+
+    _LOOP SpDocsFrom
+      {
+        ClearBuffer(#TM_TempDescr);
+
+        TM_TempDescr.nRec   := GetNextNrec(#TM_TempDescr, 0);
+        TM_TempDescr.PrMC   := SpDocsFrom.PrMC;
+        TM_TempDescr.cRec   := SpDocsFrom.nRec;
+        TM_TempDescr.cGroup := 0;
+        TM_TempDescr.TiDk   := SpDocsFrom.TiDk;
+        TM_TempDescr.cSpMC  := SpDocsFrom.cSpMC;
+
+        if ( pDocFrom = pDocOwner )
+          {
+            TM_TempDescr.cRecKat := SpDocsFrom.nRec;
+            TM_TempDescr.Sum[2]  := SpDocsFrom.Ostatok / fEdIzm.GetKoefOtpEd(SpDocsFrom.cOtpED);
+
+            _Ost := TM_TempDescr.Sum[2];
+          }
+        else
+          {
+            TM_TempDescr.cRecKat := FindNRecSpDocs(SpDocsFrom.nRec, TM_TempDescr.Sum[2]);
+            TM_TempDescr.Sum[2]  := TM_TempDescr.Sum[2] / fEdIzm.GetKoefOtpEd(SpDocsFrom.cOtpED);
+          }
+
+        TM_TempDescr.Sum[1]  := SpDocsFrom.Kol;
+        TM_TempDescr.Sum[3]  := SpDocsFrom.Price;
+        TM_TempDescr.Sum[4]  := SpDocsFrom.Summa;
+        TM_TempDescr.Koef    := 1;
+        TM_TempDescr.Percent := 100;
+
+        SetNameFields(SpDocsFrom.PrMC, SpDocsFrom.cMCUSL, SpDocsFrom.cGrMCUsl);
+
+        insert current TM_TempDescr;
+
+        _N   := TM_TempDescr.nRec;
+        _N2  := TM_TempDescr.cRec;
+        _Kol := SpDocsFrom.Kol;
+
+        if ( RecordExists SpDocsFrom2 = tsOk )
+          {
+            update current TM_TempDescr set TM_TempDescr.NotIsLeaf := 1;
+
+            if ( (RecordExists SpDocsFrom2 where (( word(439)       == SpDocsFrom2.TiDk
+                                                AND SpDocsFrom.nRec == SpDocsFrom2.cDoc
+                                                AND ( (SpDocsFrom2.MinValue + SpDocsFrom2.MaxValue) > 0 )
+                                             )) ) <> tsOk )
+              update SpDocsFrom2 set SpDocsFrom2.MinValue := 1, SpDocsFrom2.MaxValue := 100;
+
+            _LOOP SpDocsFrom2 where (( SpDocsFrom.nRec == SpDocsFrom2.cDoc AND
+                                       word(439)       == SpDocsFrom2.TiDk AND
+                                       comp(0)         == SpDocsFrom2.cSpMC
+                                    ))
+              {
+                ClearBuffer(#TM_TempDescr);
+
+                TM_TempDescr.nRec    := GetNextNrec(#TM_TempDescr, 0);
+                TM_TempDescr.PrMC    := SpDocsFrom2.PrMC;
+                TM_TempDescr.cRec    := SpDocsFrom2.nRec;
+                TM_TempDescr.cGroup  := _N;
+                TM_TempDescr.TiDk    := SpDocsFrom2.TiDk;
+                TM_TempDescr.cSpMC   := SpDocsFrom2.cSpMC;
+                TM_TempDescr.Code    := 1;
+                TM_TempDescr.Koef    := SpDocsFrom2.MinValue;
+                TM_TempDescr.Percent := SpDocsFrom2.MaxValue;
+
+                if ( pDocFrom = pDocOwner )
+                  {
+                    TM_TempDescr.cRecKat := _N2;
+                    TM_TempDescr.Sum[2]  := fEdIzm.ConvertToSecondEd(_Ost, SpDocsFrom.cOtpED, SpDocsFrom2.cOtpED);
+                  }
+                else
+                  {
+                    TM_TempDescr.cRecKat := FindNRecSpDocs(SpDocsFrom2.nRec, TM_TempDescr.Sum[2]);
+                    TM_TempDescr.Sum[2]  := TM_TempDescr.Sum[2] / fEdIzm.GetKoefOtpEd(SpDocsFrom2.cOtpED);
+                  }
+
+                TM_TempDescr.Sum[1] := fEdIzm.ConvertToSecondEd(_Kol, SpDocsFrom.cOtpED, SpDocsFrom2.cOtpED);
+                TM_TempDescr.Sum[3] := fEdIzm.ConvSellSumToSecondEd(SpDocsFrom.Price, SpDocsFrom.cOtpED, SpDocsFrom2.cOtpED);
+                TM_TempDescr.Sum[4] := SpDocsFrom.Summa;
+
+                TM_TempDescr.Sum[1]  := TM_TempDescr.Sum[1] * TM_TempDescr.Koef * TM_TempDescr.Percent / 100;
+                TM_TempDescr.Sum[2]  := TM_TempDescr.Sum[2] * TM_TempDescr.Koef * TM_TempDescr.Percent / 100;
+
+                SetNameFields(SpDocsFrom2.PrMC, SpDocsFrom2.cMCUSL, SpDocsFrom2.cGrMCUsl);
+
+                if ( SpDocsFrom2.PrMC < 10 )
+                  insert current TM_TempDescr
+                else
+                  if ( RecordExists SpDocs3 where (( SpDocsFrom2.nRec == SpDocs3.cSpMC )) = tsOk )
+                    {
+                      TM_TempDescr.NotIsLeaf := 1;
+
+                      insert current TM_TempDescr;
+
+                      var _NN: comp;
+
+                      _NN := TM_TempDescr.nRec;
+
+                      _LOOP SpDocs3 where (( SpDocsFrom2.nRec == SpDocs3.cSpMC ))
+                        {
+                          ClearBuffer(#TM_TempDescr);
+
+                          TM_TempDescr.nRec    := GetNextNrec(#TM_TempDescr, 0);
+                          TM_TempDescr.Code    := 1;
+                          TM_TempDescr.PrMC    := SpDocs3.PrMC;
+                          TM_TempDescr.cRec    := SpDocs3.nRec;
+                          TM_TempDescr.TiDk    := SpDocs3.TiDk;
+                          TM_TempDescr.cGroup  := _NN;
+
+                         if ( pDocFrom = pDocOwner )
+                           {
+                             TM_TempDescr.cRecKat := _N2;
+                             TM_TempDescr.Sum[2]  := fEdIzm.ConvertToSecondEd(_Ost, SpDocsFrom.cOtpED, SpDocs3.cOtpED);
+                           }
+                         else
+                           {
+                             TM_TempDescr.cRecKat := FindNRecSpDocs(SpDocsFrom2.nRec, TM_TempDescr.Sum[2]);
+                             TM_TempDescr.Sum[2]  := TM_TempDescr.Sum[2] / fEdIzm.GetKoefOtpEd(SpDocs3.cOtpED);
+                           }
+
+                         TM_TempDescr.Sum[1] := fEdIzm.ConvertToSecondEd(_Kol, SpDocsFrom.cOtpED, SpDocs3.cOtpED);
+                         TM_TempDescr.Sum[3] := fEdIzm.ConvSellSumToSecondEd(SpDocsFrom.Price, SpDocsFrom.cOtpEd, SpDocs3.cOtpEd);
+                         TM_TempDescr.Sum[4] := SpDocsFrom.Summa;
+
+                         TM_TempDescr.Sum[1] := TM_TempDescr.Sum[1] * SpDocsFrom2.MinValue * SpDocsFrom2.MaxValue / 100;
+                         TM_TempDescr.Sum[2] := TM_TempDescr.Sum[2] * SpDocsFrom2.MinValue * SpDocsFrom2.MaxValue / 100;
+
+                         SetNameFields(SpDocs3.PrMC, SpDocs3.cMCUSL, SpDocs3.cGrMCUsl);
+
+                         insert current TM_TempDescr;
+                       }
+                    }
+              }
+          }
+      }
+
+    _LOOP TM_TempDescr where (( TM_TempDescr.cSpMC == TM_TempDescr1.cRec ))
+      if (GetFirst FastFirstRow TM_TempDescr1 <> tsOk)
+        update TM_TempDescr2 where (( TM_TempDescr.nRec == TM_TempDescr2.nRec ))
+          set TM_TempDescr2.cSpMC := 0
+      else
+        {
+          update TM_TempDescr2 where (( TM_TempDescr.nRec == TM_TempDescr2.nRec ))
+            set TM_TempDescr2.cGroup := TM_TempDescr1.nRec;
+
+          update TM_TempDescr1
+            set TM_TempDescr1.NotIsLeaf := TM_TempDescr1.NotIsLeaf + 2;
+        }
+
+    PopBounds(tbTD0);
+    PushBounds(tbTD1);
+
+    SetBounds(#TM_TempDescr);
+    SetBounds(#SpDocsFrom);
+
+    if ( GetFirst TM_TempDescr <> tsOk )
+      {}
+
+    MySetFieldSpDocs;
+
+    RereadRecord(#TM_TempDescr);
+  }
+
+cmDefault:
+  if NOT OkMulti
+    p1 := TM_TempDescr.cRec
+  else
+    {
+      p1 := 0;
+
+      if ( ( GetMarkerCount(MarkerSpDocs) = 0 ) AND IsValid(#SpDocs) )
+        {
+          if ( TM_TempDescr.cSpMC <> 0 )
+            {
+              Abort;
+              Exit;
+            }
+
+          if ( TM_TempDescr.TiDk = word(439) )
+            if NOT (if(GetFirst TM_TempDescr1 where (( TM_TempDescr.cGroup == TM_TempDescr1.nRec )) = tsOk
+                     , TM_TempDescr1.cSpMC = 0
+                     , FALSE
+                      )
+                   )
+              {
+                Abort;
+                Exit;
+              }
+
+          if ( NOT OneMarkPick )
+            {
+              Abort;
+              Exit;
+            }
+        }
+
+      if ( wGetTune('Pick.ChkGrpIns') = 2 )
+        if ( RunWindowModal(winGetPickKol) <> cmCancel )
+          {
+            var i: longint;
+            var tmpComp: comp;
+            var tmpDouble: double;
+
+            FOR(i := 0; i < GetMarkerCount(MarkerSpDocs); i := i + 1)
+              if GetMarker(MarkerSpDocs, i, tmpComp)
+                if ( GetFirst FastFirstRow TM_TempDescr where (( tmpComp == TM_TempDescr.cRec )) = tsOk )
+                  {
+                    RescanPanel(#TM_TempDescr);
+                    tmpDouble := FunOst;
+
+                    UpdateMarker(MarkerKol, i, if(myKol > tmpDouble
+                                                , if(KatOtpEd.Diskret = 1, Trunc(tmpDouble), tmpDouble)
+                                                , if(KatOtpEd.Diskret = 1, Trunc(myKol)    , myKol    )));
+                  }
+          }
+    }
+
+cmDone:
+  {
+    DoneMarker(MarkerSpDocs0  , 'MSpDocs0'  );
+    DoneMarker(MarkerSpDocs   , 'MSpDocs'   );
+    DoneMarker(MarkerSpDocsZam, 'MSpDocsZam');
+    DoneMarker(MarkerKol      , 'MSpDocsKol');
+  }
+
+cmMarkUnMark: // Если на группу то выбирать все из группы (ins для выбора)
+  {
+    if NOT IsValid(#TM_TempDescr)
+      Exit;
+
+    if ( ( TM_TempDescr.cSpMC <> 0 ) OR ( SpDocsFrom.TiDk = 439 ) AND IsValid(#SpDocs3) )
+      Exit;
+
+    if ( IsValid(#SpDocs4) AND ( TM_TempDescr.TiDk = word(439) ) )
+      if ( ( SpDocs4.cSpMC <> 0 ) AND NOT SearchMarker(MarkerSpDocs, SpDocs4.nRec, IndexSpDocs) )
+        Exit;
+
+    if SearchMarker(MarkerSpDocs, TM_TempDescr.cRec, IndexSpDocs)
+      {
+        var tmpDouble: double;
+
+        DeleteMarker(MarkerSpDocs0, TM_TempDescr.cRecKat);
+        DeleteMarker(MarkerSpDocs , TM_TempDescr.cRec);
+
+        if GetMarker(MarkerKol, IndexSpDocs, tmpDouble)
+          AtDeleteMarker(MarkerKol, IndexSpDocs);
+
+        if ( copyZamen = 0 )
+          MarkUnmarkZamen(TM_TempDescr1.nRec);
+
+        _LOOP SpDocs3
+          if SearchMarker(MarkerSpDocs, SpDocs3.nRec, IndexSpDocs)
+            {
+              DeleteMarker(MarkerSpDocs0, SpDocs3.nRec);
+              DeleteMarker(MarkerSpDocs , SpDocs3.nRec);
+
+              if GetMarker(MarkerKol, IndexSpDocs, tmpDouble)
+                AtDeleteMarker(MarkerKol, IndexSpDocs);
+
+              if ( copyZamen = 0 )
+                MarkUnmarkZamen(TM_TempDescr1.nRec);
+
+              if ( GetFirst TM_TempDescr1 where (( SpDocs3.nRec == TM_TempDescr1.cRec)) <> tsOk )
+                {}
+
+              var mypos: comp; mypos := TM_TempDescr1.nRec;
+
+              _LOOP TM_TempDescr1 where (( mypos == TM_TempDescr1.cGroup ))
+                {
+                  if ( TM_TempDescr1.TiDk <> word(439) )
+                    Continue;
+
+                  DeleteMarker(MarkerSpDocs0, TM_TempDescr1.cRecKat);
+                  DeleteMarker(MarkerSpDocs , TM_TempDescr1.cRec);
+
+                  if GetMarker(MarkerKol, IndexSpDocs, tmpDouble)
+                    AtDeleteMarker(MarkerKol, IndexSpDocs);
+                }
+            }
+      }
+    else
+      if ( ( TM_TempDescr.cRecKat <> 0 ) OR ( EmptyFlt = 1 ) )
+        OneMarkPick;
+
+    SetMyTitle;
+
+    if ( GetNext TM_TempDescr = tsOk )
+      {}
+
+    RescanPanel(#TM_TempDescr);
+  }
+
+cmSelectall:
+  {
+    KillPick;
+    TreeGetFirst(GetCurTree);
+
+    do
+      {
+        if ( ( TM_TempDescr.cSpMc = 0 ) AND ( TM_TempDescr.TiDk <> word(439) ) )
+          {
+            RescanPanel(#TM_TempDescr);
+            OneMarkPick;
+          }
+      }
+    While TreeGetNext(GetCurTree);
+
+    SetMyTitle;
+    RereadRecord;
+    RescanPanel(#TM_TempDescr);
+  }
+
+cmUnSelectall:
+  {
+    KillPick;
+    RescanPanel(#TM_TempDescr);
+    RereadRecord;
+  }
+
+cmChangeTabbedSheetFormat:
+  if OkMulti
+    {
+      copyZamen := if(Target = brSpDocs1From, 1, 0);
+      OkMulti   := (Target <> brSpDocs2From);
+    }
+
+cmSetTabbedSheetFormat:
+  ChangeViewFormat;
+
+cmHotKeys:
+{
+  PutHotCommand(RunMenu('GetSomeSpDocs1mnu'));
+}
+
+cmIerarchy :
+{
+  RunInterface('EditMtr2Spec', 1, 0, word(coSpDocs), SpDocsFrom.nRec);
+}
+
+end; // HandleEvent Interface
+
+End. // Interface

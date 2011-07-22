@@ -1,0 +1,773 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+#include temp_tab.vih
+#include OnExpImp.vih // Подключение Экспорта - Импорта
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Номера единиц подвижного состава
+
+Параметры:
+  p1   - 1 - вагоны без ДО, 0 - вагоны без УК, 2 - все, 3 - выбор, 4 - мн.выбор
+  c1   - возвращаемый NRec вагона
+  pMC  - Код МЦ для фильтрации
+  pEd  - Код единицы подвижного состава для фильтрации
+  Sert - NRec сертификата
+#end
+
+//******************************************************************************
+
+Interface GetVagon 'Номера единиц подвижного состава' Cyan, DoAccept, EscClose;
+  Show at (, , 100, 23);
+
+//******************************************************************************
+
+#include OnExpImp.var // Подключение Экспорта - Импорта
+
+//******************************************************************************
+
+Function fnGetVagonUK(tRec: comp): boolean;forward;
+
+//******************************************************************************
+
+Create view
+var
+  VagonMarker
+, IndexNo
+, wCondition  : longint;
+
+  p1          : word;
+
+  c1
+, Sert
+, pmc
+, pEd         : comp;
+//  Фильтры
+  wFilter
+, wEdFlt      : word;
+
+  fd
+, fd1
+, fd2         : Date;
+
+  ft1
+, ft2         : time;
+
+  GloFilter
+, GloEdFlt    : word;
+
+  Glod
+, Glod1
+, Glod2       : Date;
+
+  Glot1
+, Glot2       : time;
+
+  GloMoveCell : comp;
+
+As select
+  if (SearchMarker(VagonMarker, Vagon.NRec, IndexNo), '√', '')
+    (FieldName = PickLabel)
+//******************************************************************************
+, if ((wEdFlt AND 1) = 1,
+    if ( GloMoveCell = 0, 'по всем единицам',
+      if(IsValid(tnMoveCellPick), MoveCellPick.Name, '') ), '')
+    (FieldName = strMoveCell)
+//******************************************************************************
+, Vagon.*
+from
+    Vagon    (Vagon07)
+  , SpStep
+  , Sertific
+  , BaseDoc
+  , KatOrg
+  , KatMC KatMC1
+  , KatMC KatMC2
+  , WayMove
+  , MoveCell MoveCellPick
+  , Sertific Probe
+  , StepDoc
+  , TMP01
+  , AllMemo
+where
+((
+       Vagon.cSertific  == Sertific.NRec
+  AND  Vagon.cSpStep    == SpStep.NRec
+  AND  Sert             == Probe.NRec
+  AND  StepDoc.cBaseDoc == BaseDoc.NRec
+  AND  SpStep.cStepDoc  == StepDoc.NRec
+  AND  BaseDoc.cOrg     == KatOrg.NRec
+  AND  SpStep.cMCUsl    == KatMC1.NRec
+  AND  Sertific.cMC     == KatMC2.NRec
+  AND  Vagon.cWayMove   == WayMove.NRec
+  AND  Vagon.cMoveCell  == MoveCell.NRec
+  AND  GloMoveCell      == MoveCellPick.NRec
+))
+order by Vagon.dReg
+
+// для выбора из УК
+condition Vagon01 = fnGetVagonUK(Vagon.NRec)
+
+// для выбора из ДО
+condition Vagon02 =
+       if (IsValid(tnSertific), pMC = Sertific.cMC, TRUE)
+
+condition Vagon03 = (Vagon.cSpStep = comp(0))
+
+bounds VagonByDate =
+          fd1 <<= Vagon.dReg
+AND       fd2 >>= Vagon.dReg
+order by Vagon.tReg
+
+bounds VagonByDateTime =
+          fd  == Vagon.dReg
+AND       ft1 <<= Vagon.tReg
+AND       ft2 >>= Vagon.tReg
+
+bounds VagonByMoveCell =
+          GloMoveCell == Vagon.cMoveCell
+
+condition VagonByMoveCell =
+          (GloMoveCell = Vagon.cMoveCell)
+;
+
+parameters
+      p1    // 1 - вагоны без ДО, 0 - вагоны без УК, 2 - все, 3 - выбор, 4 - мн.выбор
+    , c1    // возвращаемый NRec вагона
+    , pMC   // Код МЦ для фильтрации
+    , pEd   // Код единицы подвижного состава для фильтрации
+    , Sert; // NRec сертификата
+
+QuickChoice qcKatSoprNVagon
+  {
+    AcceptField = TMP01.NRec;
+    ViewField   = TMP01.st20_1;
+    ViewField   = TMP01.st80_1;
+    SearchField = TMP01.st20_1;
+
+    OnOpen :
+      {
+        ProcessCommand (cmInit);
+
+        _LOOP Vagon
+          {
+            ClearBuffer(tnTMP01);
+            TMP01.NRec   :=  Vagon.NRec;
+            TMP01.st20_1 :=  Vagon.Num;
+            TMP01.st80_1 :=  MoveCell.Name;
+            insert current TMP01;
+          };
+      }
+    OnClose:
+      {
+        c1    := TMP01.NRec;
+        InsertMarker(VagonMarker, c1);
+        delete all TMP01;
+        ProcessCommand (cmDone);
+      }
+  }
+//******************************************************************************
+
+Function fnGetVagonUK(tRec: comp): boolean;
+{
+  fnGetVagonUK := FALSE;
+
+  if IsValid(tnSertific)
+    Exit;
+
+  if (IsValid(tnSpStep))
+    if (pMC <> SpStep.cMCUsl)
+      Exit;
+
+  fnGetVagonUK := if (p1 = 0
+                    , if (Trim(Probe.CodeProbe) = '', TRUE, Probe.CodeProbe = Vagon.CodeProbe)
+                    , TRUE);
+}
+
+
+//******************************************************************************
+
+Procedure SwitchBounds(iBound: longint; Enable: boolean);
+{
+  if (NOT BoundActive(iBound))
+    {
+      if (Enable)
+        PushBounds(iBound);
+    }
+  else
+    if (NOT Enable)
+      SubBounds(iBound);
+} // Procedure SetBounds
+
+
+//******************************************************************************
+
+Procedure SetFilters;
+{
+  PopCondition(tcVagonByMoveCell);
+  PopCondition(tcVagon03);
+  PopBounds(tbVagonByMoveCell);
+
+  SwitchBounds(tbVagonByDate, (GloFilter = 1));
+  SwitchBounds(tbVagonByDateTime, (GloFilter = 2));
+
+  if (GloFilter <> 0)
+    {
+      if ( ((wEdFlt AND 1) = 1)
+       AND (GloMoveCell <> 0) )
+        PushCondition(tcVagonByMoveCell);
+    }
+  else
+    {
+      if ( ((wEdFlt AND 1) = 1)
+       AND (GloMoveCell <> 0) )
+        PushBounds(tbVagonByMoveCell)
+    }
+
+  if ( (wEdFlt AND 2) <> 0)
+    PushCondition(tcVagon03);
+} // Procedure SetFilters
+
+
+//******************************************************************************
+
+Procedure InitVagon;
+{
+  if (pEd <> 0)
+    {
+      GloMoveCell := pEd;
+      wEdFlt := wEdFlt OR 1;
+      ClusterDisabledField(#wEdFlt, 1);
+      ClearFieldOption(#strMoveCell, ofSelectable);
+    }
+
+  if ( (p1 = 1) OR (p1 = 2) )
+    {
+      var bVagon_NoDO, b: boolean;
+
+      ReadMyDsk(bVagon_NoDO, 'Vagon_NoDO', b);
+
+      if (bVagon_NoDO)
+        wEdFlt := wEdFlt OR 2;
+    }
+  else
+    {
+      wEdFlt := wEdFlt AND (not 2);
+      ClusterDisabledField(#wEdFlt, 2);
+    }
+
+  GloEdFlt := wEdFlt OR 1;
+  SetFilters;
+}
+
+
+//******************************************************************************
+
+Procedure ClearFilters;
+{
+  SwitchBounds(tbVagonByDate, FALSE);
+  SwitchBounds(tbVagonByDate, FALSE);
+} // Procedure SetFilters
+
+
+//******************************************************************************
+
+Procedure ProtectFields;
+{
+  SetFieldOption(#Vagon.Num      , ofProtected);
+  SetFieldOption(#Vagon.ZavNom   , ofProtected);
+  SetFieldOption(#Vagon.dReg     , ofProtected);
+  SetFieldOption(#Vagon.tReg     , ofProtected);
+  SetFieldOption(#Vagon.Massa    , ofProtected);
+  SetFieldOption(#Vagon.Netto    , ofProtected);
+  SetFieldOption(#Vagon.CodeProbe, ofProtected);
+}
+
+
+//******************************************************************************
+
+Window wnFilters 'Фильтры по единицам подвижного состава' Gray, DoAccept;
+  Show at (, 7, 65, 15);
+
+
+//******************************************************************************
+
+Panel pnFilters;
+
+Screen scFilters (, hcKuzbassIGetVagonFilter, sci1EnEsc);
+
+Fields
+  wFilter         ('Фильтры по дате/времени'                          , , ) : NoProtect;
+  fd1             ('Начало периода по дате'                           , , ) : ['DD/MM/YYYY'], NoProtect;
+  fd2             ('Начало периода по дате'                           , , ) : ['DD/MM/YYYY'], NoProtect;
+  fd              ('Дата'                                             , , ) : ['DD/MM/YYYY'], NoProtect;
+  ft1             ('Начало периода по времени'                        , , ) : ['HH: MM'], NoProtect;
+  ft2             ('Конец периода по времени'                         , , ) : ['HH: MM'], NoProtect;
+  wEdFlt          ('Фильтр по единицам подвижного состава')                 : NoProtect;
+  strMoveCell     ('Наименование единицы подвижного состава', , sci13EnEsc) : Protect, PickButton;
+<<
+
+  Фильтры по дате/времени
+ (.) без ограничений  `
+ (.) по дате          `  `c`.@@@@@@@@@@@`по`.@@@@@@@@@@@
+ (.) по дате и времени`   .@@@@@@@@@@@ `c`.@@@@@@ `по`.@@@@@@
+
+ [.] по единицам подвижного состава`       .@@@@@@@@@@@@@@@@
+ [.] только по непривязанным к ДО единицам состава`
+>>
+end;
+
+HandleEvent
+
+cmCheckField:
+  case CurField of
+    #wFilter,
+    #wEdFlt:
+      ProcessCommand(cmValue10);
+    //-----------------------------------------------
+    #fd1:
+      if (fd1 > fd2)
+        {
+          Message('Интервал задан не верно.', Error);
+          Abort;
+        }
+    //-----------------------------------------------
+    #fd2:
+      if (fd1 > fd2)
+        {
+          Message('Интервал задан не верно.', Error);
+          Abort;
+        }
+    //-----------------------------------------------
+    #ft1:
+      {
+        if (Hour(ft1) > 23)
+          {
+            Message('Ошибка ввода времени.'#13
+                  + 'Количество часов не должно превышать 23.', Error);
+            Abort;
+          }
+
+        ft1 := Time(Hour(ft1), Minute(ft1), 0, 0);
+
+        if (ft1 > ft2)
+          ft1 := ft2;
+      }
+    //-----------------------------------------------
+    #ft2:
+      {
+        if (Hour(ft2) > 23)
+          {
+            Message('Ошибка ввода времени.'#13
+                  + 'Количество часов не должно превышать 23.', Error);
+            Abort;
+          }
+
+        ft2 := Time(Hour(ft2), Minute(ft2), 0, 0);
+
+        if (ft1 > ft2)
+          ft2 := ft1;
+      }
+  end; // case
+
+cmPick:
+  case (CurField) of
+    #strMoveCell:
+      if (RunInterface('GetMoveCellMC', GloMoveCell) <> cmCancel)
+        {
+          wEdFlt := wEdFlt OR 1;
+          RereadRecord;
+        }
+  end;
+
+cmDelOnProtect:
+  if (CurField = #strMoveCell)
+    {
+      GloMoveCell := 0;
+      RereadRecord;
+    }
+
+end; // HandleEvent Panel pnFilters
+end; // Panel pnFilters
+
+HandleEvent
+
+cmInit:
+  {
+    wFilter := GloFilter;
+    wEdFlt  := GloEdFlt;
+    fd      := Glod;
+    fd1     := Glod1;
+    fd2     := Glod2;
+    ft1     := Glot1;
+    ft2     := Glot2;
+    ProcessCommand(cmValue10);
+  }
+
+cmDefault:
+  {
+    UpdateTable;
+    GloFilter := wFilter;
+    GloEdFlt  := wEdFlt;
+    Glod      := fd;
+    Glod1     := fd1;
+    Glod2     := fd2;
+    Glot1     := ft1;
+    Glot2     := ft2;
+  }
+
+end; // Window
+end; // Window wnFilters
+
+Browse brGetVagon1 (, hcOKatalEPSNum, sci1478EnIns);
+  Show at (, , , 16);
+  Table Vagon;
+
+Fields { Font = { Color = if (SearchMarker(VagonMarker, Vagon.NRec, IndexNo), ColorMark, 0 )} };
+  PickLabel        #3'√': [1],  Skip, NoAutoSize;
+  Vagon.Num        #3'Номер'      ('Номер вагона')          : [ 8], Protect;
+  Vagon.ZavNom     #3'Зав. номер' ('Заводской номер вагона'): [ 8], Protect;
+  Vagon.dReg       #3'Дата'       ('Дата регистрации')      : [ 9, 'DD/MM/YYYY'], Protect;
+  Vagon.tReg       #3'Время'      ('Время регистрации')     : [ 4, 'HH: MM'], Protect;
+  Vagon.Massa      #3'Вес тары'   ('Вес тары')              : [ 8], [prSignsInKol], Protect;
+  Vagon.Netto      #3'Нетто'      ('Нетто')                 : [ 8], [prSignsInKol], Protect;
+  (Vagon.Massa +
+   Vagon.Netto)    #3'Брутто'     ('Брутто')                : [ 8], [prSignsInKol], Protect;
+  Vagon.CodeProbe  #3'Код пробы'  ('Код пробы')             : [14], Protect;
+  MoveCell.Name    #3'Ед.подв.состава'        ('Наименование единицы подвижного состава'): [10], Protect;
+  WayMove.Name     #3'Способ транспортировки' ('Наименование способа транспортировки')   : [10], Protect;
+end; // Browse brGetVagon
+
+Screen scDO (, , sci1Esc);
+  Show at (, 17, 49, );
+  Table Vagon; //Table BaseDoc;
+
+Fields
+  BaseDoc.NoDoc: Protect;
+  BaseDoc.dDoc: ['DD/MM/YYYY'], Protect;
+  KatOrg.Name  : Protect;
+  KatMC1.Name  : Protect;
+<<
+  Информация о документе-основании:
+
+  Номер.@@@@@@@@@@@@@@  Дата.@@@@@@@@@@
+  Контрагент.@@@@@@@@@@@@@@@@@@@@@@@@@@
+  МЦ        .@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Screen scDO2 (, , sci1Esc);
+  Show at (, 17, 49, );
+  Table Vagon; //Table BaseDoc;
+<<
+>>
+end;
+
+Screen scSert (, , sci1Esc);
+  Show at (50, 17, , );
+  Table Vagon; //Table Sertific;
+
+Fields
+  Sertific.NDoc: Protect;
+  Sertific.dDoc: ['DD/MM/YYYY'], Protect;
+  Sertific.Name: Protect;
+  KatMC2.Name  : Protect;
+<<
+  Информация об удостоверении качества:
+
+  Номер.@@@@@@@@@@@@@@  Дата.@@@@@@@@@@
+  Название .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  МЦ       .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Screen scSert2 (, , sci1Esc);
+  Show at (50, 17, , );
+  Table Vagon; //Table Sertific;
+<<
+>>
+end;
+
+
+//******************************************************************************
+
+Panel pnVagon;
+  Table Vagon;
+HandleEvent
+
+cmSetDefault:
+  {
+    ClearBuffer(#Vagon);
+    Vagon.Descr := sGetTune('User.Descr');
+    Vagon.DesGr := sGetTune('User.DesGr');
+    Vagon.dReg  := Cur_Date;
+    Vagon.tReg  := Time(Hour(Cur_Time), Minute(Cur_Time), 0, 0);
+
+    if (p1 = 0)
+      Vagon.CodeProbe := Probe.CodeProbe;
+
+    SelectField(#Vagon.Num);
+  }
+
+cmInsertRecord:
+  insert current Vagon;
+
+cmDeleteRecord:
+  if (Message('Вы хотите удалить запись?', Confirmation+YesNo) = cmYes)
+    {
+      if (delete current AllMemo = tsOk)
+        { }
+
+      if (delete current Vagon = tsOk)
+        { }
+    }
+
+cmUpdateRecord:
+  update current Vagon;
+
+cmCheckField:
+  case CurField of
+    #Vagon.tReg:
+      Vagon.tReg := Time(Hour(Vagon.tReg), Minute(Vagon.tReg), 0, 0);
+  end; // case
+
+end; // HandleEvent Panel pnVagon
+end; // Panel pnVagon
+
+HandleEvent
+cmInit:
+  {
+    wCondition  := -1;
+    GloEdFlt    := 0;
+    GloMoveCell := 0;
+
+    ProtectFields;
+
+    if ( (p1 = 2) OR (p1 = 3) )
+#ifdef Atl52
+      SetHelpAndStatusContext(brGetVagon1, -1, sci1478EnEsc, 'OKatalEPSNum');
+#else
+      SetHelpAndStatusContext(brGetVagon1, -1, sci1478EnEsc, hcOKatalEPSNum);
+#end
+
+    case p1 of
+      1: wCondition := tcVagon02;
+      //-------------------------
+      0: wCondition := tcVagon01;
+    end; // case
+
+    InitVagon;
+
+    if (wCondition <> -1)
+      PushCondition(wCondition);
+
+    if (GetFirst Vagon where ((c1 == Vagon.NRec)) <> tsOk)
+      if (GetFirst Vagon <> tsOk)
+        Message('Единицы подвижного состава не найдены', Information+cmOk);
+
+    VagonMarker := InitMarker('VagonMarker', 8, 10, 10);
+    ClearMarker(VagonMarker);
+
+    GloFilter := 0;
+    Glod1     := Cur_Date;
+    Glod2     := Cur_Date;
+    Glod      := Cur_Date;
+    Glot1     := Time(0, 0, 0, 0);
+    Glot2     := Time(23, 59, 0, 0);
+    ProcessCommand(cmValue10);
+  }
+
+cmDone:
+  {
+    if (wCondition <> -1)
+      PopCondition(wCondition);
+
+    DoneMarker(VagonMarker, 'VagonMarker');
+    SaveMyDsk( if ((wEdFlt AND 2) <> 0, TRUE, FALSE), 'Vagon_NoDO');
+  }
+
+cmAddNewRec:
+  PutCommand(cmInsert);
+
+cmDefault:
+  {
+    if (p1 = 2)
+      {
+        PutCommand(cmEdit);
+        Abort;
+        Exit;
+      }
+
+    UpdateTable;
+
+    if (IsValid(#Vagon))
+      {
+        c1 := Vagon.NRec;
+
+        if (GetMarkerCount(VagonMarker) = 0)
+          InsertMarker(VagonMarker, Vagon.NRec);
+      }
+  }
+
+cmMarkUnmark:
+  {
+    InvertMarker(VagonMarker, Vagon.NRec)
+    RereadRecord(#Vagon);
+#ifdef ATL51
+    RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+#else
+    if (GetNext Vagon = tsOk)
+      {
+        CallToNeighbours(cmPosDown, #Vagon);
+        RedrawPanel(#Vagon);
+      }
+#end
+  }
+
+cmSelectAll:
+  {
+    PushPos(#Vagon);
+    StartNewVisual(vtRotateVisual, vfTimer + vfBreak, 'Помечаю все единицы подвижного состава...'#13#3, 0);
+
+    _LOOP Vagon
+      if NOT NextVisual
+        Break
+      else
+        InsertMarker(VagonMarker, Vagon.NRec);
+
+    StopVisual('', 0);
+    PopPos(#Vagon);
+    RereadRecord(#Vagon);
+  }
+
+cmUnselectAll:
+  {
+    PushPos(#Vagon);
+    StartNewVisual(vtRotateVisual, vfTimer + vfBreak, 'Сбрасываю пометку со всех единиц подвижного состава...'#13#3, 0);
+
+    _LOOP Vagon
+      if NOT NextVisual
+        Break
+      else
+        if (SearchMarker(VagonMarker, Vagon.NRec, IndexNo))
+          DeleteMarker(VagonMarker, Vagon.NRec);
+
+    StopVisual('', 0);
+    PopPos(#Vagon);
+    RescanPanel(#Vagon);
+    RereadRecord(#Vagon);
+  }
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuGetVagon'));
+
+cmFilterSave:
+  {
+    if (RunWindowModal(wnFilters) = cmDefault)
+      {
+        ClearMarker(VagonMarker);
+        SetFilters;
+
+        if (GetFirst Vagon <> tsOk)
+          {
+            Message('Не найдены единицы подвижного состава, '#13+
+                    'удовлетворяющие установленным ограничениям', Warning+cmOk);
+            PutCommand(cmFilterSave);
+          }
+
+        RescanPanel(#Vagon);
+        RereadRecord(#Vagon);
+     }
+  }
+cmValue10:
+  {
+    if (wFilter = 1)
+      {
+        SetFieldState(#fd1, sfVisible);
+        SetFieldState(#fd2, sfVisible);
+      }
+    else
+      {
+        ClearFieldState(#fd1, sfVisible);
+        ClearFieldState(#fd2, sfVisible);
+      }
+
+    if (wFilter = 2)
+      {
+        SetFieldState(#fd , sfVisible);
+        SetFieldState(#ft1, sfVisible);
+        SetFieldState(#ft2, sfVisible);
+      }
+    else
+      {
+        ClearFieldState(#fd , sfVisible);
+        ClearFieldState(#ft1, sfVisible);
+        ClearFieldState(#ft2, sfVisible);
+      }
+
+    if ((wEdFlt AND 1) = 1)
+      SetFieldState(#strMoveCell, sfVisible)
+    else
+      ClearFieldState(#strMoveCell, sfVisible);
+  }
+
+cmEdit:
+  if (RunInterface('NumVagEd', Vagon.NRec, 0) <> cmCancel)
+    RereadRecord;
+
+cmInsert:
+  {
+    var cRec: comp; cRec := 0;
+    RunInterface('NumVagEd', cRec, 1);
+
+    if (cRec<>0)
+      if (GetFirst Vagon where (( cRec == Vagon.NRec )) <> tsOk)
+        if (GetFirst Vagon  <> tsOk)
+          { }
+
+    RescanPanel(#Vagon);
+    RereadRecord(#Vagon);
+    Stop;
+  }
+
+cmDelOnProtect:
+  Abort;
+
+#include vagattr.vpp
+
+cmExp:
+  {
+    oOnExpImp.OnExportHandler( ieVagon, 0, Vagon.NRec, 0, VagonMarker );
+    RescanPanel(tnVagon);
+  }
+
+cmImp:
+  {
+    oOnExpImp.OnImportHandler( ieVagon, 0 );
+    RescanPanel(tnVagon);
+  }
+
+cmIEHist:
+  oOnExpImp.OnExportImportHistory( ieVagon, Vagon.NRec );
+
+end; // HandleEvent
+End. // Interface
+
+
+mnuGetVagon Menu
+{
+- 'Фильтр на данные', cmFilterSave, 'Установить фильтр на данные', hcHotKeyFiltr, 'Alt-B', kbAltB, sci1Esc;
+-----------;
+- 'Экспорт', cmExp, 'Экспорт документов', hcSwiftMAll, 'Alt-O', kbAltO, sci1Esc;
+- 'Импорт', cmImp, 'Импорт документов', hcSwiftMAll, 'Alt-I', kbAltI, sci1Esc;
+- 'Протокол', cmIEHist, 'Протокол экспорта/импорта', hcSwiftMAll, 'Alt-H', kbAltH, sci1Esc;
+-----------;
+- 'Внешняя классификация', cmPickClass, 'Внешняя классификация', hcGkatalM1ExtClass, 'Alt-C', kbAltC, sci1Esc;
+- 'Внешние атрибуты', cmPickAttr, 'Заполнение внешних атрибутов по данной позиции', hcGkatalM1Attr, 'Alt-A', kbAltA, sci1Esc;
+}

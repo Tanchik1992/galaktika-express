@@ -1,0 +1,259 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Печать спецификации с группировкой по частям когда задаваемой группы
+//******************************************************************************
+#include BigPrint.vih
+
+//******************************************************************************
+
+#doc
+Печать спецификации ДО
+#end
+Interface BigPrint;
+
+//******************************************************************************
+
+Table STRUCT BPrint
+(
+  cSpStep   : comp,
+  cEd       : comp,
+  PrMc      : word,
+  kGroupMC  : String[60],
+  Name      : String[80],
+  Kol       : double,
+  Price     : double,
+  Summa     : double
+)
+With Index
+(
+  BPrint00 = kGroupMC,
+  BPrint01 = cSpStep
+);
+
+//******************************************************************************
+
+Create view
+
+Var
+//------------------------------------------------------------------------------
+  __cBaseDoc
+, __cEd
+, __CurNrec
+                : comp;
+//------------------------------------------------------------------------------
+  __Precision
+, __VidGroup
+                : word;
+//------------------------------------------------------------------------------
+  __CutCode
+                : String[30];
+//------------------------------------------------------------------------------
+  __Kol
+, __Price
+, __Summa
+                : double;
+//------------------------------------------------------------------------------
+  Par1
+, Par2
+                : integer;
+//------------------------------------------------------------------------------
+
+From
+  BaseDoc
+, StepDoc
+, SpStep
+, KatMC
+, KatUsl
+, GroupMC
+, GroupUsl
+, ExClassVal
+, ExClassSeg
+, BPrint(BPrint00)
+
+Where
+((
+       __cBaseDoc       == BaseDoc.NRec
+   AND BaseDoc.NRec     == StepDoc.cBaseDoc
+   AND StepDoc.NRec     == SpStep.cStepDoc
+   AND SpStep.cMcUsl    == KatMC.NRec
+   AND SpStep.cMcUsl    == KatUsl.NRec
+   AND KatMC.CGroupMC   == GroupMC.NRec
+   AND KatUsl.CGROUPUsl == GroupUsl.NRec
+
+   AND wGetTune('Rep.Out.cAbstractName')  == ExClassVal.ClassCode
+   AND word(coKatMC)                      == ExClassVal.wTable
+   AND KatMC.NRec                         == ExClassVal.cRec
+   AND ExClassVal.cClassSeg               == ExClassSeg.NRec
+))
+;
+
+//******************************************************************************
+
+Window ModPricePar 'Количество первых символов в коде группы МЦ' DoAccept, EscClose, Gray;
+  Show at (, , 50, 7);
+
+Screen scPar (, hcIspKrupPech, sci1Esc)
+
+Fields
+  __VidGroup  ('Группировка по обобщенному наименованию', , ), NoProtect;
+  __Precision ('Количество первых символов в коде группы МЦ', , ), NoProtect;
+
+Buttons
+  cmCancel, Default, , 'OK', , sci1Esc;
+<<
+
+  [.] группировать по обобщенному наименованию`
+
+  Количество первых символов кода группы .@@@@@
+
+               <.~П~родолжить.>
+>>
+end;
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    __Precision := 2;
+    ReadMyDsk(__VidGroup, '__VidGroup', TRUE);
+    SetFieldVisible(#__Precision, (__VidGroup = 0));
+  };
+
+cmDone:
+  SaveMyDsk(__VidGroup, '__VidGroup');
+
+end;
+
+//******************************************************************************
+
+TableEvent
+  Table BaseDoc
+
+cmCheckField:
+  case CurField of
+    #__VidGroup:
+      SetFieldVisible(#__Precision, (__VidGroup = 0))
+  end;
+end;
+
+end; //Window
+
+//******************************************************************************
+
+Procedure Query;
+{
+  RunWindowModal(ModPricePar);
+}
+
+
+//******************************************************************************
+
+Procedure BegPrint(_cBaseDoc: comp);
+{
+  delete all BPrint;
+   __cBaseDoc := _cBaseDoc;
+
+  if (GetFirst BaseDoc = tsOk)
+    _LOOP SpStep
+      {
+        if ((SpStep.PrVoz <> 0) OR (SpStep.PrMc <> 1))
+          continue;
+
+        bprint.cSpStep  := SpStep.NRec;
+        bprint.PrMc     := SpStep.PrMc;
+        bprint.cEd      := KatMC.cEd;
+
+        case __VidGroup of
+          0:
+            {
+              bprint.Name     := GroupMC.Name;
+              bprint.kGroupMC := KatMC.kGroupMC;
+            }
+          1:
+            {
+              bprint.Name     := ExClassSeg.Value;
+              bprint.kGroupMC := ExClassSeg.Value;
+            }
+        end;
+
+        bprint.kol      := SpStep.kol;
+        bprint.Price    := SpStep.Price;
+        bprint.Summa    := SpStep.kol*SpStep.Price;
+        insert current bprint;
+      }
+
+  if (GetFirst BPrint = tsOk)
+    {
+       __CutCode := if (__VidGroup = 0, SubStr(bprint.kGroupMC, 0, __Precision), bprint.kGroupMC);
+       __CurNrec := bprint.cSpStep;
+       __cEd := bprint.cEd;
+      __Price := bprint.Price;
+    }
+
+  While (GetNext bprint = tsOk)
+    {
+      __Kol := 0;
+      __Summa := 0;
+
+      if ((if (__VidGroup = 0, SubStr(bprint.kGroupMC, 0, __Precision), bprint.kGroupMC) = __CutCode) AND (__CurNrec <> bprint.cSpStep) AND (bprint.PrMc = 1))
+        {
+          __Kol  := bprint.kol;
+          __Summa := bprint.Summa;
+
+          PushPos(#bprint);
+          if (GetFirst bprint where ((__CurNrec == bprint.cSpStep)) = tsOk)
+            {
+              bprint.kol   := bprint.kol + __Kol;
+              bprint.Summa := bprint.Summa + __Summa;
+              update current bprint;
+            }
+
+          PopPos(#bprint);
+          delete current bprint;
+        }
+      else
+        {
+           __CutCode := if (__VidGroup = 0, SubStr(bprint.kGroupMC, 0, __Precision), bprint.kGroupMC);
+           __CurNrec := bprint.cSpStep;
+           __cEd := bprint.cEd;
+           __Price := bprint.Price;
+        }
+    }
+}
+
+//******************************************************************************
+
+Function retGroup(
+                   var _kGroupMC  : String[80];
+                   var _Name      : String[80];
+                   var _kol       : double;
+                   var _Summa     : double;
+                       cSpStep    : comp
+                 ): boolean;
+{
+  if (GetFirst bprint where ((cSpStep == bprint.cSpStep)) <> tsOk)
+    {
+      retGroup := FALSE;
+      Exit;
+    }
+
+  case __VidGroup of
+  //----------------
+    0: _kGroupMC := bprint.kGroupMC;
+  //----------------
+    1: _kGroupMC := '';
+  //----------------
+  end;
+
+  _Name    := bprint.Name;
+  _Summa   := bprint.Summa;
+  _kol     := bprint.kol;
+  retGroup := TRUE
+}
+
+//******************************************************************************
+
+End.

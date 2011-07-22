@@ -1,0 +1,657 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// Функции для работы с тарой в сопроводительных документах
+//********************************************************************************
+
+#include SoprTara.Vih
+
+#include DOfuns.vih   // Процедуры округления в ДО
+#include SpNext.vih   // Объект получения последнего номера спецификации
+#include SDfuns.vih   // резервирование МЦ
+#include MTRFuncs.vih // функции целевого учета
+
+//********************************************************************************
+
+#doc
+Назначение:
+  Интерфейс для работы с тарой в сопроводительных документах
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//********************************************************************************
+
+Interface iSoprTara;
+
+var
+  wKolZn: word;
+  OldMinKolMc: double;
+
+#include DOfuns.var
+#include SpNext.var
+#include SDfuns.var
+#include MTRFuncs.var    // функции целевого учета
+
+Create view
+
+var
+  SchFactFlag: boolean;
+  wGrTara    : word;     // Настройка: Группировка тары в спецификации
+  bGrParty   : boolean;  // Настройка: При оприходовании относить МЦ и тару в одну общую партию
+  PriceTNVoz : comp;     // Настройка: Текущий прайс-лист для невозвратной тары
+  PriceTVoz  : comp;     // Настройка: Текущий прайс-лист для возвратной тары
+  bAutoPaste : boolean;  // Автоматическая вставка тары в сбыте
+  bAutoPasteB: boolean;  // Автоматическая вставка тары в снабжении
+  bAutoPasteS: boolean;  // Автоматическая вставка тары в складском учете
+
+As select
+  *
+
+From
+  KatSopr
+, SpSopr
+, KlPrice
+, Prices
+, KatMc
+, SpOtpEd
+, SpSopr SpSopr2
+, SpOtpEd SpOtpEd2
+
+where
+((
+   SpOtpEd.cMcTara  ==  KatMC.NRec
+))
+;
+
+
+//******************************************************************************
+// Точность при округлении
+Procedure SetKolZn;
+var
+  doMinKolMc: double;
+{
+  doMinKolMc := doGetTune('OPER.MINKOLMC');
+
+  if (wKolZn <> 99) AND (OldMinKolMc = doMinKolMc)
+    EXIT;
+
+  if (doMinKolMc >= 1)                      wKolZn := 0
+  else if (doMinKolMc >= 0.1)               wKolZn := 1
+  else if (doMinKolMc >= 0.01)              wKolZn := 2
+  else if (doMinKolMc >= 0.001)             wKolZn := 3
+  else if (doMinKolMc >= 0.0001)            wKolZn := 4
+  else if (doMinKolMc >= 0.00001)           wKolZn := 5
+  else if (doMinKolMc >= 0.000001)          wKolZn := 6
+  else if (doMinKolMc >= 0.0000001)         wKolZn := 7
+  else if (doMinKolMc >= 0.00000001)        wKolZn := 8
+  else if (doMinKolMc >= 0.000000001)       wKolZn := 9
+  else if (doMinKolMc >= 0.0000000001)      wKolZn := 10
+  else if (doMinKolMc >= 0.00000000001)     wKolZn := 11
+  else if (doMinKolMc >= 0.000000000001)    wKolZn := 12
+  else if (doMinKolMc >= 0.0000000000001)   wKolZn := 13
+  else if (doMinKolMc >= 0.00000000000001)  wKolZn := 14
+  else if (doMinKolMc >= 0.000000000000001) wKolZn := 15
+  else wKolZn := 16;
+
+  OldMinKolMc := doGetTune('OPER.MINKOLMC');
+}
+
+//******************************************************************************
+// кол-во по таре при группировки тары внизу спецификации
+Procedure GetKolTara (_cSopr, _cMC, _cSpSopr: comp; var _Kol, _KolFact, _KolOpl: double);
+{
+  _Kol     := 0;
+  _KolFact := 0;
+  _KolOpl  := 0;
+
+  _LOOP SpSopr2 where (( _cSopr  ==  SpSopr2.cSopr AND
+                         word(1) ==  SpSopr2.PrMC ))
+  {
+    if (_cSpSopr = SpSopr2.NRec)
+      Continue;
+
+    if (GetFirst SpOtpEd2 where (( SpSopr2.cOtpEd  ==  SpOtpEd2.cOtpEd AND
+                                   _cMC            ==  SpOtpEd2.cMcTara )) = tsOk)
+    {
+      _Kol     := _Kol     + SpSopr2.Kol     / SpOtpEd2.Koef;
+      _KolFact := _KolFact + SpSopr2.KolFact / SpOtpEd2.Koef;
+      _KolOpl  := _KolOpl  + SpSopr2.KolOpl  / SpOtpEd2.Koef;
+    }
+  }
+
+  if (Round (_KolFact, wKolZn) <> Trunc (_KolFact))
+  {
+    _Kol     := Trunc (_Kol + 1);
+    _KolFact := Trunc (_KolFact + 1);
+    _KolOpl  := Trunc (_KolOpl + 1);
+  }
+  else
+  {
+    _Kol     := Round (_Kol);
+    _KolFact := Round (_KolFact);
+    _KolOpl  := Round (_KolOpl);
+  }
+}
+
+//******************************************************************************
+// формирование номеров позиций
+Procedure ChangeNppSopr (_cSopr: comp);
+var
+  i: integer;
+{
+  i := 1;
+
+  wGrTara := wGetTune ('Tara.GrTara');
+
+  if (wGrTara = 0)
+  {
+    _LOOP SpSopr where (( _cSopr  == SpSopr.cSopr AND
+                          comp(0) == SpSopr.cOwner ))
+    {
+      if (SpSopr.Npp <> i)
+      {
+        SpSopr.Npp := i;
+        Update Current SpSopr;
+      }
+
+      Inc(i);
+
+      _LOOP SpSopr2 where (( _cSopr       == SpSopr2.cSopr  AND
+                             SpSopr.NRec  == SpSopr2.cOwner ))
+      {
+        if (SpSopr2.Npp <> i)
+        {
+          SpSopr2.Npp := i;
+          Update Current SpSopr2;
+        }
+
+        Inc(i);
+      }
+    }
+  }
+  else
+  {
+    _LOOP SpSopr where (( _cSopr  == SpSopr.cSopr AND
+                          comp(0) == SpSopr.cOwner ))
+    {
+      if (SpSopr.Npp <> i)
+      {
+        SpSopr.Npp := i;
+        Update Current SpSopr;
+      }
+
+      Inc(i);
+    }
+
+    _LOOP SpSopr where (( _cSopr   == SpSopr.cSopr  AND
+                          comp(1) <<= SpSopr.cOwner ))
+    {
+      if (SpSopr.Npp <> i)
+      {
+        SpSopr.Npp := i;
+        Update Current SpSopr;
+      }
+
+      Inc(i);
+    }
+
+    _LOOP SpSopr where (( _cSopr    == SpSopr.cSopr  AND
+                          comp(-1) >>= SpSopr.cOwner ))
+    {
+      if (SpSopr.Npp <> i)
+      {
+        SpSopr.Npp := i;
+        Update Current SpSopr;
+      }
+
+      Inc(i);
+    }
+  }
+}
+
+//******************************************************************************
+
+Function FillPrice: double;
+{
+  if (GetFirst KlPrice where ((Prices.cKlPrice == KlPrice.NRec)) = tsOk)  {}
+
+  if (KatSopr.cVal <> KlPrice.cVal)
+    FillPrice := oValFunc.GetAnyCurrency (KlPrice.cVal, Prices.Price, KatSopr.dSopr, KatSopr.cVal);
+  else
+    FillPrice := Prices.Price;
+
+  if (KatSopr.cVal = 0)
+    FillPrice := oDOfuns.DoRoundNDEP (KatSopr.VidSopr, FillPrice)
+  else
+    FillPrice := oDOfuns.DoRoundVltP (KatSopr.VidSopr, FillPrice);
+}
+
+
+Procedure FillTara (_Kol: double; _cParty:comp);
+var
+  _Check: boolean;
+
+{
+  SetKolZn;
+
+  ClearBuffer(#SpSopr);
+  SpSopr.cSopr   := KatSopr.NRec;
+  SpSopr.dSopr   := KatSopr.dSopr;
+  SpSopr.VidSopr := KatSopr.VidSopr;
+  SpSopr.dOprTTN := KatSopr.dOpr;
+  SpSopr.cVal    := KatSopr.cValut;
+  SpSopr.Npp     := oSpNext.GetSpNppNext (KatSopr.nRec, coSpSopr);
+  SpSopr.PrVoz   := KatSopr.TaraVoz;
+  SpSopr.PrMC    := 1;
+  SpSopr.cMcUsl  := SpOtpEd.cMcTara;
+  SpSopr.NETTO   := KatMC.MASSA;
+  SpSopr.MTARA   := KatMC.MTARA;
+
+  if (Round (_Kol / SpOtpEd.Koef, wKolZn) <> Trunc (_Kol / SpOtpEd.Koef))
+  {
+    SpSopr.Kol     := Trunc (_Kol / SpOtpEd.Koef + 1);
+    SpSopr.Kolfact := Trunc (_Kol / SpOtpEd.Koef + 1);
+  }
+  else
+  {
+    SpSopr.Kol     := Round (_Kol / SpOtpEd.Koef, wKolZn);
+    SpSopr.Kolfact := Round (_Kol / SpOtpEd.Koef, wKolZn);
+  }
+
+  _Check := FALSE;
+
+  case KatSopr.TaraVoz of
+    1: // возвратная
+    {
+      if (bGrParty)
+      {
+        if (GetFirst Prices where ((SpOtpEd.cMcTara == Prices.cThing    AND
+                                    PriceTVoz       == Prices.cKlPrice  AND
+                                    _cParty         == Prices.cParty)) = tsOk)
+         _Check:= TRUE;
+      }
+      else
+      {
+        if (GetFirst Prices where ((SpOtpEd.cMcTara == Prices.cThing  AND
+                                    PriceTVoz       == Prices.cKlPrice)) = tsOk)
+          _Check:= TRUE
+      }
+
+      if _Check
+      {
+        SpSopr.cOtpEd     := Prices.cOtped;
+        SpSopr.cPriceList := PriceTVoz;
+        SpSopr.Price      := FillPrice;
+
+        if (bGrParty)
+          SpSopr.cParty:= _cParty;
+      }
+      else
+      {
+        SpSopr.cOtpEd := fEdIzm.GetAktOtpEdNRec (SpOtpEd.cMcTara, 1);
+        SpSopr.Price  := KatMC.CenaMC;
+      }
+    }
+
+    0, 2: // невозвратная
+    {
+      if (bGrParty)
+      {
+        if (GetFirst Prices where ((SpOtpEd.cMcTara == Prices.cThing    AND
+                                    PriceTNVoz      == Prices.cKlPrice  AND
+                                    _cParty         == Prices.cParty)) = tsOk)
+         _Check:= TRUE;
+      }
+      else
+      {
+        if (GetFirst Prices where ((SpOtpEd.cMcTara == Prices.cThing  AND
+                                    PriceTNVoz      == Prices.cKlPrice)) = tsOk)
+          _Check:= TRUE
+      }
+
+      if _Check
+      {
+        SpSopr.cOtpEd     := Prices.cOtped;
+        SpSopr.Price      := FillPrice;
+        SpSopr.cPriceList := PriceTNVoz;
+
+        if (bGrParty)
+          SpSopr.cParty := _cParty;
+      }
+      else
+      {
+        SpSopr.cOtpEd := fEdIzm.GetAktOtpEdNRec (SpOtpEd.cMcTara, 1);
+        SpSopr.Price  := KatMC.CenaMC;
+      }
+    }
+  end;
+}
+
+
+Procedure InsertTara1 (_cOtpEd, _cOwner, _cSopr: comp; _Kol: double; _cParty: comp);
+{
+  _LOOP SpOtpEd where ((_cOtpEd == SpOtpEd.cOtpEd))
+                ordered by SpOtpEd.Npp
+    {
+      if (GetFirst KatMC = tsOk)
+        {
+          FillTara(_Kol, _cParty);
+          SpSopr.cOwner:= _cOwner;
+          Insert Current SpSopr;
+         }
+
+      oMTRFun.CopySpecMTR(coSpSopr, _cOwner, coSpSopr, SpSopr.nRec);
+    }
+}
+
+
+Procedure InsertTara2 (_cOtpEd, _cOwner, _cSopr: comp; _Kol: double; _cParty: comp);
+var
+  tKolOld: double;
+{
+  SetKolZn;
+
+  _LOOP SpOtpEd where ((_cOtpEd == SpOtpEd.cOtpEd))
+                ordered by SpOtpEd.Npp
+  {
+    if (GetFirst SpSopr where ((_cSopr          == SpSopr.cSopr  AND
+                                SpOtpEd.cMcTara == SpSopr.cMcUsl)) <> tsOk)
+    {
+      if (GetFirst KatMC = tsOk)
+      {
+        FillTara(_Kol, _cParty);
+        SpSopr.cOwner:= _cOwner;
+        Insert Current SpSopr;
+      }
+    }
+    else
+    {
+      tKolOld := SpSopr.KolFact;
+
+      if (NOT boGetTune('Tara.RecalcKolPos'))
+        GetKolTara(_cSopr, SpOtpEd.cMcTara, 0, SpSopr.Kol, SpSopr.KolFact, SpSopr.KolOpl)
+      else
+        if (Round (_Kol / SpOtpEd.Koef, wKolZn) <> Trunc (_Kol / SpOtpEd.Koef))
+        {
+          SpSopr.Kol     := SpSopr.Kol     + Trunc (_Kol / SpOtpEd.Koef + 1);
+          SpSopr.KolFact := SpSopr.KolFact + Trunc (_Kol / SpOtpEd.Koef + 1);
+        }
+        else
+        {
+          SpSopr.Kol     := SpSopr.Kol     + Round (_Kol / SpOtpEd.Koef, wKolZn);
+          SpSopr.KolFact := SpSopr.KolFact + Round (_Kol / SpOtpEd.Koef, wKolZn);
+        }
+
+      Update Current SpSopr;
+
+      if (SpSopr.VidSopr = 101) or (SpSopr.VidSopr = 108)
+        oSDfuns.CheckKolSoprOrdB(SpSopr.NRec, tKolOld);
+    }
+
+    oMTRFun.CopySpecMTR(coSpSopr, _cOwner, coSpSopr, SpSopr.nRec);
+  }
+}
+
+// вставка позиций с тарой
+Procedure InsertTara (_cOtpEd, _cOwner, _cSopr: comp; _Kol: double; _cParty: comp);
+{
+  // позиционирование на накладную
+  if GetFirst KatSopr where (( _cSopr == KatSopr.NRec )) <> tsOk
+    EXIT;
+
+  wGrTara    := wGetTune ('Tara.GrTara');
+  bGrParty   := boGetTune('Tara.GrParty');
+  PriceTNVoz := coGetTune('Price.cPriceTNVoz');
+  PriceTVoz  := coGetTune('Price.cPriceTVoz');
+
+  if (wGrTara = 0)
+    InsertTara1 (_cOtpEd, _cOwner, _cSopr, _Kol, _cParty);
+  else
+    InsertTara2 (_cOtpEd, _cOwner, _cSopr, _Kol, _cParty);
+}
+
+//******************************************************************************
+
+Procedure DeleteSpSoprTara1 (_cSopr, _cOwner: comp);
+{
+  WHILE (GetFirst SpSopr where ((_cSopr  == SpSopr.cSopr   AND
+                                 _cOwner == SpSopr.cOwner  AND
+                                (SpSopr.NRec <> SpSopr.cOwner) )) = tsOk)
+  {
+    oSDfuns.SpSopr_Delete (SpSopr.nRec);
+  }
+}
+
+
+Procedure DeleteSpSoprTara2 (_cSopr, _cOtpEd, _cOwner: comp; _Kol: double);
+var
+  tKolOld: double;
+{
+  SetKolZn;
+
+  _LOOP SpOtpEd where ((_cOtpEd == SpOtpEd.cOtpEd))
+    if (GetFirst SpSopr where ((_cSopr          == SpSopr.cSopr  AND
+                                SpOtpEd.cMcTara == SpSopr.cMcUsl ))  =  tsOk)
+    {
+      tKolOld := SpSopr.KolFact;
+
+      if (NOT boGetTune('Tara.RecalcKolPos'))
+        GetKolTara(_cSopr, SpOtpEd.cMcTara, _cOwner, SpSopr.Kol, SpSopr.KolFact, SpSopr.KolOpl)
+      else
+        if (Round (_Kol / SpOtpEd.Koef, wKolZn) <> Trunc (_Kol / SpOtpEd.Koef))
+          SpSopr.KolFact := SpSopr.KolFact - Trunc (_Kol / SpOtpEd.Koef + 1)
+        else
+        {
+          SpSopr.KolFact := SpSopr.KolFact - Round (_Kol / SpOtpEd.Koef, wKolZn);
+          SpSopr.KolOpl  := SpSopr.KolOpl  - Round (_Kol / SpOtpEd.Koef, wKolZn);
+        }
+
+      SpSopr.ManualTax := 0;
+
+      Update Current SpSopr;
+
+      if (SpSopr.VidSopr = 101) or (SpSopr.VidSopr = 108)
+        oSDfuns.CheckKolSoprOrdB(SpSopr.NRec, tKolOld);
+
+      //удаление записи
+      if (SpSopr.KolFact = 0)
+        oSDfuns.SpSopr_Delete (SpSopr.nRec);
+    }
+}
+
+
+// удаление позиций с тарой
+Procedure DeleteSpSoprTara (_cSopr, _cOtpEd, _cOwner: comp; _Kol: double);
+{
+  wGrTara := wGetTune ('Tara.GrTara');
+
+  if (wGrTara = 0)
+    DeleteSpSoprTara1 (_cSopr, _cOwner)
+  else
+    DeleteSpSoprTara2 (_cSopr, _cOtpEd, _cOwner, _Kol);
+}
+
+//******************************************************************************
+
+Procedure UpdateSpSoprKolTara1 (_cSopr, _cOtpEd, _cOwner: comp; _Kol: double);
+var
+  tKolOld: double;
+{
+  SetKolZn;
+
+  _LOOP SpOtpEd where (( _cOtpEd == SpOtpEd.cOtpEd ))
+  {
+    if (GetFirst SpSopr where (( _cSopr          == SpSopr.cSopr   AND
+                                 SpOtpEd.cMcTara == SpSopr.cMcUsl  AND
+                                 (_cOwner = SpSopr.cOwner)         )) = tsOk)
+    {
+      tKolOld := SpSopr.KolFact;
+
+      if (Round (_Kol / SpOtpEd.Koef, wKolZn) <> Trunc (_Kol / SpOtpEd.Koef))
+      {
+        SpSopr.KolFact := Trunc (_Kol / SpOtpEd.Koef + 1);
+        SpSopr.KolOpl  := Trunc (_Kol / SpOtpEd.Koef + 1);
+      }
+      else
+      {
+        SpSopr.KolFact := Round (_Kol / SpOtpEd.Koef, wKolZn);
+        SpSopr.KolOpl  := Round (_Kol / SpOtpEd.Koef, wKolZn);
+      }
+
+      SpSopr.ManualTax:= 0;
+      Update Current SpSopr;
+
+      if (SpSopr.VidSopr = 101) or (SpSopr.VidSopr = 108)
+        oSDfuns.CheckKolSoprOrdB(SpSopr.NRec, tKolOld);
+    }
+  }
+}
+
+
+Procedure UpdateSpSoprKolTara2 (_cSopr, _cOtpEd: comp; _Kol: double; _KolOld: double);
+var
+  k1,k2  : double;
+  tKolOld: double;
+{
+  SetKolZn;
+
+  _LOOP SpOtpEd where ((_cOtpEd == SpOtpEd.cOtpEd))
+  {
+    if (GetFirst SpSopr where ((_cSopr          == SpSopr.cSopr  AND
+                                SpOtpEd.cMcTara == SpSopr.cMcUsl ))  =  tsOk)
+    {
+      tKolOld := SpSopr.KolFact;
+
+      if (NOT boGetTune('Tara.RecalcKolPos'))
+        GetKolTara(_cSopr, SpOtpEd.cMcTara, 0, SpSopr.Kol, SpSopr.KolFact, SpSopr.KolOpl)
+      else
+      {
+        if (Round (_KolOld / SpOtpEd.Koef, wKolZn) <> Trunc (_KolOld / SpOtpEd.Koef))
+          k1 := Trunc (_KolOld / SpOtpEd.Koef + 1);
+        else
+          k1 := Round (_KolOld / SpOtpEd.Koef, wKolZn);
+
+        if (Round (_Kol / SpOtpEd.Koef, wKolZn) <> Trunc (_Kol / SpOtpEd.Koef))
+          k2 := Trunc (_Kol / SpOtpEd.Koef + 1);
+        else
+          k2 := Round (_Kol / SpOtpEd.Koef, wKolZn);
+
+        SpSopr.KolFact   := SpSopr.KolFact - k1 + k2;
+        SpSopr.KolOpl    := SpSopr.KolOpl  - k1 + k2;
+      }
+
+      SpSopr.ManualTax := 0;
+
+      Update Current SpSopr;
+
+      if (SpSopr.VidSopr = 101) or (SpSopr.VidSopr = 108)
+        oSDfuns.CheckKolSoprOrdB(SpSopr.NRec, tKolOld);
+    }
+  }
+}
+
+
+// обновление данных по количеству в позициях с тарой
+Procedure UpdateSpSoprKolTara (_cSopr, _cOtpEd, _cOwner: comp; _Kol: double; _KolOld: double);
+{
+  wGrTara := wGetTune ('Tara.GrTara');
+
+  if (wGrTara = 0)
+    UpdateSpSoprKolTara1 (_cSopr, _cOtpEd, _cOwner, _Kol);
+  else
+    UpdateSpSoprKolTara2 (_cSopr, _cOtpEd, _Kol, _KolOld);
+}
+
+
+//******************************************************************************
+// установка партии в позициях с тарой
+Procedure SetPartyTara (_cSopr, _cOtpEd, _cOwner, _cParty: comp);
+{
+  if (boGetTune('Tara.GrParty') AND (wGetTune('Tara.GrTara') = 0))
+    _LOOP SpOtpEd where (( _cOtpEd == SpOtpEd.cOtpEd ))
+    {
+      if (GetFirst SpSopr where (( _cSopr          == SpSopr.cSopr   AND
+                                   SpOtpEd.cMcTara == SpSopr.cMcUsl  AND
+                                   (_cOwner = SpSopr.cOwner) )) = tsOk)
+       {
+         SpSopr.cParty := _cParty;
+         Update Current SpSopr;
+       }
+    }
+}
+
+
+//******************************************************************************
+// проверка автоматической вставки тары
+Function CheckTaraAutoPaste (TypeSopr: word): boolean;
+{
+  CheckTaraAutoPaste := FALSE;
+
+  case TypeSopr of
+    101,//Накладная на прием МЦ
+    102,//Накладная на возврат МЦ от консигнатора
+    103,//Накладная на прием МЦ от консигнанта
+    108://Накладная на прием молочного сырья
+    {
+      CheckTaraAutoPaste := bAutoPasteB;
+    }
+
+    201,//Накладная на отпуск МЦ
+    202,//Накладная на отпуск МЦ консигнатору
+    203,//Накладная на возврат МЦ консигнанту
+    210,//Акт передачи оборудования в монтаж
+    229,//Акт передачи МЦ на строительство
+    106,//Рекламационная накладная от покупателя на возврат МЦ
+    206://Рекламационная накладная на возврат МЦ продавцу
+    {
+      CheckTaraAutoPaste := bAutoPaste;
+    }
+
+    600..606, 611..613, 621, 622, 630, 632:
+    {
+      CheckTaraAutoPaste := bAutoPasteS;
+    }
+  end;
+}
+
+
+//******************************************************************************
+// Установить значение настройки
+Procedure SetTuneAutoPaste(bValue: boolean; wNumNastr: word);
+{
+  case wNumNastr of
+    1: bAutoPaste  := bValue;
+    2: bAutoPasteB := bValue;
+    3: bAutoPasteS := bValue;
+  end;
+}
+
+//******************************************************************************
+// Прочитать значение настройки
+Function GetTuneAutoPaste(wNumNastr: word): boolean;
+{
+  GetTuneAutoPaste := FALSE;
+
+  case wNumNastr of
+    1: GetTuneAutoPaste  := bAutoPaste;
+    2: GetTuneAutoPaste  := bAutoPasteB;
+    3: GetTuneAutoPaste  := bAutoPasteS;
+  end;
+}
+
+
+//******************************************************************************
+Handleevent
+cmOnVipLoad:
+{
+  wKolZn      := 99;
+  OldMinKolMc := doGetTune('Oper.MinKolMc');
+  bAutoPaste  := boGetTune('Tara.AutoPaste');
+  bAutoPasteB := boGetTune('Tara.AutoPaste_Buy');
+  bAutoPasteS := boGetTune('Tara.AutoPaste_Skl');
+}
+end;
+
+end.

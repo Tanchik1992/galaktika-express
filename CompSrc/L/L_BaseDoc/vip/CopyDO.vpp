@@ -1,0 +1,408 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Копирование документов-оснований
+//******************************************************************************
+
+
+if EditDOPosEnabled(true, true)
+  {
+    if (((tipDO = 101) AND boGetTune('Doc.Buy.NotEditDO'))
+        or
+        ((tipDO = 201) AND boGetTune('Doc.Sell.NotEditDO'))
+        or
+        ((tipDO = 1410) AND boGetTune('Doc.Wood.NarAkt.NotEditDO'))
+        or
+        ((tipDO = 1420) AND boGetTune('Doc.Wood.Schet.NotEditDO')))
+      if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+        {
+          Message('Редактирование документа-основания при наличии '#13#3+
+                  'сопроводительных или платежных документов ЗАПРЕЩЕНО!',
+                  Information);
+          Exit;
+        }
+
+    if (CurTable <> #BaseDoc)
+      Exit;
+
+    if (not UpdateTable)
+      Exit;
+
+    if (BaseDoc.cOrg = 0)
+      {
+        Message('В документе-основании необходимо указать контрагента!', Warning+OkButton);
+        SelectField(#KatOrg.Name);
+        Exit;
+      }
+
+    if (RunInterface( GetDBase, TRUE, word(0), word(0), docNo, stepNo, comp(0),
+         double(0)) = cmCancel)
+      Exit;
+
+    Par8 := 0;
+
+    if RunWindowModal(CopyDoPar) <> cmDefault
+      Exit;
+
+    StartNewVisual( vtRotateVisual
+                  , vfTimer + vfBreak + vfConfirm
+                  , 'Копирование спецификаций...'
+                  , 1);
+
+    _LOOP Pick3 where (( word(32) == Pick3.wList ))
+      {
+        if (NOT NextVisual)
+          Break;
+
+        stepNo := Pick3.cRec;
+
+        if (GetFirst StepDocC where ((Pick3.cRec == StepDocC.NRec)) = tsOk)
+          if (GetFirst BaseDocC where ((StepDocC.cBaseDoc == BaseDocC.NRec )) = tsOk)
+            if (BaseDocC.NRec = BaseDoc.NRec)
+              Continue;
+
+        if Par3 = 1
+          if (GetFirst KlPrice where ((if(SpStepC.PrMC = 1, cMCPrice, cUSLPrice) == KlPrice.Nrec)) = tsOk)
+            update current BaseDoc set BaseDoc.dPrice := KlPrice.dPrice;
+
+        var VagonMarker, Ind: longint;   VagonMarker := InitMarker('VagonMarker', 8, 10, 10);
+
+        var fcOldRecSpStep: comp;
+
+        if (BaseDoc.TypeDoc = 1)
+          _LOOP SpStepC where (( stepno == SpStepC.cStepDoc ))
+            {
+              if not (
+                      (SpStepC.PrMC = 2)
+                   OR
+                      (SpStepC.PrMC = 1) AND
+                       (SpStepC.NVagon  = BaseDoc.NVagon) AND
+                        (SpStep.cCellVal = BaseDoc.cCellVal) AND
+                         (
+                          (Par5 = 0)
+                       OR
+                          (Par5 = 1) AND (SpStepC.NVagon = Par6)
+                       OR
+                          (Par5 = 2) AND
+                           (
+                            SearchMarker(VagonMarker, SpStepC.cNMoveCell, Ind)
+                          OR
+                            (GetMarkerCount(VagonMarker) = 0) AND
+                             (SpStepC.NVagon = '')
+                           )
+                         )
+                     )
+                if Message(
+                     'Позиции спецификации не могут быть скопированы в "повагонный" ДО'#13+
+                     'из-за различия единиц подвижного состава и/или их номеров.'#13#13+
+                     'Изменить тип текущего ДО "на маршрут" или отменить копирование?',
+                             YesNo+Confirmation) <> cmYes
+                  {
+                    DoneMarker(VagonMarker, '');
+                    Continue;
+                  }
+                else
+                  {
+                    update current BaseDoc set BaseDoc.TypeDoc := 0;
+                    Break;
+                  }
+            }
+
+        if ( GetFirst SpStepC where
+              ((stepno == SpStepc.cStepDoc)) <> tsOk )
+          {
+            if (GetFirst BaseDocC where ((StepDocC.cBaseDoc == BaseDocC.NRec )) <> tsOk)
+              {}
+
+            Message('Нет спецификации в документе №' + string(BaseDocC.NoDoc) + '  !', Information+OkButton);
+            continue;
+          }
+
+        _LOOP SpStepC where ((stepno == SpStepc.cStepDoc))
+          if (
+              (SpStepC.PrMC = 2)
+            OR
+              (SpStepC.PrMC = 1) AND
+               (
+                (Par5 = 0)
+              OR
+                (Par5 = 1)AND
+                 (SpStepC.NVagon = Par6)
+              OR
+                (Par5 = 2) AND
+                 (
+                  SearchMarker(VagonMarker, SpStepC.cNMoveCell, Ind)
+                OR
+                  (GetMarkerCount(VagonMarker) = 0) AND (SpStepC.NVagon = '')
+                 )
+               )
+             )
+
+            {
+              var RVhod : word;
+              var pGrNal: comp;
+
+              if Par3 = 1
+                {
+                  if ((GetFirst Prices
+                       where ((SpStepC.cMCUsl  == Prices.cThing AND
+                               if(SpStepC.PrMC = 1, cMCPrice, cUSLPrice) == Prices.cKlPrice)) ) = tsOk)
+                     {
+                       isinpr := 1;   // есть в прайсе
+                       if ((BaseDoc.cVal<>KlPrice.cVal) AND (BaseDoc.cVal<>0))
+                         isinpr := 0;           // цены в нужной валюте нет
+                     }
+                   else
+                     {
+                       isinpr := 0;           // нету в прайсе
+                       ClearBuffer(#Prices);
+                     }
+                  SpStepC.Price := 0;
+                  SpStepC.cPriceList := Prices.cKlPrice;
+                  SpStepC.Garant := Prices.Garant;
+                }
+
+              var czt: comp;  czt := 0;
+
+              if (GetFirst SpecZatr where ((coSpStep == SpecZatr.coTable AND SpStepC.nRec == SpecZatr.cSpec)) = tsOk)
+                czt := SpecZatr.cAddSumTune;
+
+              fcOldRecSpStep := SpStepC.Nrec;
+              SpStepC.Nrec := 0;
+              SpStepC.dDoc := BaseDoc.dDoc;
+              SpStepC.cStepDoc := StepDoc.Nrec;
+              SpStepC.SumVal := 0;
+              SpStepC.Summa := 0;
+              SpStepC.Nds := 0;
+              SpStepC.Reserv := 0;
+
+              if (BaseDoc.VidDoc = 102)  //Прием на консигнацию
+               SpStepC.cParty := BaseDoc.cParty
+              else
+                if Par4 = 0
+                  SpStepC.cParty := 0;
+
+              SpStepC.Kol := SpStepC.KolSkl;
+              SpStepC.KolOpl := 0;
+              SpStepC.ManualTax := 0;
+              SpStepC.ProcUb := 0;
+              SpStepC.Npp  := oSpNext.GetSpNppNext(SpStepC.cStepDoc, coSpStep);
+
+              if (Par3 = 1)
+                {
+                  RVhod := KlPrice.VhodNal;
+                  //------Пересчет цен прайса при разной входимости налогов
+                  if ( BaseDoc.VhodNal <> RVhod )
+                    {
+                      var pThing: comp; pThing := SpStepC.cMCUsl;
+
+                      if ( SpStepC.PrMC = 1 )
+                        {
+                          if ( loCopy.GetFirst FastFirstRow KatMC where (( pThing == KatMC.nRec )) = tsOK )
+                            pGrNal := loCopy.KatMC.cGrNal;
+                        }
+                      else
+                        if ( loCopy.GetFirst FastFirstRow KatUsl where (( pThing == KatUsl.nRec )) = tsOK )
+                          pGrNal := loCopy.KatUsl.cGrNal;
+
+                      var dValNalog: date;
+                      dValNalog := if (BaseDoc.dValCurse = ZeroDate, BaseDoc.dDoc, BaseDoc.dValCurse);
+
+                      if ( BaseDoc.VhodNal = 1 ) // налоги входят в цену
+                        {
+                          CountNalogPrice(BaseDoc.nRec
+                                        , SpStepC.nRec
+                                        , tipDo + 1000
+                                        , pGrNal
+                                        , BaseDoc.cOrg
+                                        , SpStepC.Kol
+                                        , SpStepC.cOtpEd
+                                        , dValNalog
+                                        , BaseDoc.cVal
+                                        , 0
+                                        , Prices.Price
+                                        , Prices.SumVal
+                                        , BaseDoc.cPayment);
+
+                          Prices.Price  := GetNalogPrice;
+                          Prices.SumVal := GetNalogValPrice;
+                        }
+                      else
+                        {
+                          CountBasePrice(BaseDoc.nRec
+                                       , SpStepC.nRec
+                                       , tipDo + 1000
+                                       , pGrNal
+                                       , BaseDoc.cOrg
+                                       , SpStepC.Kol
+                                       , SpStepC.cOtpEd
+                                       , dValNalog
+                                       , BaseDoc.cVal
+                                       , 0
+                                       , Prices.Price
+                                       , Prices.SumVal
+                                       , BaseDoc.cPayment);
+
+                          Prices.Price  := GetBasePrice;
+                          Prices.SumVal := GetBaseValPrice;
+                        }
+                    }
+
+                  //---------------------------------------------------------------------
+
+                  SpStepC.cVal := BaseDoc.cVal;
+                  if (isinpr = 1)
+                    {
+                      // скидка по контрагенту
+                      if ((BaseDoc.cNalog = 2) and ((BaseDoc.VidDoc = 202) or (BaseDoc.VidDoc = 201) or (BaseDoc.VidDoc = 1420)))
+                        {
+                          Prices.Price  := Prices.Price * (1-BaseDoc.KolKompl/100);
+                          Prices.SumVal := Prices.SumVal * (1-BaseDoc.KolKompl/100);
+                        }
+
+                      if (Prices.cOtpEd = SpStepC.cOtpEd)
+                        {
+                          if (BaseDoc.cVal = 0)
+                            {
+                              SpStepC.Price := froundrub2(Prices.Price);
+                              SpStepC.Summa := froundrub2(SpStepC.Price*SpStepC.Kol);
+                            }
+                          else
+                            {
+                              SpStepC.Price := froundval2(Prices.SumVal);
+                              SpStepC.SumVal := froundval2(SpStepC.Price*SpStepC.Kol);
+                            }
+                        }
+                      else
+                        {
+                          var k1: double;  k1 := fEdIzm.GetKoefOtpEd(SpStepC.cOtpEd);
+                          var k2: double;  k2 := fEdIzm.GetKoefOtpEd(Prices.cOtpEd)
+
+                          if (BaseDoc.cVal = 0)
+                            SpStepC.Price := oDOfuns.DoRoundNde(tipdo, Prices.Price * k1 / k2)
+                          else
+                            SpStepC.Price := oDOfuns.DoRoundVlt(tipdo, Prices.SumVal * k1 / k2);
+                        }
+                    }
+                }
+              else
+                {
+                  var pStepDoc: comp; pStepDoc := stepno;
+
+                  if ( loCopy.GetFirst FastFirstRow StepDoc where (( pStepDoc == StepDoc.nRec )) = tsOK )
+                    if ( loCopy.GetFirst FastFirstRow BaseDoc where (( loCopy.StepDoc.cBaseDoc == BaseDoc.nRec )) = tsOK )
+                      RVhod := loCopy.BaseDoc.VhodNal;
+
+                  //------Пересчет цен прайса при разной входимости налогов
+                  if ( BaseDoc.VhodNal <> RVhod )
+                    {
+                      var pThing: comp; pThing := SpStepC.cMCUsl;
+
+                      if ( SpStepC.PrMC = 1 )
+                        {
+                          if ( loCopy.GetFirst FastFirstRow KatMC where (( pThing == KatMC.nRec )) = tsOK )
+                            pGrNal := loCopy.KatMC.cGrNal;
+                        }
+                      else
+                        if ( loCopy.GetFirst FastFirstRow KatUsl where (( pThing == KatUsl.nRec )) = tsOK )
+                          pGrNal := loCopy.KatUsl.cGrNal;
+
+                      var dValNalog: date;
+                      dValNalog := if (BaseDoc.dValCurse = ZeroDate, BaseDoc.dDoc, BaseDoc.dValCurse);
+
+                      if ( BaseDoc.VhodNal = 1 ) // налоги входят в цену
+                        {
+                          CountNalogPrice(BaseDoc.nRec
+                                        , SpStepC.nRec
+                                        , tipDo + 1000
+                                        , pGrNal
+                                        , BaseDoc.cOrg
+                                        , SpStepC.Kol
+                                        , SpStepC.cOtpEd
+                                        , dValNalog
+                                        , BaseDoc.cVal
+                                        , 0
+                                        , 0
+                                        , SpStepC.Price
+                                        , BaseDoc.cPayment);
+
+                          SpStepC.Price := GetNalogValPrice;
+                        }
+                      else
+                        {
+                          CountBasePrice(BaseDoc.nRec
+                                       , SpStepC.nRec
+                                       , tipDo + 1000
+                                       , pGrNal
+                                       , BaseDoc.cOrg
+                                       , SpStepC.Kol
+                                       , SpStepC.cOtpEd
+                                       , dValNalog
+                                       , BaseDoc.cVal
+                                       , 0
+                                       , 0
+                                       , SpStepC.Price
+                                       , BaseDoc.cPayment);
+
+                          SpStepC.Price := GetBaseValPrice;
+                        }
+                    }
+
+                  //---------------------------------------------------------------------
+                  var NewPrice: double;
+
+                  NewPrice := if (SpStepC.cVal = BaseDoc.cVal,
+                                      SpStepC.Price,
+                                      oValFunc.GetAnyCurrency(SpStepC.cVal,
+                                                              SpStepC.Price,
+                                                              BaseDoc.dDoc,
+                                                              BaseDoc.cVal));
+                  SpStepC.cVal := BaseDoc.cVal;
+                  SpStepC.Price := oDOfuns.DoRoundP(BaseDoc.cVal, BaseDoc.VidDoc, NewPrice);
+                }
+
+              PushPos(#SpStepC);
+              insert current SpStepC;
+
+      #ifNdef __vschetb__
+      #ifdef __vschet__
+              //копируем сложные скидки по спецификации в ДО на продажу
+              if (BaseDoc.VidDoc = 201) OR (BaseDoc.VidDoc = 1420)
+                piCalcSkid.CopyDocSkid (fcOldRecSpStep, SpStepC.NRec, word(1));
+      #end
+      #end
+
+#ifndef __MTR_TO_SPEC__
+              if (czt <> 0)
+                {
+                  insert SpecZatr Set SpecZatr.coTable := coSpStep,
+                                      SpecZatr.cSpec := SpStepC.Nrec,
+                                      SpecZatr.cAddSumTune := czt,
+                                      SpecZatr.cUKS := SpStepC.cUKS;
+                }
+#else
+              oMTRFun.CopySpecMTR(coSpStep, fcOldRecSpStep, coSpStep, SpStepC.NRec);
+#end
+              RunInterface('CopySpDocSmeta', word(coSpStep), fcOldRecSpStep, word(coSpStep), SpStepC.nRec);
+      #ifdef __vschet__         // для предоплат пока не надо
+              if (BaseDoc.TypeDoc = 1)
+                if GetFirst SpStep where (( SpStepC.nRec == SpStep.nRec )) = tsOk
+                  {
+                    SpStepCellVal(1);
+                    SpStepCellVal(2);
+                  }
+      #end
+              PopPos(#SpStepC);
+            }
+
+        DoneMarker(VagonMarker, '');
+      }
+
+    RereadRecord;
+    StopVisual('',0);
+
+    GetTotalSkid(false);
+
+    update current basedoc;
+    RereadRecord;
+  }

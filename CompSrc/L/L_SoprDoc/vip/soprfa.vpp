@@ -1,0 +1,113 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//******************************************************************************
+
+Create View cvFunc
+var
+  _Rec  : comp;
+
+from
+  KatSopr
+, KatSopr KatSopr2
+, SpSopr
+, SpSopr SpSopr2
+, SpSopr SpSopr3
+, Pick
+, SpecZatr
+, SpecZatr SpecZatr2
+
+where
+((
+     KatSopr.NRec     ==  SpSopr.cSopr
+AND  KatSopr2.NRec    ==  SpSopr3.cSopr
+))
+
+;
+
+
+//******************************************************************************
+//
+//
+Function GetKol : double;
+var dKol : double;
+{
+  GetKol := 0;
+
+  dKol := 0;
+
+  cvFunc._LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cAddSumTune))
+    if (cvFunc.SpecZatr.coTable = 0)
+      dKol := dKol + double(cvFunc.SpecZatr.cSpec);
+
+  GetKol := cvFunc.SpSopr.KolFact - 0.000001 * dKol / fEdIzm.GetKoefOtpEd(cvFunc.SpSopr.cOtpEd);
+}
+
+//******************************************************************************
+// проверка оприходывания накладной
+//
+
+Procedure CheckOprixod(_cRec_ : comp);
+{
+  var bAllOprix : boolean; 
+  var dOprix    : date; 
+  var KolOst    : double; 
+
+  bAllOprix := TRUE;    
+  dOprix    := ZeroDate;
+
+  if (cvFunc.GetFirst KatSopr where ((_cRec_ == KatSopr.NRec)) <> tsOk)
+    Exit;
+  
+  cvFunc._LOOP SpSopr
+    {
+      KolOst := GetKol;
+
+      if (cvFunc.SpSopr.dOprTTN = ZeroDate)
+        {
+          if (KolOst = 0)
+            {
+              var dD : date; dD := ZeroDate;
+
+              cvFunc._LOOP SpecZatr where ((cvFunc.SpSopr.NRec == SpecZatr.cAddSumTune))
+                if (cvFunc.SpecZatr.coTable = 0)
+                  if (cvFunc.GetFirst SpSopr2 where ((cvFunc.SpecZatr.cUks == SpSopr2.NRec)) = tsOK ) 
+                    if ( dD < cvFunc.SpSopr2.dOprTTN )
+                      dD := cvFunc.SpSopr2.dOprTTN; 
+
+              //if (dD <= cvFunc.KatSopr.dSopr)
+                cvFunc.update current SpSopr set SpSopr.dOprTTN := dD;
+
+              if ( dOprix < cvFunc.SpSopr.dOprTTN )
+                dOprix := cvFunc.SpSopr.dOprTTN;
+            }
+          else
+            bAllOprix := FALSE;
+        }
+      else
+        {
+          if (KolOst = 0)
+            {
+              if ( dOprix < cvFunc.SpSopr.dOprTTN )
+                dOprix := cvFunc.SpSopr.dOprTTN;
+            }
+          else
+            {
+              bAllOprix := FALSE;
+
+              cvFunc.update current SpSopr  set SpSopr.dOprTTN := ZeroDate;
+              cvFunc.update current KatSopr set KatSopr.dOpr   := ZeroDate;
+            }
+        }
+    }
+
+  if (cvFunc.KatSopr.dOpr = ZeroDate)
+    if (bAllOprix)
+      if (dOprix <> ZeroDate)
+        {
+          cvFunc.update current KatSopr set KatSopr.dOpr := dOprix;
+
+          if (cvFunc.KatSopr.Status = 0)
+            update current KatSopr set KatSopr.Status := 1, KatSopr.cNote := oNotes.GetFirstNote(100, 1);
+        }
+}

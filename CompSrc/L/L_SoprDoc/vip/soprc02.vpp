@@ -1,0 +1,352 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : пересчитывает все, что можно пересчитать в таблице SpSopr ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#ifNdef _soprc02_VPP
+#define _soprc02_VPP
+
+Procedure RefreshNalogsMarker(flag: word);
+var abeg, aend: Date;
+var opts: word;
+var oldsumma, oldvsumma: double;
+var aReported: boolean;
+var isObor: boolean;
+var i, ii: word;
+var cNRec: comp;
+{
+  If not ReadMyDsk(abeg , 'RefreshNalogsabeg', TRUE)
+    abeg := KatSopr.dSopr;
+  If not ReadMyDsk(aend , 'RefreshNalogsaend', TRUE)
+    aend := Cur_Date;
+  opts := 1 + 2 + 4 + 8 + 16;
+  case flag of
+    0: if (RunDialog(RcNalogsSoprParams, abeg, aend, opts) = cmCancel)
+          Exit;
+    2: if (RunDialog(RcNalogsSoprParams2, abeg, aend, opts) = cmCancel)
+          Exit;
+  end;
+  SaveMyDsk( abeg, 'RefreshNalogsabeg');
+  SaveMyDsk( aend, 'RefreshNalogsaend');
+
+  if ((opts AND 32) <> 0)
+    If Message('Внимание! '+
+            ''#13#3'"ПЕРЕСЧИТАТЬ НАЛОГ по последней группе из каталога МЦ/Услуг".'+
+            ''#13#3'Это значит, что по каждой позиции спецификации налог будет удален, затем '+
+            ''#13#3'заново рассчитан, позиции с РУЧНЫМИ налогами остаются без изменений.'+
+            ''#13#3'Продолжить?', YesNo)<>cmYes
+      {
+        Exit;
+      }
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+            'Пересчет спецификации документа', 1);
+  ii := if(GetMarkerCount(MarkerNZ)>0, GetMarkerCount(MarkerNZ), 1)
+  PushPos(#KatSopr);
+  For (i := 0; i < ii; inc(i))
+    {
+      if ii = 1
+        cNRec := KatSopr.NRec;
+      else
+        GetMarker(MarkerNZ, i, cNRec);
+
+      if (GetFirst KatSopr where ((cNRec == KatSopr.NRec)) = tsOk)
+          {
+            #include soprc29.vpp
+          }
+    }
+  StopVisual('', 0);
+  PopPos(#KatSopr);
+  ClearMarker(MarkerNZ);
+  RescanPanel(#KatSopr);
+  if (aReported)
+    frm1wed.ShowFile('Протокол пересчета')
+  else
+    frm1wed.AbortForm;
+} // Procedure RefreshNalogs
+
+
+
+
+Procedure RefreshNalogsDate(flag: word);
+var abeg, aend: Date;
+var opts: word;
+var save_b, save_e: Date; // Сохраннение параметров фильра по датам
+var saveFilter: boolean; // фохранение флага фильтра
+var oldsumma, oldvsumma: double;
+var aReported: boolean;
+var isObor: boolean;
+{
+  If not ReadMyDsk(abeg , 'RefreshNalogsabeg', TRUE)
+    abeg := KatSopr.dSopr;
+  If not ReadMyDsk(aend , 'RefreshNalogsaend', TRUE)
+    aend := Cur_Date;
+
+  if (abeg > aend)
+    {
+      aend := KatSopr.dSopr;
+      abeg := Cur_Date;
+    }
+  opts := 1 + 2 + 4 + 8 + 16;
+
+  case flag of
+    0: if (RunDialog(RcNalogsSoprParams, abeg, aend, opts) = cmCancel)
+          Exit;
+    2: if (RunDialog(RcNalogsSoprParams2, abeg, aend, opts) = cmCancel)
+          Exit;
+  end;
+
+  if (abeg > aend)
+    {
+      Message('Начальная дата больше конечной.', CancelButton);
+      Exit;
+    }
+  SaveMyDsk( abeg, 'RefreshNalogsabeg');
+  SaveMyDsk( aend, 'RefreshNalogsaend');
+
+  if ((opts AND 32) <> 0)
+    If Message('Внимание! '+
+            ''#13#3'"ПЕРЕСЧИТАТЬ НАЛОГ по последней группе из каталога МЦ/Услуг".'+
+            ''#13#3'Это значит, что по каждой позиции спецификации налог будет удален, затем '+
+            ''#13#3'заново рассчитан, позиции с РУЧНЫМИ налогами остаются без изменений.'+
+            ''#13#3'Продолжить?', YesNo)<>cmYes
+      {
+        Exit;
+      }
+
+  PushPos(#KatSopr);
+ // -- Сохранение фильра
+  save_b := begdate;
+  save_e := enddate;
+  saveFilter := isFilter
+  ResetDocBound;
+ // -- Установка фильтра по датам
+  begdate := abeg;
+  enddate := aend;
+  isFilter := TRUE;
+  SetDocBound;
+ // -- Двигаемся по документам
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, 'Пересчет документов ', 1);
+
+  if (GetFirst KatSopr <> tsOk)
+    Message('Документов на заданный период не найдено.');
+  else
+    {
+      aReported := FALSE;
+      _LOOP KatSopr
+        {
+          #include soprc29.vpp
+        }
+    }
+
+ // -- Востановление фильтра
+  StopVisual('', 0);
+  ResetDocBound;
+  begdate := save_b;
+  enddate := save_e;
+  isFilter := saveFilter;
+  SetDocBound;
+  PopPos(#KatSopr);
+  RereadRecord;
+
+  if (aReported)
+    frm1wed.ShowFile('Протокол пересчета')
+  else
+    frm1wed.AbortForm;
+} // RefreshNalogsDate
+
+
+
+
+Procedure RefreshNalogs(flag: word);
+{
+ if GetMarkerCount(MarkerNZ) > 0
+   RefreshNalogsMarker(flag);
+ else
+   RefreshNalogsDate(flag);
+}
+
+#ifdef _SOPRDOC_VIP
+
+//проверка и пересчет средних цен по одному документу
+Procedure CalcSrPriceInOneDoc(bWriteSkip: boolean; var bReported: boolean; var Opts: word);
+var
+  oldsumma, oldvsumma: double;
+  isObor: boolean;
+{
+  if not OtkatToOldState(false, word(0))
+    Exit;
+
+  oldsumma  := KatSopr.Summa;
+  oldvsumma := KatSopr.SumVal;
+
+  isObor := GetFirst Oborot where (( KatSopr.VidSopr == Oborot.TiDk    AND
+                                     KatSopr.NRec    == Oborot.cSoprDoc )) = tsOk;
+  if (KatSopr.wAdoc = adSoprDocSN)
+  {
+    frm1wed.Write('Документ '+ NomDes + ' от ' + string(KatSopr.dSopr) +
+                  ' сторнирует информацию за прошлый период. Документ пропущен.');
+    bReported := TRUE;
+    Exit;
+  }
+
+  if (((Opts AND 1) <> 0) AND isObor)
+  {
+     if (bWriteSkip)
+     {
+       frm1wed.Write('По документу '  + NomDes + ' от ' + string(KatSopr.dSopr) +
+                     ' были сформированы проводки. Документ пропущен.');
+       bReported := TRUE;
+     }
+     Exit;
+  }
+
+  if (((Opts AND 2) <> 0) AND (KatSopr.dOpr <> Date(0, 0, 0)))
+  {
+    if (bWriteSkip)
+    {
+      frm1wed.Write('В документе '+ NomDes + ' от ' + string(KatSopr.dSopr) +
+                    ' установлена дата проведения. Документ пропущен.');
+      bReported := TRUE;
+    }
+    Exit;
+  }
+
+  if (isObor)
+  {
+    frm1wed.Write('По документу '+ NomDes + ' от ' + string(KatSopr.dSopr) +
+                  ' были сформированы проводки. Их нужно проверить.');
+    bReported := TRUE;
+  }
+
+  if not NextVisual Exit;
+  //пересчет средних цен
+  CalcSrPrice;
+  CheckSumma(true);
+
+  if ((Opts AND 4) <> 0)
+    if ((oldsumma <> KatSopr.Summa) or (oldvsumma <> KatSopr.SumVal))
+    {
+      frm1wed.Write('Сумма по документу ' + NomDes + ' от ' + string(KatSopr.dSopr) + ' изменена: ');
+      if (oldsumma <> KatSopr.Summa)
+        frm1wed.Write('     НДЕ было: ' + DoubleToStr(oldsumma,     '\2P[|-]3666666666666666.88') +
+                      ' стало: '        + DoubleToStr(KatSopr.Summa, '\2P[|-]3666666666666666.88'));
+      if (oldvsumma <> KatSopr.SumVal)
+        frm1wed.Write('     ' + KlVal.SimvolV +
+                      ' было: '  + DoubleToStr(oldvsumma     , '\2P[|-]3666666666666666.88') +
+                      ' стало: ' + DoubleToStr(KatSopr.SumVal, '\2P[|-]3666666666666666.88'));
+      bReported := TRUE;
+    }
+}
+
+//пересчет средних цен в документах
+Procedure CalcSrPriceInDocs;
+var
+  aBeg, aEnd: Date;
+  Opts: word;
+  bWriteSkip, bReported: boolean;
+  saveFilter: boolean; // фохранение флага фильтра
+  i, MCount: word;
+  cNRec: comp;
+  save_b, save_e: Date; // Сохраннение параметров фильра по датам
+{
+  If not ReadMyDsk(aBeg, 'CalcSrPriceInDocs_aBeg', TRUE)
+    aBeg := KatSopr.dSopr;
+  If not ReadMyDsk(aEnd, 'CalcSrPriceInDocs_aEnd', TRUE)
+    aEnd := Cur_Date;
+  If not ReadMyDsk(Opts, 'CalcSrPriceInDocs_Opts', TRUE)
+    Opts := 1 + 2 + 4 + 8;
+
+  if (RunDialog(CalcSrPrice, aBeg, aEnd, Opts) = cmCancel)
+    Exit;
+
+  SaveMyDsk(aBeg, 'CalcSrPriceInDocs_aBeg');
+  SaveMyDsk(aEnd, 'CalcSrPriceInDocs_aEnd');
+  SaveMyDsk(Opts, 'CalcSrPriceInDocs_Opts');
+
+  //выводить в отчет пропущенные документы
+  bWriteSkip := (Opts AND 8) <> 0;
+  bReported  := FALSE;
+
+  PushPos(#KatSopr);
+
+  MCount := GetMarkerCount(MarkerNZ);
+
+  if (MCount > 0)
+  {
+    ResetBounds(#KatSopr);
+    StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm,
+                  'Пересчет средних цен в документах', MCount);
+
+    For (i := 0; i < MCount; inc(i))
+    {
+      GetMarker(MarkerNZ, i, cNRec);
+
+      if (GetFirst KatSopr where ((cNRec == KatSopr.NRec)) = tsOk)
+        CalcSrPriceInOneDoc(bWriteSkip, bReported, Opts);
+    }
+
+    SetBounds(#KatSopr);
+    StopVisual('', 0);
+    ClearMarker(MarkerNZ);
+  }
+  else
+  {
+    if (aBeg > aEnd)
+    {
+      Message('Начальная дата больше конечной');
+      Exit;
+    }
+
+    // -- Сохранение фильра
+    save_b := begdate;
+    save_e := enddate;
+    saveFilter := isFilter
+    ResetDocBound;
+    // -- Установка фильтра по датам
+    begdate  := aBeg;
+    enddate  := aEnd;
+    isFilter := TRUE;
+    SetDocBound;
+    // -- Двигаемся по документам
+
+    if (GetFirst KatSopr <> tsOk)
+      Message('Документов на заданный период не найдено.');
+    else
+    {
+      MCount := 0;
+      _LOOP KatSopr
+        MCount := MCount + 1;
+      StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm,
+                     'Пересчет средних цен в документах', MCount);
+      bReported := FALSE;
+      _LOOP KatSopr
+        CalcSrPriceInOneDoc(bWriteSkip, bReported, Opts);
+    }
+
+    // -- Востановление фильтра
+    StopVisual('', 0);
+    ResetDocBound;
+    begdate  := save_b;
+    enddate  := save_e;
+    isFilter := saveFilter;
+    SetDocBound;
+  }
+
+  PopPos(#KatSopr);
+  RereadRecord(#KatSopr);
+
+  if (bReported)
+    frm1wed.ShowFile('Протокол пересчета')
+  else
+    frm1wed.AbortForm;
+}
+#end //_SOPRDOC_VIP
+
+#end //_02_vpp

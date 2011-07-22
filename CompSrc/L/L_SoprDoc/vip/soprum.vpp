@@ -1,0 +1,258 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// HandleEvent из AktUMC.vip
+//******************************************************************************
+
+#include SOPRC13.VPP
+
+cmSetDefault :
+  {
+    case CurTable of
+      #SpSopr
+    , #SoprOrdB:
+        if not OtkatToOldState(false,word(0))
+          {
+            Stop;
+            Exit;
+          }
+    end;
+
+    var aKolD : double; akold := 0;
+
+    PushPos(#SoprOrdB)
+
+    _LOOP SoprOrdB
+      akold := akold + SoprOrdB.kol;
+
+    PopPos(#SoprOrdB)
+
+    DefaultSoprOrdB;
+
+    if (SpSopr.KolOpl > akold)
+      SoprOrdB.kol := SpSopr.KolOpl - akold;
+
+    SelectField(#KatPodr2.Name);
+  }
+
+cmPick :
+  {
+    case CurTable of
+      #SpSopr
+    , #SoprOrdB:
+      if not OtkatToOldState(false,word(0))
+        {
+          Stop;
+          Exit;
+        }
+    end;
+
+    case CurField of
+      #KatPodr2.Name :
+        {
+          PickKatPodrName;
+
+          if (( SoprOrdB.cMol = 0 )
+            AND boGetTune('Pick.AvtoMol')
+            AND not boGetTune('Pick.AutoPickinInterface'))
+            {
+              SelectField(#KatMol2.Name);
+              PickKatMolName;
+            }
+        }
+
+      #KatMol2.Name :
+        PickKatMolName;
+    end;
+  }//cmPick
+
+cmDeleteRecord :
+  if (Message(''#3'Удалить текущее распределение по складам ?',YesNo) = cmYes)
+    {
+      Delete Current SoprOrdB;
+      ReScanPanel(#SoprOrdB);
+    }
+  else
+    Abort;
+
+cmSetCurField :
+  {
+    if not OtkatToOldState(false,word(0))
+      Exit;
+
+    if not boGetTune('Pick.AutoPickinInterface')
+      Exit;
+
+    case Target of
+     #KatPodr2.Name:
+       if SoprOrdB.cPodr=0
+         PutCommand(cmPick);
+     #KatMol2.Name:
+       if SoprOrdB.cMol=0
+         PutCommand(cmPick);
+    end;
+  }
+
+cmCheckField:
+  {
+    if CurTable <> #SoprOrdB
+      Exit;
+
+    var pKatEd : comp; pKatEd := if(GetFirst fastfirstrow KatEd = tsOK, KatEd.nRec, comp(0));
+
+    fEdIzm.CheckKolDiskretAll(SoprOrdB.kol, SpSopr.cOtpEd, pKatEd, True, True);//проверка на делимость
+
+    if (isNew)
+      {
+        insert current SoprOrdB;
+        SetNew(false);
+      }
+    else
+      update current SoprOrdB;
+
+    var  all_kol : double; all_kol := 0;
+
+    PushPos(#SoprOrdB)
+
+    _LOOP SoprOrdB
+      all_kol := All_kol+soprordb.kol;
+
+    PopPos(#SoprOrdB)
+
+    if all_kol > SpSopr.KolOpl
+      {
+        message( ''#3'Распределено больше на:' + doubletostr(all_kol-SpSopr.KolOpl,'6666667.899999') + ' ' + OtpEd);
+        set SoprOrdB.kol := SoprOrdB.kol - (all_kol - SpSopr.KolOpl);
+      }
+  }
+
+cmExprFieldChanged:
+  {
+    case CurField of
+      #Percent :
+        {
+          if (CurTable = #SoprOrdB)
+            if (isNew)
+              {
+                insert current SoprOrdB;
+                SetNew(false);
+              }
+            else
+              {
+                update current SoprOrdB;
+                ReScanPanel(#SoprOrdB);
+              }
+
+          var OldKol: double;  OldKol := SoprOrdB.Kol;
+          var p     : double;  p      := double(ExprFieldValue);
+
+          if (p > 100)
+            p := 100.0;
+
+          if (p < 0)
+            p := 0.0;
+
+          p := p * SpSopr.KolFact / 100;
+
+          if (KatOtpEd.Diskret = 1) //неделимая
+            p := Round(p)
+
+          var  all_kol : double; all_kol := 0;
+
+          PushPos(#SoprOrdB);
+
+          _LOOP SoprOrdB where((SpSopr.NRec == SoprOrdB.cSpSopr))
+            all_kol := all_kol + soprordb.kol;
+
+          PopPos(#SoprOrdB);
+
+          all_kol := all_kol - SoprOrdB.kol;
+
+          if (all_kol + p > SpSopr.kolfact)
+            p := SpSopr.KolFact - all_kol;
+
+          set SoprOrdB.Kol := p;
+
+          Stop;
+          Exit;
+        }
+
+      #PercentSumma :
+        {
+          if (CurTable=#SoprOrdB)
+           if (isNew)
+             {
+               insert current SoprOrdB;
+               SetNew(false);
+             }
+           else
+             {
+               update current SoprOrdB;
+               ReScanPanel(#SoprOrdB);
+             }
+
+          var p: double;  p := double(ExprFieldValue);
+
+          if (p > SumPrice)
+            p := SumPrice;
+
+          if (p < 0)
+            p := 0;
+
+          p := p * SpSopr.KolFact / SumPrice;
+
+          if (KatOtpEd.Diskret = 1) //неделимая
+            p := Round(p)
+
+         var all_kol: double; all_kol := 0;
+
+         PushPos(#SoprOrdB);
+
+         _LOOP SoprOrdB where((SpSopr.NRec == SoprOrdB.cSpSopr))
+           all_kol := all_kol + SoprOrdB.Kol;
+
+         PopPos(#SoprOrdB);
+
+         all_kol := all_kol - soprordb.kol;
+
+         if (all_kol + p > spsopr.kolfact)
+           p := SpSopr.KolFact - all_kol;
+
+         set SoprOrdB.Kol := p;
+
+         Stop;
+         Exit;
+       }//PercentSumma
+    end;
+  }//cmExprFieldChanged:
+
+cmCheckRecord :
+  {
+    if (SoprOrdB.cPodr = 0)
+      {
+        Message(''#3'Укажите СКЛАД или удалите запись.');
+        SelectField(#KatPodr2.Name);
+        Abort;
+        Exit;
+      }
+
+    if (SoprOrdB.Kol = 0)
+      {
+        Message(''#3'Укажите количество МЦ или удалите запись.');
+        SelectField(#SoprOrdB.Kol);
+        abort;
+        Exit;
+      }
+  }
+
+cmInsertRecord :
+  {
+    Insert current SoprOrdB;
+    ReScanPanel(#SoprOrdB);
+  }
+
+cmUpdateRecord :
+  {
+    Update current SoprOrdB;
+    ReScanPanel(#SoprOrdB);
+  }

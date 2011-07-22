@@ -1,0 +1,1957 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12
+// множественный выбор накладных
+//********************************************************************************
+
+#include notes.vih
+#include statlog.vih
+#include ofpmacro.vpp
+#include EditDoc.vih
+#include ExtAttr.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  множественный выбор накладных
+
+Параметры:
+  TypeSopr - вид сопр.документа
+  begdate  - начальная дата фильтра по датам
+  enddate  - конечная дата фильтра по датам
+  wView    - 1-показывать сформированные ордера, 0-нет
+  wGrSopr  - 1-не давать пометить накладные, входящие в сводную
+           - 2-выбор осуществляется из пакетного формирования ордеров
+#end
+
+//******************************************************************************
+
+Interface GetSomeKatSopr 'Выбор набора накладных' DoAccept, EscClose, Cyan;
+  Show at (, , 110, 25);
+
+//******************************************************************************
+
+#include EditDoc.var
+
+//******************************************************************************
+
+Create view PodrPickView
+
+Var
+//------------------------------------------------------------------------------
+  s_SimvRub
+                : string;
+//------------------------------------------------------------------------------
+  s1
+                : string[30];
+//------------------------------------------------------------------------------
+  _cfKontr
+, cfKontr
+, _cfDog
+, cfDog
+, ccPodr
+                : comp;
+//------------------------------------------------------------------------------
+  filSel
+, wView                 // 1-показывать сформированные ордера, 0-нет
+, wGrSopr
+, wfKontr
+, CountPick
+, wPickNum
+, _OnlyNotDO
+, SoprOrder
+, _SoprOrder
+, _wfKontr
+, _wNakl
+, MainType
+, Kol_cmNal
+, wChkStatus  // Разрешать только в статусе "исполняемый"
+                : word;
+//------------------------------------------------------------------------------
+  OnlyNotDO
+, Actsable
+                : boolean; // TRUE - показывать только не привязаные к ДО накладные
+//------------------------------------------------------------------------------
+  _begdate
+, _enddate
+, d1
+, d2
+                : Date;
+
+  oExtAttr   : iExtAttr;
+
+//------------------------------------------------------------------------------
+#include soprvar.vpp // переменые ЕДД
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+// выбор
+  if(IsValid(tnPick), '√', '')
+    ( FieldName = picked )
+//------------------------------------------------------------------------------
+// валюта
+, if (KatSopr.cVal = 0, if(s_SimvRub <> '', s_SimvRub, 'НДЕ'), KlVal.SimVolV)
+    ( FieldName = KatVal )
+//------------------------------------------------------------------------------
+// сумма по накладной
+, if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal)
+    ( FieldName = KatSum )
+//------------------------------------------------------------------------------
+// цена позиции
+, if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice)
+    ( FieldName = SpPrice )
+//------------------------------------------------------------------------------
+// стоимость позиции
+, if (KatSopr.cVal = 0, SpSopr.Price * SpSopr.KolOpl, SpSopr.VPrice * SpSopr.KolOpl)
+    ( FieldName = SpSum )
+//------------------------------------------------------------------------------
+// ед.
+, if (SpSopr.cOtpEd = 0, if(SpSopr.PrMC = 1, KatEd.Name, KatEdUsl.Name), KatOtpEd.Name)
+    ( FieldName = SpEd )
+//------------------------------------------------------------------------------
+// наименование спецификации
+, if (SpSopr.PrMc = 1, KatMC.Name, KatUsl.Name)
+    ( FieldName = SpName )
+//------------------------------------------------------------------------------
+// код спецификации
+, if (SpSopr.PrMc = 1, KatMC.BarKod, KatUsl.Kod)
+    ( FieldName = SpKod )
+//------------------------------------------------------------------------------
+// вид товар/услуга
+, if (SpSopr.PrMc = 1, 'Т', 'У')
+    ( FieldName = sPrMc )
+//------------------------------------------------------------------------------
+//статус
+, if(KatSopr.cNote <> 0,
+     KatNotes.Name, if(KatSopr.Status = 0, 'оформляемый', 'исполняемый'))
+        ( FieldName = KatNotesName )
+//------------------------------------------------------------------------------
+//договор
+, '№' + Dogovor2.NoDoc + DateToStr(Dogovor2.dDoc , ' от DD/MM/YYYY')
+        ( FieldName = Dog2Name )
+//------------------------------------------------------------------------------
+
+, GrSopr.*
+, KatSopr.*
+, SpSopr.*
+, KatOrg.Name
+, KatMC.Name
+
+From
+  GrSopr             (ReadOnly)
+, KatSopr
+, SpSopr             (ReadOnly)
+, KatOrg             (ReadOnly)
+, KatPodr            (ReadOnly)
+, KatMol             (ReadOnly)
+, KatParty           (ReadOnly)
+, KlVal              (ReadOnly)
+, CursVal            (ReadOnly)
+, KatMC              (ReadOnly)
+, KatUsl             (ReadOnly)
+, KatEd              (ReadOnly)
+, KatOtpEd           (ReadOnly)
+, MarPunkt           (ReadOnly)
+, Pick
+, KatPodr  ToPodr    (ReadOnly)
+, Pick     Pick1
+, KatEd    KatEdUsl  (ReadOnly)
+, KatOrg   OrgTo     (ReadOnly)
+, KatOrg   OrgFrom   (ReadOnly)
+, KatOrg   KatOrg2   (ReadOnly)
+, MarPunkt MarPunktP (ReadOnly)
+, KatSopr  KatSopr_KN
+, KatMOL   ToMOL
+, TekMC
+, SchFact            (ReadOnly)
+, KatNotes
+, Dogovor
+, Dogovor  Dogovor2
+
+//******************************************************************************
+
+Where
+((
+
+       TypeSopr          == KatSopr.VidSopr
+  AND  begdate          <<= KatSopr.dSopr
+  AND  enddate          >>= KatSopr.dSopr
+
+  AND  word(22)          == Pick.wList
+  AND  KatSopr.NRec      == Pick.cRec
+
+  AND  KatSopr.cGrSopr   == GrSopr.NRec
+  AND  KatSopr.cOrgBase  == KatOrg.NRec
+  AND  KatSopr.cGruzTo   == OrgTo.NRec
+  AND  KatSopr.cGruzFrom == OrgFrom.NRec
+  AND  KatSopr.cVal      == KlVal.NRec
+  AND  KatSopr.NRec      == SpSopr.cSopr
+  AND  KatSopr.cPodrFrom == KatPodr.NRec
+  AND  KatSopr.cPodrTo   == ToPodr.NRec
+  AND  KatSopr.cMOLTo    == ToMOL.NRec
+  AND  KatSopr.cStepDoc  == StepDoc.NRec
+  AND  KatSopr.NRec      == KatSopr_KN.cADoc
+  AND  KatSopr.cSchFact  == SchFact.NRec
+  AND  KatSopr.cNote     == KatNotes.NRec
+  AND  KatSopr.cDogovor  == Dogovor.nRec
+
+  AND  SpSopr.cMCUsl     == KatMC.NRec
+  AND  SpSopr.cMCUsl     == KatUsl.NRec
+  AND  SpSopr.cOtpEd     == KatOtpEd.NRec
+  AND  SpSopr.cParty     == KatParty.NRec
+
+  AND  KatMC.cEd         == KatEd.NRec
+  AND  KatUsl.cEd        == KatEdUsl.NRec
+
+  AND  coKatSopr         == TTNDoc.wTable
+  AND  KatSopr.NRec      == TTNDoc.cDoc
+  AND  TTNDoc.cPunktR    == MarPunkt.NRec
+  AND  TTNDoc.cPunktP    == MarPunktP.NRec
+
+  AND  StepDoc.cBaseDoc  == BaseDoc.NRec
+
+  AND  _cfKontr          == KatOrg2.NRec
+  AND  _cfDog            == Dogovor2.NRec
+
+))
+
+Order tmpOrd01 by KatSopr.VidSopr, KatSopr.dSopr, KatSopr.nSopr
+
+//------------------------------------------------------------------------------
+Bounds dMainBound =  TypeSopr  == KatSopr.VidSopr AND
+                     begdate  <<= KatSopr.dSopr   AND
+                     enddate  >>= KatSopr.dSopr
+
+//------------------------------------------------------------------------------
+Bounds dVscBound  =  TypeSopr  == KatSopr.VidSopr AND
+                     (DscName   = KatSopr.Descr)  AND
+                     begdate  <<= KatSopr.dSopr   AND
+                     endDate  >>= KatSopr.dSopr
+
+//------------------------------------------------------------------------------
+Bounds dGroupDsc  =  TypeSopr  == KatSopr.VidSopr AND
+                     (DesGroup  = KatSopr.DesGr)  AND
+                     begdate  <<= KatSopr.dSopr   AND
+                     endDate  >>= KatSopr.dSopr
+
+//------------------------------------------------------------------------------
+Bounds NotViewOpr = d1 <<= KatSopr.dOpr (NoIndex) AND
+                    d2 >>= KatSopr.dOpr (NoIndex)
+
+//------------------------------------------------------------------------------
+Bounds OnlyNotDO  = comp(0) == KatSopr.cStepDoc (NoIndex)
+
+//------------------------------------------------------------------------------
+Bounds fKontr     = cfKontr == KatSopr.cOrgBase (NoIndex)
+
+//------------------------------------------------------------------------------
+Bounds fDog       = cfDog == KatSopr.cDogovor (NoIndex)
+
+//------------------------------------------------------------------------------
+// спрятать сторнирующие накдадные и накладные, для которых существует корректирующая
+Condition No_SN_KatSopr = (adSoprDocSN <> KatSopr.wADoc) AND (not IsValid(tnKatSopr_KN))
+//------------------------------------------------------------------------------
+// Для 110 типа два направления
+Condition byTipDoc = (if(Maintype = 101 OR Maintype = 108 OR MainType = 1411, 1, 2) = KatSopr.TipSopr)
+//------------------------------------------------------------------------------
+#ifdef __NIOKR__
+Condition NIOKR = ( Dogovor.VidDog = 13 ) AND ( Dogovor.cAgentDog <> 0 )
+#end
+;
+
+//******************************************************************************
+
+Parameters
+  TypeSopr
+, begdate
+, enddate
+, wView   // 1-показывать сформированные ордера, 0-нет
+, wGrSopr // 1-не давать пометить накладные, входящие в сводную
+          // 2-выбор осуществляется из пакетного формирования ордеров
+;
+
+//******************************************************************************
+
+#include gr_sp.vpp
+
+//******************************************************************************
+
+Procedure SetFilters;
+{
+  case DscVisible of
+  //----------------
+    dcAllModif
+  , dcOwnModifAllRead
+  , dcGrpModifAllRead:
+      PushBounds(tbdMainBound);
+  //----------------
+    dcOwnOnly:
+      PushBounds(tbdVscBound);
+  //----------------
+    dcGrpRead, dcGrpModif:
+      PushBounds(tbdGroupDsc);
+  //----------------
+  end;
+  SetOrder(titmpOrd01);
+}
+
+
+//******************************************************************************
+
+Procedure SetDescriptor;
+{
+  if ( NOT UpdateTable )
+    Exit;
+
+  if (IsNew AND ( NOT IsModified ) )
+    Exit;
+
+  var TempVisible: word; TempVisible := DscVisible;
+
+  if ( RunInterface('GetDescr', DscName, DesGroup, TempVisible) <> cmCancel )
+    {
+      if ( TempVisible <> DscVisible )
+        {
+          DscVisible := TempVisible;
+          SetFilters;
+        }
+
+      RereadRecord;
+    }
+}
+
+//******************************************************************************
+
+Procedure RunSoprDoc;
+{
+  iEditDoc.RunEditHozDoc(coKatSopr, KatSopr.VidSopr, KatSopr.VidSopr, KatSopr.NRec);
+}
+
+//******************************************************************************
+
+Function Date2Word(_dat: date): word;
+{
+  Date2Word := To_Days(Sub_Date(_dat, Date(1, 1, 1980)));
+}
+
+//******************************************************************************
+// проверка текущей накладной на разрешение выбора
+Function ChekNaklByParam (bMess: boolean): boolean;
+{
+  ChekNaklByParam := TRUE;
+
+  if (wGrSopr = 0)
+    EXIT;
+
+  // по сводной накладной
+  if ((wGrSopr AND 1) = 1)
+    if IsValid(#GrSopr)
+    {
+      ChekNaklByParam := FALSE;
+
+      if (bMess)
+        Message('Данная накладная уже привязана к сводной накладной!', CancelButton)
+
+      EXIT;
+    }
+
+  // по статусу
+  if ((wGrSopr AND 2) = 2)
+    if (wChkStatus = 1)
+      if (KatSopr.Status <> 1)
+      {
+        ChekNaklByParam := FALSE;
+
+        if (bMess)
+          Message('Статус выбираемых накладных может быть только "исполняемый"!', CancelButton)
+
+        EXIT;
+      }
+}
+
+//******************************************************************************
+
+Procedure SetMyTitle;
+var
+  tmpS: string;
+{
+  tmpS := 'Выбор набора накладных';
+
+  case typeSopr of
+  //--------------
+    110
+  , 111
+  , 114
+  , 211:
+      tmpS := 'Выбор набора актов на услуги, работы';
+  //--------------
+    101, 108:
+      tmpS := 'Выбор набора накладных на закупку';
+  //--------------
+    1411:
+      tmpS := 'Выбор дневников приемки работ';
+  //--------------
+    553, 554, 557:
+      tmpS := 'Выбор набора актов на ремонт';
+  //--------------
+    600:
+      tmpS := 'Выбор набора накладных на внутреннее перемещение';
+  //--------------
+    606:
+      tmpS := 'Выбор набора транзитных накладных';
+  //--------------
+    621:
+      tmpS := 'Выбор набора актов на комплектование';
+  //--------------
+    622:
+      tmpS := 'Выбор набора актов на разукомплектование';
+  //--------------
+  end;
+
+  SetTitle(tmpS + ' (выбрано: ' + string(CountPick) + ')');
+}
+
+
+//******************************************************************************
+
+Procedure MarkSopr(_NRec: comp);
+{
+  inc(CountPick);
+  inc(wPickNum);
+
+  ClearBuffer(#Pick);
+
+  Pick.PickNum := wPickNum;
+  Pick.cRec    := _NRec;
+  Pick.wList   := 22;
+
+  insert current Pick;
+}
+
+//******************************************************************************
+
+Function MarkForFilt(What: word): boolean;
+{
+  MarkForFilt := FALSE;
+
+  PackFields;
+
+  PushPos(#KatSopr);
+
+  var _cOrg : comp;
+
+  case TypeSopr of
+  //------------------------------------------------------------------------------
+    600, 606:
+      _cOrg := KatSopr.cOrgBase;
+  //------------------------------------------------------------------------------
+    else
+      _cOrg := KatSopr.cOrg;
+  //------------------------------------------------------------------------------
+  end;
+
+  var _cGruzTo    : comp;   _cGruzTo   := KatSopr.cGruzTo;
+  var _cGruzFrom  : comp;   _cGruzFrom := KatSopr.cGruzFrom;
+  var _dOpr       : date;   _dOpr      := KatSopr.dOpr;
+  var _cVal       : comp;   _cVal      := KatSopr.cVal;
+  var _cParty     : comp;   _cParty    := if (GetFirst SpSopr = tsOk, SpSopr.cParty, 0);
+  var _cGrSopr    : comp;   _cGrSopr   := if (IsValid(#GrSopr), KatSopr.cGrSopr, 0);
+
+  var tmpStr_Visual: string;
+
+  tmpStr_Visual := if ( What = 1, 'Помечаю документы...', 'Снимаю выделение документов...');
+
+  StartNewVisual(vtRotateVisual, vfTimer + vfConfirm, tmpStr_Visual + ''#13#13, 1);
+
+  _LOOP KatSopr
+    {
+      if ( KatSopr.dSopr < _begdate )
+        Continue;
+
+      if ( KatSopr.dSopr > _enddate )
+        Continue;
+
+      if ( (filSel AND 1) > 0 )
+        case TypeSopr of
+          600, 606:
+            {
+              if ( _cOrg <> KatSopr.cOrgBase )
+                Continue;
+            }
+        else
+          if ( _cOrg <> KatSopr.cOrg )
+            Continue;
+        end;
+
+      if ( (filSel AND  2) > 0 )
+        if ( _cGruzTo <> KatSopr.cGruzTo )
+          Continue;
+
+      if ( (filSel AND  4) > 0 )
+        if ( _cGruzFrom <> KatSopr.cGruzFrom )
+          Continue;
+
+      if ( (filSel AND  8) > 0 )
+        if ( _dOpr <> KatSopr.dOpr )
+          Continue;
+
+      if ( (filSel AND 16) > 0 )
+        if ( _cVal <> KatSopr.cVal )
+          Continue;
+
+      if ( (filSel AND 32) > 0 )
+        if ( _cParty <> SpSopr.cParty )
+          Continue;
+
+      if ( (filSel AND 64) > 0 )
+        if ( _cGrSopr <> KatSopr.cGrSopr )
+          Continue;
+
+      if ( What = 1 )
+        {
+          if ( GetFirst Pick <> tsOk )
+            MarkSopr(KatSopr.NRec);
+        }
+      else
+        if ( GetFirst Pick = tsOk )
+          if ( delete current Pick = tsOk )
+            CountPick := CountPick - 1;
+
+      NextVisual;
+    } // For "KatSopr"
+
+  SetMyTitle;
+
+  PopPos(#KatSopr);
+
+  RereadRecord(#KatSopr);
+
+  StopVisual('', 0);
+
+  MarkForFilt := TRUE;
+} // Function MarkForFilt
+
+//******************************************************************************
+
+Window winGetSomeKatSopr_Plus 'Пометить накладные по условиям фильтрации' DoAccept;
+  Show at (19, 3, 69, 19);
+
+//******************************************************************************
+
+Panel BBB;
+
+Screen scrGetSomeKatSopr_Plus
+
+Fields
+  _begdate ('Дата начала диапазона пометки', hcAllVPick, sci147enIns): NoProtect;
+  _enddate ('Дата конца диапазона пометки' , hcAllVPick, sci147enIns): NoProtect,
+    { Font = { BackColor = if (_begdate > _enddate, ColorError, 0) } };
+  filSel   ('Фильтр для пометки', hcAllVPick, sci147enIns): NoProtect;
+
+Buttons
+  cmOk    , , , 'Пометить накладные по условиям фильтрации', , sci1Esc;
+  cmNo    , , , 'Снять выделение накладных по условиям фильтрации', , sci1Esc;
+  cmCancel, , , 'Отмена', , sci1Esc;
+<<
+              В диапазоне дат
+        `с`.@@@@@@@@@@@  `по`.@@@@@@@@@@@
+
+  Пометить:
+   [.] с одинаковым контрагентом              `
+   [.] с одинаковым грузополучателем          `
+   [.] с одинаковым грузоотправителем         `
+   [.] с одинаковой датой формирования ордеров`
+   [.] с одинаковой валютой                   `
+   [.] с одинаковой партией                   `
+   [.] с одинаковой группой накладных         `
+
+ <. ~П~ометить .><.  ~С~нять  .><. О~т~мена .>
+
+>>
+end; // Screen scrGetSomeKatSopr_Plus
+
+
+//******************************************************************************
+
+HandleEvent // Panel
+
+cmCheckField:
+  if ( ( CurField = #_enddate ) OR ( CurField = #_begdate ) )
+    if ( _begdate > _enddate )
+      {
+        Message('Перепутаны даты...', OkButton + Warning);
+        set _enddate := _begdate;
+        Abort;
+      }
+
+end; // HandleEvent Panel
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    if ( NOT ChekNaklByParam ( FALSE ) )
+      {
+        filSel := filSel AND (1+2+4+8+16+32);
+        ClusterDisabledField(#filSel, 64);
+      }
+    else
+      ClusterDisabledField(#filSel, 0);
+  }
+
+cmOk:
+  {
+     MarkForFilt(1);
+     PutCommand(cmDefault);
+  }
+
+cmNo:
+  {
+    MarkForFilt(2);
+    PutCommand(cmDefault);
+  }
+
+end; // HandleEvent
+end; // Window winGetSomeKatSopr_Plus;
+
+//-----------------------------------------------------------------------------
+
+Window wSetFilters 'Установка фильтров' EscClose, DoAccept;
+
+Screen scrFilter1 ('', , sci1Esc);
+
+Fields
+  _begdate     ('Введите начальную дату интервала', hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect;
+  _enddate     ('Введите конечную дату интервала' , hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect,
+    { Font = { BackColor = if (_begdate > _enddate, ColorError, 0) } };
+  wfKontr      ('Выбор контрагента', hcfilOnKontr): NoProtect;
+  KatOrg2.Name ('Выбор контрагента', hcfilOnKontr, sci13Esc): Protect, PickButton;
+  _OnlyNotDO   ('Установить/снять фильтр только по непривязанным к ДО накладным', hcSwitchPrivDO   ): NoProtect;
+  _SoprOrder   ('Установка фильтров на накладные по отношению к ордерам'        , hcSwitchSoprOrder): NoProtect;
+  _wNakl       ('Переключает типы для "закупки" и "продажи" АКТЫ <─> НАКЛАДНЫЕ' , hcSwitchNaclAkt  ): NoProtect;
+
+Buttons
+  cmOk, Default, , 'Ввод - принять выбор', , sci1Esc;
+  cmCancel,    , , 'Отмена', , sci1Esc;
+<<
+
+        Ввод интервала времени:
+        `Начальная дата: ` .@@@@@@@@@@@
+        `Конечная дата: `  .@@@@@@@@@@@
+
+  [.] Контрагент`.@@@@@@@@@@@@@@@@@@@@@@@@@
+
+        Показывать:
+         (.) все накладные             `
+         (.) только не привязанные к ДО`
+
+         (.) все накладные               `
+         (.) только накладные с ордерами `
+         (.) только накладные без ордеров`
+
+        Альтернатива выбора, показывать:
+         (.) накладные `
+         (.) акты      `
+
+       <. Продолжить .>   <.   Отмена   .>
+
+>>
+end; // Screen
+
+//******************************************************************************
+
+Screen scrFilter2 ('', , sci1Esc);
+
+Fields
+  _begdate     ('Введите начальную дату интервала', hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect;
+  _enddate     ('Введите конечную дату интервала' , hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect,
+    { Font = { BackColor = if (_begdate > _enddate, ColorError, 0) } };
+
+  wfKontr      ('Выбор контрагента', hcfilOnKontr): NoProtect;
+  KatOrg2.Name ('Выбор контрагента', hcfilOnKontr, sci13Esc): Protect, PickButton;
+  _OnlyNotDO   ('Установить/снять фильтр только по непривязанным к ДО накладным', hcSwitchPrivDO): NoProtect;
+  _SoprOrder   ('Установка фильтров на накладные по отношению к ордерам', hcSwitchSoprOrder): NoProtect;
+
+Buttons
+  cmOk, Default, , 'Ввод - принять выбор', , sci1Esc;
+  cmCancel, , , 'Отмена', , sci1Esc;
+<<
+
+        Ввод интервала времени:
+        `Начальная дата: ` .@@@@@@@@@@@
+        `Конечная дата: `  .@@@@@@@@@@@
+
+  [.] Контрагент`.@@@@@@@@@@@@@@@@@@@@@@@@@
+
+        Показывать:
+         (.) все накладные             `
+         (.) только не привязанные к ДО`
+
+         (.) все накладные               `
+         (.) только накладные с ордерами `
+         (.) только накладные без ордеров`
+
+       <. Продолжить .>   <.   Отмена   .>
+
+>>
+end; // Screen
+
+//******************************************************************************
+
+Screen scrFilter3 ('', , sci1Esc);
+
+Fields
+  _begdate   ('Введите начальную дату интервала', hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect;
+  _enddate   ('Введите конечную дату интервала' , hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect,
+    { Font = { BackColor = if (_begdate > _enddate, ColorError, 0) } };
+  _OnlyNotDO ('Установить/снять фильтр только по непривязанным к ДО накладным', hcSwitchPrivDO): NoProtect;
+  _SoprOrder ('Установка фильтров на накладные по отношению к ордерам', hcSwitchSoprOrder): NoProtect;
+
+Buttons
+  cmOk, Default, , 'Ввод - принять выбор', , sci1Esc;
+  cmCancel   , , , 'Отмена', , sci1Esc;
+<<
+
+  Ввод интервала времени:
+  `Начальная дата: ` .@@@@@@@@@@@
+  `Конечная дата: `  .@@@@@@@@@@@
+
+  Показывать:
+   (.) все накладные             `
+   (.) только не привязанные к ДО`
+
+   (.) все накладные               `
+   (.) только накладные с ордерами `
+   (.) только накладные без ордеров`
+
+   <. Продолжить .>  <.   Отмена   .>
+
+>>
+end; // Screen
+
+//******************************************************************************
+
+Screen scrFilter4 ('', , sci1Esc);
+Fields
+  _begdate     ('Введите начальную дату интервала', hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect;
+  _enddate     ('Введите конечную дату интервала' , hcD_GetInterval): [, 'DD/MM/YYYY'], NoProtect,
+    { Font = { BackColor = if (_begdate > _enddate, ColorError, 0) } };
+
+  wfKontr      ('Выбор контрагента', hcfilOnKontr): NoProtect;
+  KatOrg2.Name ('Выбор контрагента', hcfilOnKontr, sci13Esc): Protect, PickButton;
+  Dog2Name     ('Выбор договора', hcfilOnKontr, sci13Esc): Protect, PickButton;
+  _OnlyNotDO   ('Установить/снять фильтр только по непривязанным к ДО накладным', hcSwitchPrivDO): NoProtect;
+Buttons
+  cmOk, Default, , 'Ввод - принять выбор', , sci1Esc;
+  cmCancel, , , 'Отмена', , sci1Esc;
+<<
+
+        Ввод интервала времени:
+        `Начальная дата:` .@@@@@@@@@@@
+        `Конечная дата:`  .@@@@@@@@@@@
+
+  [.] Контрагент`.@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] Договор`   .@@@@@@@@@@@@@@@@@@@@@@@@@
+
+        Показывать:
+         (.) все накладные             `
+         (.) только не привязанные к ДО`
+
+       <. Продолжить .>   <.   Отмена   .>
+
+>>
+end; // Screen
+
+//******************************************************************************
+
+Panel AAA;
+
+HandleEvent // Panel
+
+cmPick:
+  case CurField of
+  //**************
+    #KatOrg2.Name:
+      {
+        if ( RunInterface('GetKatOr', _cfKontr, comp(0), FALSE, comp(0), comp(0)) <> cmCancel )
+          set _cfKontr := _cfKontr;
+
+        if ( _cfKontr = 0 )
+          set wfKontr := wfKontr and 2;
+      }
+  //**************
+    #Dog2Name:
+      {
+        if ( RunInterface('GetSomeDogovor',
+                            word(13),        // pVidDog,    // вид документа - если задан будет установлен фильтр
+                            word(-1),        // pStatus,    // 0FFFFh - все документы, иначе битовая маска РАЗРЕШЕННЫХ статусов документов
+                            word(0),         // pDirect,    // 0 - выбирать все документы, 1 - только на продажу, 2 - только на закупку
+                            word(0),         // pAttach,    // 0 - выбирать соглашения нельзя, 1 - можно, 2 - только соглашения
+                            false,           // OkOne,      // TRUE - груповой выбор FALSE - только один
+                            _cfDog,          // prmDogovor, // возвращаемый указатель на договор
+                            true,            // OneLevel,   // показывать записи одного уровня (true), false - нет
+                            comp(0)          // pOwn        // ссылка на владельца уровня (действует если OneLevel = true) - ВОЗВРАЩАЕМЫЙ!
+                          ) <> cmCancel )
+          set _cfDog := _cfDog;
+
+        if ( _cfDog = 0 )
+          set wfKontr := wfKontr and 1;
+      }
+  //**************
+  end;
+
+cmCheckField:
+  {
+    if ( ( CurField = #_enddate ) OR ( CurField = #_begdate ) )
+      if ( _begdate > _enddate )
+        {
+          Message('Перепутаны даты...', OkButton + Warning);
+          set _enddate := _begdate;
+          Abort;
+        }
+
+    case CurField of
+    //**************
+      #wfKontr:
+        {
+          if ( ( (wfKontr AND 1) <> 0 ) AND ( _cfKontr = 0 ) )
+            {
+              SelectField(#KatOrg2.Name);
+              PutCommand(cmPick);
+            }
+
+          if ( ( (wfKontr AND 2) <> 0 ) AND ( _cfDog = 0 ) )
+            {
+              SelectField(#Dog2Name);
+              PutCommand(cmPick);
+            }
+        }
+    //**************
+    end;
+  }
+
+cmDelOnProtect:
+    case CurField of
+    //**************
+      #KatOrg2.Name:
+        {
+          set _cfKontr := 0;
+          set wfKontr  := wfKontr and 2;
+        }
+    //**************
+      #Dog2Name:
+        {
+          set _cfDog  := 0;
+          set wfKontr := wfKontr and 1;
+        }
+    //**************
+    end;
+
+end; // HandleEvent Panel
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent // Window
+
+cmInit:
+  {
+    _wfKontr     := wfKontr;
+    set _cfKontr := cfKontr;
+    _OnlyNotDO   := if(OnlyNotDO, word(1), word(0));
+
+    if (wGrSopr = 4)
+      {
+        SetFormat(scrFilter4);
+        LocateWin((80-46) div 2,1,46,23-9, wSetFilters);
+      }
+    else
+      if Actsable
+        {
+          SetFormat(scrFilter1);
+          LocateWin((80-46) div 2, 1, 46, 23-1, wSetFilters);
+        }
+      else
+        {
+          SetFormat(scrFilter2);
+          LocateWin((80-46) div 2, 2, 46, 20-2, wSetFilters);
+        }
+
+    if (
+        ( typeSopr <> 101 )
+         AND
+        ( typeSopr <> 108 )
+         AND
+        ( typeSopr <> 1411)
+         AND
+        ( typeSopr <> 110 )
+         AND
+        ( typeSopr <> 114 )
+         AND
+        ( typeSopr <> 111 )
+         AND
+        ( typeSopr <> 201 )
+         AND
+        ( typeSopr <> 1411 )
+         AND
+        ( typeSopr <> 211 )
+       )
+      {
+        SetFormat(scrFilter3);
+        LocateWin((80-35) div 2, 3, 35, 19-3, wSetFilters);
+      }
+    else
+      _wNakl := if ((typeSopr <> 111) AND (typeSopr <> 211) AND (typeSopr <> 110) AND (typeSopr <> 114), 0, 1);
+
+    _SoprOrder := SoprOrder;
+  }
+
+cmDone:
+  {
+    wfKontr := _wfKontr;
+
+    if ( (wfKontr AND 1) = 0 )
+      cfKontr := _cfKontr;
+
+    if ( (wfKontr AND 2) = 0 )
+      cfDog := _cfDog;
+  }
+
+cmOk:
+  {
+    if (
+        boGetTune('User.UseFilter')
+         AND
+        (
+         ( _begdate < dGetTune('User.dFilter1') )
+          OR
+         ( _enddate > dGetTune('User.dFilter2') )
+        )
+       )
+      {
+        Message('Заданный интервал дат не попадает в разрешенный'#13
+              + '(установленный в настройке)');
+
+        if ( _begdate < dGetTune('User.dFilter1') )
+          begdate := dGetTune('User.dFilter1');
+
+        if ( _enddate > dGetTune('User.dFilter2') )
+          enddate := dGetTune('User.dFilter2');
+      }
+    else
+      {
+        begdate := _begdate;
+        enddate := _enddate;
+      }
+
+    if ( (wfKontr AND 1) <> 0 )
+      {
+        if ( NOT BoundActive(tbfKontr) )
+          AddBounds(tbfKontr);
+      }
+    else
+      if ( BoundActive(tbfKontr) )
+        SubBounds(tbfKontr);
+
+    if ( (wfKontr AND 2) <> 0 )
+      {
+        if ( NOT BoundActive(tbfDog) )
+          AddBounds(tbfDog);
+      }
+    else
+      if ( BoundActive(tbfDog) )
+        SubBounds(tbfDog);
+
+    cfKontr  := _cfKontr;
+    cfDog    := _cfDog;
+    _wfKontr := wfKontr;
+
+    if ( _OnlyNotDO = 1 )
+      {
+        if ( NOT BoundActive(tbOnlyNotDO) )
+          AddBounds(tbOnlyNotDO);
+      }
+    else
+      if ( BoundActive(tbOnlyNotDO) )
+        SubBounds(tbOnlyNotDO);
+
+    OnlyNotDO := _OnlyNotDO = 1;
+
+    case _SoprOrder of
+      // все накладные
+      0:
+        if ( BoundActive(tbNotViewOpr) )
+          SubBounds(tbNotViewOpr);
+      // только накладные с ордерами
+      1:
+        {
+          d1 := Date(1, 1, 1900);
+          d2 := Date(1, 1, 2100);
+
+          if ( NOT BoundActive(tbNotViewOpr) )
+            AddBounds(tbNotViewOpr);
+        }
+      // только накладные без ордеров
+      2:
+        {
+          d1 := ZeroDate;
+          d2 := ZeroDate;
+
+          if ( NOT BoundActive(tbNotViewOpr) )
+            AddBounds(tbNotViewOpr);
+        };
+    end;
+
+    SoprOrder := _SoprOrder;
+
+    if (
+        (
+         ( typeSopr <> 111 )
+          AND
+         ( typeSopr <> 211 )
+          AND
+         ( typeSopr <> 110 )
+          AND
+         ( typeSopr <> 114 )
+          AND
+         ( _wNakl = 1 )
+        )
+         OR
+        (
+         ( typeSopr <> 101 )
+          AND
+         ( typeSopr <> 108 )
+          AND
+         ( typeSopr <> 1411)
+          AND
+         ( typeSopr <> 1421)
+          AND
+         ( typeSopr <> 201 )
+          AND
+         ( _wNakl = 0 )
+        )
+       )
+      ProcessCommand(cmNal);
+
+    PutCommand(cmDefault);
+  }
+end; // HandleEvent Window
+
+end; // Window
+
+//------------------------------------------------------------------------------
+
+
+Panel p1;
+
+Browse brKatSopr (, hcAllVPick, sci147enIns);
+
+Fields
+//------------------------------------------------------------------------------
+  {Font = {Color = if ( ((TypeSopr = 621) OR (TypeSopr = 622)) AND (KatSopr.TypeDoc = 3)
+                      , ColorGray
+                      , if(IsValid(tnPick), ColorMark, 0)) } };
+//------------------------------------------------------------------------------
+  Picked        #3'V'
+                : [1], Skip, NoAutoSize;
+//------------------------------------------------------------------------------
+  ''+KatNotesName   #3'Статус'               : [14], skip, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  KatSopr.DesGr #3'Группа'
+                ('Код группы пользователей')
+                : [5], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatSopr.Descr #3'Дескр.'
+                ('Дескриптор(идентификатор) пользователя')
+                : [5], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatSopr.nSopr #3'Номер'
+                ('Номер накладной')
+                : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatSopr.dSopr #3'Дата'
+                ('Дата формирования накладной')
+                : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name   #3'Контрагент'
+                ('Контрагент, указанный в накладной')
+                : [12], Protect;
+//------------------------------------------------------------------------------
+  BaseDoc.NoDoc #3'№ ДО'
+                ('Номер документа-основания (если накладная привязана к ДО)')
+                : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  GrSopr.nSopr  #3'Сводная'#13#3'накладная'
+                ('Номер сводной накладной (если накладная входит в сводную)')
+                : [6], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  Schfact.Num   #3'Номер СФ'
+                ('Номер сформированного по накладной налогового документа')
+                : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatSopr.Name  #3'Примечание'
+                ('Примечание к накладной')
+                : [13], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatPodr.Name  #3'Откуда'
+                ('Откуда произведено перемещение')
+                : [14], Protect;
+//------------------------------------------------------------------------------
+  ToPodr.Name   #3'Куда'
+                ('')
+                : [14], Protect;
+//------------------------------------------------------------------------------
+  ToMOL.Name    #3'МОЛ'
+                ('МОЛ')
+                : [12], Protect;
+//------------------------------------------------------------------------------
+  KatSopr.dOpr  #3'Дата'#13#3'проведения'
+                ('Дата сформированных по накладной складских ордеров')
+                : [10], Protect, NoAutoSize;
+//------------------------------------------------------------------------------
+#ifdef __NIOKR__
+  [NIOKR_Rep '']
+  oExtAttr.sGetAttr(coKatSopr, KatSopr.nRec, 'НИОКР. Отчеты агента')
+                #3'Отчеты'
+                ('Есть ли отчеты агента по документу')
+                : [4], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+  [NIOKR_Akt '']
+  oExtAttr.sGetAttr(coKatSopr, KatSopr.nRec, 'НИОКР. Акты на вознаграждение')
+                #3'Акты'
+                ('Есть ли акты на вознаграждение по документу')
+                : [4], Protect, NoAutoSize, Centered;
+//------------------------------------------------------------------------------
+#end
+end;
+
+//******************************************************************************
+
+Create view vKatSopr
+
+As select
+  NRec
+, dSopr
+, dOpr
+
+From
+  KatSopr;
+
+HandleEvent
+
+cmMarkUnMark:
+  {
+    if ( NOT IsValid(#KatSopr) )
+      Exit;
+
+    if ( ( ( KatSopr.VidSopr = 621 ) OR ( KatSopr.VidSopr = 622 ) ) AND ( KatSopr.TypeDoc = 3 ) )
+      Exit;
+
+    if ( ChekNaklByParam ( TRUE ) )
+      {
+        if ( IsValid(#Pick) )
+          {
+            if ( delete current Pick <> tsOk )
+              {
+              }
+
+            dec(CountPick);
+          }
+        else
+          {
+            MarkSopr(KatSopr.NRec); // помечаем накладную...
+
+            if ( KatSopr.wADoc = adSoprDocKN ) // если это корректирующая накладная...
+              {
+                var PNnRec: comp; PNnRec := KatSopr.cADoc;
+                // ...найдем соответствующую приходную (корректируемую) накладную
+                if ( vKatSopr.GetFirst FastFirstRow KatSopr where (( PNnRec == KatSopr.NRec )) = tsOk )
+                  {
+                    if ( longint(vKatSopr.dOpr) <> 0 ) // если корректируемая накладная оприходована...
+                      {
+                        // ... сторнируем ее: для этого оприходуем сторнирующую накладную
+                        if ( vKatSopr.GetFirst FastFirstRow KatSopr
+                                      where (( PNnRec      == KatSopr.cADoc AND
+                                               adSoprDocSN == KatSopr.wADoc )) = tsOk)
+                          MarkSopr(vKatSopr.NRec)
+                        else
+                          Message('Нарушение целостности данных по накладным.');
+                      }
+                  }
+                else
+                  Message('Нарушение целостности данных по накладным.');
+              }
+          }
+
+        SetMyTitle;
+      }
+    #ifdef ATL51
+    RedrawCurrentandGo(GetCurrentFormat, TRUE);
+    #else
+    if ( GetNext KatSopr = tsOk )
+      CallToNeighbours(cmPosDown, #KatSopr);
+
+    RescanPanel(#KatSopr);
+    #end
+  }
+
+cmSelectAll:
+  {
+    PushPos(#KatSopr);
+
+    StartNewVisual(vtNumericVisual, vfTimer + vfBreak, 'Помечаю документы: ', 1);
+
+    _LOOP KatSopr
+      {
+        NextVisual;
+
+        if ( NOT ChekNaklByParam ( FALSE ) )
+          Continue;
+
+        if ( RecordExists Pick where (( 22 == Pick.wList AND KatSopr.NRec == Pick.cRec )) = tsOk )
+          Continue;
+
+        MarkSopr(KatSopr.NRec);
+      }
+
+    PopPos(#KatSopr);
+
+    SetMyTitle;
+
+    RereadRecord;
+    RescanPanel(#KatSopr);
+
+    StopVisual('', 0);
+  }
+
+cmShowAll:
+  RunWindow(winGetSomeKatSopr_Plus);
+
+cmUnselectAll:
+  {
+    if ( delete Pick where (( 22 == Pick.wList )) <> tsOk )
+      {
+      }
+
+    CountPick := 0;
+    wPickNum  := 0;
+
+    SetMyTitle;
+
+    RescanPanel(#KatSopr);
+  }
+
+end;
+end; // Panel p1
+
+HandleEvent
+
+cmInit:
+  {
+    _begdate     := begdate;
+    _enddate     := enddate;
+
+    MainType := typeSopr;
+
+    Kol_cmNal := 0;
+
+    wChkStatus := wGetTune('Doc.Sell.MakeOrder');
+
+    PushCondition(tcNo_SN_KatSopr);
+
+    if (typeSopr = 101 or typeSopr = 108 or typeSopr = 201 or typeSopr = 1411 or typeSopr = 1421)
+      PushCondition(tcbyTipDoc);
+
+    #ifdef __NIOKR__
+    if ( wGrSopr = 4 )
+      PushCondition(tcNIOKR);
+    #end
+
+    SetFieldVisible(#KatSopr.dOpr, (TypeSopr <> 110) AND (TypeSopr <> 111) AND (TypeSopr <> 211));
+
+    SetFieldVisible(#Schfact.Num, (TypeSopr = 101) OR (TypeSopr = 103) OR (TypeSopr = 108) OR (TypeSopr = 1411) OR (TypeSopr = 106) OR (TypeSopr = 111) OR
+                                  (TypeSopr = 201) OR (TypeSopr = 203) OR (TypeSopr = 1421) OR (TypeSopr = 206) OR (TypeSopr = 211))
+
+    if (wGetTune('Country') = 2 )
+      SetColumnTitle(brKatSopr, #Schfact.Num, ''#3'Номер НН');
+
+    case TypeSopr of
+    //------------------------------------------------------------------------------
+      606, 600: // SetFormat(MoveKatSopr);
+        {
+          SetTitle('Выбор набора накладных на внутреннее перемещение');
+
+          SetFieldVisible(#KatOrg.Name    , FALSE);
+          SetFieldVisible(#BaseDoc.NoDoc  , FALSE);
+          SetFieldVisible(#KatSopr.Name   , FALSE);
+          SetFieldVisible(#ToMOL.Name     , FALSE);
+#ifdef __NIOKR__
+          SetFieldVisible(#NIOKR_Rep      , FALSE);
+          SetFieldVisible(#NIOKR_Akt      , FALSE);
+#end
+        }
+    //------------------------------------------------------------------------------
+      621, 622: // SetFormat(KatSoprAktK);
+        {
+          SetFieldVisible(#BaseDoc.NoDoc  , FALSE);
+          SetFieldVisible(#KatOrg.Name    , FALSE);
+          SetFieldVisible(#GrSopr.nSopr   , FALSE);
+          SetFieldVisible(#KatPodr.Name   , FALSE);
+          SetColumnTitle(brKatSopr, #topodr.Name, ''#3'Склад');
+#ifdef __NIOKR__
+          SetFieldVisible(#NIOKR_Rep      , FALSE);
+          SetFieldVisible(#NIOKR_Akt      , FALSE);
+#end
+        }
+    //------------------------------------------------------------------------------
+      101, 108: // SetFormat(KatSoprB);
+        {
+          SetFieldVisible(#ToPodr.Name    , FALSE);
+          SetFieldVisible(#KatPodr.Name   , FALSE);
+          SetFieldVisible(#ToMOL.Name     , FALSE);
+#ifdef __NIOKR__
+          SetFieldVisible(#NIOKR_Rep      , FALSE);
+          SetFieldVisible(#NIOKR_Akt      , FALSE);
+#end
+        }
+    //------------------------------------------------------------------------------
+      else // SetFormat(KatSopr);
+        {
+          SetFieldVisible(#ToPodr.Name    , FALSE);
+          SetFieldVisible(#KatPodr.Name   , FALSE);
+          SetFieldVisible(#ToMOL.Name     , FALSE);
+#ifdef __NIOKR__
+          if ( wGrSopr <> 4 )
+            {
+              SetFieldVisible(#NIOKR_Rep  , FALSE);
+              SetFieldVisible(#NIOKR_Akt  , FALSE);
+            }
+#end
+        }
+    //------------------------------------------------------------------------------
+    end;
+
+    // удаление старого Pick
+    delete Pick1 where (( 22 == Pick1.wList ));
+
+    CountPick := 0;
+    wPickNum  := 0;
+
+    SetMyTitle;
+
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    if boGetTune('User.UseFilter')
+      if ( ( begdate < dGetTune('User.dFilter1') ) OR ( enddate > dGetTune('User.dFilter2') ) )
+        {
+          if ( begdate < dGetTune('User.dFilter1') )
+            {
+              ShowTune('Начальная граница интервала дат будет скорректирована согласно настройке', 'User.dFilter1');
+              begdate := dGetTune('User.dFilter1');
+            }
+
+          if ( enddate > dGetTune('User.dFilter2') )
+            {
+              ShowTune('Конечная граница интервала дат будет скорректирована согласно настройке', 'User.dFilter2');
+              enddate := dGetTune('User.dFilter2');
+            }
+        }
+
+    DscName    := sGetTune('User.Descr');
+    DesGroup   := sGetTune('User.DesGr');
+    DscVisible := wGetTune('Doc.Visible');
+
+    if ( begdate > enddate )
+      enddate := begdate;
+
+    SetFilters;
+
+    var Datechanged: boolean;
+
+    if ( NOT ReadMyDsk(OnlyNotDO, 'GetSomeKatSopr_OnlyNotDO', Datechanged) )
+      OnlyNotDO := FALSE;
+
+    if ( NOT ReadMyDsk(Actsable, 'GetSomeKatSopr_Actsable', Datechanged) )
+      Actsable := TRUE;
+
+    if ( NOT ReadMyDsk(cfKontr, 'GetSomeKatSopr_cfKontr', Datechanged) )
+      cfKontr := 0;
+
+    if ( NOT ReadMyDsk(cfDog, 'GetSomeKatSopr_cfDog', Datechanged) )
+      cfDog := 0;
+
+    wfKontr := 0;
+
+    if ( ( TypeSopr = 621 ) OR ( TypeSopr = 622 ) )
+      {
+        Actsable := FALSE;
+        cfKontr  := 0;
+      }
+
+    d1 := ZeroDate;
+    d2 := ZeroDate;
+
+    SoprOrder := 0;
+
+    if ( wView = 0 )
+      {
+        AddBounds (tbNotViewOpr);
+        SoprOrder := 2;
+      }
+
+    if OnlyNotDO
+      AddBounds(tbOnlyNotDO);
+
+    if ( GetLast KatSopr <> 0 )
+      if ( Actsable )
+        {
+          ProcessCommand(cmNal);
+
+          if (Kol_cmNal > 100)
+            Abort
+          else
+            if ( GetLast KatSopr <> 0 )
+              {
+                Message('Нет требуемых накладных и актов...', CancelButton);
+                Abort;
+              }
+        }
+      else
+        {
+          Message('Нет требуемых накладных...', CancelButton);
+          Abort;
+        }
+  }
+
+cmDone:
+  SaveMyDsk(TRUE, 'GetSomeKatSopr_Actsable');
+
+cmDocBas: // Alt+D
+  {
+    OnlyNotDO := NOT OnlyNotDO;
+
+    if OnlyNotDO
+      {
+        if ( NOT BoundActive(tbOnlyNotDO) )
+          AddBounds(tbOnlyNotDO);
+      }
+    else
+      if ( BoundActive(tbOnlyNotDO) )
+        SubBounds(tbOnlyNotDO);
+
+    RereadRecord;
+  }
+
+cmAddNewRec:
+  {
+    KatSopr.NRec := -1;
+    RunSoprDoc;
+    RereadRecord;
+  }
+
+cmPass:
+{
+  if (CurWindow <> wiSpSopr) // только просмотр
+  {
+    RunSoprDoc;
+    RereadRecord;
+  }
+}
+
+cmEdit:
+{
+  PutCommand(cmPass);
+}
+
+cmFilterSave: // <Alt+B>
+  if ( RunWindowModal(wSetFilters)  = cmDefault )
+    RereadRecord;
+
+cmDefault:
+  {
+    if ( RecordExists Pick1 where (( 22 == Pick1.wList )) <> tsOk )
+      MarkSopr(KatSopr.NRec);
+
+    SaveMyDsk(OnlyNotDO, 'GetSomeKatSopr_OnlyNotDO');
+    RescanPanel(#KatSopr);
+  }
+
+cmManagerId:
+  SetDescriptor;
+
+cmHotKeys:
+  {
+    if ( ( typeSopr = 621 ) OR ( typeSopr = 622 ) )
+      {
+        PutHotCommand(RunMenu('mnuGetSomeKatSopr_shot4_HotKeys'));
+        Exit;
+      }
+
+  if ( ( typeSopr = 111 ) OR ( typeSopr = 110 ) OR ( typeSopr = 114 ) OR ( typeSopr = 211 ) ) // акты
+    DisableCommand(cmAccording); // нельзя просмотреть ордера
+
+  if (
+      ( typeSopr <> 101 )
+       AND
+      ( typeSopr <> 108 )
+       AND
+      ( typeSopr <> 1411)
+       AND
+      ( typeSopr <> 110 )
+       AND
+      ( typeSopr <> 114 )
+       AND
+      ( typeSopr <> 111 )
+       AND
+      ( typeSopr <> 201 )
+       AND
+      ( typeSopr <> 1421 )
+       AND
+      ( typeSopr <> 211 )
+     )
+    PutHotCommand(RunMenu('mnuGetSomeKatSopr_shot_HotKeys'))
+  else
+    if Actsable
+      {
+        if OnlyNotDO
+          PutHotCommand(RunMenu('mnuGetSomeKatSopr_fil_HotKeys'))
+        else
+          PutHotCommand(RunMenu('mnuGetSomeKatSopr_all_HotKeys'));
+      }
+    else
+      if OnlyNotDO
+        PutHotCommand(RunMenu('mnuGetSomeKatSopr_shot3_HotKeys'))
+      else
+        PutHotCommand(RunMenu('mnuGetSomeKatSopr_shot2_HotKeys'));
+
+  if ( ( typeSopr = 111 ) OR ( typeSopr = 110 ) OR ( typeSopr = 114 ) OR ( typeSopr = 211 ) ) // акты
+    EnableCommand(cmAccording); // нельзя просмотреть ордера
+  }
+
+cmAttrib: // Ctrl+Enter
+  RunWindow(wiSpSopr);
+
+cmAccording: // Atl+S
+  {
+    RunInterface('ShowOrderForSopr', KatSopr.NRec);
+    RereadRecord(#KatSopr);
+  }
+
+! -Key------------- <Alt+F> -------------------------
+cmNal:
+  {
+    if (
+        ( NOT Actsable )
+         OR
+        (
+         ( typeSopr <> 101 )
+          AND
+         ( typeSopr <> 108 )
+          AND
+         ( typeSopr <> 1411)
+          AND
+         ( typeSopr <> 111 )
+          AND
+         ( typeSopr <> 110 )
+          AND
+         ( typeSopr <> 114 )
+          AND
+         ( typeSopr <> 201 )
+          AND
+         ( typeSopr <> 1421 )
+          AND
+         ( typeSopr <> 211 )
+        )
+       )
+      Exit;
+
+    inc(Kol_cmNal);
+    if (Kol_cmNal > 100)
+    {
+      Message('Нет требуемых накладных и актов...', CancelButton);
+      Abort;
+      Exit;
+    }
+
+    case typeSopr of
+    //--------------
+      101, 108:
+        {
+          typeSopr := 111;
+          SetTitle('Выбор набора актов на услуги (выбрано ' + string(CountPick) + ')');
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+      1411:
+        {
+          typeSopr := 1411;
+          SetTitle('Выбор дневников приемки работ (выбрано ' + string(CountPick) + ')');
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+      111:
+        {
+          typeSopr := 110 ;
+          SetTitle('Выбор набора актов выполненных работ (выбрано '+string(CountPick)+')') ;
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+      110:
+        {
+          typeSopr := if(MainType = 101 or MainType = 108, 114, 201);
+          SetTitle('Выбор набора ' + if(typeSopr = 114, 'актов приемки', 'накладных') + ' (выбрано '+string(CountPick)+')') ;
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+      114:
+        {
+          typeSopr := 101;
+          SetTitle('Выбор набора накладных (выбрано '+string(CountPick)+')') ;
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+      201:
+        {
+          typeSopr := 211;
+          SetTitle('Выбор набора актов на услуги (выбрано ' + string(CountPick) + ')');
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+      211:
+        {
+          typeSopr := 110;
+          SetTitle('Выбор набора актов выполненных работ (выбрано '+string(CountPick)+')') ;
+          if (GetLast KatSopr <> tsOk)
+            ProcessCommand(cmNal);
+        }
+    //--------------
+    end;
+
+    if ( GetLast KatSopr = tsOk )
+      {
+      }
+
+    RereadRecord(#KatSopr);
+  }
+
+end; // Interface
+
+End.
+
+//******************************************************************************
+
+mnuGetSomeKatSopr_all_HotKeys Menu
+{
+//------------------------------------------------------------------------------
+-'~А~льтернатива выбора АКТЫ <─> НАКЛАДНЫЕ',
+   cmNal,
+   'Переключение режимов просмотра: АКТЫ <─> НАКЛАДНЫЕ"', hcSwitchNaclAkt, 'Alt+F', kbAltF, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить все накладные',
+   cmSelectAll,
+   'Пометить все видимые накладные', hcAllVPick, 'GrayPlus', kbGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-'Снять пометку',
+   cmUnselectAll,
+   'Снять пометку со всех видимых накладных', hcAllVPick, 'GrayMinus', kbGrayMinus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить накладные по условиям фильтрации',
+   cmShowAll,
+   'Пометить все видимые накладные, которые удовлетворяют заданным условиям', hcAllVPick, 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Просмотр ордеров',
+   cmAccording,
+   'Просмотр информации по ордерам, сформированным по документу', hcOrder4SoprVMain, 'Alt+S', kbAltS, sci1Esc;
+//------------------------------------------------------------------------------
+-'Просмотр спецификации накладной',
+   cmAttrib,
+   'Просмотр шапки и спецификации текущей накладной', hcGrSopr_KatSopr, 'Сtrl+Enter', kbCtrlEnter, sci1Esc;
+//------------------------------------------------------------------------------
+-'Редактирование накладной',
+   cmPass,
+   'Редактирование накладной в стандартном окне', hcAllVPick, 'F4', kbF4, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Изменить дескриптор',
+   cmManagerID,
+   'Изменение/установка дескриптора пользователя', hcIGetDescr, 'Alt+M', kbAltM, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Только не привязанные к ДО',
+   cmDocBas,
+   'Показывать только накладные/акты не привязанные к ДО', hcSwitchPrivDO, 'Alt+D', kbAltD, sci1Esc;
+//------------------------------------------------------------------------------
+-'Установка фильтров',
+   cmFilterSave,
+   'Установка фильтров', hcSoprSetFilters, 'Alt+B', kbAltB, sci1Esc;
+//------------------------------------------------------------------------------
+}
+
+//******************************************************************************
+
+mnuGetSomeKatSopr_fil_HotKeys Menu
+{
+//------------------------------------------------------------------------------
+- '~А~льтернатива выбора АКТЫ <─> НАКЛАДНЫЕ',
+   cmNal,
+   'Переключение режимов просмотра: АКТЫ <─> НАКЛАДНЫЕ"', hcSwitchNaclAkt, 'Alt+F', kbAltF, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить все накладные',
+   cmSelectAll,
+   'Пометить все видимые накладные', hcAllVPick, 'GrayPlus', kbGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-'Снять пометку',
+   cmUnselectAll,
+   'Снять пометку со всех видимых накладных', hcAllVPick, 'GrayMinus', kbGrayMinus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить накладные по условиям фильтрации',
+   cmShowAll,
+   'Пометить все видимые накладные, которые удовлетворяют заданным условиям', hcAllVPick, 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Просмотр ордеров',
+   cmAccording,
+   'Просмотр информации по ордерам, сформированным по документу', hcOrder4SoprVMain, 'Alt+S', kbAltS, sci1Esc;
+//------------------------------------------------------------------------------
+-'Просмотр спецификации накладной',
+   cmAttrib,
+   'Просмотр шапки и спецификации текущей накладной', hcGrSopr_KatSopr, 'Сtrl+Enter', kbCtrlEnter, sci1Esc;
+//------------------------------------------------------------------------------
+-'Редактирование накладной',
+   cmPass,
+   'Редактирование накладной в стандартном окне', hcAllVPick, 'F4', kbF4, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Изменить дескриптор',
+   cmManagerID,
+   'Изменение/установка дескриптора пользователя', hcIGetDescr, 'Alt+M', kbAltM, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Показывать все накладные',
+   cmDocBas,
+   'Показывать все накладные (снять фильтр только по непривязанным)', hcSwitchPrivDO, 'Alt+D', kbAltD, sci1Esc;
+//------------------------------------------------------------------------------
+-'Установка фильтров',
+   cmFilterSave,
+   'Установка фильтров', hcSoprSetFilters, 'Alt+B', kbAltB, sci1Esc;
+//------------------------------------------------------------------------------
+}
+
+//******************************************************************************
+
+mnuGetSomeKatSopr_shot_HotKeys Menu
+{
+//------------------------------------------------------------------------------
+-'Пометить все накладные',
+   cmSelectAll,
+   'Пометить все видимые накладные', hcAllVPick, 'GrayPlus', kbGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-'Снять пометку',
+   cmUnselectAll,
+   'Снять пометку со всех видимых накладных', hcAllVPick, 'GrayMinus', kbGrayMinus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить накладные по условиям фильтрации',
+   cmShowAll,
+   'Пометить все видимые накладные, которые удовлетворяют заданным условиям', hcAllVPick, 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Просмотр ордеров',
+   cmAccording,
+   'Просмотр информации по ордерам, сформированным по документу', hcOrder4SoprVMain, 'Alt+S', kbAltS, sci1Esc;
+//------------------------------------------------------------------------------
+-'Просмотр спецификации накладной',
+   cmAttrib,
+   'Просмотр шапки и спецификации текущей накладной', hcGrSopr_KatSopr, 'Сtrl+Enter', kbCtrlEnter, sci1Esc;
+//------------------------------------------------------------------------------
+-'Редактирование накладной',
+   cmPass,
+   'Редактирование накладной в стандартном окне', hcAllVPick, 'F4', kbF4, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Изменить дескриптор',
+   cmManagerID,
+   'Изменение/установка дескриптора пользователя', hcIGetDescr, 'Alt+M', kbAltM, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Установка фильтров',
+   cmFilterSave,
+   'Установка фильтров', hcSoprSetFilters, 'Alt+B', kbAltB, sci1Esc;
+//------------------------------------------------------------------------------
+}
+
+//******************************************************************************
+
+mnuGetSomeKatSopr_shot2_HotKeys Menu
+{
+//------------------------------------------------------------------------------
+-'Пометить все накладные',
+   cmSelectAll,
+   'Пометить все видимые накладные', hcAllVPick, 'GrayPlus', kbGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-'Снять пометку',
+   cmUnselectAll,
+   'Снять пометку со всех видимых накладных', hcAllVPick, 'GrayMinus', kbGrayMinus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить накладные по условиям фильтрации',
+   cmShowAll,
+   'Пометить все видимые накладные, которые удовлетворяют заданным условиям', hcAllVPick, 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Просмотр ордеров',
+   cmAccording,
+   'Просмотр информации по ордерам, сформированным по документу', hcOrder4SoprVMain, 'Alt+S', kbAltS, sci1Esc;
+//------------------------------------------------------------------------------
+-'Просмотр спецификации накладной',
+   cmAttrib,
+   'Просмотр шапки и спецификации текущей накладной', hcGrSopr_KatSopr, 'Сtrl+Enter', kbCtrlEnter, sci1Esc;
+//------------------------------------------------------------------------------
+-'Редактирование накладной',
+   cmPass,
+   'Редактирование накладной в стандартном окне', hcAllVPick, 'F4', kbF4, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Изменить дескриптор',
+  cmManagerID,
+  'Изменение/установка дескриптора пользователя', hcIGetDescr, 'Alt+M', kbAltM, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Только не привязанные к ДО',
+  cmDocBas,
+  'Показывать только накладные/акты не привязанные к ДО', hcSwitchPrivDO, 'Alt+D', kbAltD, sci1Esc;
+//------------------------------------------------------------------------------
+-'Установка фильтров',
+  cmFilterSave,
+  'Установка фильтров', hcSoprSetFilters, 'Alt+B', kbAltB, sci1Esc;
+//------------------------------------------------------------------------------
+}
+
+//******************************************************************************
+
+mnuGetSomeKatSopr_shot3_HotKeys Menu
+{
+//------------------------------------------------------------------------------
+-'Пометить все накладные',
+   cmSelectAll,
+   'Пометить все видимые накладные', hcAllVPick, 'GrayPlus', kbGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-'Снять пометку',
+   cmUnselectAll,
+   'Снять пометку со всех видимых накладных', hcAllVPick, 'GrayMinus', kbGrayMinus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить накладные по условиям фильтрации',
+   cmShowAll,
+   'Пометить все видимые накладные, которые удовлетворяют заданным условиям', hcAllVPick, 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Просмотр ордеров',
+   cmAccording,
+   'Просмотр информации по ордерам, сформированным по документу', hcOrder4SoprVMain, 'Alt+S', kbAltS, sci1Esc;
+//------------------------------------------------------------------------------
+-'Просмотр спецификации накладной',
+   cmAttrib,
+   'Просмотр шапки и спецификации текущей накладной', hcGrSopr_KatSopr, 'Сtrl+Enter', kbCtrlEnter, sci1Esc;
+//------------------------------------------------------------------------------
+-'Редактирование накладной',
+   cmPass,
+   'Редактирование накладной в стандартном окне', hcAllVPick, 'F4', kbF4, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Изменить дескриптор',
+   cmManagerID,
+   'Изменение/установка дескриптора пользователя', hcIGetDescr, 'Alt+M', kbAltM, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Показывать все накладные',
+   cmDocBas,
+   'Показывать все накладные (снять фильтр только по непривязанным)', hcSwitchPrivDO, 'Alt+D', kbAltD, sci1Esc;
+//------------------------------------------------------------------------------
+-'Установка фильтров',
+   cmFilterSave,
+   'Установка фильтров', hcSoprSetFilters, 'Alt+B', kbAltB, sci1Esc;
+//------------------------------------------------------------------------------
+}
+
+//******************************************************************************
+
+mnuGetSomeKatSopr_shot4_HotKeys Menu
+{
+//------------------------------------------------------------------------------
+-'Пометить все акты',
+   cmSelectAll,
+   'Пометить все видимые акты', hcAllVPick, 'GrayPlus', kbGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-'Снять пометку',
+   cmUnselectAll,
+   'Снять пометку со всех видимых актов', hcAllVPick, 'GrayMinus', kbGrayMinus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Пометить акты по условиям фильтрации',
+   cmShowAll,
+   'Пометить все видимые акты, которые удовлетворяют заданным условиям', hcAllVPick, 'Ctrl+''+''', kbCtrlGrayPlus, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Просмотр ордеров',
+   cmAccording,
+   'Просмотр информации по ордерам, сформированным по документу', hcOrder4SoprVMain, 'Alt+S', kbAltS, sci1Esc;
+//------------------------------------------------------------------------------
+-'Редактирование акта',
+   cmPass,
+   'Редактирование акта в стандартном окне', hcAllVPick, 'F4', kbF4, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+//------------------------------------------------------------------------------
+-'Изменить дескриптор',
+   cmManagerID,
+   'Изменение/установка дескриптора пользователя', hcIGetDescr, 'Alt+M', kbAltM, sci1Esc;
+//------------------------------------------------------------------------------
+-----------;
+-'Установка фильтров',
+   cmFilterSave,
+   'Установка фильтров', hcSoprSetFilters, 'Alt+B', kbAltB, sci1Esc;
+//------------------------------------------------------------------------------
+}
+
+//******************************************************************************

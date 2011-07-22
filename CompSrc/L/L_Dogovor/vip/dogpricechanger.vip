@@ -1,0 +1,783 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Изменение цен в календарном плане договора по прайс-листу
+//******************************************************************************
+
+#include SpDocs.vih
+#include oEdIzm.vih
+#include CalPlan.vih
+
+#doc
+Интерфейс изменения цен в календарном плане договора по прайс-листу
+#end
+Interface DogPriceChanger 'Изменение цен в календарных планах договоров' DoAccept, EscClose, Gray;
+  Show at (,, 56, 13)
+
+#include SpDocs.var
+#include oEdIzm.var
+
+Table struct ModifPlan
+(
+  cDogovor   : comp
+, cAppDogovor: comp
+, cCalPlan   : comp
+, SortName   : string
+, wParam     : word
+, wError     : word
+)
+With index
+(
+  ModifPlan00 = wError + SortName
+);
+
+Create view
+
+var
+  pKlPrice
+    : comp;
+
+  dChange
+, d1, d2
+    : date;
+
+  wParam1
+, wParam2
+, wFilter
+    : word;
+
+  sDogFilter
+, sOrgFilter
+    : string;
+
+  MarkerOrg
+, MarkerDog
+    : longint;
+
+  oCalPlan
+    : CalPlan;
+
+From
+  KlPrice
+, Prices
+, KatOrgDescr
+, KatOrg
+, Dogovor
+, Dogovor AppDog
+, IerDog
+, CalPlan
+, IerCalPl
+, SpDocs
+, KatOtpEd
+, ModifPlan
+, BaseDoc
+, KatSopr
+, BaseFin
+
+Where
+((
+  pKlPrice == KlPrice.nRec
+))
+;
+
+Form frmReport('PrcChng.OUT','ERRR') With NoVisual;
+
+Function GetTrueDateValCurse(dValC, dF, dInp : date) : date;
+{
+  GetTrueDateValCurse := if(longint(dValC) = 0, if(longint(dF) = 0, dInp, dF), dValC);
+}
+
+Screen scParams(, hci_dog_Param_Paket_IzmCen, sci13EnEsc)
+Fields
+  KlPrice.Name: Protect,
+    { Font = {BackColor = if (IsValid(#KlPrice), 0, ColorNeed) }};
+  wParam1: [LIST 'из прайс-листа'
+               , 'указанной точно'
+          ], Protect;
+  dChange: NoProtect,
+    { Font = {BackColor = if (dChange = ZeroDate, ColorNeed, 0) }};
+  wParam2: [LIST 'нет'
+               , 'по цене'
+               , 'по количеству'
+          ], Protect;
+  wFilter(,,sci1EnEsc): NoProtect;
+  d1: NoProtect;
+  d2: NoProtect;
+  sDogFilter: Skip;
+  sOrgFilter: Skip;
+Buttons
+  cmOk, Default;
+  cmCancel;
+<<
+  `Прайс-лист`
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  Дата изменения цен .@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@
+  Разделение спецификации               .@@@@@@@@@@@@
+
+  `Фильтр по`
+  [.] периоду действия``с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+  [.] договорам`       .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] контрагентам`    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  <. Продолжить .> <. Отмена     .>
+>>
+end;
+
+Procedure InitFltDogs;
+var PickRec : comp;
+{
+  if ( GetMarkerCount(MarkerDog) > 1 )
+    set sDogFilter := 'Множественный выбор (' + string(GetMarkerCount(MarkerDog)) + ')'
+  else
+  {
+    GetMarker(MarkerDog, 0, PickRec);
+    if ( GetFirst FastFirstRow Dogovor where (( PickRec == Dogovor.nRec )) = tsOk )
+      set sDogFilter := if(Dogovor.cDogovor = 0, 'Договор', 'соглашение')
+                      + ' №' + Dogovor.NoDoc
+                      + DateToStr(Dogovor.dDoc, ' от DD/MM/YYYY');
+  }
+}
+
+Procedure InitFltKatOrgs;
+var PickRec : comp;
+{
+  if ( GetMarkerCount(MarkerOrg) > 1 )
+    set sOrgFilter := 'Множественный выбор (' + string(GetMarkerCount(MarkerOrg)) + ')'
+  else
+  {
+    GetMarker(MarkerOrg, 0, PickRec);
+    if ( GetFirst FastFirstRow KatOrg where (( PickRec == KatOrg.nRec )) = tsOk )
+      set sOrgFilter := KatOrg.Name;
+  }
+}
+
+//******************************************************************************
+// Проверка договора на соответсвие фильтрам
+//******************************************************************************
+Function CheckDogovor: boolean;
+var
+  IndNo: longint;
+{
+  CheckDogovor := FALSE;
+
+  if ( (wFilter and 1) <> 0 ) // фильтр по периоду действия
+    if ( ( d1 > Dogovor.dEnd ) OR ( ( d2 < Dogovor.dBeg ) AND ( d2 <> ZeroDate ) ) )
+      Exit;
+
+  if ( (wFilter and 4) <> 0 ) // фильтр по контрагентам
+    if Not SearchMarker(MarkerOrg, Dogovor.cOrg, IndNo)
+      Exit;
+
+  CheckDogovor := TRUE;
+}
+
+//******************************************************************************
+// Проверка ПКП на соответсвие фильтрам
+//******************************************************************************
+Function CheckCalPlan: boolean;
+var
+  IndNo: longint;
+{
+  CheckCalPlan := FALSE;
+
+  if ( ( CalPlan.DirectPlat <> 0 ) AND ( CalPlan.DirectMC <> 100 ) )
+    Exit;
+
+  if ( CalPlan.Status = 4 ) // закрытые не рассматриваем
+    Exit;
+
+  if ( dChange > CalPlan.dTo )
+    Exit;
+
+  if ( (wFilter and 1) <> 0 ) // фильтр по периоду действия
+    if ( ( d1 > CalPlan.dTo ) OR ( ( d2 < CalPlan.dFrom ) AND ( d2 <> ZeroDate ) ) )
+      Exit;
+
+  if ( (wFilter and 4) <> 0 ) // фильтр по контрагентам
+    if Not SearchMarker(MarkerOrg, CalPlan.cOrg, IndNo)
+      Exit;
+
+  CheckCalPlan := TRUE;
+}
+
+Function ExistsDoc: boolean;
+{
+  ExistsDoc := TRUE;
+
+  if ( RecordExists BaseDoc where (( CalPlan.nRec == BaseDoc.cCalPlan )) = tsOK )
+    Exit;
+
+  if ( RecordExists KatSopr where (( CalPlan.nRec == KatSopr.cCalPlan )) = tsOK )
+    Exit;
+
+  if ( RecordExists BaseFin where (( Dogovor.nRec == BaseFin.cDogovor and
+                                     CalPlan.nRec == BaseFin.cCalPlan )) = tsOK )
+    Exit;
+
+  ExistsDoc := FALSE;
+}
+
+#include rounddog.vpp
+
+Function GetNewPrice: double;
+{
+  GetNewPrice := 0;
+
+  if ( GetFirst FastFirstRow Prices where (( KlPrice.nRec  == Prices.cKlPrice and
+                                             SpDocs.cMcUsl == Prices.cThing )) <> tsOk )
+    Exit;
+
+  if ( ( KlPrice.TipMoney = 0 ) AND ( AppDog.TipMoney = 2 ) )
+    {
+      GetNewPrice := oValFunc.GetAnyCurrency(0,
+                                             Prices.Price,
+                                             GetTrueDateValCurse(CalPlan.dValCurse, CalPlan.dFrom, CalPlan.dInput),
+                                             CalPlan.cVal);
+    }
+  else
+    if ( CalPlan.cVal <> KlPrice.cVal )
+      GetNewPrice := oValFunc.GetAnyCurrency(KlPrice.cVal,
+                                             Prices.SumVal,
+                                             GetTrueDateValCurse(CalPlan.dValCurse, CalPlan.dFrom, CalPlan.dInput),
+                                             CalPlan.cVal);
+    else
+      GetNewPrice := if(KlPrice.cVal = 0, Prices.Price, Prices.SumVal);
+}
+
+Function GetPeriodBefore: double;
+{
+  GetPeriodBefore := (CalcDaysBetweenDates(CalPlan.dFrom, dChange, FALSE) - 1)
+                       /
+                      CalcDaysBetweenDates(CalPlan.dFrom, CalPlan.dTo, FALSE);
+}
+
+//******************************************************************************
+// Процедура изменения цен
+//******************************************************************************
+Function ProcessOneDogovor: boolean;
+var
+  tmpSpMrk, tmpMrk, IndNo: longint;
+{
+  ProcessOneDogovor := FALSE;
+
+  if Not NextVisual
+    Exit;
+
+  ProcessOneDogovor := TRUE;
+
+  if Not CheckDogovor
+    Exit;
+
+  tmpSpMrk := InitMarker('', 8, 100, 10);
+  tmpMrk   := InitMarker('', 8, 100, 10);
+
+  ClearMarker(tmpMrk);
+
+  _LOOP IerDog where (( Dogovor.nRec == IerDog.cUpRec and
+                        word(1)      == IerDog.IsLeaf and
+                        IerDog.cRec  == AppDog.nRec
+                        ))
+
+    _LOOP IerCalPl where (( IerDog.cRec   == IerCalPl.cDogovor and
+                            word(1)       == IerCalPl.isLeaf   and
+                            IerCalPl.cRec == CalPlan.nRec ))
+      {
+        if SearchMarker(tmpMrk, IerCalPl.cRec, IndNo)
+          Continue;
+
+        if Not CheckCalPlan
+          Continue;
+
+        ClearBuffer(#ModifPlan);
+
+        ModifPlan.cDogovor    := Dogovor.nRec;
+        ModifPlan.cAppDogovor := CalPlan.cDogovor;
+        ModifPlan.cCalPlan    := CalPlan.nRec;
+        ModifPlan.SortName    := DateToStr(Dogovor.dDoc, 'YYYY/MM/DD') + Dogovor.NoDoc + CalPlan.NoDoc;
+
+        if ExistsDoc
+          {
+            ModifPlan.wError := 1;
+            insert current ModifPlan;
+
+            Continue;
+          }
+
+        ModifPlan.wError := 0;
+
+        if ( ( CalPlan.dFrom >= dChange ) OR ( wParam2 = 0 ) )
+        // менять цены необходимо полностью
+          {
+            ModifPlan.wParam := 0;
+          }
+        else
+        // необходимо разделить цены
+          {
+            ModifPlan.wParam := 1;
+          }
+
+        insert current ModifPlan;
+
+        ClearMarker(tmpSpMrk);
+
+        _LOOP SpDocs where (( word(403)     == SpDocs.TiDk AND
+                              CalPlan.nRec  == SpDocs.cDoc AND
+                              SpDocs.cOtpEd == KatOtpEd.nRec ))
+          if (
+              ( KlPrice.Tip = 0 ) AND ( SpDocs.PrMc = 1 )
+               OR
+              ( KlPrice.Tip = 1 ) AND ( SpDocs.PrMc <> 1 )
+             )
+            if ( RecordExists Prices where (( KlPrice.nRec  == Prices.cKlPrice and
+                                              SpDocs.cMcUsl == Prices.cThing )) = tsOk )
+              {
+                if ( ( ModifPlan.wParam = 1 ) AND ( wParam2 = 2 ) AND ( KatOtpEd.Diskret = 1 ) )
+                  {
+                    update current ModifPlan set ModifPlan.wError := 2;
+
+                    ClearMarker(tmpSpMrk);
+
+                    Break;
+                  }
+
+                InsertMarker(tmpSpMrk, SpDocs.nRec);
+              }
+
+        if ( GetMarkerCount(tmpSpMrk) = 0 )
+          Continue;
+
+        case ModifPlan.wParam of
+        //******************************************************************************
+          0:
+            {
+              var PickRec : comp;
+              var i, MrkCount : longint;
+
+              MrkCount := GetMarkerCount(tmpSpMrk);
+
+              for ( i := 1; i <= MrkCount; inc(i) )
+                if GetMarker(tmpSpMrk, i - 1, PickRec)
+                  if ( GetFirst FastFirstRow SpDocs where (( PickRec       == SpDocs.nRec AND
+                                                             SpDocs.cOtpEd == KatOtpEd.nRec )) = tsOk )
+                    {
+                      SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, GetNewPrice);
+                      oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+                      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, SpDocs.cDoc, SpDocs.nRec);
+                    }
+
+              oCalPlan.ReCalcCalPlan(CalPlan.nRec);
+            }
+        //******************************************************************************
+          1:
+            {
+              var Koeff: double;
+              Koeff := GetPeriodBefore;
+
+              _LOOP SpDocs where (( word(403)    == SpDocs.TiDk AND
+                                    CalPlan.nRec == SpDocs.cDoc ))
+                {
+                  case wParam2 of
+                  //******************************************************************************
+                    1: // изменяем цену
+                      {
+                        SpDocs.Price := SpDocs.Price * Koeff;
+                      }
+                  //******************************************************************************
+                    2: // изменяем количество
+                      {
+                        // проверить на делимость
+                        if ( KatOtpEd.Diskret = 1 )
+                          Continue;
+
+                        SpDocs.Kol     := SpDocs.Kol * Koeff;
+                        SpDocs.Ostatok := fEdIzm.ConvertToUchEd(SpDocs.Kol, SpDocs.cOtpEd);
+                      }
+                  //******************************************************************************
+                  end;
+
+                  SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, SpDocs.Price);
+                  oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+                  oSpDocs.ChangePosSpDocs(SpDocs.TiDk, SpDocs.cDoc, SpDocs.nRec);
+                }
+
+              var NewNRec: comp;
+
+              NewNRec := GetNextNRec(#CalPlan, 0);
+
+              InsertMarker(tmpMrk, NewNRec);
+
+              oCalPlan.MakeCopyCalPlan(CalPlan.nRec
+                                     , TRUE
+                                     , NewNRec
+                                     , CalPlan.cCalPlan
+                                     , CalPlan.cPredPlan
+                                     , CalPlan.cDogovor
+                                     , CalPlan.Status
+                                      );
+
+              update current CalPlan
+                set CalPlan.dTo   := Sub_Day(dChange, 1)
+                  , CalPlan.NoDoc := CalPlan.NoDoc + '_1';
+
+              oCalPlan.ReCalcCalPlan(CalPlan.nRec);
+
+              _LOOP SpDocs where (( word(403) == SpDocs.TiDk AND
+                                    NewNRec   == SpDocs.cDoc ))
+                {
+                  SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, GetNewPrice);
+
+                  case wParam2 of
+                  //******************************************************************************
+                    1: // изменяем цену
+                      {
+                        SpDocs.Price := SpDocs.Price * ( 1 - Koeff );
+                      }
+                  //******************************************************************************
+                    2: // изменяем количество
+                      {
+                        // проверить на делимость
+                        if ( KatOtpEd.Diskret = 1 )
+                          Continue;
+
+                        SpDocs.Kol     := SpDocs.Kol / Koeff * ( 1 - Koeff );
+                        SpDocs.Ostatok := fEdIzm.ConvertToUchEd(SpDocs.Kol, SpDocs.cOtpEd);
+                      }
+                  //******************************************************************************
+                  end;
+
+                  SpDocs.Price := DogRound_P(SpDocs.cVal <> 0, SpDocs.Price);
+                  oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+                  oSpDocs.ChangePosSpDocs(SpDocs.TiDk, SpDocs.cDoc, SpDocs.nRec);
+                }
+
+              update CalPlan where (( NewNRec == CalPlan.nRec ))
+                set CalPlan.dFrom := dChange
+                  , CalPlan.NoDoc := CalPlan.NoDoc + '_2';
+
+              oCalPlan.ReCalcCalPlan(NewNRec);
+            }
+        //******************************************************************************
+        end;
+      }
+
+  DoneMarker(tmpSpMrk, '');
+  DoneMarker(tmpMrk  , '');
+}
+//******************************************************************************
+
+Function GetDogName: string;
+{
+  GetDogName := AppDog.NoDoc + DateToStr(AppDog.dDoc, ' от DD/MM/YYYY. ')
+              + 'Срок действия' + DateToStr(AppDog.dBeg, ' с DD/MM/YYYY')
+                                + DateToStr(AppDog.dEnd, ' по DD/MM/YYYY');
+}
+
+Function GetPlanName: string;
+{
+  GetPlanName := CalPlan.NoDoc + DateToStr(CalPlan.dInput, ' от DD/MM/YYYY. ')
+              + 'Срок действия' + DateToStr(CalPlan.dFrom, ' с DD/MM/YYYY')
+                                + DateToStr(CalPlan.dTo, ' по DD/MM/YYYY');
+}
+
+HandleEvent
+
+cmInit:
+  {
+    ReadMyDsk(wParam1 , 'DogPriceChanger_wParam1' , TRUE);
+    ReadMyDsk(wParam2 , 'DogPriceChanger_wParam2' , TRUE);
+    ReadMyDsk(pKlPrice, 'DogPriceChanger_pKlPrice', TRUE);
+
+    if ( GetFirst KlPrice <> tsOk )
+      {}
+
+    if ( wParam1 = 0 )
+      dChange := KlPrice.dPrice;
+
+    SetFieldSelectable(#dChange, wParam1 = 1);
+
+    SetFieldSelectable(#d1, FALSE);
+    SetFieldSelectable(#d2, FALSE);
+
+    SetFieldSelectable(#sDogFilter, FALSE);
+    SetFieldSelectable(#sOrgFilter, FALSE);
+
+    MarkerOrg := InitMarker('MarkerOrg' ,8, 100, 10);
+    ClearMarker(MarkerOrg);
+
+    MarkerDog := InitMarker('MarkerDog' ,8, 100, 10);
+    ClearMarker(MarkerDog);
+
+  }
+
+cmDone:
+  {
+    DoneMarker(MarkerOrg, '');
+    DoneMarker(MarkerDog, '');
+
+    SaveMyDsk(wParam1 , 'DogPriceChanger_wParam1');
+    SaveMyDsk(wParam2 , 'DogPriceChanger_wParam2');
+    SaveMyDsk(pKlPrice, 'DogPriceChanger_pKlPrice');
+  }
+
+cmOk:
+  {
+    if Not IsValid(#KlPrice)
+      {
+        Message('Не задан прайс-лист', Information);
+        SelectField(#KlPrice.Name);
+        Exit;
+      }
+
+    if ( dChange = ZeroDate )
+      {
+        Message('Не задана дата изменения цен', Information);
+        SelectField(#dChange);
+        Exit;
+      }
+
+    PutCommand(cmDefault);
+  }
+
+cmDefault:
+  {
+    delete all ModifPlan;
+
+    if ( ( (wFilter and 2) <> 0 ) AND ( GetMarkerCount(MarkerDog) > 0 ) ) // фильтр по договорам
+      {
+        var PickRec : comp;
+        var i, MrkCount : longint;
+
+        MrkCount := GetMarkerCount(MarkerDog);
+
+        StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak + vfConfirm, 'Изменение цен ...', MrkCount);
+
+        for ( i := 1; i <= MrkCount; inc(i) )
+          if GetMarker(MarkerDog, i - 1, PickRec)
+            if ( GetFirst FastFirstRow Dogovor where (( PickRec == Dogovor.nRec )) = tsOk )
+              ProcessOneDogovor;
+
+        StopVisual('', 0);
+      }
+    else
+      if ( ( (wFilter and 4) <> 0 ) AND ( GetMarkerCount(MarkerOrg) > 0 ) ) // фильтр по контрагентам
+        {
+          var PickRec : comp;
+          var i, MrkCount, lCount: longint;
+
+          MrkCount := GetMarkerCount(MarkerOrg);
+
+          lCount := 0;
+
+          for ( i := 1; i <= MrkCount; inc(i) )
+            if GetMarker(MarkerOrg, i - 1, PickRec)
+              _LOOP Dogovor where (( comp(0) == Dogovor.cDogovor and PickRec == Dogovor.cOrg ))
+                lCount := lCount + 1;
+
+          StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak + vfConfirm, 'Изменение цен ...', lCount);
+
+          for ( i := 1; i <= MrkCount; inc(i) )
+            if GetMarker(MarkerOrg, i - 1, PickRec)
+              _LOOP Dogovor where (( comp(0) == Dogovor.cDogovor and PickRec == Dogovor.cOrg ))
+                if Not ProcessOneDogovor
+                  Break;
+
+          StopVisual('', 0);
+        }
+      else
+        {
+          var lCount: longint;
+
+          lCount := 0;
+
+          _LOOP Dogovor where (( comp(0) == Dogovor.cDogovor ))
+            lCount := lCount + 1;
+
+          StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak + vfConfirm, 'Изменение цен ...', lCount);
+
+          _LOOP Dogovor where (( comp(0) == Dogovor.cDogovor ))
+            if Not ProcessOneDogovor
+              Break;
+
+          StopVisual('', 0);
+        }
+
+    if ( RecordsInTable(#ModifPlan) > 0 )
+      {
+        var pCurDog, pCurAppDog: comp;
+        pCurDog    := -1;
+        pCurAppDog := -1;
+
+        frmReport.write('Измененные товарные пункты календарного плана');
+        frmReport.write('=============================================');
+
+        var Flag: boolean; Flag := TRUE;
+
+        _LOOP ModifPlan
+          {
+            if ( Flag AND ( ModifPlan.wError > 0 ) )
+              {
+                frmReport.write('');
+                frmReport.write('Неизмененные товарные пункты календарного плана');
+                frmReport.write('===============================================');
+
+                Flag := FALSE;
+              }
+
+            if ( pCurDog <> ModifPlan.cDogovor )
+              {
+                pCurDog := ModifPlan.cDogovor;
+
+                if ( GetFirst FastFirstRow AppDog where (( ModifPlan.cDogovor == AppDog.nRec )) = tsOk )
+                  {
+                    frmReport.write('');
+                    frmReport.write('Договор №' + GetDogName);
+                  }
+              }
+
+            if ( ModifPlan.cAppDogovor <> ModifPlan.cDogovor )
+              {
+                pCurAppDog := ModifPlan.cAppDogovor;
+
+                if ( GetFirst FastFirstRow AppDog where (( ModifPlan.cAppDogovor == AppDog.nRec )) = tsOk )
+                  frmReport.write(' Соглашение №' + GetDogName);
+              }
+
+            if ( GetFirst FastFirstRow CalPlan where (( ModifPlan.cCalPlan == CalPlan.nRec )) = tsOk )
+              frmReport.write('  ПКП №' + GetPlanName + '. '
+                           + if(ModifPlan.wError = 0, if(ModifPlan.wParam = 0, 'Модификация', 'Разделение')
+                                                    , if(ModifPlan.wError = 1, 'Сформированы документы'
+                                                                             , 'Существуют позиции с неделимым количеством'))
+                           );
+          }
+
+        frmReport.PutEvent(feBreak);
+        frmReport.ShowFile('Протокол изменения цен');
+      }
+    CloseInterface(cmDefault);
+  }
+
+cmPick:
+  case CurField of
+  //******************************************************************************
+    #KlPrice.Name:
+      {
+        RunInterface('GetKlPr', pKlPrice, word(0), word(1), word(0));
+
+        if ( wParam1 = 0 )
+          set dChange := KlPrice.dPrice;
+      }
+  //******************************************************************************
+    #sOrgFilter:
+      {
+        var MarkerDescr: longint;
+
+        MarkerDescr := InitMarker('KatOrgDescr', 8, 100, 10);
+        ClearMarker(MarkerDescr);
+
+        var PickRec : comp;
+        var i, MrkCount : longint;
+
+        MrkCount := GetMarkerCount(MarkerOrg);
+
+        for ( i := 1; i <= MrkCount; inc(i) )
+          if GetMarker(MarkerOrg, i - 1, PickRec)
+            _LOOP KatOrgDescr where (( PickRec == KatOrgDescr.cRec ))
+              InsertMarker(MarkerDescr, KatOrgDescr.nRec);
+
+        DoneMarker(MarkerDescr, 'KatOrgDescr');
+        DoneMarker(MarkerOrg, 'KatOrg');
+
+        RunInterface('GetSomeKontrPrim', TRUE);
+
+        MarkerOrg := InitMarker('KatOrg', 8, 100, 10);
+        InitFltKatOrgs;
+      }
+  //******************************************************************************
+    #sDogFilter:
+      {
+        DoneMarker(MarkerDog, 'MDogovor');
+
+        SaveMyDsk(TRUE, 'GetSDog_SaveSelect');
+
+        RunInterface('GetSomeDogovor'
+                             , word(0)
+                             , 0FFFFh
+                             , word(0)
+                             , word(0)
+                             , TRUE
+                             , comp(0)
+                             , TRUE
+                             , comp(0)
+                    );
+
+        MarkerDog := InitMarker('MDogovor', 8, 100, 10);
+
+        InitFltDogs;
+      }
+  //******************************************************************************
+  end;
+
+cmDelOnProtect:
+  case CurField of
+  //******************************************************************************
+    #KlPrice.Name:
+      set pKlPrice := 0;
+  //******************************************************************************
+    #sOrgFilter:
+      {
+        ClearMarker(MarkerOrg);
+        set sOrgFilter := '';
+      }
+  //******************************************************************************
+    #sDogFilter:
+      {
+        ClearMarker(MarkerDog);
+        set sDogFilter := '';
+      }
+  //******************************************************************************
+  end;
+
+cmCheckField:
+  case CurField of
+    //******************************************************************************
+    #wParam1:
+      {
+        SetFieldSelectable(#dChange, wParam1 = 1);
+
+        if ( wParam1 = 0 )
+          set dChange := KlPrice.dPrice;
+      }
+    //******************************************************************************
+    #wFilter:
+      {
+        SetFieldSelectable(#d1, (wFilter and 1) <> 0);
+        SetFieldSelectable(#d2, (wFilter and 1) <> 0);
+
+        SetFieldSelectable(#sDogFilter, (wFilter and 2) <> 0);
+        SetFieldSelectable(#sOrgFilter, (wFilter and 4) <> 0);
+
+        case ( word(OldFieldValue) xor wFilter ) of
+        //******************************************************************************
+          2:
+            if ( ( (wFilter and 2) <> 0 ) AND ( GetMarkerCount(MarkerDog) = 0 ) )
+              {
+                SelectField(#sDogFilter);
+                PutCommand(cmPick);
+              }
+        //******************************************************************************
+          4:
+            if ( ( (wFilter and 4) <> 0 ) AND ( GetMarkerCount(MarkerOrg) = 0 ) )
+              {
+                SelectField(#sOrgFilter);
+                PutCommand(cmPick);
+              }
+        //******************************************************************************
+        end;
+      }
+//******************************************************************************
+  end;
+
+end;
+
+End.

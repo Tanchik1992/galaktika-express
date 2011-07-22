@@ -1,0 +1,795 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Общие функции для работы с договорами
+//******************************************************************************
+
+#ifNdef __DogFuns_vip__
+#Error Вместо функций из DogFuns.vpp необходимо использовать методы объекта (см DogFuns.vih)
+#end
+
+#ifNdef _DogFuns_VPP
+#define _DogFuns_VPP
+
+//******************************************************************************
+
+#include SpDocs.var
+#include oEdIzm.var
+#include chkschem.var
+
+//******************************************************************************
+
+Create view loDogDeleter
+Var
+  pDogovor: comp;
+From
+  AktSver
+, BaseDoc
+, BaseFin
+, CalPlan
+, Dogovor
+, IerCalPl
+, IerDog
+, Iski
+, KatSopr
+, NZakaz
+, PlatDog
+Where
+((
+       pDogovor     == Dogovor.NRec
+  AND  pDogovor     == PlatDog.cDogovor
+  AND  pDogovor     == AktSver.cDogovor
+  AND  pDogovor     == IerDog.cUpRec
+  AND  word(1)      == IerDog.IsLeaf
+  AND  IerDog.cRec  == CalPlan.cDogovor
+  AND  comp(0)      == CalPlan.cCalPlan
+  AND  pDogovor     == IerCalPl.cDogovor
+  AND  CalPlan.NRec == IerCalPl.cUpRec
+  AND  word(1)      == IerCalPl.IsLeaf
+))
+;
+
+//******************************************************************************
+
+#declare CheckDogLinks(Tbl, Str)
+  if (loDogDeleter.Dogovor.cDogovor = 0)
+    {
+      if (loDogDeleter.RecordExists #Tbl where (( loDogDeleter.pDogovor == #Tbl.cDogovor)) = tsOk)
+        {
+          CheckDogovorLinksMSG := FALSE;
+          MsgStr := MsgStr + ''#13' - #Str';
+        }
+    }
+  else
+    if (loDogDeleter.RecordExists #Tbl where (( loDogDeleter.Dogovor.cDogovor == #Tbl.cDogovor AND
+                                                loDogDeleter.Dogovor.NRec     == #Tbl.cAppDogovor)) = tsOk)
+      {
+        CheckDogovorLinksMSG := FALSE;
+        MsgStr := MsgStr + ''#13' - #Str';
+      }
+#end
+
+//******************************************************************************
+Function CheckDogovorLinksMSG(           // проверка, есть ли в других документах ссылки на переданный договор
+                  pDog        : comp     // ссылка на договор
+                ; var MsgStr  : string   // документы, ссылающиеся на договор
+                ): boolean;              // TRUE - проверка прошла успешно, сссылок нет; FALSE - когда есть ссылки
+{
+  if ( pDog <> loDogDeleter.pDogovor )
+    {
+      set loDogDeleter.pDogovor := pDog;
+      if (loDogDeleter.GetFirst FastFirstRow Dogovor <> tsOk)
+        { }
+    }
+
+  CheckDogovorLinksMSG := TRUE;
+
+  MsgStr := '';
+
+  if ( loDogDeleter.RecordExists Iski where (( loDogDeleter.pDogovor == Iski.cDogovor)) = tsOk )
+    {
+      CheckDogovorLinksMSG := FALSE;
+      MsgStr := MsgStr + ''#13' - исковые заявления';
+    }
+
+  #CheckDogLinks(BaseFin, финансовые документы)
+  #CheckDogLinks(BaseDoc, документы-основания)
+  #CheckDogLinks(KatSopr, сопроводительные документы)
+
+  if ( loDogDeleter.Dogovor.cDogovor = 0 )
+    {
+      if ( loDogDeleter.RecordExists NZakaz where (( loDogDeleter.pDogovor == NZakaz.cDogovor )) = tsOk )
+        {
+          CheckDogovorLinksMSG := FALSE;
+          MsgStr := MsgStr + ''#13' - наряд-заказы';
+        }
+    }
+  else
+    if ( loDogDeleter.RecordExists NZakaz where (( loDogDeleter.Dogovor.NRec == NZakaz.cAppDogovor )) = tsOk )
+      {
+        CheckDogovorLinksMSG := FALSE;
+        MsgStr := MsgStr + ''#13' - наряд-заказы';
+      }
+}
+
+//******************************************************************************
+
+Function CheckDogovorLinks(           // проверка, есть ли в других документах ссылки на переданный договор
+                  pDog     : comp     // ссылка на договор
+                ; NeedMsg  : boolean  // нужно или нет сообщение
+                ): boolean;           // TRUE - проверка прошла успешно, сссылок нет; FALSE - когда есть ссылки
+
+{
+  var tmpS : string;  tmpS := '';
+
+  CheckDogovorLinks := CheckDogovorLinksMSG(pDog, tmpS);
+
+  if NeedMsg
+    if ( tmpS <> '' )
+      Message(if(loDogDeleter.Dogovor.cDogovor = 0, 'Договор ', 'Соглашение ')
+            + f_sNumDate(loDogDeleter.Dogovor.NoDoc, loDogDeleter.Dogovor.dDoc)
+            + ' не может быть удален, поскольку на него есть ссылки в документах следующих типов: '#13
+            + tmpS
+            , Information);
+}
+
+//******************************************************************************
+
+#declare ErrHndl(Txt1, Txt2)
+  On ExObjIfcNoLoad:
+     {
+       Message('Ошибка удаления ExObjIfcNoLoad. #Txt1 ' + Dogovor.NoDoc + ' #Txt2.', Error);
+       Exit;
+     }
+  On ExObjIfcNoImpl:
+     {
+       Message('Ошибка удаления ExObjIfcNoImpl. #Txt1 ' + Dogovor.NoDoc + ' #Txt2.', Error);
+       Exit;
+     }
+  On ExObjIfcBadVar:
+     {
+       Message('Ошибка удаления ExObjIfcBadVar. #Txt1 ' + Dogovor.NoDoc + ' #Txt2.', Error);
+       Exit;
+     }
+#end
+
+//******************************************************************************
+// удаление договора
+//******************************************************************************
+Function DeleteDogovorEx(pDog: comp; NeedMsg: boolean): boolean;
+{
+  DeleteDogovorEx := FALSE;
+
+  set loDogDeleter.pDogovor := pDog;
+
+  if ( loDogDeleter.GetFirst FastFirstRow Dogovor <> tsOk )
+    { }
+
+  if not CheckDogovorLinks(pDog, NeedMsg)
+    Exit;
+
+  var iCalPlan: tCalPlanObjInterface; GetVipRef(iCalPlan, 'CalPlan');
+  var iDogovor: tDogovorObjInterface; GetVipRef(iDogovor, 'Dogovor');
+  var iAktSver: tAktSverObjInterface; GetVipRef(iAktSver, 'AktSver');
+
+  //всяческие удаления
+  do
+    {
+      loDogDeleter._LOOP IerDog
+        {
+          //------------------------------------------------------------------------------
+          _try
+            loDogDeleter._LOOP CalPlan
+              do
+                loDogDeleter._LOOP IerCalPl
+                  if iCalPlan.SetPosition(loDogDeleter.IerCalPl.cRec)
+                    {
+                      oSpDocs.SpDocs_ClearUsed(loDogDeleter.IerCalPl.cRec, word(403));
+
+                      if not iCalPlan.DeleteCalPlan
+                        {
+                          Message('Ошибка удаления ПКП (CalPlan.nRec = ' + string(loDogDeleter.IerCalPl.cRec) + ')', Error);
+                          Exit;
+                        }
+                    }
+              While ( loDogDeleter.RecordExists IerCalPl = tsOk );
+          //------------------------------------------------------------------------------
+          _except
+            #ErrHndl(ПКП договора, не удалены полностью)
+          //------------------------------------------------------------------------------
+
+          //------------------------------------------------------------------------------
+          _try
+            if iDogovor.SetPosition(loDogDeleter.IerDog.cRec)
+              {
+                oSpDocs.SpDocs_ClearUsed(loDogDeleter.IerDog.cRec
+                                       , if(loDogDeleter.IerDog.cUpRec = loDogDeleter.IerDog.cRec, word(400), word(401)));
+
+                if ( iDogovor.DeleteDogovor <> tsOk )
+                  {
+                    Message('Ошибка удаления договора (Dogovor.nRec = ' + string(loDogDeleter.IerDog.cRec) + ')', Error);
+                    Exit;
+                  }
+              }
+          //------------------------------------------------------------------------------
+          _except
+            #ErrHndl(Договор, не удален)
+          //------------------------------------------------------------------------------
+        }
+    }
+  While ( loDogDeleter.RecordExists IerDog = tsOk );
+
+  if ( loDogDeleter.Dogovor.cDogovor = 0 )
+    {
+    //------------------------------------------------------------------------------
+      _try
+        loDogDeleter._LOOP AktSver
+          {
+            if iAktSver.SetPosition(loDogDeleter.AktSver.nRec)
+              iAktSver.DeleteAktSver;
+          }
+    //------------------------------------------------------------------------------
+      _except
+        #ErrHndl(Акты сверки договора, не удалены полностью)
+    //------------------------------------------------------------------------------
+    }
+
+  DeleteDogovorEx := TRUE;
+}
+
+//******************************************************************************
+// возвращает TRUE, если количество записей в базе в таблице DOgovors превышает максимально допустимое
+Function TooMuchDogovors: boolean;
+var n: word;
+{
+  n := 20;
+
+  if ( RecordsInTable(#Dogovor) <= n )
+    TooMuchDogovors := FALSE
+  else
+    {
+      Message('Демо-режим предполагает наличие не более ' + string(n) + ' договоров/соглашений', CancelButton);
+
+      TooMuchDogovors := TRUE;
+    }
+}
+
+//******************************************************************************
+
+Create view loDogMaker
+From
+  Dogovor
+, Dogovor DogOwner
+, AttrDog
+, SoprHoz
+, KatVidD
+, KatNotes
+, KatBank
+, SpDocs
+, KatMC
+, KatUsl
+, GroupMC
+, GroupUsl
+, KatOtpEd
+;
+
+//******************************************************************************
+!----------- заполнение буфера SoprHoz --------------------------------------
+//******************************************************************************
+
+Procedure PutBufferDogovorSoprHoz(DogBuf: #TDogovor);
+var
+  dValDog: date;
+{
+  loDogMaker.SoprHoz.cSoprDoc    := DogBuf.nRec;
+  loDogMaker.SoprHoz.cDogovor    := DogBuf.cDogovor;
+  loDogMaker.SoprHoz.cAppDogovor := 0;
+  loDogMaker.SoprHoz.DatOb       := DogBuf.dDoc;
+  loDogMaker.SoprHoz.TipDoc      := DogBuf.TiDk;
+  loDogMaker.SoprHoz.TiDkGal     := DogBuf.TiDk;
+  loDogMaker.SoprHoz.NoDoc       := DogBuf.NoDoc;
+  loDogMaker.SoprHoz.Descr       := DogBuf.Descr;
+  loDogMaker.SoprHoz.DesGr       := DogBuf.DesGr;
+  loDogMaker.SoprHoz.KodValut    := DogBuf.cVal;
+
+  dValDog := if(DogBuf.dValCurse = ZeroDate,
+                if(DogBuf.dBeg = ZeroDate, DogBuf.dDoc, DogBuf.dBeg),
+                DogBuf.dValCurse);
+
+  if ( DogBuf.cVal <> 0 )
+    {
+      loDogMaker.SoprHoz.Summa    := oValFunc.GetNatCurrency(DogBuf.cVal, DogBuf.Summa, dValDog);
+      loDogMaker.SoprHoz.SumValut := DogBuf.Summa;
+    }
+  else
+    {
+      loDogMaker.SoprHoz.Summa    := DogBuf.Summa;
+      loDogMaker.SoprHoz.SumValut := 0.0;
+    }
+}
+
+//******************************************************************************
+!------- Регистрация Договора в SoprHoz -------------------------------------
+//******************************************************************************
+
+var iSHoz: ObjSHmanager; // интерфейс для работы с SoprHoz
+
+Function InsertDogovorSoprHoz(DogBuf: #TDogovor): word;
+{
+  if NullVipRef(iSHoz)
+    GetVipRef(iSHoz, 'SHmanager');
+
+  loDogMaker.ClearBuffer(loDogMaker.tnSoprHoz);
+
+  PutBufferDogovorSoprHoz(DogBuf);
+
+  InsertDogovorSoprHoz := iSHoz.InsByHan(loDogMaker.SoprHoz.BufferP);
+}
+
+//******************************************************************************
+!---------- Модификация информации о договоре в SoprHoz ---------------------
+//******************************************************************************
+
+Function UpDateDogovorSoprHoz(DogBuf: #TDogovor): word;
+{
+  if ( loDogMaker.GetFirst fastfirstrow SoprHoz
+                     where (( DogBuf.TiDk == SoprHoz.TipDoc and
+                              DogBuf.nRec == SoprHoz.cSoprDoc )) = tsOK )
+    {
+      PutBufferDogovorSoprHoz(DogBuf);
+
+      if NullVipRef(iSHoz)
+        GetVipRef(iSHoz, 'SHmanager');
+
+      UpDateDogovorSoprHoz := iSHoz.UpdByHan(loDogMaker.SoprHoz.BufferP);
+    }
+}
+
+Function UpDateInsertDogovorSoprHoz(DogBuf: #TDogovor): word;
+{
+  if ( loDogMaker.RecordExists SoprHoz
+                     where (( DogBuf.TiDk == SoprHoz.TipDoc and
+                              DogBuf.nRec == SoprHoz.cSoprDoc )) = tsOK )
+    UpDateInsertDogovorSoprHoz := UpDateDogovorSoprHoz(DogBuf)
+  else
+    UpDateInsertDogovorSoprHoz := InsertDogovorSoprHoz(DogBuf);
+}
+//******************************************************************************
+var oNotes  : iNotes;
+var oStatlog: vipStatlog;
+var oExtAtr : iExtAttr;
+var oExtCls : iExtClass;
+
+#include IerDog.vpp
+//******************************************************************************
+
+//******************************************************************************
+// Действия после добавления или редактирования записи Dogovor
+//******************************************************************************
+Procedure OnAfterModifyDog(DogBuf: #TDogovor; IsNewDog: boolean);
+var
+  strComment: string;
+{
+  if Not IsNewDog
+    UpDateDogovorSoprHoz(DogBuf)
+  else
+    {
+      if ( DogBuf.cDogovor <> 0 )
+        {
+          if ( loDogMaker.GetFirst FastFirstRow DogOwner where (( DogBuf.cDogovor == DogOwner.nRec )) <> tsOk )
+            {}
+
+          // копируем атрибуты договора(соглашения)
+          if ( loDogMaker.GetFirst FastFirstRow AttrDog where (( DogBuf.cDogovor == AttrDog.cDogovor )) = tsOk )
+            {
+              loDogMaker.AttrDog.nRec := 0;
+              loDogMaker.AttrDog.cDogovor := DogBuf.nRec;
+
+              if ( DogBuf.cOrg <> loDogMaker.DogOwner.cOrg )
+                {
+                  loDogMaker.AttrDog.Cont_Addr := '';
+                  loDogMaker.AttrDog.Cont_FIO  := '';
+                  loDogMaker.AttrDog.Otv_FIO   := '';
+                  loDogMaker.AttrDog.Otv_Post  := '';
+                  loDogMaker.AttrDog.Sign_FIO  := '';
+                  loDogMaker.AttrDog.Sign_Post := '';
+                  loDogMaker.AttrDog.Sign_Osn  := '';
+                }
+
+              if ( loDogMaker.insert current AttrDog <> tsOk )
+                {}
+            }
+        }
+
+      if ( ( DogBuf.cDogovor <> 0 ) AND boGetTune('Oper.ExClassDog') )
+        {
+          oExtAtr.CopyAllAttr    (word(coDogovor), DogBuf.cDogovor, DogBuf.nRec);
+          oExtCls.CopyAllClassVal(word(coDogovor), DogBuf.cDogovor, DogBuf.nRec);
+        }
+
+      InsertDogovorSoprHoz(DogBuf);
+
+      CreateIerDogOnDoc(DogBuf.cDogovor, DogBuf.nRec);
+
+      if ( DogBuf.cZamena <> 0 )
+        {
+          strComment := if(DogBuf.cDogovor = 0
+                         , 'Расторгнут на основании договора № '
+                         , 'Расторгнуто на основании соглашения № ')
+                      + DogBuf.NoDoc + ' от ' + DateToStr(DogBuf.dDoc, 'DD/MM/YYYY');
+
+          DoCancelDoc(DogBuf.cZamena, strComment);
+        }
+    }
+
+  if ( DogBuf.cDogovor <> 0 )
+    oChkSchem.CheckSchem(DogBuf.cDogovor, loDogMaker.DogOwner.TiDk, DogBuf.nRec, DogBuf.TiDk, TRUE);
+}
+
+//******************************************************************************
+// Создание и редактирование таблицы Dogovor
+//******************************************************************************
+Function UpdInsDogByHan(var DogBuf: #TDogovorP; IsNewDog: boolean): word;
+var
+  wres: word;
+{
+  if DemoMode
+    if TooMuchDogovors
+      {
+        UpdInsDogByHan := 1;
+        Exit;
+      }
+
+  loDogMaker.ClearBuffer(loDogMaker.tnDogovor);
+
+  loDogMaker.Dogovor.BufferP := DogBuf;
+  set DogBuf.nRec := DogBuf.nRec;
+
+  if IsNewDog
+    wres := loDogMaker.insert current Dogovor
+  else
+    wres := loDogMaker.update current Dogovor;
+
+  UpdInsDogByHan := wres;
+
+  if ( wres = tsOk )
+    {
+      DogBuf := loDogMaker.Dogovor.BufferP;
+      OnAfterModifyDog(loDogMaker.Dogovor.Buffer, IsNewDog);
+    }
+}
+
+//******************************************************************************
+// получить следующий номер соглашения
+//******************************************************************************
+Function GetSoglCodeNext: string;
+var tmpN: string;
+{
+  if ( loDogMaker.GetLast FastFirstRow Dogovor
+          where (( DogOwner.nRec == Dogovor.cDogovor ))
+          ordered by index Dogovor02 = tsOk )
+    tmpN := loDogMaker.Dogovor.NoDoc
+  else
+    tmpN := loDogMaker.DogOwner.NoDoc + '_0000';
+
+  GetSoglCodeNext := NextNumStr(tmpN);
+}
+
+Procedure SetFieldsFromOwner(var DogBuf: #TDogovor);
+{
+  if ( loDogMaker.GetFirst FastFirstRow Dogovor where (( DogBuf.cZamena == Dogovor.nRec )) <> tsOk )
+    Exit;
+
+  DogBuf.Direct    := loDogMaker.Dogovor.Direct;
+  DogBuf.cVidDog   := loDogMaker.Dogovor.cVidDog;
+  DogBuf.cMyOrg    := loDogMaker.Dogovor.cMyOrg;
+  DogBuf.cOrg      := loDogMaker.Dogovor.cOrg;
+  DogBuf.cPol      := loDogMaker.Dogovor.cPol;
+  DogBuf.cPlat     := loDogMaker.Dogovor.cPlat;
+  DogBuf.cGrPol    := loDogMaker.Dogovor.cGrPol;
+  DogBuf.cGrOtp    := loDogMaker.Dogovor.cGrOtp;
+  DogBuf.cBankPol  := loDogMaker.Dogovor.cBankPol;
+  DogBuf.cBankPlat := loDogMaker.Dogovor.cBankPlat;
+}
+
+Procedure InitDogBuf(var DogBuf: #TDogovor);
+{
+  if ( DogBuf.DesGr = '' )
+    DogBuf.DesGr := sGetTune('User.DesGr');
+
+  if ( DogBuf.Descr = '' )
+    DogBuf.Descr := sGetTune('User.Descr');
+
+  if ( DogBuf.dInput = ZeroDate )
+    DogBuf.dInput := Cur_Date;
+
+  if ( DogBuf.dDoc = ZeroDate )
+    DogBuf.dDoc := Cur_Date;
+
+  if ( DogBuf.cDogovor = 0 )
+    {
+      DogBuf.TiDk := 400;
+
+      if ( DogBuf.NoDoc = '' )
+        DogBuf.NoDoc := '000000';
+
+      if ( DogBuf.TipMoney = 0 )
+        DogBuf.TipMoney := 1;
+
+      if ( DogBuf.VhodNal = 0 )
+        DogBuf.VhodNal := if(wGetTune('Doc.Sell.Nalog') = 1, 1, 2);
+
+      if ( DogBuf.cVidDog = 0 )
+        DogBuf.cVidDog := coGetTune('Dog.VidDog');
+
+      DogBuf.ShemaSum := wGetTune('Dog.CursForPlPor');
+
+      if ( DogBuf.cZamena <> 0 )
+        SetFieldsFromOwner(DogBuf);
+    }
+  else
+    {
+      DogBuf.Tidk := 401;
+
+      if ( loDogMaker.GetFirst FastFirstRow DogOwner where (( DogBuf.cDogovor == DogOwner.nRec )) <> tsOk )
+        {}
+
+      if ( DogBuf.cZamena <> 0 )
+        SetFieldsFromOwner(DogBuf)
+      else
+        {
+          DogBuf.Direct := loDogMaker.DogOwner.Direct;
+
+          if ( DogBuf.cVidDog = 0 )
+            DogBuf.cVidDog := loDogMaker.DogOwner.cVidDog;
+
+          DogBuf.cMyOrg    := loDogMaker.DogOwner.cMyOrg;
+          DogBuf.cOrg      := loDogMaker.DogOwner.cOrg;
+          DogBuf.cPol      := loDogMaker.DogOwner.cPol;
+          DogBuf.cPlat     := loDogMaker.DogOwner.cPlat;
+          DogBuf.cGrPol    := loDogMaker.DogOwner.cGrPol;
+          DogBuf.cGrOtp    := loDogMaker.DogOwner.cGrOtp;
+          DogBuf.cBankPol  := loDogMaker.DogOwner.cBankPol;
+          DogBuf.cBankPlat := loDogMaker.DogOwner.cBankPlat;
+        }
+
+      DogBuf.ShemaSum     := loDogMaker.DogOwner.ShemaSum;
+      DogBuf.cDopKlas     := loDogMaker.DogOwner.cDopKlas;
+      DogBuf.cShipment    := loDogMaker.DogOwner.cShipment;
+      DogBuf.cTipOtg      := loDogMaker.DogOwner.cTipOtg;
+      DogBuf.cWayMove     := loDogMaker.DogOwner.cWayMove;
+      DogBuf.ShipAddTerms := loDogMaker.DogOwner.ShipAddTerms;
+      DogBuf.cShtrafShip  := loDogMaker.DogOwner.cShtrafShip;
+      DogBuf.cShtrafPlat  := loDogMaker.DogOwner.cShtrafPlat;
+      DogBuf.Discount     := loDogMaker.DogOwner.Discount;
+      DogBuf.IsExtra      := loDogMaker.DogOwner.IsExtra;
+      DogBuf.IsSum        := loDogMaker.DogOwner.IsSum;
+      DogBuf.SpecStatus   := loDogMaker.DogOwner.SpecStatus;
+
+      DogBuf.cProg        := loDogMaker.DogOwner.cProg;
+      DogBuf.dBeg         := loDogMaker.DogOwner.dBeg;
+      DogBuf.dEnd         := loDogMaker.DogOwner.dEnd;
+      DogBuf.TipMoney     := loDogMaker.DogOwner.TipMoney;
+      DogBuf.VhodNal      := loDogMaker.DogOwner.VhodNal;
+      DogBuf.NoDoc_Ext    := loDogMaker.DogOwner.NoDoc_Ext;
+      DogBuf.cVal         := loDogMaker.DogOwner.cVal;
+      DogBuf.cValRas      := loDogMaker.DogOwner.cValRas;
+      DogBuf.NoDoc        := GetSoglCodeNext;
+    }
+
+  if ( loDogMaker.GetFirst FastFirstRow KatVidD where (( DogBuf.cVidDog == KatVidD.nRec )) = tsOk )
+    {
+      DogBuf.VidDog := loDogMaker.KatVidD.VidDog;
+      DogBuf.Direct := loDogMaker.KatVidD.Direct;
+    }
+  else
+    if ( DogBuf.VidDog <> 0 )
+      if ( loDogMaker.GetFirst FastFirstRow KatVidD where (( comp(0)       == KatVidD.cOwner AND
+                                                             DogBuf.VidDog == KatVidD.VidDog (NoIndex) )) = tsOk )
+        {
+          DogBuf.cVidDog := loDogMaker.KatVidD.nRec;
+          DogBuf.Direct  := loDogMaker.KatVidD.Direct;
+        }
+
+  if ( DogBuf.Direct = 0 )
+    DogBuf.Direct := 1;
+
+  if ( DogBuf.cMyOrg = 0 )
+    DogBuf.cMyOrg := coGetTune('MyOrg');
+
+  if ( DogBuf.VidDog = 14 )
+    DogBuf.IsExtra := 2;
+
+  if ( DogBuf.cNote = 0 )
+    {
+      var oStatUser: VipStatUser;
+
+      if Not oStatUser.Descr_Stat_U(TRUE, DogBuf.TiDk, sGetTune('User.Descr'), DogBuf.cNote)
+        DogBuf.cNote := oNotes.GetFirstNote(DogBuf.TiDk, DogBuf.Status)
+    }
+
+  if ( loDogMaker.GetFirst FastFirstRow KatNotes where (( DogBuf.cNote == KatNotes.nRec )) = tsOK )
+    DogBuf.Status := loDogMaker.KatNotes.Status;
+
+  case (DogBuf.Direct and 1) of
+  // договора на продажу
+    1:
+      {
+        if ( DogBuf.cPlat    = 0 ) DogBuf.cPlat    := DogBuf.cOrg;
+        if ( DogBuf.cPol     = 0 ) DogBuf.cPol     := DogBuf.cMyOrg;
+        if ( DogBuf.cBankPol = 0 ) DogBuf.cBankPol := coGetTune('MyBank');
+        if ( DogBuf.cGrPol   = 0 ) DogBuf.cGrPol   := DogBuf.cOrg;
+        if ( DogBuf.cGrOtp   = 0 ) DogBuf.cGrOtp   := DogBuf.cMyOrg;
+      }
+  // договора на закупку
+    0:
+      {
+        if ( DogBuf.cPlat     = 0 ) DogBuf.cPlat     := DogBuf.cMyOrg;
+        if ( DogBuf.cPol      = 0 ) DogBuf.cPol      := DogBuf.cOrg;
+        if ( DogBuf.cBankPlat = 0 ) DogBuf.cBankPlat := coGetTune('MyBank');
+        if ( DogBuf.cGrPol    = 0 ) DogBuf.cGrPol    := DogBuf.cMyOrg;
+        if ( DogBuf.cGrOtp    = 0 ) DogBuf.cGrOtp    := DogBuf.cOrg;
+      }
+  end; // case
+
+  if ( DogBuf.cBankPlat = 0 )
+    if ( (loDogMaker.GetFirst FastFirstRow KatBank
+                     where (( DogBuf.cPlat == KatBank.cOrg ))
+                     ordered by index KatBank05) = tsOk )
+      DogBuf.cBankPlat := loDogMaker.KatBank.nRec;
+
+  if ( DogBuf.cBankPol = 0 )
+    if ( (loDogMaker.GetFirst FastFirstRow KatBank
+                     where (( DogBuf.cPol == KatBank.cOrg ))
+                     ordered by index KatBank05) = tsOk )
+      DogBuf.cBankPol := loDogMaker.KatBank.nRec;
+}
+
+Procedure InitSpDogBuf(var SpBuf: #TSpDocs; DogBuf: #TDogovor);
+var
+  wPr    : word;
+  pMcUsl : comp;
+  NSpecif: string;
+{
+  loDogMaker.ClearBuffer(loDogMaker.tnSpDocs);
+
+  SpBuf.nRec := loDogMaker.GetNextNrec(loDogMaker.tnSpDocs, 0);
+  SpBuf.cDoc := DogBuf.nRec;
+  SpBuf.Code := oSpDocs.GetSpDocsCodeNext(DogBuf.nRec, DogBuf.TiDk);
+
+  if ( DogBuf.VidDog = 14 )
+    {
+      SpBuf.PrMC  := 50;
+      SpBuf.Price := DogBuf.Discount;
+
+      Exit;
+    }
+
+  SpBuf.cShipment    := DogBuf.cShipment;
+  SpBuf.cTipOtg      := DogBuf.cTipOtg;
+  SpBuf.ShipAddTerms := DogBuf.ShipAddTerms;
+  SpBuf.cVal         := DogBuf.cVal;
+  SpBuf.cWayMove     := DogBuf.cWayMove;
+  SpBuf.Empty        := 1;
+  SpBuf.dFrom        := DogBuf.dBeg;
+  SpBuf.dTo          := DogBuf.dEnd;
+  SpBuf.TiDk         := DogBuf.TiDk;
+  SpBuf.FilialNo     := oNotes.Notes_InUseStatus(DogBuf.cNote);
+
+  case SpBuf.PrMC of
+    1, 2, 4:
+      SpBuf.Direct := 2 - (DogBuf.Direct mod 2);
+  else
+    {
+      SpBuf.Direct := 1 + (DogBuf.Direct mod 2);
+    }
+  end;
+
+  pMcUsl := 0;
+
+  case SpBuf.PrMC of
+    1, 4, 5:
+      {
+        wPr := 1;
+
+        if ( loDogMaker.GetFirst FastFirstRow KatMC where (( SpBuf.cMcUsl == KatMC.nRec )) = tsOK )
+          {
+            pMcUsl  := SpBuf.cMcUsl;
+            NSpecif := loDogMaker.KatMC.Name;
+
+            if ( SpBuf.cGrMCUsl = 0 )
+              SpBuf.cGrMCUsl := loDogMaker.KatMC.cGroupMC;
+
+            if ( SpBuf.cGrNal = 0 )
+              SpBuf.cGrNal := loDogMaker.KatMC.cGrNal;
+          }
+        else
+          if ( loDogMaker.GetFirst FastFirstRow GroupMC where (( SpBuf.cGrMCUsl == GroupMC.nRec )) = tsOK )
+            {
+              pMcUsl  := SpBuf.cGrMCUsl;
+              NSpecif := loDogMaker.GroupMC.Name;
+              wPr := 3;
+            }
+      }
+  else
+    {
+      wPr := 2;
+
+      if ( loDogMaker.GetFirst FastFirstRow KatUsl where (( SpBuf.cMcUsl == KatUsl.nRec )) = tsOK )
+        {
+          pMcUsl  := SpBuf.cMcUsl;
+          NSpecif := loDogMaker.KatUsl.Name;
+
+          if ( SpBuf.Kol = 0 )
+            SpBuf.Kol := loDogMaker.KatUsl.KolAkt;
+
+          if ( SpBuf.cGrMCUsl = 0 )
+            SpBuf.cGrMCUsl := loDogMaker.KatUsl.cGroupUsl;
+
+          if ( SpBuf.cGrNal = 0 )
+            SpBuf.cGrNal := loDogMaker.KatUsl.cGrNal;
+        }
+      else
+        if ( loDogMaker.GetFirst FastFirstRow GroupUsl where (( SpBuf.cGrMCUsl == GroupUsl.nRec )) = tsOK )
+          {
+            pMcUsl  := SpBuf.cGrMCUsl;
+            NSpecif := loDogMaker.GroupUsl.Name;
+            wPr := 4;
+          }
+    }
+  end;
+
+  if ( ( SpBuf.cOtpEd = 0 ) AND ( pMcUsl <> 0 ) )
+    if ( loDogMaker.GetFirst FastFirstRow KatOtpEd where (( pMcUsl  == KatOtpEd.cMCUSL AND
+                                                            word(1) == KatOtpEd.Akt    AND
+                                                            wPr     == KatOtpEd.PrMC
+                                                         )) = tsOK )
+      SpBuf.cOtpEd := loDogMaker.KatOtpEd.nRec
+    else
+      Message('Не задана активная отпускная единица измерения для ' + NSpecif + '!', Warning);
+
+  SpBuf.Ostatok := fEdIzm.ConvertToUchEd(SpBuf.Kol, SpBuf.cOtpEd);
+
+  if ( loDogMaker.GetFirst FastFirstRow AttrDog where (( DogBuf.nRec == AttrDog.cDogovor )) = tsOk )
+    SpBuf.cOtvPodr := loDogMaker.AttrDog.cPodr;
+
+  if ( loDogMaker.GetFirst FastFirstRow KatVidD where (( DogBuf.cVidDog == KatVidD.nRec )) = tsOk )
+    if ( loDogMaker.KatVidD.VidDog = 1 )
+      if ( SpBuf.PrMC = 1 )
+        SpBuf.Direct := DogBuf.Direct
+       else
+        SpBuf.Direct := if(DogBuf.Direct = 1, 2, 1);
+}
+
+//******************************************************************************
+// пересчет схемы платежей при изменении суммы по договору/соглашению
+//******************************************************************************
+Procedure RecalcSchema(pDog: comp);
+var
+  DogSum: double;
+{
+  loDogDeleter.pDogovor := pDog;
+
+  if ( loDogDeleter.GetFirst Dogovor <> tsOk )
+    Exit;
+
+  DogSum := oValFunc.GetAnyCurrency(loDogDeleter.Dogovor.cVal
+                                  , loDogDeleter.Dogovor.Summa
+                                  , oSpDocs.GetTrueDateValCurse(loDogDeleter.Dogovor.dValCurse
+                                                              , loDogDeleter.Dogovor.dBeg
+                                                              , loDogDeleter.Dogovor.dDoc
+                                                               )
+                                  , loDogDeleter.PlatDog.cVal
+                                   );
+
+  if ( wGetTune('Dog.SchemaRecalc') = 0 )
+  // пересчет схемы платежей относительно %
+    loDogDeleter.update PlatDog
+      set PlatDog.Summa := DogSum * loDogDeleter.PlatDog.Procent / 100
+  else
+  // пересчет схемы платежей относительно сумм
+    loDogDeleter.update PlatDog
+      set PlatDog.Procent := 100 * loDogDeleter.PlatDog.Summa / DogSum;
+}
+
+#end // _DogFuns_VPP

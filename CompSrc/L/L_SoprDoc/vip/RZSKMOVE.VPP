@@ -1,0 +1,212 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+#ifndef _RZSKMOVE_VPP
+#define _RZSKMOVE_VPP
+#include rzprhsop.vpp
+
+#include SDfuns.var
+
+var sRzErrorMsg :string;
+
+//******************************************************************************
+// Удаление КУТ и складских ордеров по накладной на внутреннее перемещение
+Function RDeleteOrders(Warn: boolean):boolean;
+var Res: boolean;
+{
+  Res := DeleteKUTS(Warn);    //удаление КУТ (розница)
+
+  if Res
+    if GetFirst SklOrder where ((KatSopr.nRec == SklOrder.cSopr)) = tsOk
+      Res := DeleteOrders(False);  //удаление складского ордера
+
+  RDeleteOrders := Res;
+} // function RDeleteOrders
+
+Create View v_toRozn
+From
+  toRozn
+, KlPrice
+, Prices
+, KatPodr
+, KatMC
+, KatEd
+where
+((
+  KatMC.cEd == KatEd.NRec
+));
+
+function FillTbl_ToRozn :boolean;
+{
+  FillTbl_ToRozn := false;
+
+  if (GetFirst SklOrder where ((KatSopr.NRec == SklOrder.cSopr)) = tsOk)
+  {
+    FillTbl_ToRozn := true;
+    _LOOP SpOrder where ((SklOrder.NRec == SpOrder.cSklOrder))
+    {
+      v_ToRozn.toRozn.NRec      := 0;
+      v_toRozn.toRozn.cPodrFrom := Katsopr.cPodrFrom;
+      v_toRozn.toRozn.cPodr     := KatSopr.cPodrTo;
+      v_toRozn.toRozn.cMolFrom  := KatSopr.cMolFrom;
+      v_toRozn.toRozn.cMol      := KatSopr.cMolTo;
+      v_toRozn.toRozn.cMC       := SpOrder.cMC;
+      v_toRozn.toRozn.Price     := SpOrder.srPrice;
+      v_toRozn.toRozn.VPrice    := SpOrder.vPrice;
+      v_toRozn.toRozn.cVal      := SpOrder.cVal;
+      v_toRozn.toRozn.Kol       := SpOrder.Kol;
+      v_toRozn.toRozn.cParty    := SpOrder.cParty;
+      v_toRozn.toRozn.PriceDoc  := SpOrder.srPrice;
+      v_toRozn.toRozn.vPriceDoc := SpOrder.vPrice;
+      v_toRozn.toRozn.cSpSopr   := SpOrder.cSpSopr;
+      if ( v_toRozn.Insert current toRozn <> tsOk )
+      {
+        FillTbl_ToRozn := false;
+        break;
+      }
+    } // _LOOP
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// проверка наличия МЦ в прайс листе
+function CheckMCinPrList( AcoPriceList :comp; AcoMC :comp ) :boolean;
+{
+  CheckMCinPrList := false;
+
+  if ( v_toRozn.GetFirst Prices where (( AcoPriceList == Prices.cKlPrice and
+                                         AcoMC        == Prices.cThing )) = tsOK )
+    CheckMCinPrList := true;
+
+}
+
+Procedure rzMakeMove;
+{
+  var Res :boolean;
+
+  if KatSopr.cPodrTo=0
+    {
+      message('Накладная склад -> розничная торговля №' + Katsopr.NSopr +
+              ' от ' + DateToStr(Katsopr.DSopr, 'DD/MM/YY') + ' '#13 +
+              'Необходимо выбрать склад прихода.',CancelButton);
+      Exit;
+    }
+
+  if (v_ToRozn.Delete All toRozn <> tsOk)
+    Exit;
+
+  Res:= MakeRashOrd(true,0);
+
+  if (Res)
+    Res := FillTbl_ToRozn;
+
+  if (Res)
+    {
+      Update_Current_KatSopr;
+      RunInterface(KUTOper);
+    }
+} // procedure rzMakeMove
+
+///////////////////////////////////////////////////////////////////////////////
+// пакетное фомирование ордеров по накладным склад -> розница
+function rzMakeMovePaket( AdtDateOrd :date ) :boolean;
+{
+  var Res :boolean;
+  var coPriceList :comp;
+  var sPrListName :string;
+
+  rzMakeMovePaket := false;
+  sRzErrorMsg := 'Накладная склад -> розничная торговля №' + Katsopr.NSopr +
+                  ' от ' + DateToStr(Katsopr.DSopr, 'DD/MM/YY') + ' '#13;
+
+  if KatSopr.cPodrTo=0
+    {
+      sRzErrorMsg := sRzErrorMsg + '  Не задан склад прихода.'#13;
+      Exit;
+    }
+
+  case wGetTune('Rozn.PickPrice') of
+    0:
+      {
+        coPriceList := coGetTune('Price.cPrice'); // текущий прайс-лист
+        if ( v_toRozn.GetFirst KlPrice where(( coPriceList == KlPrice.NRec )) <> tsOK )
+        {
+          sRzErrorMsg := sRzErrorMsg + '  Не задан текущий прайс-лист.'#13;
+          Exit;
+        }
+      }
+    2:
+      {
+        var coTmpPodr :comp;
+        coTmpPodr := KatSopr.cPodrTo;
+
+        if ( v_toRozn.GetFirst KatPodr where (( coTmpPodr == KatPodr.NRec )) <> tsOK )
+        {
+          message('Не найден склад прихода.', information);
+          Exit;
+        }
+        coPriceList := v_toRozn.KatPodr.cPriceL;
+        if ( v_toRozn.GetFirst KlPrice where(( coPriceList == KlPrice.NRec )) <> tsOK )
+        {
+          sRzErrorMsg := sRzErrorMsg + '  Для подразделения <' +
+                         v_toRozn.KatPodr.Name + '> не задан прайс-лист.'#13;
+          Exit;
+        }
+      }
+  end;
+
+  Res := true;
+
+  var coTmpMC :comp;
+  // проверка наличия МЦ в прайс листе
+  if wGetTune('Rozn.PickPrice') <> 1
+  {
+    _LOOP SpSopr where (( KatSopr.NRec == SpSopr.cSopr and
+                          word(1)      == SpSopr.PrMC ))
+      {
+        if not CheckMCinPrList(coPriceList, SpSopr.cMCUsl)
+        {
+          if ( v_toRozn.GetFirst KlPrice where(( coPriceList == KlPrice.NRec )) <> tsOK )
+          {
+            message('Не найден прайс-лист', information);
+          }
+          sPrListName := v_toRozn.KlPrice.Name;
+
+          coTmpMC := SpSopr.cMCUsl;
+          if ( v_toRozn.GetFirst KatMC where(( coTmpMC == KatMC.NRec )) <> tsOK ) {}
+
+           sRzErrorMsg := sRzErrorMsg + '  - МЦ: ' + v_toRozn.KatMC.Name +
+                                       ' (баркод ' + v_toRozn.KatMC.BarKod +
+                                       ') Ед.Изм.: ' + v_toRozn.KatEd.Name + ' '#13;
+          sRzErrorMsg := sRzErrorMsg + '     не найдена в прайс-листе <' + sPrListName + '>';
+          Res := false;
+        }
+      } // _LOOP
+  }
+
+  if ( not Res )
+  {
+    rzMakeMovePaket := Res;
+    Exit;
+  }
+
+  if (v_ToRozn.Delete All toRozn <> tsOk)
+    Exit;
+
+  Res := MakeRashOrd(true, longint(AdtDateOrd));
+
+  if (Res)
+    Res := FillTbl_ToRozn;
+
+  if (Res)
+  {
+    Update_Current_KatSopr;
+    RunInterface(KUTOper);
+  }
+  rzMakeMovePaket := Res;
+}
+
+#end //_RZSKMOVE_VPP

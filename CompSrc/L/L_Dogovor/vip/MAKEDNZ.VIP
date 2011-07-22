@@ -1,0 +1,168 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1987,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : Мастер формирования детальных наряд-заказов по групповому ║
+ ║ Ответственный : Бартош Евгений Анатольевич (BAR)                          ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#doc
+Интерфейс формирования детальных наряд-заказов по групповому
+#end
+interface MakeDetailedNZak 'Мастер формирования детальных наряд-заказов по групповому'
+   (,hcDg_Master_NZ,) DoAccept, escclose;
+   Show at (0,0,80,25);
+create view vwMakeDetailedNZak
+var
+  pNZakaz : comp;
+  Pkol,
+  SourKol : double;
+(
+    SpDocsPrMC,         // 1
+    SpDocsGrName,       // 2
+    SpDocsObjName       // 3
+)
+as select
+  // 1
+  if ( SpDocs.PrMC = 1,'Т','У' ),
+  // 2
+  if ( SpDocs.PrMC = 1, GroupMC.Name, GroupUsl.Name ),
+  // 3
+  if ( SpDocs.PrMC = 1, KatMC.Name, KatUsl.Name )
+from
+ PickRep,
+ SpDocs,
+ GroupMC,
+ GroupUsl,
+ KatMC,
+ KatUsl,
+ KatOtpEd
+where
+((
+  pNZakaz                 ==  SpDocs.cDoc          and
+  word(440)               ==  SpDocs.TiDk          and
+  SpDocs.cGrMCUSL         ==  GroupMC.nRec         and
+  SpDocs.cGrMCUSL         ==  GroupUsl.nRec        and
+  SpDocs.cMCUSL           ==  KatMC.nRec           and
+  SpDocs.cMCUSL           ==  KatUsl.nRec          and
+  SpDocs.cOtpEd           ==  KatOtpEd.nRec        and
+  SpDocs.NRec             ==  PickRep.cUserDeskRep and
+  word(10)                ==  PickRep.wList        and
+  UserName                ==  PickRep.OwnName
+));
+parameters
+ pNZakaz;
+
+function getPickedKol(pNoneNRec:comp):double;
+var tmpKol: double;
+{
+  tmpKol := 0;
+  PushPos(#PickRep);
+  _loop PickRep
+    {
+      if ((pNoneNrec <> 0) and (pNoneNrec=PickRep.NRec)) continue;
+      tmpKol := tmpKol + PickRep.PickKol;
+    }
+  PopPos(#PickRep);
+  getPickedKol := tmpKol;
+}
+
+function getSourKol(pSourNRec:comp):double;
+var tmpKol: double;
+{
+  tmpKol := 0;
+  PushPos(#SpDocs);
+  _loop SpDocs where((pSourNRec == SpDocs.cUpDoc))
+    {
+      tmpKol := tmpKol + SpDocs.Kol;
+    }
+  PopPos(#SpDocs);
+  getSourKol := SpDocs.Kol - tmpKol;
+}
+
+panel SpNZak01;
+table SpDocs;
+browse brSpNZak01 (,,sci1Esc);
+show at (,,,7);
+fields
+  SpDocs.Code    '#' ('Номер по порядку',,sci1Esc) : [3], protect;
+  SpDocsPrMC     'МЦ/У' ('Признак товара/услуги',,sci1Esc) : [4], protect;
+  SpDocsGrName   'Группа' ('Наименование группы МЦ/услуг',,sci1Esc) : [10], protect;
+  SpDocsObjName  'Наименование' ('Наименование МЦ/услуги',,sci1Esc) : [20], protect;
+  KatOtpEd.Name  'Отп.ед.' ('Наименование отпускной единицы измерения',,sci1Esc) : [7], protect;
+  SpDocs.Kol     'Количество по НЗ' ('Количество по позиции наряд-заказа',,sci1Esc) : [10,3], protect;
+end; // browse
+
+handleevent
+cmPositionChanged:
+  {
+    PKol := getPickedKol(comp(0));
+    SourKol := getSourKol(SpDocs.NRec);
+  }
+
+end; //
+end; // panel
+
+panel PickRep01;
+show at (,14,,20);
+table PickRep;
+browse brPickRep01 (,,sci1Esc);
+fields
+  PickRep.PickNum  'Номер по порядку' ('Номер наряд-заказа по порядку',,sci1Esc) : [17], skip;
+  PickRep.PickKol  'Количество' ('Количество по позиции',,sci1Esc) : [10,3];
+end; // browse
+screen scPickRep02 (,,sci1Esc);
+show at (,8,,13);
+fields
+  SpDocsGrName    ('Наименование группы МЦ/услуг',,sci1Esc) : skip;
+  SpDocsObjName   ('Наименование МЦ/услуги',,sci1Esc) : skip;
+  SourKol         ('чество по позиции наряд-заказа',,sci1Esc) : [,3], skip;
+  PKol            ('Выбранное количество по позиции наряд-заказа',,sci1Esc) : [,3], skip;
+Buttons
+  cmValue1 ,Default,,'продолжить формирование детального наряд-заказа',,sci1Esc;
+  cmValue2 ,,,'продолжить формирование детального наряд-заказа',,sci1Esc;
+<<
+                <. Продолжить .>           <. Отмена .>
+
+ .@@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@ Доступно .@@@@@@@@@@@ Выбрано .@@@@@@@@@@@
+>>
+end;
+handleevent
+
+cmValue1:
+  PutCommand(cmDefault);
+
+cmValue2:
+    PutCommand(cmCancel);
+
+cmUpdateRecord:
+  Update current PickRep;
+
+cmCheckField:
+  {
+    case (curfield) of
+      #PickRep.PickKol:
+        { //var PKol : double;
+          PKol := getPickedKol(PickRep.NRec) + PickRep.PickKol;
+          if (PKol > SourKol)
+            {
+              PickRep.PickKol := PickRep.PickKol - (Pkol-SourKol);
+              Pkol := SourKol;
+            }
+        }
+    end;
+  }
+
+end; //
+end; // panel
+
+HandleEvent
+cmDefault:
+  {
+  }
+end;
+end.

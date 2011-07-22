@@ -1,0 +1,593 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.70 - логистика
+// Договора
+//
+//********************************************************************************
+
+#include notes.vih
+#include aktsver.vih
+
+#doc
+Интерфейс формирования актов сверки по договорам
+#end
+Interface dog2Akt 'Формирование актов сверки по договорам' (, hcDogovorAktSverkiMake,) EscClose, Gray;
+
+  Show at (3, 2, 76, 18);
+
+Create view
+
+Var
+  wFilter
+, wDog
+, wGrDog
+, wNazna
+, wKontr
+, wSopr
+, wPlat
+, wDateBeg
+              : word;
+
+  DateBeg
+, DateEnd
+              : date;
+
+  cDog
+, cGrDog
+, cNazna
+, cKontr
+              : comp;
+
+  bFormir
+              : boolean;
+
+  MarkerNazna
+, MarkerKontr
+, MarkerGrDog
+, MarkerDog
+, MarkerAkt
+              : longint;
+
+  lSetFiltr
+              : string;
+
+  oAktSver
+              : tAktSverObjInterface;
+
+  oNotes
+              : iNotes;
+
+As Select
+
+  if ((cDog <> 0),   '№ ' + String(Dogovor.NoDoc) + ' от ' + String(Dogovor.dInput),
+                     if ((wDog > 1), 'множественный выбор', '')
+     )
+                                             ( FieldName = fDog )
+
+, if ((cGrDog <> 0), GroupSch.Name,
+                     if ((wGrDog > 1), 'множественный выбор', '')
+     )
+                                             ( FieldName = fGrDog )
+
+, if ((cNazna <> 0), KatNazna.Name,
+                     if ((wNazna > 1), 'множественный выбор', '')
+     )
+                                             ( FieldName = fNazna )
+
+, if ((cKontr <> 0), KatOrg.Name,
+                     if ((wKontr > 1), 'множественный выбор', '')
+     )
+                                             ( FieldName = fKontr )
+
+From
+  dogovor
+, dogovor Dogovor1
+, GroupSch
+, SpGrSch
+, KatNazna
+, KatOrg
+, KatOrg  KatOrg1
+, AktSver                   (Normal)
+, AktSver AktSver_s
+, DocSver                   (Normal)
+, KlVal
+, Pick
+
+Where
+((
+    cDog     == dogovor.nRec
+and cGrDog   == GroupSch.nRec
+and cNazna   == KatNazna.nRec
+and cKontr   == KatOrg.nRec
+and comp(0)  == Dogovor1.cDogovor
+))
+;
+
+Form frmReeAkt('ReeAkt.out', 'ReeAkt') with novisual;
+form frm_AS('as.OUT', 'AktSver');
+
+#include aktfun.vpp  // функция автоформирования актов сверки
+
+//******************************************************************************
+Function ProcessOneDogovor: boolean;
+Var
+  Ind1: longint;
+  wDoc: word;
+  cAkt: comp;
+  dtmp: double;
+{
+  ProcessOneDogovor := FALSE;
+
+  if ( Dogovor1.Status <> 1 )
+    Exit;
+
+  DateBeg := Dogovor1.dBeg;
+  dtmp    := 0;
+
+  if ( wDateBeg = 1 )
+    if ( GetLast AktSver_s where (( Dogovor1.nRec == AktSver_s.cDogovor )) Ordered By AktSver_s.dBeg = tsOk )
+      {
+        dtmp := AktSver_s.SaldoOut;
+
+        if ( AktSver_s.dEnd <> ZeroDate )
+          DateBeg := Add_Day(AktSver_s.dEnd, 1);
+      }
+
+  if ( DateBeg > DateEnd )
+    Exit;
+
+  if ( (wFilter and 4) = 4 )
+    {
+      if ( not SearchMarker(MarkerNazna, Dogovor1.cProg, Ind1) )
+        Exit;
+    }
+
+  if ( (wFilter and 8) = 8 )
+    {
+      if ( not SearchMarker(MarkerKontr, Dogovor1.cOrg, Ind1) )
+        Exit;
+    }
+
+  ClearBuffer(#AktSver);
+
+  AktSver.cDogovor := Dogovor1.nRec;
+  AktSver.dInput   := Cur_Date;
+  AktSver.dDoc     := Cur_Date;
+  AktSver.dBeg     := DateBeg;
+  AktSver.dEnd     := DateEnd;
+  AktSver.SaldoIn  := dtmp;
+  AktSver.cVal     := Dogovor1.cValRas;
+  AktSver.DesGr    := sGetTune('User.DesGr');
+  AktSver.Descr    := sGetTune('User.Descr');
+  AktSver.cNote    := oNotes.GetFirstNote(402, AktSver.Status);
+
+  if ( GetLast AktSver_s where (( AktSver.cDogovor == AktSver_s.cDogovor )) Ordered By index AktSver02 <> tsOk )
+    set AktSver.NoDoc := '00001'
+  else
+    {
+      Var tmpS : string;
+
+      tmpS := AktSver_s.NoDoc;
+
+      if ( trim(tmpS) = '' )
+        tmpS := '00001';
+
+      set AktSver.NoDoc := NextNumStr(tmpS);
+    }
+
+  if ( insert current AktSver = tsOk )
+    {
+      wDoc := 7 + 8 * wSopr + 16 * wPlat;
+
+      cAkt := AktSver.nRec;
+
+      AutoFormAktSver(cAkt, wDoc, AktSver.dBeg, AktSver.dEnd,
+                                  AktSver.dBeg, AktSver.dEnd,
+                                  AktSver.dBeg, AktSver.dEnd);
+
+      if ( GetFirst AktSver where (( cAkt == AktSver.nRec )) = tsOk )
+        {
+          Var dtmp  : double;
+          Var dStat : word;
+
+          dtmp := AktSver.SaldoIn;
+
+          _loop DocSver where (( AktSver.nRec == DocSver.cAktSver ))
+            {
+              NextVisual;
+
+              case DocSver.TiDkSver of
+                11, 13 : dtmp := dtmp + DocSver.SumVal;
+                21, 23 : dtmp := dtmp - DocSver.SumVal;
+              end; // case
+            }
+
+          set AktSver.SaldoOut := dtmp;
+
+          if ( update current AktSver <> tsOk ) {}
+        }
+
+      InsertMarker(MarkerAkt, AktSver.nRec);
+
+      frmReeAkt.Write(AktSver.nRec);
+
+      if ( GetFirst KatOrg1 where ((Dogovor1.cOrg == KatOrg1.nRec)) = tsOk )
+        frmReeAkt.Write(KatOrg1.Name)
+      else
+        frmReeAkt.Write(' ');
+
+      frmReeAkt.Write(Dogovor1.NoDoc + ' от ' + DateToStr(Dogovor1.dDoc, 'DD.MM.YYYY'));
+      frmReeAkt.Write(AktSver.NoDoc  + ' от ' + DateToStr(AktSver.dDoc , 'DD.MM.YYYY'));
+      frmReeAkt.Write(AktSver.SaldoOut);
+
+      if ( AktSver.cVal = 0 )
+        frmReeAkt.Write(sGetTune('NDE.SimvRub'))
+      else
+        {
+          if ( GetFirst KlVal where (( AktSver.cVal == KlVal.nRec )) = tsOk )
+            frmReeAkt.Write(KlVal.SimVolV);
+          else
+            frmReeAkt.Write(' ');
+        }
+    }
+
+  ProcessOneDogovor := TRUE;
+}
+//******************************************************************************
+
+Procedure RunCycleFilterDog;
+Var
+  cRec
+               : comp;
+
+  MarkerCount
+, i
+               : word;
+{
+  MarkerCount := GetMarkerCount(MarkerDog);
+
+  for ( i := 0; i < MarkerCount; i := i + 1 )
+    {
+      if ( GetMarker(MarkerDog, i, cRec) )
+        {
+          NextVisual;
+
+          if ( GetFirst Dogovor1 where ((cRec == Dogovor1.nRec)) = tsOk )
+            if not ProcessOneDogovor
+              Continue;
+        }
+    }
+
+  if ( not frmReeAkt.Error )
+    frmReeAkt.ShowFile('');
+  else
+    frmReeAkt.AbortForm;
+}
+
+Procedure RunCycleAllDog;
+{
+  _loop Dogovor1
+    {
+      NextVisual;
+
+      if not ProcessOneDogovor
+        Continue;
+    }
+
+  if ( not frmReeAkt.Error )
+    frmReeAkt.ShowFile('');
+  else
+    frmReeAkt.AbortForm;
+}
+
+Procedure RunCycleFilterGrDog;
+{
+  _loop Pick where ((word(4) == Pick.wList))
+    {
+      _loop SpGrSch where ((  Pick.cRec == SpGrSch.cGroupSch
+                          and word(1)   == SpGrSch.wList
+                          ))
+        {
+          NextVisual;
+
+          if ( GetFirst Dogovor1 where ((SpGrSch.cBaseDoc == Dogovor1.nRec)) = tsOk )
+            if not ProcessOneDogovor
+              Continue;
+        }
+    }
+
+  if ( not frmReeAkt.Error )
+    frmReeAkt.ShowFile('');
+  else
+    frmReeAkt.AbortForm;
+}
+
+//-----------------------------------------------------------------------
+
+#doc
+Окно параметров формирования актов сверки по договорам
+#end
+Window winParam 'Формирование актов сверки по договорам' EscClose, Gray;
+  Show at (, , 74, 17);
+
+Panel panParam;
+  Table dogovor;
+
+Screen scrParam (, hcDogovorAktSverkiMake, sci1Esc);
+  bevel b3 {1, 3, 74, 13, bsLowered, bsBox};
+Fields
+  DateEnd  ('Конечная дата',,sci13Esc)                            : [,'DD/MM/YYYY'], NoProtect;
+  wDateBeg ('Начальная дата',,)                                   :
+    [List 'из договора', 'по предыдущему акту'], Protect;
+  lSetFiltr (): skip, {font = {color = ColorSysBlack; bold = true}};
+  wFilter  ('Установите фильтры',,)                               : NoProtect;
+  fDog     ('Установите фильтр по договорам',,sci13Esc)           : PickButton, Protect;
+  fGrDog   ('Установите фильтр по группам договоров',,sci13Esc)   : PickButton, Protect;
+  fNazna   ('Установите фильтр по назначению',,sci13Esc)          : PickButton, Protect;
+  fKontr   ('Установите фильтр по контрагенту',,sci13Esc)         : PickButton, Protect;
+  wSopr    ('Установите фильтр по сопроводительным документам',,) :
+    [List 'все', 'только со счетами-фактурами'], Protect;
+  wPlat    ('Установите фильтр по платежным документам',,)        :
+    [List 'все', 'только распределенные и авансовые'], Protect;
+
+Buttons
+  cmValue1,,, 'Принять выбор',, sci1Esc;
+  cmCancel,,, 'Отмена',, sci1Esc;
+
+<<
+
+ `Формировать акты по состоянию на:` .@@@@@@@@@@@
+ `Дата начала действия актов:`       .@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  .@@@@@@@@@@@@@@@@@@@@
+    [.] Договорам             ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    [.] Группам договоров     ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    [.] Назначению договора   ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    [.] Контрагенту договора  ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  `Сопроводительным документам:`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  `Платежным документам:`       .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+    <.Сформировать.>                                  <.   Отмена   .>
+
+>>
+end; //Screen
+
+HandleEvent
+
+cmCheckField :
+  {
+    if ( (wFilter and 1) = 1 )
+      ClusterDisabledField(#wFilter, 2);
+    else
+      {
+        if ( (wFilter and 2) = 2 )
+          ClusterDisabledField(#wFilter, 1);
+        else
+          ClusterDisabledField(#wFilter, 0);
+      }
+  }
+
+cmPick :
+  {
+    case CurField of
+
+      #fDog :
+        {
+          Var maskDog  : word;
+          Var pDogovor : comp;
+
+          if ( (wFilter and 1) <> 1 )
+            Exit;
+
+          maskDog := 2; //-- допустимы только исполняемые договора
+
+          SaveMyDsk(true, 'GetSDog_NotSelectStat');
+
+          if ( RunInterface(GetSomeDogovor, word(0)
+                                          , maskDog
+                                          , word(0)
+                                          , word(1)
+                                          , true
+                                          , cDog
+                                          , false
+                                          , comp(0)) <> cmCancel )
+            {
+              MarkerDog := InitMarker('MDogovor', 8, 100, 10);
+              wDog := GetMarkerCount(MarkerDog);
+
+              if ( wDog <> 1 )
+                set cDog := 0;
+              else
+                {
+                  cDog := 0;
+
+                  GetMarker(MarkerDog, 0, cDog);
+                  set cDog := cDog;
+                }
+
+              DoneMarker(MarkerDog, 'MDogovor');
+            }
+        }
+
+      #fGrDog :
+        {
+          if ( (wFilter and 2) <> 2 )
+            Exit;
+
+          if ( RunInterface('GetGroupSch', 3, 1, 0, true, comp(0), false) = cmDefault )
+            {
+              if ( GetFirst Pick where ((word(4) == Pick.wList)) <> tsOk )
+                {
+                  wGrDog := 0;
+                  set cGrDog := 0;
+                }
+              else
+                {
+                  wGrDog := 1;
+                  set cGrDog := Pick.cRec;
+
+                  if ( GetNext Pick where ((word(4) == Pick.wList)) = tsOk )
+                    {
+                      wGrDog := 2;
+                      set cGrDog := 0;
+                    }
+                }
+            }
+        }
+
+      #fNazna :
+        {
+          if ( (wFilter and 4) <> 4 )
+            Exit;
+
+          if ( RunInterface('GetSomKatNazna', boolean(true), comp(0) ) <> cmCancel )
+            {
+              MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+              wNazna := GetMarkerCount(MarkerNazna);
+
+              if ( wNazna <> 1 )
+                set cNazna := 0;
+              else
+                {
+                  cNazna := 0;
+                  GetMarker(MarkerNazna, 0, cNazna);
+                  set cNazna := cNazna;
+                }
+
+              DoneMarker(MarkerNazna, 'MKatNazna');
+            }
+        }
+
+      #fKontr :
+        {
+          if ( (wFilter and 8) <> 8 )
+            Exit;
+
+          if ( RunInterface('GetSomeKontrPrim', false) <> cmCancel )
+            {
+              MarkerKontr := InitMarker('KatOrg', 8, 100, 10);
+              wKontr := GetMarkerCount(MarkerKontr);
+
+              if ( wKontr = 1 )
+                set cKontr := 0;
+              else
+                {
+                  cKontr := 0;
+                  GetMarker(MarkerKontr, 0, cKontr);
+                  set cKontr := cKontr;
+                }
+
+              DoneMarker(MarkerKontr, 'KatOrg');
+            }
+        }
+
+    end; // case
+
+    RescanPanel(#Dogovor);
+  }
+
+end; // HandleEvent
+
+end; // Panel
+
+HandleEvent
+
+cmValue1 :
+  {
+    bFormir := true;
+    CloseWindow(winParam);
+  }
+
+end; // HandleEvent
+
+end; // window
+
+HandleEvent
+
+cmInit :
+  {
+    lSetFiltr := 'Установка фильтров по:';
+    bFormir := false;
+
+    DateEnd := Cur_Date;
+
+    wFilter := 0;
+    wDog    := 0;
+    wGrDog  := 0;
+    wNazna  := 0;
+    wKontr  := 0;
+    wSopr   := 0;
+    wPlat   := 0;
+
+    cDog    := 0;
+    cGrDog  := 0;
+    cNazna  := 0;
+    cKontr  := 0;
+
+    Delete NoVisual Pick where ((word(4) == Pick.wList));
+
+    MarkerDog := InitMarker('MDogovor', 8, 100, 10);
+    ClearMarker(MarkerDog);
+    DoneMarker(MarkerDog, 'MDogovor');
+
+    MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+    ClearMarker(MarkerNazna);
+    DoneMarker(MarkerNazna, 'MKatNazna');
+
+    MarkerKontr := InitMarker('KatOrg', 8, 100, 10);
+    ClearMarker(MarkerKontr);
+    DoneMarker(MarkerKontr, 'KatOrg');
+
+    MarkerAkt := InitMarker('AktSver', 8, 100, 10);
+    ClearMarker(MarkerAkt);
+    DoneMarker(MarkerAkt, 'AktSver');
+
+    RunWindowModal(winParam);
+
+    if ( bFormir )
+      {
+        MarkerDog   := InitMarker('MDogovor',  8, 100, 10);
+        MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+        MarkerKontr := InitMarker('KatOrg',    8, 100, 10);
+        MarkerAkt   := InitMarker('AktSver',   8, 100, 10);
+
+        StartNewVisual(vtRotateVisual, vfTimer, ''#3'Формирование актов сверки...'#13#3, 1);
+
+        if ( (wFilter and 1) = 1 )
+          RunCycleFilterDog;
+        else
+          {
+            if ( (wFilter and 2) = 2 )
+              RunCycleFilterGrDog;
+            else
+              RunCycleAllDog;
+          }
+
+        StopVisual('', 0);
+
+        DoneMarker(MarkerDog,   'MDogovor');
+        DoneMarker(MarkerNazna, 'MKatNazna');
+        DoneMarker(MarkerKontr, 'KatOrg');
+        DoneMarker(MarkerAkt,   'AktSver');
+
+        if ( Message('Печатать сформированные акты сверки?', Confirmation+YesNo) = Yes )
+          {
+            Var cAkt        : comp;
+            Var MarkerCount : word;
+            Var i           : word;
+
+            GetVipRef(oAktSver, 'AktSver');
+
+            oAktSver.AktSverPrintFromMarker;
+          }
+      }
+
+    Abort;
+    Exit;
+  }
+
+end; // HandleEvent
+
+end. // Interface

@@ -1,0 +1,1014 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Планы НИОКР
+//******************************************************************************
+
+#doc
+Планы НИОКР
+#end
+Interface vipPlanNIOKR 'Планы НИОКР' EscClose, Cyan;
+  Show at (,, 80,)
+
+Function IsMarkered: boolean; forward;
+
+Create view
+
+Var
+//*************
+  IsPick
+, PickLevel
+    : word;
+//*************
+  CurGroup
+, pPlanNIOKR
+    : comp;
+//*************
+  Marker
+, Ind
+    : longint;
+//*************
+
+As select
+  if(IsMarkered, '√', '')
+    ( FieldName = Picked )
+
+From
+  PlanNIOKR(PlanNIOKR02)
+, PlanNIOKR      PlanNIOKR2
+, PlanNIOKRDescr
+, PlanNIOKRDescr PlanNIOKRDescr2
+, Dogovor
+
+Where
+((
+  CurGroup == PlanNIOKRDescr.cOwner
+))
+
+//------------------------------------------------------------------------------
+Bounds
+  OnTree =
+    PlanNIOKRDescr.cPlan == PlanNIOKR.nRec
+//------------------------------------------------------------------------------
+;
+
+Parameters
+  IsPick      // cgiPick, cgiMulti, cgiPickMult
+, PickLevel   // pnYear, pnPunkt, pnRazdel
+
+, pPlanNIOKR
+;
+
+//******************************************************************************
+
+#doc
+Окно редактирования плана НИОКР
+#end
+Window wPlanNIOKREditor 'Редактирование плана НИОКР' EscClose;
+  Show at (,, 80, 15)
+
+Screen scPlanDetail (,,sci1378Esc)
+  Show at (,,,5)
+  Table PlanNIOKR
+Fields
+  PlanNIOKR.OnYear: Protect;
+  PlanNIOKR.Razdel: Protect;
+  PlanNIOKR.Punkt(,,sci178Esc): NoProtect;
+<<
+
+ `Год плана   :` .@@@@@@
+ `Раздел плана:` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Пункт плана :` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end
+
+Text memoID = mbrPlanNIOKR PlanNIOKR.TextData 'Предмет плана': NoProtect;
+  Show at (, 6, 80,)
+
+HandleEvent
+
+cmDefault:
+  {
+    if IsNew
+      SetModified(TRUE);
+  }
+
+cmDone:
+  {
+    PackFields;
+    UpdateTable;
+  }
+
+end;
+
+end; // Window
+
+//******************************************************************************
+
+Tree trPlanNIOKR (,,sci1478EscTree)
+  Show at (,,,15)
+  Table PlanNIOKRDescr
+Fields { Font = { Color = if(Picked = '', 0, ColorMark); Bold = (Picked <> '') }};
+  PlanNIOKRDescr.Name #3'Год / Раздел / План': [80], Protect;
+  Picked              #3'√'                  :  [1], Skip;
+end;
+
+Browse brPlanNIOKR (,,sci1478Esc)
+  Show at (,,,15)
+  Table PlanNIOKR
+Fields { Font = { Color = if(Picked = '', 0, ColorMark); Bold = (Picked <> '') }};
+  PlanNIOKR.OnYear #3'Год плана'   :  [9], Protect;
+  PlanNIOKR.Razdel #3'Раздел плана': [35], Protect;
+  PlanNIOKR.Punkt  #3'Пункт плана' : [35], Protect;
+  Picked           #3'√'           :  [1], Skip;
+end;
+
+Text memoID = mtrPlanNIOKR PlanNIOKR.TextData 'Предмет плана': Protect;
+  Show at (,16,,)
+
+Function IsMarkered: boolean;
+{
+  IsMarkered := FALSE;
+
+  if ( (IsPick and cgiMulti) <> 0 )
+    if ( GetCurrentFormat = brPlanNIOKR )
+      {
+        if ( PickLevel = pnPunkt )
+          IsMarkered := SearchMarker(Marker, PlanNIOKR.nRec, Ind);
+      }
+    else
+      case PickLevel of
+        pnYear  : IsMarkered := SearchMarker(Marker, PlanNIOKRDescr.nRec , Ind);
+        pnRazdel: IsMarkered := SearchMarker(Marker, PlanNIOKRDescr.nRec , Ind);
+        pnPunkt : IsMarkered := SearchMarker(Marker, PlanNIOKRDescr.cPlan, Ind);
+      end;
+}
+
+//******************************************************************************
+Procedure Reposition;
+var pPlan: comp;
+{
+  pPlan := PlanNIOKR.nRec;
+
+  if ( GetFirst FastFirstRow PlanNIOKRDescr where (( pPlan == PlanNIOKRDescr.cPlan )) = tsOK )
+    {
+      CurGroup := PlanNIOKRDescr.cOwner;
+      TreeJumpToRecord(trPlanNIOKR, PlanNIOKRDescr.nRec);
+      RereadRecord(#PlanNIOKRDescr);
+    }
+}
+
+Procedure CheckIerarhy(Buf: type$PlanNIOKR);
+var
+  pOwner: comp;
+{
+  if ( GetFirst FastFirstRow PlanNIOKRDescr2
+          where (( comp(0)            == PlanNIOKRDescr2.cOwner AND
+                   string(Buf.OnYear) == PlanNIOKRDescr2.Name
+                )) <> tsOK )
+    {
+      ClearBuffer(#PlanNIOKRDescr2);
+
+      PlanNIOKRDescr2.VidPlan := pnYear;
+      PlanNIOKRDescr2.Name    := string(Buf.OnYear);
+
+      insert current PlanNIOKRDescr2;
+    }
+
+  pOwner := PlanNIOKRDescr2.nRec;
+
+  if ( GetFirst FastFirstRow PlanNIOKRDescr2
+          where (( pOwner     == PlanNIOKRDescr2.cOwner AND
+                   Buf.Razdel == PlanNIOKRDescr2.Name
+                )) <> tsOK )
+    {
+      ClearBuffer(#PlanNIOKRDescr2);
+
+      PlanNIOKRDescr2.VidPlan := pnRazdel;
+      PlanNIOKRDescr2.cOwner  := pOwner;
+      PlanNIOKRDescr2.Name    := Buf.Razdel;
+
+      insert current PlanNIOKRDescr2;
+    }
+
+  pOwner := PlanNIOKRDescr2.nRec;
+
+  if ( GetFirst FastFirstRow PlanNIOKRDescr2 where (( Buf.nRec == PlanNIOKRDescr2.cPlan )) = tsOK )
+    {
+      PlanNIOKRDescr2.VidPlan := pnPunkt;
+      PlanNIOKRDescr2.cOwner  := pOwner;
+      PlanNIOKRDescr2.Name    := Buf.Punkt;
+
+      update current PlanNIOKRDescr2;
+    }
+  else
+    {
+      ClearBuffer(#PlanNIOKRDescr2);
+
+      PlanNIOKRDescr2.VidPlan := pnPunkt;
+      PlanNIOKRDescr2.cOwner  := pOwner;
+      PlanNIOKRDescr2.cPlan   := Buf.nRec;
+      PlanNIOKRDescr2.Name    := Buf.Punkt;
+
+      insert current PlanNIOKRDescr2;
+    }
+}
+
+//******************************************************************************
+
+TableEvent table PlanNIOKRDescr
+
+//******************************************************************************
+
+cmTreeTop:
+  CurGroup := 0;
+
+//******************************************************************************
+
+cmTreeUp:
+  CurGroup := PlanNIOKRDescr.cOwner;
+
+//******************************************************************************
+
+cmTreeDown:
+  CurGroup := PlanNIOKRDescr.nRec;
+
+//******************************************************************************
+
+cmTreeNodeType:
+  if ( RecordExists PlanNIOKRDescr2 where (( PlanNIOKRDescr.nRec == PlanNIOKRDescr2.cOwner )) <> tsOK )
+    TreeSetNodeType(trPlanNIOKR, 2);
+
+//******************************************************************************
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(trPlanNIOKR, PlanNIOKRDescr.cOwner);
+
+//******************************************************************************
+
+cmDeleteRecord:
+  {
+    if ( RecordExists PlanNIOKRDescr2 where (( PlanNIOKRDescr.nRec == PlanNIOKRDescr2.cOwner )) = tsOK )
+      {
+        Message('Запись удалить нельзя - имеются подчиненные!', Warning);
+        Abort;
+        Exit;
+      }
+
+    if ( ( PlanNIOKRDescr.VidPlan = pnPunkt ) AND ( PlanNIOKRDescr.cPlan <> 0 ) )
+      if ( RecordExists Dogovor where (( PlanNIOKRDescr.cPlan == Dogovor.cPlanNIOKR )) = tsOK )
+        {
+          Message('Запись удалить нельзя - на нее имеются ссылки в договорах!', Warning);
+          Abort;
+          Exit;
+        }
+
+    if ( Message('Удалить запись?', YesNo + Confirmation) <> cmYes )
+      Abort
+    else
+      {
+        if ( PlanNIOKRDescr.VidPlan = pnPunkt )
+          delete PlanNIOKR2 where (( PlanNIOKRDescr.cPlan == PlanNIOKR2.nRec ));
+
+        delete current PlanNIOKRDescr;
+      }
+  }
+
+//******************************************************************************
+
+end;
+
+Function OneMark: boolean;
+{
+  OneMark := FALSE;
+
+  if ( Not IsValid(#PlanNIOKRDescr) )
+    Exit;
+
+  if ( PickLevel <> PlanNIOKRDescr.VidPlan )
+    {
+      case PickLevel of
+        pnYear  : Message('Разрешено выбирать только год плана НИОКР.', Warning)
+        pnRazdel: Message('Разрешено выбирать только разделы плана НИОКР.', Warning)
+        pnPunkt : Message('Разрешено выбирать только пункты плана НИОКР.', Warning)
+      end;
+    }
+  else
+    {
+      OneMark := TRUE;
+
+      if ( GetCurrentFormat = brPlanNIOKR )
+        {
+          if IsValid(#PlanNIOKR)
+            InvertMarker(Marker, PlanNIOKR.nRec);
+        }
+      else
+        case PickLevel of
+          pnYear  : if ( PlanNIOKRDescr.VidPlan = pnYear   ) InvertMarker(Marker, PlanNIOKRDescr.nRec);
+          pnRazdel: if ( PlanNIOKRDescr.VidPlan = pnRazdel ) InvertMarker(Marker, PlanNIOKRDescr.nRec);
+          pnPunkt : if ( PlanNIOKRDescr.VidPlan = pnPunkt  ) InvertMarker(Marker, PlanNIOKRDescr.cPlan);
+        end;
+    }
+}
+
+TableEvent table PlanNIOKR
+
+cmPick:
+  {
+    case CurField of
+    //**************
+      #PlanNIOKR.OnYear, #PlanNIOKR.Razdel:
+        {
+          var pRec, pOwner: comp;
+
+          if ( RunInterface('vipPlanNIOKR', cgiPick, pnRazdel, pRec) <> cmCancel )
+            {
+              delete PlanNIOKRDescr2 where (( PlanNIOKR.nRec == PlanNIOKRDescr2.cPlan ));
+
+              if ( GetFirst PlanNIOKRDescr2 where (( pRec == PlanNIOKRDescr2.nRec )) = tsOK )
+                {
+                  set PlanNIOKR.Razdel := PlanNIOKRDescr2.Name;
+
+                  pOwner := PlanNIOKRDescr2.cOwner;
+
+                  if ( GetFirst PlanNIOKRDescr2 where (( pOwner == PlanNIOKRDescr2.nRec )) = tsOK )
+                      set PlanNIOKR.OnYear := word(PlanNIOKRDescr2.Name);
+
+                  insert PlanNIOKRDescr set
+                    PlanNIOKRDescr.Name   := PlanNIOKR.Punkt
+                  , PlanNIOKRDescr.cPlan  := PlanNIOKR.nRec
+                  , PlanNIOKRDescr.cOwner := pRec;
+                }
+            }
+        }
+    //**************
+    end;
+  }
+
+cmInsertRecord:
+  {
+    insert current PlanNIOKR;
+    CheckIerarhy(PlanNIOKR.Buffer);
+    Reposition;
+  }
+
+cmUpdateRecord:
+  {
+    update current PlanNIOKR;
+    CheckIerarhy(PlanNIOKR.Buffer);
+    Reposition;
+  }
+
+cmDeleteRecord:
+  {
+    if ( RecordExists Dogovor where (( PlanNIOKR.nRec == Dogovor.cPlanNIOKR )) = tsOK )
+      {
+        Message('Запись удалить нельзя - на нее имеются ссылки в договорах!', Warning);
+        Abort;
+        Exit;
+      }
+
+    if ( Message('Удалить запись?', YesNo + Confirmation) <> cmYes )
+      Abort
+    else
+      {
+        delete PlanNIOKRDescr2 where (( PlanNIOKR.nRec == PlanNIOKRDescr2.cPlan ));
+
+        delete current PlanNIOKR;
+      }
+  }
+
+cmSetDefault:
+  PutCommand(cmEdit);
+
+end; // TableEvent
+
+Function GetNewPlanYear(var wYear: word): boolean;
+var wNewYear: word;
+{
+  GetNewPlanYear := FALSE;
+
+  wNewYear := wYear;
+
+  if ( RunDialog('GetNewYear', wNewYear) = cmCancel )
+    Exit;
+
+  if ( RecordExists PlanNIOKRDescr2
+             where (( pnYear           == PlanNIOKRDescr2.VidPlan AND
+                      string(wNewYear) == PlanNIOKRDescr2.Name )) = tsOK )
+    Message('Такой год плана уже есть.', Information)
+  else
+    {
+      wYear := wNewYear;
+
+      GetNewPlanYear := TRUE;
+    }
+}
+
+Function GetNewRazdel(wYear: word; var sRazdel: s80): boolean;
+var sNewRazdel: s80;
+{
+  GetNewRazdel := FALSE;
+
+  sNewRazdel := sRazdel;
+
+  if ( RunDialog('GetNewRazdelName', wYear, sNewRazdel) = cmCancel )
+    Exit;
+
+  if ( RecordExists PlanNIOKR2 where (( wYear      == PlanNIOKR2.OnYear AND
+                                        sNewRazdel == PlanNIOKR2.Razdel )) = tsOK )
+    Message('Такой раздел года плана уже есть.', Information)
+  else
+    {
+      sRazdel := sNewRazdel;
+
+      GetNewRazdel := TRUE;
+    }
+}
+
+Function GetNewPunkt(wYear: word; sRazdel: s80; var sPunkt: s80): boolean;
+var sNewPunkt: s80;
+{
+  GetNewPunkt := FALSE;
+
+  sNewPunkt := sPunkt;
+
+  if ( RunDialog('GetNewPunktName', wYear, sRazdel, sNewPunkt) = cmCancel )
+    Exit;
+
+  if ( RecordExists PlanNIOKR2 where (( wYear     == PlanNIOKR2.OnYear AND
+                                        sRazdel   == PlanNIOKR2.Razdel AND
+                                        sNewPunkt == PlanNIOKR2.Punkt )) = tsOK )
+    Message('Такой пункт в разделе года плана уже есть.', Information)
+  else
+    {
+      sPunkt := sNewPunkt;
+
+      GetNewPunkt := TRUE;
+    }
+}
+
+HandleEvent
+
+cmInit:
+  {
+    PushBounds(tbOnTree);
+
+    if ( (IsPick and cgiMulti) = 0 )
+      SetFieldVisible(#Picked, FALSE)
+    else
+      {
+        Marker := InitMarker('PlanNIOKRPick', 8, 100, 10);
+
+        if ( (IsPick and cgiNotClear) = 0 )
+          ClearMarker(Marker);
+
+        SetHelpAndStatusContext(trPlanNIOKR, -1, sci1478EscTreeI, 0);
+        SetHelpAndStatusContext(brPlanNIOKR, -1, sci1478EscIns  , 0);
+      }
+
+    if ( GetFirst FastFirstRow PlanNIOKRDescr
+            where (( pPlanNIOKR == PlanNIOKRDescr.cPlan )) = tsOK )
+      {
+        CurGroup := PlanNIOKRDescr.cOwner;
+        TreeJumpToRecord(trPlanNIOKR, PlanNIOKRDescr.nRec);
+      }
+    else
+      CurGroup := 0;
+  }
+
+cmDone:
+  if (Marker <> 0)
+    DoneMarker(Marker, '');
+
+cmMarkUnMark:
+  {
+    OneMark;
+
+    RescanPanel(if(GetCurrentFormat = brPlanNIOKR, #PlanNIOKR, #PlanNIOKRDescr));
+  }
+
+cmSelectAll:
+  {
+    if ( GetCurrentFormat = brPlanNIOKR )
+      {
+        if ( PickLevel <> pnPunkt )
+          {
+            Message('Помечать пункты нельзя', Warning);
+            Exit;
+          }
+
+        ClearMarker(Marker);
+
+        PushPos(#PlanNIOKR);
+
+        _LOOP PlanNIOKR
+          InsertMarker(Marker, PlanNIOKR.nRec);
+
+        PopPos(#PlanNIOKR);
+
+        RescanPanel(#PlanNIOKR);
+      }
+    else
+      {
+        ClearMarker(Marker);
+
+        _LOOP PlanNIOKRDescr2
+          case PickLevel of
+            pnYear  : if ( PlanNIOKRDescr2.VidPlan = pnYear   ) InsertMarker(Marker, PlanNIOKRDescr2.nRec);
+            pnRazdel: if ( PlanNIOKRDescr2.VidPlan = pnRazdel ) InsertMarker(Marker, PlanNIOKRDescr2.nRec);
+            pnPunkt : if ( PlanNIOKRDescr2.VidPlan = pnPunkt  ) InsertMarker(Marker, PlanNIOKRDescr2.cPlan);
+          end;
+
+        RescanPanel(#PlanNIOKRDescr);
+      }
+  }
+
+cmUnSelectAll:
+  {
+    ClearMarker(Marker);
+    RescanPanel(if(GetCurrentFormat = brPlanNIOKR, #PlanNIOKR, #PlanNIOKRDescr));
+  }
+
+cmAccording:
+  {
+    if ( PickLevel <> pnPunkt )
+      Exit;
+
+    if ( GetCurrentFormat <> brPlanNIOKR )
+      {
+        PopBounds(tbOnTree);
+
+        if ( GetFirst FastFirstRow PlanNIOKR
+                where (( PlanNIOKRDescr.cPlan == PlanNIOKR.nRec )) = tsOK )
+          {}
+
+        SetFormat(brPlanNIOKR);
+        RereadRecord(#PlanNIOKR);
+      }
+    else
+      {
+        if ( GetFirst FastFirstRow PlanNIOKRDescr
+                where (( PlanNIOKR.nRec == PlanNIOKRDescr.cPlan )) = tsOK )
+          {
+            var pGroup: comp;
+            pGroup   := PlanNIOKRDescr.nRec;
+            CurGroup := PlanNIOKRDescr.cOwner;
+            TreeJumpToRecord(trPlanNIOKR, pGroup);
+          }
+
+        PushBounds(tbOnTree);
+        SetFormat(trPlanNIOKR);
+        RereadRecord(#PlanNIOKRDescr);
+      }
+  }
+
+cmEdit:
+  if ( IsValid(#PlanNIOKR) OR ( CurTable = #PlanNIOKR ) )
+    RunWindow(wPlanNIOKREditor)
+  else
+    if IsValid(#PlanNIOKRDescr)
+      case PlanNIOKRDescr.VidPlan of
+      //****************************
+        pnYear:
+          {
+            var wOldYear, wNewYear: word;
+
+            wOldYear := word(PlanNIOKRDescr.Name);
+            wNewYear := wOldYear;
+
+            if GetNewPlanYear(wNewYear)
+              {
+                update current PlanNIOKRDescr;
+
+                  update PlanNIOKR2 where (( wOldYear == PlanNIOKR2.OnYear ))
+                    set PlanNIOKR2.OnYear := wNewYear;
+              }
+          }
+      //****************************
+        pnRazdel:
+          {
+            if ( GetFirst FastFirstRow PlanNIOKRDescr2 where (( PlanNIOKRDescr.cOwner == PlanNIOKRDescr2.nRec )) = tsOK )
+              if GetNewRazdel(word(PlanNIOKRDescr2.Name), PlanNIOKRDescr.Name)
+                {
+                  update current PlanNIOKRDescr;
+
+                  update PlanNIOKR set PlanNIOKR.Razdel := PlanNIOKRDescr.Name;
+                }
+          }
+      //****************************
+      end;
+
+cmSwitchFormat:
+  case Target of
+  //************
+    mtrPlanNIOKR:
+      {
+        if ( Not IsValid(#PlanNIOKRDescr) )
+          Abort
+        else
+          if ( PlanNIOKRDescr.VidPlan <> pnPunkt )
+            Abort;
+      }
+  //************
+  end;
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuCheckPlans'));
+
+cmValue1:
+  {
+    StartNewVisual(vtIndicatorVisual, vfTimer, 'Проверка пунктов плана ...'#13#3, RecordsInTable(#PlanNIOKR2));
+
+    _LOOP PlanNIOKR2
+      {
+        NextVisual;
+        CheckIerarhy(PlanNIOKR2.Buffer);
+      }
+
+    StopVisual('', 0);
+
+    StartNewVisual(vtNumericVisual, vfTimer, 'Проверка разделов плана ...'#13#3, 1);
+
+    _LOOP PlanNIOKRDescr2 where (( pnRazdel == PlanNIOKRDescr2.VidPlan ))
+      {
+        NextVisual;
+        if ( RecordExists PlanNIOKRDescr where (( PlanNIOKRDescr2.cOwner == PlanNIOKRDescr.nRec )) <> tsOK )
+          delete PlanNIOKRDescr where (( PlanNIOKRDescr2.nRec == PlanNIOKRDescr.nRec ));
+      }
+
+    StopVisual('', 0);
+
+    TreeGetFirst(trPlanNIOKR);
+    RereadRecord(#PlanNIOKRDescr);
+    RereadRecord(#PlanNIOKR);
+
+    Message('Проверка каталога окончена', Information);
+  }
+
+cmValue3:
+  {
+    if Not IsValid(#PlanNIOKRDescr)
+      Exit;
+
+    case PlanNIOKRDescr.VidPlan of
+    //****************************
+      pnYear:
+        {
+          var sRazdel: s80;
+
+          sRazdel := '';
+
+          if ( GetLast PlanNIOKRDescr2 where (( PlanNIOKRDescr.nRec == PlanNIOKRDescr2.cOwner )) = tsOK )
+            if ( NextNumStr(PlanNIOKRDescr2.Name) <> PlanNIOKRDescr2.Name )
+              sRazdel := NextNumStr(PlanNIOKRDescr2.Name);
+
+          if Not GetNewRazdel(word(PlanNIOKRDescr.Name), sRazdel)
+            Exit
+          else
+            {
+              PlanNIOKRDescr.VidPlan := pnRazdel;
+              PlanNIOKRDescr.cOwner  := PlanNIOKRDescr.nRec;
+              PlanNIOKRDescr.Name    := sRazdel;
+              PlanNIOKRDescr.nRec    := 0;
+
+              insert current PlanNIOKRDescr;
+            }
+        }
+    //****************************
+      pnRazdel:
+        {
+          var sRazdel, sPunkt: s80;
+
+          sPunkt := '';
+
+          if ( GetLast PlanNIOKRDescr2 where (( PlanNIOKRDescr.nRec == PlanNIOKRDescr2.cOwner )) = tsOK )
+            if ( NextNumStr(PlanNIOKRDescr2.Name) <> PlanNIOKRDescr2.Name )
+              sPunkt := NextNumStr(PlanNIOKRDescr2.Name);
+
+          sRazdel := PlanNIOKRDescr.Name;
+
+          var wYear: word;
+
+          if ( GetFirst FastFirstRow PlanNIOKRDescr2 where (( PlanNIOKRDescr.cOwner == PlanNIOKRDescr2.nRec )) = tsOK )
+            wYear := word(PlanNIOKRDescr2.Name);
+
+          if Not GetNewPunkt(wYear, sRazdel, sPunkt)
+            Exit
+          else
+            {
+              var pNewPlan: comp;
+              pNewPlan := GetNextNRec(#PlanNIOKR, 0);
+
+              ClearBuffer(#PlanNIOKR);
+
+              PlanNIOKR.nRec   := pNewPlan;
+              PlanNIOKR.OnYear := wYear;
+              PlanNIOKR.Razdel := sRazdel;
+              PlanNIOKR.Punkt  := sPunkt;
+
+              insert current PlanNIOKR;
+
+              PlanNIOKRDescr.VidPlan := pnPunkt;
+              PlanNIOKRDescr.cOwner  := PlanNIOKRDescr.nRec;
+              PlanNIOKRDescr.Name    := sPunkt;
+              PlanNIOKRDescr.cPlan   := pNewPlan;
+              PlanNIOKRDescr.nRec    := 0;
+
+              insert current PlanNIOKRDescr;
+            }
+        }
+    else
+      Exit;
+    end;
+
+    var pGroup: comp;
+
+    pGroup   := PlanNIOKRDescr.nRec;
+    CurGroup := PlanNIOKRDescr.cOwner;
+
+    TreeJumpToRecord(trPlanNIOKR, pGroup);
+
+    RereadRecord(#PlanNIOKRDescr);
+  }
+
+cmAddNewRec:
+  if Not IsValid(#PlanNIOKRDescr)
+    PutCommand(cmValue2)
+  else
+    case PlanNIOKRDescr.VidPlan of
+    //****************************
+      pnYear:
+        PutHotCommand(RunMenu('mnuNewPlanRazdel'));
+    //****************************
+      pnRazdel:
+        PutHotCommand(RunMenu('mnuNewPlanPunkt'));
+    //****************************
+    else
+      PutCommand(cmValue2);
+    end;
+
+cmValue2:
+  {
+    var wYear  : word;
+    var sRazdel: s80;
+
+    wYear   := 0;
+    sRazdel := '';
+
+    if Not IsValid(#PlanNIOKRDescr)
+      {
+        wYear := Year(Cur_Date);
+
+        if GetNewPlanYear(wYear)
+          {
+            ClearBuffer(#PlanNIOKRDescr);
+
+            PlanNIOKRDescr.VidPlan := pnYear;
+            PlanNIOKRDescr.Name    := string(wYear);
+
+            insert current PlanNIOKRDescr;
+
+            RereadRecord(#PlanNIOKRDescr);
+          }
+      }
+    else
+      case PlanNIOKRDescr.VidPlan of
+      //****************************
+        pnYear:
+          {
+            PushPos(#PlanNIOKRDescr);
+
+            if ( GetLast PlanNIOKRDescr = tsOK )
+              wYear := word(NextNumStr(PlanNIOKRDescr.Name));
+
+            PopPos(#PlanNIOKRDescr);
+
+            if GetNewPlanYear(wYear)
+              {
+                ClearBuffer(#PlanNIOKRDescr);
+
+                PlanNIOKRDescr.VidPlan := pnYear;
+                PlanNIOKRDescr.Name    := string(wYear);
+
+                insert current PlanNIOKRDescr;
+
+                RereadRecord(#PlanNIOKRDescr);
+              }
+          }
+      //****************************
+        pnRazdel:
+          {
+            if ( GetFirst FastFirstRow PlanNIOKRDescr2 where (( PlanNIOKRDescr.cOwner == PlanNIOKRDescr2.nRec )) = tsOK )
+              {
+                PushPos(#PlanNIOKRDescr);
+
+                sRazdel := '';
+
+                if ( GetLast PlanNIOKRDescr = tsOK )
+                  if ( NextNumStr(PlanNIOKRDescr.Name) <> PlanNIOKRDescr.Name )
+                    sRazdel := NextNumStr(PlanNIOKRDescr.Name);
+
+                PopPos(#PlanNIOKRDescr);
+
+                if GetNewRazdel(word(PlanNIOKRDescr2.Name), sRazdel)
+                  {
+                    ClearBuffer(#PlanNIOKRDescr);
+
+                    PlanNIOKRDescr.VidPlan := pnRazdel;
+                    PlanNIOKRDescr.Name    := sRazdel;
+
+                    insert current PlanNIOKRDescr;
+
+                    RereadRecord(#PlanNIOKRDescr);
+                  }
+              }
+          }
+      //****************************
+        pnPunkt:
+          {
+            var sPunkt: s80;
+
+            PushPos(#PlanNIOKRDescr);
+
+            sPunkt := '';
+
+            if ( GetLast PlanNIOKRDescr = tsOK )
+              if ( NextNumStr(PlanNIOKRDescr.Name) <> PlanNIOKRDescr.Name )
+                sPunkt := NextNumStr(PlanNIOKRDescr.Name);
+
+            if ( GetFirst FastFirstRow PlanNIOKRDescr2 where (( PlanNIOKRDescr.cOwner == PlanNIOKRDescr2.nRec )) = tsOK )
+              {
+                sRazdel := PlanNIOKRDescr2.Name;
+
+                if ( GetFirst FastFirstRow PlanNIOKRDescr where (( PlanNIOKRDescr2.cOwner == PlanNIOKRDescr.nRec )) = tsOK )
+                  wYear := word(PlanNIOKRDescr.Name);
+              }
+
+            PopPos(#PlanNIOKRDescr);
+
+            if GetNewPunkt(wYear, sRazdel, sPunkt)
+              {
+                var pNewPlan: comp;
+                pNewPlan := GetNextNRec(#PlanNIOKR, 0);
+
+                ClearBuffer(#PlanNIOKR);
+
+                PlanNIOKR.nRec   := pNewPlan;
+                PlanNIOKR.OnYear := wYear;
+                PlanNIOKR.Razdel := sRazdel;
+                PlanNIOKR.Punkt  := sPunkt;
+
+                insert current PlanNIOKR;
+
+                ClearBuffer(#PlanNIOKRDescr);
+
+                insert current PlanNIOKRDescr set
+                  PlanNIOKRDescr.Name    := sPunkt
+                , PlanNIOKRDescr.VidPlan := pnPunkt
+                , PlanNIOKRDescr.cPlan   := pNewPlan;
+
+                RereadRecord(#PlanNIOKRDescr);
+              }
+          }
+      end;
+  }
+
+cmDefault:
+  if ( (IsPick and cgiPick) <> 0 )
+    if ( (IsPick and cgiMulti) = 0 )
+      {
+        if ( GetCurrentFormat = brPlanNIOKR )
+          {
+            if ( IsValid(#PlanNIOKR) AND ( PickLevel = pnPunkt ) )
+              {
+                pPlanNIOKR := PlanNIOKR.nRec;
+                CloseInterface(cmDefault);
+              }
+          }
+        else
+          if IsValid(#PlanNIOKRDescr)
+            {
+              if ( PickLevel <> PlanNIOKRDescr.VidPlan )
+                {
+                  case PickLevel of
+                    pnYear  : Message('Разрешено выбирать только год плана НИОКР.', Warning)
+                    pnRazdel: Message('Разрешено выбирать только разделы плана НИОКР.', Warning)
+                    pnPunkt : Message('Разрешено выбирать только пункты плана НИОКР.', Warning)
+                  end;
+
+                  Exit;
+                }
+
+              pPlanNIOKR := if(PickLevel = pnPunkt, PlanNIOKRDescr.cPlan, PlanNIOKRDescr.nRec);
+              CloseInterface(cmDefault);
+            }
+      }
+    else
+      {
+        var cCount : longint;
+        var bOk : boolean;
+
+        bOk := true;
+        cCount := GetMarkerCount(Marker);
+
+        if (cCount = 0)
+          bOk := OneMark;
+
+        if (bOk)
+          {
+            DoneMarker(Marker, 'PlanNIOKRPick');
+            CloseInterface(cmDefault);
+          }
+      }
+end;
+
+end.
+
+#doc
+Проверка корректности каталога. Используется в интерфейсе <link Interface L_Dogovor::vipPlanNIOKR>L_Dogovor::vipPlanNIOKR - Планы НИОКР</link>
+#end
+mnuCheckPlans Menu
+{
+- 'Проверка корректности каталога', cmValue1, , , '', , sci1Esc;
+}
+
+#doc
+Создание нового года плана. Используется в интерфейсе <link Interface L_Dogovor::vipPlanNIOKR>L_Dogovor::vipPlanNIOKR - Планы НИОКР</link>
+#end
+mnuNewPlanYear Menu
+{
+- 'Создать новый год плана', cmValue2, , , '', , sci1Esc;
+}
+
+#doc
+Создание нового раздела плана. Используется в интерфейсе <link Interface L_Dogovor::vipPlanNIOKR>L_Dogovor::vipPlanNIOKR - Планы НИОКР</link>
+#end
+mnuNewPlanRazdel Menu
+{
+- 'Создать новый год плана', cmValue2, , , '', , sci1Esc;
+- 'Создать новый раздел плана', cmValue3, , , '', , sci1Esc;
+}
+
+#doc
+Создание нового пункта плана. Используется в интерфейсе <link Interface L_Dogovor::vipPlanNIOKR>L_Dogovor::vipPlanNIOKR - Планы НИОКР</link>
+#end
+mnuNewPlanPunkt Menu
+{
+- 'Создать новый раздел плана', cmValue2, , , '', , sci1Esc;
+- 'Создать новый пункт плана', cmValue3, , , '', , sci1Esc;
+}
+
+#doc
+Создание нового пункта плана. Используется в интерфейсе <link Interface L_Dogovor::vipPlanNIOKR>L_Dogovor::vipPlanNIOKR - Планы НИОКР</link>
+#end
+mnuNewPlanPunktF7 Menu
+{
+- 'Создать новый пункт плана', cmValue2, , , '', , sci1Esc;
+}
+
+GetNewPunktName DIALOG
+  StatusCtx scGalDial;
+Fields
+  wYear   : word, Skip;
+  sRazdel : string[80], Skip;
+  sNewName: string[80];
+Buttons
+  cmOk, Default, , 'Подтверждение ввода';
+<<'Ввод наименования раздела'
+
+ Год плана           .@@@@@@
+ Наименование раздела.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Наименование пункта .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+                          <.~П~родолжить.>
+>>
+
+GetNewRazdelName DIALOG
+  StatusCtx scGalDial;
+Fields
+  wNewYear: word, Skip;
+  sNewName: string[80];
+Buttons
+  cmOk, Default, , 'Подтверждение ввода';
+<<'Ввод наименования раздела'
+
+ Год плана           .@@@@@@
+ Наименование раздела.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+                          <.~П~родолжить.>
+>>
+
+GetNewYear DIALOG
+  StatusCtx scGalDial;
+Fields
+  wNewYear: word;
+Buttons
+  cmOk, Default, , 'Подтверждение ввода';
+<<'Ввод года плана'
+
+    Год плана
+     .@@@@@@
+
+ <.Продолжить.>
+>>

@@ -1,0 +1,826 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Процедуры для документов-оснований
+//******************************************************************************
+
+#include DOfuns.var
+#include DEIfuns.var
+
+//******************************************************************************
+// Для ручного (!!! и только) редактирования полей количеств
+//******************************************************************************
+
+#if ('#_CurInt' <> 'MtrFormDO') AND ('#_CurInt' <> 'dssch')
+Procedure Pick_KolDopEd(wTipKol : word;
+                        sTitle  : string;
+                        var fKol: double;
+                        TrueMake: longint;
+                        _wVidDoc: word );
+{
+  if not(UseDEI)
+    exit;
+
+  if (SpStep.PrMC <> 1)
+    exit;
+
+  var _wTiDk: word;
+
+  _wTiDK := oDOfuns.GetTipHozOnVidDoc(_wVidDoc);
+
+  RunInterface('KolDopEd',
+                word(coSpStep), // coTable,  код таблицы спецификации
+                SpStep.NRec,   // cRec,     ссылка на спецификацию
+                wTipKol,       // wTipKol,  тип количества
+                sTitle,        // sTitle,   заголовок интерфейса по шаблону: "Ввод количества ..."
+                SpStep.cMCUSL, // cMCUsl,   NRec МЦ/услуги
+                SpStep.PrMC,   // PrMC,     1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+                SpStep.Price,  // Price,    цена за 1-у отпускную единицу
+                if (SpStep.cVal = 0, forPrice, forVPrice), // forPrice, кол-во знаков после запятой в цене
+                if (SpStep.cVal = 0, forSumma, forVSumma), // forSumma, кол-во знаков после запятой в стоимости
+                SpStep.cVal,   // cVal,     валюта переданной цены
+                SpStep.cOtpEd, // cOtpEd,   ссылка на отпускную единицу измерения
+                fKol,          // fKol      количество в отпускных единицах (возвращаемый параметр)
+                TrueMake,
+                _wTiDk
+              );
+
+  case wTipKol of
+    1: oldKolSklDEI := fKol;
+    2: oldKolDEI    := fKol;
+    3: oldKolOplDEI := fKol;
+  end;
+}
+
+//******************************************************************************
+
+Procedure proc18; // расчет налогов по выбранной группе
+{
+  if not UpdateTable
+    Exit;
+
+  var TipGrNal: word;
+
+  case SpStep.PrMC of
+  //-----------------
+    1:
+      TipGrNal := 1;
+  //-----------------
+    2..6
+  , 8:
+      TipGrNal := 2;
+  //-----------------
+    else
+      TipGrNal := 0;
+  //-----------------
+  end; // case
+
+  var cNewGrNal: comp; cNewGrNal := 0;
+
+  if (RunInterface('GetGrNal', cNewGrNal, TipGrNal) <> cmCancel)
+    {
+      delete spdocnal
+         where (( SpStep.NRec                 == SpDocNal.cSpDoc AND
+                  word(BaseDoc.VidDoc +1000)  == SpDocNal.TipDoc ));
+
+      set SpStep.ManualTax := 0;
+      set SpStep.cGrNal := cNewGrNal;
+      update current spstep;
+      ChangePos(cNewGrNal);
+      update current spstep;
+      ModifDo;
+    }
+}
+
+//******************************************************************************
+
+var PickedNum: longint;
+
+//******************************************************************************
+
+Procedure KillPick2;
+{
+  ResetBounds(#Pick2);
+
+  delete Pick2 where ((word(15) == Pick2.wList));
+
+  SetBounds(#Pick2);
+
+  PickedNum := 0;
+}
+
+//----------------------------------------------------------------------------
+
+Procedure Pick2Ins;
+{
+  if (IsValid(#Pick2))
+    delete current Pick2
+  else
+    {
+      inc(PickedNum);
+      Pick2.wList := 15;
+      Pick2.PickNum := PickedNum;
+      Pick2.pickkol := 0;
+      Pick2.cRec := BaseDoc.NRec;
+      insert current Pick2;
+    }
+
+  #ifdef ATL51
+  RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+  #else
+  if (GetNext BaseDoc = tsOk)
+    CallToNeighbours(cmPosDown, #BaseDoc);
+
+  RescanPanel(#BaseDoc);
+  #end
+}
+
+//----------------------------------------------------------------------------
+
+Function SomePicked: boolean;
+{
+  ResetBounds(#Pick2);
+
+  SomePicked := (RecordExists Pick2 where ((word(15) == Pick2.wList)) = tsOk);
+
+  SetBounds(#Pick2);
+}
+
+//----------------------------------------------------------------------------
+
+Procedure Pick2Plus;
+{
+  PushPos(#BaseDoc);
+  KillPick2;
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+             'Помечаю документы-основания...'#13#3, 1);
+
+  _LOOP BaseDoc
+    if (not NextVisual)
+      Break;
+    else
+      {
+        inc(PickedNum);
+        Pick2.wList := 15;
+        Pick2.PickNum := PickedNum;
+        Pick2.cRec := BaseDoc.NRec;
+        Pick2.PickKol := 0;
+        insert current Pick2;
+      }
+
+  PopPos(#BaseDoc);
+
+  RereadRecord;
+  StopVisual('', 0);
+}
+
+//----------------------------------------------------------------------------
+
+Procedure Pick2Minus;
+{
+  KillPick2;
+  RereadRecord;
+}
+
+//******************************************************************************
+
+Procedure ViewSprTov;
+var SumM , SumV: double;
+var OutFlag: boolean;
+{
+  if (not (IsValid(#SpStep)))
+    Exit;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Формирование справки по документу', 1);
+
+  PushPos(#SpStep);
+  SumV := 0;
+  SumM := 0;
+  OutFlag := FALSE;
+  SprDo.SetGroup('Справка по ДО');
+  SprDo.SkipFormat(3);
+
+  _LOOP SpStep
+    if (SpStep.PrMC = 1)
+      {
+        SprDo.Write(KatMC.Name);
+        OutFlag := (not SprDo.Error) AND (NextVisual);
+        if (not OutFlag)
+          Break;
+
+        SprDo.Write(KatMc.BarKod);
+        SprDo.Write(KatOtpEd.Name);
+        SprDo.Write(SpStep.Kol);
+        SprDo.Write(SpStep.Kol * KatOtpEd.koef * KatMc.Massa);
+        SprDo.Write(SpStep.Kol * KatOtpEd.koef * KatMc.Volume);
+        SumM := SumM + SpStep.Kol * KatOtpEd.koef * KatMc.Massa;
+        SumV := SumV + SpStep.Kol * KatOtpEd.koef * KatMc.Volume;
+      }
+
+  StopVisual('', vfSilent);
+
+  if (OutFlag)
+    {
+      SprDo.PutEvent(feBreak);
+      SprDo.Write(SumM);
+      SprDo.Write(SumV);
+      SprDo.ShowFile('Справка по документу '+ BaseDoc.Nodoc);
+    }
+  else
+    SprDo.AbortForm;
+
+  PopPos(#SpStep);
+}
+
+//------------------------------------------------------------------------------
+
+#ifdef  __manservi__
+  Procedure ViewSprTovFR;
+  var OutFlag: boolean;
+  {
+    if (not (IsValid(#SpStep)))
+      Exit;
+
+    StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm, 'Формирование справки по документу', 1);
+
+    PushPos(#SpStep);
+    OutFlag := FALSE;
+
+    _LOOP SpStep
+      if (SpStep.PrMC = 1)
+        {
+          ClearBuffer(#FRtbl_SchFunc);
+          FRtbl_SchFunc.KatMC_Name     := KatMC.Name;
+          FRtbl_SchFunc.KatMc_BarKod   := KatMc.BarKod;
+          FRtbl_SchFunc.KatOtpEd_Name  := KatOtpEd.Name;
+          FRtbl_SchFunc.SpStep_Kol     := SpStep.Kol;
+          FRtbl_SchFunc.Kolkoef_Massa  := SpStep.Kol * KatOtpEd.koef * KatMc.Massa;
+          FRtbl_SchFunc.Kolkoef_Volume := SpStep.Kol * KatOtpEd.koef * KatMc.Volume;
+          Insert current FRtbl_SchFunc;
+
+          OutFlag := (NextVisual);
+          if (not OutFlag)
+            Break;
+        }
+
+    StopVisual('', vfSilent);
+
+    if (OutFlag)
+      RunFReport(FRNalSchFc_SchFun, '', false);
+
+    ResetBounds(#FRtbl_SchFunc);
+    Delete All FRtbl_SchFunc;
+    SetBounds(#FRtbl_SchFunc);
+
+
+    PopPos(#SpStep);
+  }
+#endif
+
+//------------------------------------------------------------------------------
+
+Procedure UpdateObjAcctKol(NewKol: double);
+Var
+  cObj, cSpObj : comp;
+{
+  cObj   := 0;
+  cSpObj := 0;
+
+  if ( GetFirst ObjAcct where ((  toBaseDoc    == ObjAcct.TypeObj
+                              and BaseDoc.nRec == ObjAcct.cObject
+                              )) = tsOk )
+    { //входящие по отношению к заявке
+      cObj := ObjAcct.nRec;
+
+      if ( GetFirst SpObjAcc where ((  toSpStep    == SpObjAcc.TypePos
+                                   and SpStep.nRec == SpObjAcc.cPos
+                                   and word(0)     == SpObjAcc.TypeHier (noindex)
+                                   and cObj        == SpObjAcc.cObjAcct (noindex)
+                                   )) = tsOk )
+        update current SpObjAcc set SpObjAcc.KolcPos := NewKol;
+    }
+  else //исходящие по отношению к заявке
+    if ( GetFirst ObjAcct where ((  toBaseDoc    == ObjAcct.TypeOwn
+                                and BaseDoc.nRec == ObjAcct.cOwner
+                                )) = tsOk )
+      {
+        cObj := ObjAcct.nRec;
+
+        if ( GetFirst SpObjAcc where ((  toSpStep    == SpObjAcc.TypeObj
+                                     and SpStep.nRec == SpObjAcc.cObject
+                                     and word(1)     == SpObjAcc.TypeHier (noindex)
+                                     and cObj        == SpObjAcc.cObjAcct (noindex)
+                                     )) = tsOk )
+          cSpObj := SpObjAcc.cPos;
+
+          if ( GetFirst SpObjAcc where ((  toSpZClient == SpObjAcc.TypePos
+                                       and cSpObj      == SpObjAcc.cPos
+                                       and word(0)     == SpObjAcc.TypeHier (noindex)
+                                       and cObj        == SpObjAcc.cObjAcct (noindex)
+                                       )) = tsOk )
+            update current SpObjAcc set SpObjAcc.KolcPos := NewKol;
+      }
+}
+
+//-----коррекция убыли---------------------------------------------------
+
+Procedure CheckKol;
+{
+  if (SpStep.PrMC <> 1) //для услуг
+    {
+      SpStep.KolSkl := SpStep.Kol;
+      SpStep.ProcUb := 0;
+    }
+  else
+    {
+      if (SpStep.Kol = 0)
+        set SpStep.Kol := SpStep.KolSkl*(1-SpStep.ProcUb/100)
+      else
+        if (SpStep.KolSkl <> 0)
+          set SpStep.ProcUb := 100*(1-SpStep.Kol/SpStep.KolSkl);
+
+      if (SpStep.Kol > SpStep.KolSkl)
+         if (BaseDoc.Direct = 1)// для документов сбыта
+           {
+             case wGetTune('Doc.Sell.ChkKolOpl') of
+               // запрещать превышение кол-ва оплаченного над фактическим
+               0: {
+                 Message('Запрещен ввод количества к оплате превышающего количество к списанию.'#10#13 +
+                         'См. настройку:'#10#13 +
+                         GetTuneName ('Doc.Sell.ChkKolOpl'));
+                 SpStep.ProcUb := 0;
+                 set SpStep.Kol := SpStep.KolSkl;
+               }
+               // разрешать превышение кол-ва оплаченного над фактическим
+               1: {
+               }
+               // разрешать с предупреждением
+               2: {
+                 Message('Количество к оплате превышает количество к списанию.'#10#13 +
+                         'Устанавливается процент убыли: ' + string(SpStep.ProcUb));
+               }
+             end;
+           }
+         else
+           {
+             SpStep.ProcUb := 0;
+             set SpStep.Kol := SpStep.KolSkl;
+           }
+    }
+
+  if (UpdateTable)
+    { }
+
+  if (OldKolSklDEI<>SpStep.KolSkl )
+   {
+     if UseDEI
+       oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, OldKolSklDEI, SpStep.KolSkl, longint(0), BaseDoc.VidDoc);
+
+     OldKolSklDEI := SpStep.KolSkl;
+   }
+
+  if (OldKolDEI<>SpStep.Kol)
+   {
+     if UseDEI
+       oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, OldKolDEI, SpStep.Kol, longint(0), BaseDoc.VidDoc);
+
+     OldKolDEI := SpStep.Kol;
+   }
+
+  if ( wGetTune('Oper.ModifyMTOZayvkaKol') = 1 )
+    UpdateObjAcctKol(SpStep.Kol);
+}
+
+//******************************************************************************
+
+#ifdef __ExSumEnter__
+
+Procedure CheckSumma;
+{
+  if (wGetTune('Doc.DO.IzmCenaKol') = 0)
+    {
+      Message('Установлен запрет на изменение стоимости в документах-основаниях'#13#13+GetTuneName('Doc.DO.IzmCenaKol'));
+      Exit;
+    }
+
+  var getSum: double;  getSum := SummaTov;
+
+  if ((RunDialog('GetSumTov', getSum) = cmCancel) OR (abs(getSum) < 0.000001))
+    Exit;
+
+  case wGetTune('Doc.DO.IzmCenaKol') of
+  //-----------------------------------
+    1:
+      if (SpStep.Price <> 0)
+        {
+          set SpStep.KolSkl := getSum / SpStep.Price;
+
+          fEdIzm.CheckKolDiskret(SpStep.KolSkl, KatOtpEd.NRec, TRUE, TRUE);
+
+          set SpStep.Kol := SpStep.KolSkl;
+        }
+  //-----------------------------------
+    2:
+      if (SpStep.KolSkl <> 0)
+          set SpStep.Price := oDOfuns.DoRoundP(BaseDoc.cVal, tipDo, getSum / SpStep.KolSkl);
+  //-----------------------------------
+  end;
+
+  UpdateTable;
+}
+#end
+
+
+//******************************************************************************
+
+Procedure CheckProcUb;
+{
+  if (SpStep.PrMC <> 1) //для услуг
+    set SpStep.ProcUb := 0
+  else
+    {
+      if (SpStep.ProcUb >= 100)
+        {
+          SpStep.ProcUb := 0;
+          set SpStep.Kol := SpStep.KolSkl;
+        }
+      else
+        set SpStep.Kol := SpStep.KolSkl*(1-SpStep.ProcUb/100);
+    }
+
+  if ( UseDEI AND ( OldKolDEI <> SpStep.Kol ) )
+    {
+      UpdateTable;
+
+      oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, OldKolDEI, SpStep.Kol, longint(0), BaseDoc.VidDoc);
+      OldKolDEI := SpStep.Kol;
+    }
+}
+
+//******************************************************************************
+
+Procedure CheckKolSkl;
+{
+  if (SpStep.PrMC <> 1) //для услуг
+    {
+      SpStep.Kol := SpStep.KolSkl;
+      SpStep.ProcUb := 0;
+    }
+  else
+    {
+      if (SpStep.KolSkl = 0)
+        {
+          set SpStep.ProcUb := 0;
+          SpStep.Kol := 0;
+        }
+      else
+        set SpStep.Kol := SpStep.KolSkl*(1-SpStep.ProcUb/100);
+    }
+
+  UpdateTable;
+
+  if ( UseDEI AND ( ( OldKolSklDEI <> SpStep.KolSkl ) OR ( OldKolDEI <> SpStep.Kol ) ) )
+    {
+      if ( OldKolSklDEI <> SpStep.KolSkl )
+        {
+          oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, OldKolSklDEI, SpStep.KolSkl, longint(0), BaseDoc.VidDoc);
+          OldKolSklDEI := SpStep.KolSkl;
+        }
+
+      if ( OldKolDEI <> SpStep.Kol )
+        {
+          oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, OldKolDEI, SpStep.Kol, longint(0), BaseDoc.VidDoc);
+          OldKolDEI := SpStep.Kol;
+        }
+    }
+
+  if ( wGetTune('Oper.ModifyMTOZayvkaKol') = 1 )
+    UpdateObjAcctKol(SpStep.KolSkl);
+}
+
+//******************************************************************************
+
+Procedure MyPrintDoc;
+{
+  var pg_flag, vidreport: word;
+  var boPrint: boolean;
+  pg_flag := 0;
+
+  if not(UpdateTable)
+    exit;
+
+  if (not readMyDsk(vidReport,'vidReport_vschet', true))
+    vidReport := 0;
+
+  PushPos(#BaseDoc);
+  PushPos(#SpStep);
+  boPrint := TRUE;
+
+  if (GetFirst Pick2 where ((word(15) == Pick2.wList)) <> tsOk)
+    if (GetFirst SpStep <> tsOk)
+      if not (((BaseDoc.VidDoc = 211) OR (BaseDoc.VidDoc = 111)) AND (BaseDoc.SpecYes = 0))
+        {
+          boPrint := FALSE;
+          Message('В документе нет спецификации!', Warning+CancelButton);
+        }
+
+  if (boPrint)
+    {
+      if (GetFirst Pick2
+            where ((word(15) == Pick2.wList)) <> tsOk)
+        {
+          Pick2.wList := 15;
+          Pick2.PickNum := 100;
+          Pick2.pickkol := 0;
+          Pick2.cRec := BaseDoc.NRec;
+          insert current Pick2;
+        }
+      else
+        if (GetNext Pick2       // только одна запись
+              where ((word(15) == Pick2.wList)) <> tsOk)
+          pg_flag := 0;
+        else                   // больше одной записи
+        {
+          if (vidReport = 0) // не выводить диалог, если вызван FR-отчет
+            if ( RunDialog('PrintBaseDocParams', pg_flag) = cmCancel )
+            {
+              PopPos(#SpStep);
+              PopPos(#BaseDoc);
+              Exit;
+            }
+        }
+
+      if ( boGetTune('Doc.GrupSTN') AND fNal AND ( coGetTune('Nalog.cNalogAkcis') = 0 ) AND
+         ( BaseDoc.VidDoc = 201 OR BaseDoc.VidDoc = 1420 ) )
+        if (VidReport = 0)
+          RunInterface('ndspri', pg_flag);
+        else
+        {
+          var pdocs : PrnDocs noAuto;
+          pdocs := new (PrnDocs);
+          pdocs.PrDoc(pg_flag);
+        }
+
+      else
+      {
+        var pdocs : PrnDocs noAuto;
+        pdocs := new (PrnDocs);
+        pdocs.PrDoc(pg_flag);
+      }
+    }
+
+  PopPos(#SpStep);
+  PopPos(#BaseDoc);
+}
+
+//******************************************************************************
+//******************************************************************************
+
+var
+  SklKol,  SklRes,  SklSvb,
+  FirmKol, FirmRes, FirmSvb: double;
+
+//******************************************************************************
+
+#doc
+Окно просмотра информации о наличии МЦ
+#end
+Window  wSpravTov 'Информация по наличию' (, hcKouDocBNalRes, ) escClose, Cyan;
+  Show at (, 15, 76, 24);
+
+//******************************************************************************
+
+Panel p1;
+  Table SpStep;
+
+Screen sSpTovSkl;
+
+Fields
+  trim(KatMC.BarKod)  : skip, left, {font = {bold = TRUE}};
+  trim(KatMC.Name)    : skip, {font = {bold = TRUE}};
+  trim(KatOtpEd.Name): skip, {font = {bold = TRUE}};
+  if (KatOtpEd.Koef = 1, 'совпадает с учетной единицей измерения', 'коэффициент к учетной единице = '+StringNLZR(KatOtpEd.Koef, 0, 5))
+                : skip, {font = {italic = TRUE; color = if (KatOtpEd.Koef = 1, 0, ColorError)}};
+  'ВСЕГО': skip, right;
+  'На складе: ': skip, right;
+  trim(katpodr.Name): skip, {font = {bold = TRUE}};
+  FirmKol: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, right, {font = {bold = TRUE}};
+  SklKol  : [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, right, {font = {bold = TRUE}};
+  FirmRes: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, right, {font = {bold = TRUE}};
+  SklRes  : [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, right, {font = {bold = TRUE}};
+  FirmSvb: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, right, {font = {bold = TRUE}};
+  SklSvb  : [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, right, {font = {bold = TRUE}};
+
+<<
+
+ `Номенк.номер`.@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Наименование`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Отп.единица `.@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+            .@@@@@@@@@@.@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Наличие: `.@@@@@@@@@@.@@@@@@@@@@
+ `Резерв:  `.@@@@@@@@@@.@@@@@@@@@@
+ `Свободно:`.@@@@@@@@@@.@@@@@@@@@@
+>>
+end;
+
+//******************************************************************************
+
+Screen sSpTov;
+
+Fields
+  trim(KatMC.BarKod)  : skip, left, {font = {bold = TRUE}};
+  trim(KatMC.Name)    : skip, {font = {bold = TRUE}};
+  trim(KatOtpEd.Name): skip, {font = {bold = TRUE}};
+  if (KatOtpEd.Koef = 1, 'совпадает с учетной единицей измерения', 'коэффициент к учетной: '+StringNLZR(KatOtpEd.Koef, 0, 5))
+                : skip, {font = {italic = TRUE}};
+  FirmKol: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, {font = {bold = TRUE}};
+  FirmRes: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, {font = {bold = TRUE}};
+  FirmSvb: [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], skip, {font = {bold = TRUE}};
+
+<<
+
+ `Номенк.номер`.@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Наименование`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ `Отп.единица `.@@@@@@@@@@@   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+ `Наличие ` .@@@@@@@@@@@@@
+ `Резерв  ` .@@@@@@@@@@@@@
+ `Свободно` .@@@@@@@@@@@@@
+>>
+end;
+end;
+end;
+
+//******************************************************************************
+#include TekOstMC.vpp // текущий остаток в оперконтуре
+//******************************************************************************
+
+Procedure SpravTov;
+{
+  if not IsValid(#SpStep)
+    {
+      Message('Заполните спецификацию!', Warning + CancelButton);
+      Exit;
+    }
+
+  if ( (SpStep.PrMC <>1) OR (SpStep.cMCUsl = 0) )
+    {
+      Message('Необходимо выбрать МЦ!', Warning + CancelButton);
+      Exit;
+    }
+
+  if (GetFirst TekMC <> tsOk)
+    { }
+
+  if (GetFirst SklOst <> tsOk)
+    { }
+
+  FirmKol := TekOstMC(TekMC.cMC)/*tekmc.KolAkt*/   / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+  FirmRes := TekMC.Reserve  / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+  FirmSvb := FirmKol - FirmRes;
+
+  if (BaseDoc.cParty = 0)
+    SetFormat(sSpTov)
+  else
+    {
+      if (GetFirst KatPodr where ((BaseDoc.cParty == KatPodr.NRec)) <> tsOk)
+        { }
+
+      SklKol := SklOst.Kol / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+      SklRes := SklOst.Res / fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+      SklSvb := SklKol - SklRes;
+      SetFormat(sSpTovSkl);
+    }
+
+  RunWindowModal(wSpravTov);
+}
+
+//******************************************************************************
+
+Procedure DelPosSpDocNal;
+{
+  if (Delete NoVisual SpDocNal
+           where ((SpStep.NRec == SpDocNal.cSpDoc AND
+                   1000+BaseDoc.VidDoc == SpDocNal.TipDoc)) <> tsOk)
+    { }
+}
+
+#end // #if
+
+//******************************************************************************
+
+Function CheckAndSetCurrency: boolean;
+{
+  CheckAndSetCurrency := FALSE;
+
+  if ( BaseDoc.TipMoney <> 1 )
+    if ( coGetTune('BaseCurrency') = 0 )
+      {
+        if ( RunInterface('GetValOt', BaseDoc.cVal) = cmCancel )
+          Exit;
+      }
+    else
+      BaseDoc.cVal := coGetTune('BaseCurrency');
+
+  CheckAndSetCurrency := TRUE;
+}
+
+//******************************************************************************
+
+Procedure SetBankDef;
+{
+  if ( GetFirst fastfirstrow PickBank where (( BaseDoc.cOrg == PickBank.cOrg )) ordered by index KatBank05 = tsOk )
+    set BaseDoc.cBank := PickBank.NRec
+  else
+    set BaseDoc.cBank := 0;
+}
+
+//******************************************************************************
+
+Procedure DelLastNumDOnBaseDoc;
+{
+  if (boGetTune('FN.isNumStatDoc') AND (BaseDoc.VidDoc = 201 OR BaseDoc.VidDoc = 211 OR BaseDoc.VidDoc = 1420) AND IsValid(tnStatDoc))
+    case BaseDoc.VidDoc of
+      201  : DelLastNumD_(101 , 'Категория (' + StatDoc.StatCode + ')', BaseDoc.Nodoc);
+      211  : DelLastNumD_(111 , 'Категория (' + StatDoc.StatCode + ')', BaseDoc.Nodoc);
+      1420 : DelLastNumD_(1410, 'Категория (' + StatDoc.StatCode + ')', BaseDoc.Nodoc)
+    end;
+  else
+    if (boGetTune('FN.isNumOtvPodr') AND ((BaseDoc.VidDoc = 101) OR (BaseDoc.VidDoc = 201) OR (BaseDoc.VidDoc = 211)))
+      {
+        case BaseDoc.VidDoc of
+          101: DelLastNumD_(100                 , string(BaseDoc.cOtvPodr), BaseDoc.Nodoc)
+          201
+        , 211: DelLastNumD_(BaseDoc.VidDoc - 100, string(BaseDoc.cOtvPodr), BaseDoc.Nodoc)
+        end;
+      }
+    else
+      if (wGetTune('FN.AvtoNum') <> 1)  // нумерация по спец. таблице
+        case BaseDoc.VidDoc of
+        //-----------
+          101: DelLastNumD(100, BaseDoc.NoDoc);
+          201: DelLastNumD(101, BaseDoc.NoDoc);
+          202: DelLastNumD(102, BaseDoc.NoDoc);
+          211: DelLastNumD(111, BaseDoc.NoDoc);
+          501: DelLastNumD(103, BaseDoc.NoDoc);
+          502: DelLastNumD(105, BaseDoc.NoDoc);
+          510: DelLastNumD(104, BaseDoc.NoDoc);
+          520: DelLastNumD(215, BaseDoc.NoDoc);
+          550: DelLastNumD(550, BaseDoc.NoDoc);
+          1420: DelLastNumD(1410, BaseDoc.NoDoc);
+        //-----------
+        end;//case
+}
+
+//******************************************************************************
+
+Function RunPostStatusChangeAlg(pc1 : comp; IsBefore: boolean) : boolean;
+Var
+  calg    : comp;
+  wResult : word;
+{
+  RunPostStatusChangeAlg := FALSE;
+
+  calg := coGetTune(if(IsBefore, 'Doc.DO.StatusBeforeChangedAlg', 'Doc.DO.StatusChangedAlg'));
+
+  if ( calg <> 0 )
+    {
+      StartNewVisual(vtRotateVisual, vfScreenBottom, '', 0);
+
+      wResult := RunInterface('SimpleWayToRunAlgorithm', calg
+                                                       , word(1201)
+                                                       , BaseDoc.nRec
+                                                       , pc1);
+
+      StopVisual('', 0);
+
+      if ( (wResult = cmNo) or (wResult = cmDefault) )
+        {
+          Message(''#3+'По результатам выполнения алгоритма'+''#13+
+                  ''#3+'изменение статуса запрещено',Information);
+          exit;
+        }
+
+      if (wResult = cmCancel)
+        if Message(''#3+'В процессе выполнения алгоритма произошли ошибки!'+''#13+
+                   ''#3+'Изменить статус?',YesNo) <> cmYes
+          exit;
+    }
+
+  RunPostStatusChangeAlg := TRUE;
+}
+
+//******************************************************************************
+
+#ifndef  __Zrem__
+Procedure ToMenuAdd(TuneName: string; TuneCommand: word; aMenu: longint);
+{
+  var AlgName: string;  AlgName := sGetTune(TuneName)
+
+  if( AlgName <> '' )
+    AddMenuItemEx(aMenu, AlgName, AlgName, 'Zakaz_UserLM', TuneCommand, 0);
+
+}
+#endif
+//******************************************************************************

@@ -1,0 +1,458 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Контур логистики
+// Функции для отчета "Реестр сопроводительных документов"
+//******************************************************************************
+
+Function GetSimbolValut(cVal : comp) : string;
+{
+  GetSimbolValut := if (cVal = comp(0), sSimbValNDE, oValFunc.GetValSimv(cVal));
+};
+
+//******************************************************************************
+
+Procedure NumOrderWrite;
+Var strOrd: string;
+{
+  strOrd := '';
+
+  if ( String(KatSopr.dOpr) <> '0' )
+    {
+      cNakl := KatSopr.NRec;
+      RereadRecord(#SklOrder);
+
+      if ( GetFirst SklOrder = tsOk)
+        _LOOP SklOrder       
+          strOrd := strOrd + Trim(SklOrder.nOrder) + '; ';
+    }
+
+  frmSoprReestr.Write(strOrd);
+}
+ 
+//******************************************************************************
+
+Procedure Reestr;
+Var
+//---------------------------------------------
+  n
+, pusto   
+               : word;
+//---------------------------------------------
+  sm
+, tmpsum
+               : double;
+//---------------------------------------------
+  cValItogSum
+               : comp;
+//---------------------------------------------
+  dCursReCalc
+, tmpDate
+               : Date;
+//---------------------------------------------
+{
+  n := 0;
+  if ( (Filtr AND 4) = 4 )
+    AddBounds(tbbyKontr);
+
+  if( SoprInRep = 1 )
+    AddBounds(tbbyKatSoprOpr);
+  else
+    AddBounds(tbbyKatSoprAll);
+
+  frmSoprReestr.Write(DateToStr(BegDate, 'DD/MM/YYYY'));
+  frmSoprReestr.Write(DateToStr(EndDate, 'DD/MM/YYYY'));
+
+  if ( (Filtr AND 1) = 1 )
+    frmSoprReestr.Write(KatPodr.Name);
+  else
+    frmSoprReestr.Write('все');
+
+  if ( (Filtr AND 2) = 2 )
+    frmSoprReestr.Write(KatMol.Name);
+  else
+    frmSoprReestr.Write('все');
+
+  if ( (Filtr AND 4) = 4 )
+    frmSoprReestr.Write(KatOrg1.Name);
+  else
+    frmSoprReestr.Write('все');
+
+  case wItogSum of
+  //---------------------------------------------
+    0:
+      {
+        cValItogSum := comp(0)
+        frmSoprReestr.Write('в НДЕ');
+      }
+  //---------------------------------------------
+    1:
+      {
+        cValItogSum := coGetTune('BaseCurrency');
+        frmSoprReestr.Write(' в базовой валюте');
+      }
+  //---------------------------------------------
+    2:
+      {
+        cValItogSum := coGetTune('Rep.cVal');
+        frmSoprReestr.Write(' в валюте отчетов');
+      }
+  //---------------------------------------------
+  end;
+
+  frmSoprReestr.Write(GetSimbolValut(cValItogSum));
+
+  case wDateCurs of
+  //---------------------------------------------
+    0:
+      {
+        dCursReCalc := Date(0, 0, 0)
+        frmSoprReestr.Write('дата документа');
+      }
+   //---------------------------------------------
+   1:
+      {
+        if (LongInt(EndDate) = 0) dCursReCalc := Cur_Date
+        else dCursReCalc := EndDate;
+        frmSoprReestr.Write(DateToStr(dCursReCalc, 'DD/MM/YYYY'));
+      }
+  //---------------------------------------------
+    2:
+      {
+        dCursReCalc := Cur_Date
+        frmSoprReestr.Write(DateToStr(dCursReCalc, 'DD/MM/YYYY'));
+      }
+  //---------------------------------------------
+  end;
+
+  //приходные документы
+  if ( (Filtr AND 2) = 2 )
+    AddBounds(tbbyMolTo);
+
+  if ( (Filtr AND 1) = 1 )
+    AddBounds(tbbyPodrTo); //подразделение куда
+
+  PushCondition ( tcbyKatSoprPrih );
+  sm    := 0;
+  pusto := 1;
+
+  if ( GetFirst KatSopr = tsOk)
+    _LOOP KatSopr
+      if ( SearchMarker ( MarkerTree, comp(KatSopr.VidSopr), IndexNoTree ))
+        {
+          n := n+1;
+          frmSoprReestr.Write(n);
+          frmSoprReestr.Write(DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmSoprReestr.Write(KatSopr.Nsopr);
+          frmSoprReestr.Write(KatSopr.Descr);
+          frmSoprReestr.Write(KatOrg.Name);
+          frmSoprReestr.Write(KatSopr.Summa);
+          frmSoprReestr.Write(GetSimbolValut(KatSopr.cVal));
+          frmSoprReestr.Write(KatSopr.Name);
+          NumOrderWrite;
+
+          if (KatSopr.cVal = cValItogSum)
+            sm := sm+KatSopr.Summa
+          else
+           {
+             tmpDate := dCursReCalc;             
+             tmpSum  := if (KatSopr.cVal = comp(0), KatSopr.Summa, KatSopr.SumVal);
+
+             if (longint(dCursReCalc) = 0)              
+               tmpDate := if (longint(KatSopr.dOpr) = 0, KatSopr.dSopr, KatSopr.dOpr);
+              
+             sm := sm + oValFunc.GetAnyCurrency(KatSopr.cVal, tmpSum, tmpDate, cValItogSum);
+           }
+
+          pusto := 0;
+        }
+
+  if ( pusto = 1 )
+    {
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+    }
+
+  frmSoprReestr.PutEvent(feBreak);
+  frmSoprReestr.Write(sm);
+  PopCondition ( tcbyKatSoprPrih );
+
+  if ( (Filtr AND 2) = 2 )
+    SubBounds(tbbyMolTo);
+
+  if ( (Filtr AND 1) = 1 )
+    SubBounds(tbbyPodrTo); //подразделение куда
+
+  //внутренние документы
+  if ( (Filtr AND 2) = 2 )
+    AddBounds(tbbyMolTo);
+
+  if ( (Filtr AND 1) = 1 )
+    AddBounds(tbbyPodrTo); //подразделение куда
+
+  PushCondition ( tcbyKatSoprVnut );
+  pusto := 1;
+
+  if ( GetFirst KatSopr = tsOk)
+    _LOOP KatSopr
+      if ( SearchMarker ( MarkerTree, comp(KatSopr.VidSopr), IndexNoTree ))
+        {
+          n := n+1;
+          frmSoprReestr.Write(n);
+          frmSoprReestr.Write(DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmSoprReestr.Write(KatSopr.Nsopr);
+          frmSoprReestr.Write(KatSopr.Descr);
+          frmSoprReestr.Write(KatPodrFrom.Name);
+          frmSoprReestr.Write(KatPodrTo.Name);
+          NumOrderWrite;
+          pusto := 0;
+        }  
+
+  if ( (Filtr AND 2) = 2 )
+    SubBounds(tbbyMolTo);
+
+  if ( (Filtr AND 1) = 1 )
+    SubBounds(tbbyPodrTo);    //подразделение куда
+
+  if ( ((Filtr AND 2) = 2) OR ((Filtr AND 1) = 1) )  //если ограничения по подр. или МОЛ то анализируем дважды (куда и откуда)
+    {
+      if ( (Filtr AND 2) = 2 )
+        AddBounds(tbbyMolFrom);
+
+      if ( (Filtr AND 1) = 1 )
+        AddBounds(tbbyPodrFrom); //подразделение откуда
+
+      if ( GetFirst KatSopr = tsOk)
+        _LOOP KatSopr
+          if ( SearchMarker ( MarkerTree, comp(KatSopr.VidSopr), IndexNoTree ))
+            {
+              n := n+1;
+              frmSoprReestr.Write(n);
+              frmSoprReestr.Write(DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+              frmSoprReestr.Write(KatSopr.Nsopr);
+              frmSoprReestr.Write(KatSopr.Descr);
+              frmSoprReestr.Write(KatPodrFrom.Name);
+              frmSoprReestr.Write(KatPodrTo.Name);
+              NumOrderWrite;
+              pusto := 0;
+            }
+
+      if ( (Filtr AND 2) = 2 )
+        SubBounds(tbbyMolFrom);
+
+      if ( (Filtr AND 1) = 1 )
+        SubBounds(tbbyPodrFrom); //подразделение куда
+    }
+
+  if ( pusto = 1 )
+    {
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+    }
+
+  frmSoprReestr.PutEvent(feBreak);
+  PopCondition ( tcbyKatSoprVnut );
+
+  //расходные
+  if ( (Filtr AND 2) = 2 )
+    AddBounds(tbbyMolFrom);
+
+  if ( (Filtr AND 1) = 1 )
+    AddBounds(tbbyPodrFrom); //подразделение откуда
+
+  PushCondition ( tcbyKatSoprRash );
+  sm := 0;
+  pusto := 1;
+
+  if ( GetFirst KatSopr = tsOk)
+    _LOOP KatSopr
+      if ( SearchMarker ( MarkerTree, comp(KatSopr.VidSopr), IndexNoTree ))
+        {
+          n := n+1;
+          frmSoprReestr.Write(n);
+          frmSoprReestr.Write(DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmSoprReestr.Write(KatSopr.Nsopr);
+          frmSoprReestr.Write(KatSopr.Descr);
+          frmSoprReestr.Write(KatOrg.Name);
+          frmSoprReestr.Write(KatSopr.Summa);
+          frmSoprReestr.Write(GetSimbolValut(KatSopr.cVal));
+          frmSoprReestr.Write(KatSopr.Name);
+          NumOrderWrite;
+
+          if (KatSopr.cVal = cValItogSum)
+            sm := sm+KatSopr.Summa
+          else
+            {
+              tmpDate := dCursReCalc;              
+              tmpSum  := if (KatSopr.cVal = comp(0), KatSopr.Summa, KatSopr.SumVal);
+
+              if (longint(dCursReCalc) = 0)
+                tmpDate := if (longint(KatSopr.dOpr) = 0, KatSopr.dSopr, KatSopr.dOpr);
+
+              sm := sm + oValFunc.GetAnyCurrency(KatSopr.cVal, tmpSum, tmpDate, cValItogSum);
+            }
+
+          pusto := 0;
+        }
+
+  if ( pusto = 1 )
+    {
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+    }
+
+  frmSoprReestr.PutEvent(feBreak);
+  frmSoprReestr.Write(sm);
+  PopCondition ( tcbyKatSoprRash );
+
+  if ( (Filtr AND 2) = 2 )
+    SubBounds(tbbyMolFrom);
+
+  if ( (Filtr AND 1) = 1 )
+    SubBounds(tbbyPodrFrom); //подразделение откуда
+
+  //рекламационные
+  if ( (Filtr AND 2) = 2 )
+    AddBounds(tbbyMolFrom);
+
+  if ( (Filtr AND 1) = 1 )
+    AddBounds(tbbyPodrFrom); //подразделение откуда
+
+  PushCondition ( tcbyKatSoprRekl );
+  sm := 0;
+  pusto := 1;
+
+  if ( GetFirst KatSopr = tsOk)
+    _LOOP KatSopr
+      if ( SearchMarker ( MarkerTree, comp(KatSopr.VidSopr), IndexNoTree ))
+        {
+          n := n+1;
+          frmSoprReestr.Write(n);
+          frmSoprReestr.Write(DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+          frmSoprReestr.Write(KatSopr.Nsopr);
+          frmSoprReestr.Write(KatSopr.Descr);
+          frmSoprReestr.Write(KatOrg.Name);
+          frmSoprReestr.Write(KatSopr.Summa);
+          frmSoprReestr.Write(GetSimbolValut(KatSopr.cVal));
+          NumOrderWrite;
+
+          if (KatSopr.cVal = cValItogSum)
+            sm := sm+KatSopr.Summa
+          else
+           {
+             tmpDate := dCursReCalc;
+
+             if KatSopr.cVal = comp(0)
+               tmpSum  := KatSopr.Summa
+             else
+               tmpSum  := KatSopr.SumVal;
+
+             if (longint(dCursReCalc) = 0)
+               tmpDate := if (longint(KatSopr.dOpr) = 0, KatSopr.dSopr, KatSopr.dOpr);
+
+             sm := sm + oValFunc.GetAnyCurrency(KatSopr.cVal, tmpSum, tmpDate, cValItogSum);
+           };
+
+          pusto := 0;
+        }
+
+  if ( (Filtr AND 2) = 2 )
+    SubBounds(tbbyMolFrom);
+
+  if ( (Filtr AND 1) = 1 )
+    SubBounds(tbbyPodrFrom); //подразделение откуда
+
+  if ( ((Filtr AND 2) = 2) OR ((Filtr AND 1) = 1) )  //если ограничения по подр. или МОЛ то анализируем дважды (куда и откуда)
+    {
+      if ( (Filtr AND 2) = 2 )
+        AddBounds(tbbyMolTo);
+
+      if ( (Filtr AND 1) = 1 )
+        AddBounds(tbbyPodrTo); //подразделение куда
+
+      if ( GetFirst KatSopr = tsOk)
+        _LOOP KatSopr
+          if ( SearchMarker ( MarkerTree, comp(KatSopr.VidSopr), IndexNoTree ))
+            {
+              n := n+1;
+              frmSoprReestr.Write(n);
+              frmSoprReestr.Write(DateToStr(KatSopr.dSopr, 'DD/MM/YYYY'));
+              frmSoprReestr.Write(KatSopr.Nsopr);
+              frmSoprReestr.Write(KatSopr.Descr);
+              frmSoprReestr.Write(KatOrg.Name);
+              frmSoprReestr.Write(KatSopr.Summa);
+              frmSoprReestr.Write(GetSimbolValut(KatSopr.cVal));
+              NumOrderWrite;
+
+              if (KatSopr.cVal = cValItogSum)
+                sm := sm+KatSopr.Summa
+              else
+               {
+                 tmpDate := dCursReCalc;                 
+                 tmpSum  := if (KatSopr.cVal = comp(0), KatSopr.Summa, KatSopr.SumVal);
+
+                 if (longint(dCursReCalc) = 0)
+                   tmpDate := if (longint(KatSopr.dOpr) = 0, KatSopr.dSopr, KatSopr.dOpr);
+
+                 sm := sm + oValFunc.GetAnyCurrency(KatSopr.cVal, tmpSum, tmpDate, cValItogSum);
+               };
+
+              pusto := 0;
+            }
+
+      if ( (Filtr AND 2) = 2 )
+        SubBounds(tbbyMolTo);
+
+      if ( (Filtr AND 1) = 1 )
+        SubBounds(tbbyPodrTo); //подразделение куда
+    }
+
+  if ( pusto = 1 )
+    {
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+      frmSoprReestr.Write(' ');
+    }
+
+  frmSoprReestr.PutEvent(feBreak);
+  frmSoprReestr.Write(sm);
+  PopCondition ( tcbyKatSoprRekl );
+
+  if ( (Filtr AND 4) = 4 )
+    SubBounds(tbbyKontr);
+
+  if( SoprInRep = 1 )
+    SubBounds(tbbyKatSoprOpr);
+  else
+    SubBounds(tbbyKatSoprAll);
+
+  frmSoprReestr.Write(n);
+
+  if ( NOT frmSoprReestr.Error )
+    frmSoprReestr.ShowFile('Реестр сопроводительных документов')
+  else
+    frmSoprReestr.AbortForm;
+}

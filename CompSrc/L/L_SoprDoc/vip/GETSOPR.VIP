@@ -1,0 +1,254 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Выборы накладных для складских ордеров                    ║
+!║ Примечание    : здесь 2 интерфейса (накладные на отпуск и оприходование)  ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+!------------ Выбор накладной для расходного ордера --------------------
+
+#include EditDoc.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор накладных для складских ордеров
+
+Параметры:
+  pNRec   - ссылка на сопр.документ (возвращаемый)
+  w1      - тип сопроводительного документа
+  pSklad  - ссылка на склад
+#end
+
+//******************************************************************************
+
+Interface GetSoprFrom 'Выбор накладной на отпуск МЦ' DoAccept, EscClose, Cyan;
+  Show at (,,,16);
+Create view
+Var
+  pNRec, pSklad : comp;
+  w1, w2 : word;
+  iEditDoc : EditDoc;
+  SelectFlag: boolean;
+As select
+  KatSopr.*
+From KatSopr
+Where
+((
+  date(0,0,0) == KatSopr.dOpr      and //дата оприходования
+  pSklad      == KatSopr.cPodrFrom and
+  w1         <<= KatSopr.VidSopr   and
+  w2         >>= KatSopr.VidSopr   and
+
+  KatSopr.nRec      == SklOrder.cSopr and
+  KatSopr.cNote     == KatNotes.NRec and
+  KatSopr.cOrgBase  == KatOrg.NRec and
+  KatSopr.cPodrFrom == KatPodr.NRec and
+  KatSopr.VidSopr   == KatDoc.TiDkGal
+  //KatSopr.cValut == KlVal.NRec
+))
+condition
+  No_SN_KatSopr = (adSoprDocSN <> KatSopr.wADoc)
+;
+
+Parameters
+  pNRec,
+  w1,
+  pSklad;
+
+Browse brKatSopr ('Выберите накладную и нажмите ВВОД',hcIGetSopr,sci14EnEsc);
+table KatSopr;
+Fields
+  {font = {bold = isValid(#SklOrder) and not (KatSopr.Status = 0 and SelectFlag) }}; // KatSopr.Status <> 0 исполняемый
+  KatSopr.Descr #3'Дескр.'            : [5], protect,NoAutoSize;
+  KatSopr.nSopr #3'Номер','накладной' : [8], protect,NoAutoSize;
+  KatSopr.dSopr #3'Дата','создания'   : [10,'DD/MM/YYYY'], protect,Centered,NoAutoSize;
+  KatNotes.Name #3'Статус'            : [8], protect;
+  KatSopr.dOpr  #3'Дата','списания'   : [10,'DD/MM/YYYY'], protect,Centered,NoAutoSize;
+  KatOrg.Name   #3'Контрагент'        : [10], protect;
+  KatPodr.Name  #3'Подразделение'     : [14], protect;
+  KatSopr.Summa #3'Сумма'             : [12],[brForSopr_Price], protect;
+  if (isValid(#SklOrder),'+','')'О'   : [1], protect,NoAutoSize,Centered;
+  KatDoc.name   #3'Тип'               : [12], protect;
+end;
+
+HandleEvent
+cmInit :
+  {
+    SelectFlag := (wGetTune('Manuf.MakeOrderExecStat') = 1); // TRUE когда настройка "ДА"
+    Case W1 of
+     1 :  {W1 := 201; W2 := 203}  //204 - Акты на списание не показывать
+     2 :  {W1 := 501; W2 := 501}
+     3 :  {W1 := 600; W2 := 600}
+    end;
+    PushCondition(tcNo_SN_KatSopr);
+    if GetFirst KatSopr where ((pNRec == KatSopr.NRec)) <> tsOk
+      if (GetLast KatSopr <> tsOk)
+        {
+          message(''#3'Нет накладных на отпуск МЦ с данного подразделения',Information);
+          pNRec := 0;
+          Abort;
+        }
+    ReReadRecord(#KatSopr);
+    RescanPanel(#KatSopr);
+  }
+
+cmDefault :
+  {
+    if (KatSopr.Status = 0 and SelectFlag) {
+      Message('Установлена настройка Формирование ордеров по накладным/актам только в статусе "Исполняемый"');
+      Exit;
+    }
+    if isValid(#SklOrder)
+      message(''#3'Внимание! По данной накладной уже было списание МЦ', Information);
+
+    pNRec := KatSopr.NRec;
+  }
+cmEdit:
+  {
+    iEditDoc.RunEditHozDoc(coKatSopr,KatSopr.VidSopr,KatSopr.VidSopr,KatSopr.nRec);
+    ReReadRecord(#KatSopr);
+  }
+end;
+End.
+
+
+!=====================================================================
+!
+!                Выбор накладной для приходного ордера
+!
+!=====================================================================
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор накладных для складских ордеров
+
+Параметры:
+  pNRec   - ссылка на сопр.документ (возвращаемый)
+  pSklad  - ссылка на склад
+  pMol    - ссылка на МОЛ
+#end
+
+//******************************************************************************
+
+Interface GetSoprTo 'Выбор накладной на приход МЦ' EscClose,Cyan;
+  Show at (,,,21);
+Create view
+Var
+  pNRec, pSklad, pMol : comp;
+  iEditDoc : EditDoc;
+  SelectFlag: boolean;
+As Select
+  KatSopr.*, SoprOrdB.*
+From
+  SoprOrdB(SoprOrdB05), synonym SoprOrdB SoprOrdB2,
+  KatSopr(KatSopr02)
+where
+((
+  101 <<= KatSopr.VidSopr and
+  101 >>= KatSopr.VidSopr and
+
+  KatSopr.nRec     == SklOrder.cSopr and
+  KatSopr.cNote    == KatNotes.NRec  and
+  KatSopr.cOrgBase == KatOrg.NRec and
+  KatSopr.cValut   == KlVal.NRec and
+  KatSopr.VidSopr  == KatDoc.TiDkGal and
+
+  KatSopr.nRec == SoprOrdB.cSoprDoc and
+
+  KatSopr.nRec == SoprOrdB2.cSoprDoc and
+  pSklad       == SoprOrdB2.cPodr    and
+  pMol         == SoprOrdB2.cMol     and
+
+  SoprOrdB.cMC   == KatMC.nRec   and
+  SoprOrdB.cPodr == KatPodr.nRec and
+  SoprOrdB.cMOL  == KatMOL.nRec
+
+))
+ condition No_SN_KatSopr = (adSoprDocSN <> KatSopr.wADoc)
+;
+
+Parameters
+  pNRec,
+  pSklad,
+  pMol;
+
+
+Browse brKatSopr ('Выберите накладную и нажмите ВВОД',hcIGetSopr,sci14EnEsc);
+  show at (,,,15)
+Table KatSopr
+Fields
+  {font = {bold = (isValid(#SoprOrdB2) or not isValid(#SoprOrdB)) and not (KatSopr.Status = 0 and SelectFlag) }}; // KatSopr.Status <> 0 исполняемый
+
+  KatSopr.Descr #3'Дескр.'            : [5], protect,NoAutoSize;
+  KatSopr.nSopr #3'Номер','накладной' : [8], protect,NoAutoSize;
+  KatSopr.dSopr #3'Дата','создания'   : [10,'DD/MM/YYYY'], protect,Centered,NoAutoSize;
+  KatNotes.Name #3'Статус'            : [8], protect;
+  KatSopr.dOpr  #3'Дата','оприход.'   : [10,'DD/MM/YYYY'], protect,Centered,NoAutoSize;
+  KatOrg.Name   #3'Контрагент'        : [14], protect;
+  KatSopr.Summa #3'Сумма'             : [12],[brForSopr_Price], protect,NoAutoSize;
+  if (isValid(#SklOrder),'+',' ')
+      'О' ('Наличие ордеров',,)     : [1], protect,NoAutoSize,Centered;
+  KatDoc.name   #3'Тип'               : [12], protect;
+end;
+
+Browse brSoprOrdB ('Спецификация накладной',hcIGetSopr,sci14EnEsc);
+  show at (,16,,)
+Table SoprOrdB
+Fields
+  KatPodr.name #3'Подразделение'   : [20], protect;
+  KatMOL.name  #3'МОЛ'             : [15], protect;
+  KatMC.name   #3'Наименование МЦ' : [25], protect;
+  KatMC.barKod #3'Код МЦ'          : [15], protect;
+end;
+
+
+HandleEvent // browse
+cmInit :
+  {
+    SelectFlag := (wGetTune('Manuf.MakeOrderExecStat') = 1); // TRUE когда настройка "ДА"
+
+    PushCondition(tcNo_SN_KatSopr);
+    if GetFirst KatSopr where ((pNRec == KatSopr.NRec)) <> tsOk
+      if (GetLast KatSopr <> tsOk)
+        {
+          message('Нет накладных на поступление МЦ',Information);
+          pNRec := 0;
+          Abort;
+        }
+  }
+
+cmDefault :
+  {
+    if (KatSopr.Status = 0 and SelectFlag) {
+      Message('Установлена настройка Формирование ордеров по накладным/актам только в статусе "Исполняемый"');
+      Exit;
+    }
+
+    if (wGetTune('Doc.Buy.MakeOrder') = 1) AND (KatSopr.Status <> 1)
+    {
+      Message('Включена настройка "Формирование ордеров по накладным только в статусе "исполняемый"".'#10#13 +
+              'Выберите другую накладную!');
+      Stop;
+      Exit;
+    }
+
+    if not(isValid(#SoprOrdB2) or not isValid(#SoprOrdB))
+      if message('Накладная распределена на другие подразделения или МОЛ.'#13+
+                 'Выбрать данную накладную?', YesNo) <> cmYes
+        {
+          abort;
+          exit;
+        }
+    set pNRec := KatSopr.NRec;
+
+    CloseInterface(cmDefault);
+  }
+
+cmEdit:
+  {
+    iEditDoc.RunEditHozDoc(coKatSopr,KatSopr.VidSopr,KatSopr.VidSopr,KatSopr.nRec);
+    ReReadRecord(#KatSopr);
+  }
+end; // handleevent
+end.

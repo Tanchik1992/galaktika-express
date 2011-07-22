@@ -1,0 +1,212 @@
+Create view vPlatDog
+From PlatDog
+;
+
+
+
+Function DirectKoeff ( PD_Direct: word ): integer;
+{
+  DirectKoeff := if ( (PD_Direct and 1) = (Dogovor.Direct and 1), integer(1), integer(-1) );
+}
+
+Function CalcPlatDogPercent ( WithOutNrec: comp ): double;
+var Sum: double;
+{
+  Sum := 0;
+  vPlatDog._loop PlatDog where (( DogovorView.Dogovor.nRec == PlatDog.cDogovor ))
+      if vPlatDog.PlatDog.nRec <> WithOutNrec
+        Sum := Sum +
+               vPlatDog.PlatDog.Procent *
+               DirectKoeff ( vPlatDog.PlatDog.Direct );
+  CalcPlatDogPercent := Sum;
+}
+
+Function CalcPlatDogSum ( WithOutNrec: comp ): double;
+var Sum: double;
+{
+  Sum := 0;
+  vPlatDog._loop PlatDog where (( DogovorView.Dogovor.nRec == PlatDog.cDogovor ))
+      if vPlatDog.PlatDog.nRec <> WithOutNrec
+        Sum := Sum +
+               oValFunc.GetAnyCurrency ( vPlatDog.PlatDog.cVal,
+                                         vPlatDog.PlatDog.Summa,
+                                         oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc),
+                                         Dogovor.cVal ) *
+               DirectKoeff ( vPlatDog.PlatDog.Direct );
+  CalcPlatDogSum := Sum;
+}
+
+Procedure UpdatePlatDogSumma;
+{
+set PlatDog.Summa := oValFunc.GetAnyCurrency ( Dogovor.cVal, Dogovor.Summa,
+                                               oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc),
+                                               PlatDog.cVal) * PlatDog.Procent/100;
+}
+
+#doc
+Окно редактирования схемы платежей
+#end
+Window wiDogovorSchema 'Схема платежей' ('Схема платежей', hcDogPayment_1, )
+  Show at (,, 91, 21);
+
+Panel pnPlatDog
+  Table PlatDog
+
+Browse brPlatDog
+  Show at (,,,18)
+Fields
+  PlatDog.Npp     #3'№'#13#3'п/п' ('Порядковый номер',,): [3], Protect, NoAutoSize;
+  PlatDog.Direct  #3'Направление' ('Направление движения платежных средств',,):
+    [LIST 1 'получение', 'передача'], [11], Protect, NoAutoSize, Centered;
+  GrPlat.Name     #3'Средство платежа' ('Средство платежа',,): [20], PickButton, Protect;
+  SpKau.Name      #3'Источник финансирования' ('Источник финансирования. Del-очистка поля',,): [25], PickButton, Protect;
+  PlatDog.Control #3'<=>' ('Характер ограничений (=, <=, >=)',,):
+    [LIST 0 '=', '<=', '>='], [3], Protect, NoAutoSize, Centered;
+  PlatDog.Procent #3'Процент' ('Процент от суммы договора',,): [7.2], NoAutoSize;
+  PlatDog.Summa   #3'Сумма платежа' ('Сумма платежа',,): [14.2, '\2p[|-]3666`666`666`666.88'];
+  PlatDogVal      #3'Вал.' ('Валюта',,): [4], PickButton, Protect, NoAutoSize, Centered;
+end;
+
+Screen scrPlatDog
+  Show at (,19,,)
+Fields
+  PlatDog.Comment ('Дополнительные требования',,);
+<<
+`Дополнительные требования`
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+HandleEvent
+
+cmDelOnProtect:
+  case CurField of
+    #PlatDogVal :
+     {
+      set PlatDog.cVal := 0;
+      UpdatePlatDogSumma;
+     }
+
+    #SpKau.Name:
+     {
+      set PlatDog.cFinSource :=0;
+      set SpKau.Name         :='';
+     }
+  end; //case
+
+cmPick:
+  case CurField of
+    #GrPlat.Name: RunInterface ( GroupPlat, word(1), PlatDog.cPayForm );
+
+    #SpKau.Name : {
+      if (iGetKau.GetCodeKau(cgiPick,cgKau_FinSource,PlatDog.cFinSource) <> 0)
+        set PlatDog.cFinSource :=PlatDog.cFinSource;
+    }
+
+    #PlatDogVal:
+      if RunInterface('GetValOt', PlatDog.cVal) = cmDefault
+        UpdatePlatDogSumma;
+  end; //case
+
+cmSetDefault:
+if NOT EditDogPosEnabled(false, false) Abort
+else {
+  PlatDog.cVal   := Dogovor.cVal;
+  PlatDog.Npp    := oSpNext.GetSpNppNext( PlatDog.cDogovor, coPlatDog );
+  PlatDog.Direct := 2 - (Dogovor.Direct and 1);
+}
+
+cmCheckField:
+  case CurField of
+    #PlatDog.Procent:
+      if (PlatDog.Procent < 0.0) or (PlatDog.Procent > 100.001) {
+        message('Величина % должна быть в интервале 0..100!', Warning);
+        Abort;
+      }
+      else UpdatePlatDogSumma;
+
+    #PlatDog.Summa:
+      set PlatDog.Procent :=
+        100*PlatDog.Summa / oValFunc.GetAnyCurrency ( Dogovor.cVal, Dogovor.Summa,
+                                                      oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc), Dogovor.cVal);
+  end;
+
+cmCheckRecord: {
+  var d: double;
+  d := CalcPlatDogSum(PlatDog.nRec) +
+       DirectKoeff(PlatDog.Direct) * oValFunc.GetAnyCurrency(PlatDog.cVal,
+                                                             PlatDog.Summa,
+                                                             oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc),
+                                                             Dogovor.cVal);
+  if ((d - Dogovor.Summa) > 0.005)
+    {
+      Message('Общая сумма платежей по всем видам платежных средств '+
+              DoubleToStr(d, '\2p([|-]36,666,666,666.88)')+
+             ''#13'не должна превосходить сумму по договору '+
+              DoubleToStr(Dogovor.Summa, '\2p([|-]36,666,666,666.88)!'), Warning);
+      Abort;
+    }
+  else {
+    d := PlatDog.Procent * DirectKoeff(PlatDog.Direct) + CalcPlatDogPercent(PlatDog.nRec);
+    if not ((d >= 0.0) and ( d <= 100.001))
+      {
+        Message('Общий процент по схеме составил '+
+                DoubleToStr(d, '\2p[|-]36,666.88%')+
+           ''#13'Должен быть в интервале 0..100!', Warning);
+        Abort;
+      }
+  }
+}
+
+cmInsertRecord:
+  insert current PlatDog;
+
+cmUpdateRecord:
+  update current PlatDog;
+
+cmDeleteRecord:
+  if EditDogPosEnabled(false, false)
+  {
+    var d: double;
+    d := CalcPlatDogSum(PlatDog.nRec);
+    if ((d - Dogovor.Summa) > 0.005)
+      {
+        Message('Нельзя удалить запись.'+
+               ''#13'Общая сумма платежей по всем видам платежных средств '+
+                DoubleToStr(d, '\2p([|-]36,666,666,666.88)')+
+               ''#13'будет превосходить сумму по договору '+
+                DoubleToStr(Dogovor.Summa, '\2p([|-]36,666,666,666.88)!'), Warning);
+        Abort;
+      }
+    else {
+      var AP: double;
+      AP := CalcPlatDogPercent(PlatDog.nRec);
+      if not ((AP >= 0.0) and (AP <= 100.001))
+        {
+          Message ('Нельзя удалить запись.'+
+                  ''#13'Общий процент по схеме составит '+
+                   DoubleToStr(AP, '\2p[|-]36,666.88%')+
+              ''#13'Должен быть в интервале 0..100!', Warning);
+          Abort;
+        }
+      else
+        if Message ( 'Удалить данную запись?', YesNo ) = cmYes {
+          delete current PlatDog;
+          oSpNext.UpDateSpDocsNpp ( PlatDog.cDogovor, coPlatDog );
+          ReScanPanel ( tnPlatDog );
+        }
+    }
+  }
+
+cmPositionChanged :
+  ProtectRecord(#PlatDog, NOT EditDogPosEnabled(false, false));
+
+end;
+end;
+
+HandleEvent
+cmInit:
+  ProtectRecord(#PlatDog, NOT EditDogPosEnabled(false, false));
+
+end;
+end;

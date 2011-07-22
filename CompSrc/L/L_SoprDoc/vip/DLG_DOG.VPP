@@ -1,0 +1,226 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Ф-ия для контроля задолженности по договору в накладной   ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+function GetBalanceDogovor      (
+                                  KatSoprNRec : comp;
+                                  pDogovor    : comp;
+                                  pAppDogovor : comp;
+                                  pCalPlan    : comp;
+                                  var BalR    : double;
+                                  var BalV    : double;
+                                  var BalB    : double;
+                                  d1          : date
+                                ) : boolean;
+var          //  {получение баланса по договору за интервал d0..d1}
+  s1,s1v : double;
+  totald, totaldv,
+  totalk, totalkv : double;
+begin
+  GetBalanceDogovor := false;
+  totald := 0; totaldv := 0;
+  totalk := 0; totalkv := 0;
+  BalR := 0;
+  BalV := 0;
+  BalB := 0;
+  _LOOP BaseFin where((pDogovor==BaseFin.cDogovor and
+                       pAppDogovor==BaseFin.cAppDogovor and
+                       pCalPlan==BaseFin.cCalPlan ))
+    {
+      if (not nextvisual)
+        exit;
+      if (BaseFin.dDoc > d1)
+        break;
+
+      oValFunc.GetNatTarCurrency(comp(0), BaseFin.Summa,
+                                 BaseFin.cVal, BaseFin.SumVal, BaseFin.dDoc,
+                                 s1, s1v);
+      if (BaseFin.Direct = 1)
+        {
+          totalD := totalD + s1;
+          totalDv := totalDv + s1v;
+        }
+      else
+        {
+          totalK := totalK + s1;
+          totalKv := totalKv + s1v;
+        }
+    }
+
+  _LOOP KatSopr where ((pDogovor == KatSopr.cDogovor))
+    {
+      if (not nextvisual)
+        exit;
+
+      if ((KatSopr.cDogovor <> pDogovor) or
+          (KatSopr.cAppDogovor <> pAppDogovor) or
+          (KatSopr.cCalPlan <> pCalPlan))
+        break;
+      if ((KatSopr.dOpr = date(0,0,0)) and   //-- учитываем только списанные накладные
+          (KatSopr.NRec <> KatSoprNRec))      //-- и учитываем текущую накладную
+        continue;
+      oValFunc.GetNatTarCurrency(comp(0), KatSopr.Summa,
+                                 KatSopr.cValut, KatSopr.SumVal, KatSopr.dSopr,
+                                 s1, s1v);
+      if (KatSopr.vidsopr < 200)
+        {
+          totalD := totalD + s1;
+          totalDv := totalDv + s1v;
+        }
+      else
+        {
+          totalK := totalK + s1;
+          totalKv := totalKv + s1v;
+        }
+    }
+  BalR := totalD  - totalK;
+  BalV := totalDv - totalKv;
+
+  BalB := oValFunc.GetBaseCurrency(oValFunc.valTar, BalV, d1);
+  GetBalanceDogovor := true;
+
+end;
+
+function CheckDolgDog(d1:date;typeVis:word):boolean;
+var ret : word;
+    MaxDolgR,MaxDolgB: double;
+    DolgVal : comp;
+    isMaxDolg : boolean;
+    BalR, BalV, BalB : double;
+    RubSimv : string;
+{
+  CheckDolgDog := true;
+  if (KatSopr.cDogovor = 0)
+    exit;
+  if (KatSopr.cAppDogovor <> 0)
+    {
+      ret := GetFirst Dogovor where ((KatSopr.cAppDogovor == Dogovor.NRec));
+      if (ret <> tsOk)
+        {
+          CheckDolgDog := false;
+          exit;
+        }
+    }
+  else
+    {
+      ret := GetFirst Dogovor where ((KatSopr.cDogovor == Dogovor.NRec));
+      if (ret <> tsOk)
+        {
+          CheckDolgDog := false;
+          exit;
+        }
+    }
+  isMaxDolg :=  ((Dogovor.MaxDebtsControl and 1) = 1)
+  if (not isMaxDolg)
+    exit;
+
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+      ''#3'рассчитывается баланс расчетов'#13#3'по договору №'+
+      Dogovor.NoDoc, 1);
+  oValFunc.InitVal;
+  MaxDolgR := 0;MaxDolgB := 0;
+
+  RubSimv := '???';
+  RubSimv := sGetTune('NDE.SimvRub');
+
+//-- определяем величину максимального долга
+  DolgVal := Dogovor.cVal;
+  if (DolgVal = 0)
+    {
+      MaxDolgR := Dogovor.MaxDebts;
+      MaxDolgB := oValFunc.GetBaseCurrency(comp(0),MaxDolgR,KatSopr.dPrice);
+    }
+  else
+    {
+      MaxDolgB := oValFunc.GetBaseCurrency(Dogovor.cVal,Dogovor.MaxDebts,KatSopr.dPrice);
+      MaxDolgR := oValFunc.GetNatCurrency(Dogovor.cVal,Dogovor.MaxDebts,KatSopr.dPrice);
+    }
+
+  PushPos(#KatSopr);
+  GetBalanceDogovor(KatSopr.NRec,KatSopr.cDogovor,KatSopr.cAppDogovor,KatSopr.cCalPlan,
+                    BalR, BalV, BalB,KatSopr.dPrice);
+  PopPos(#KatSopr);
+
+  StopVisual('',0);
+  BalR := if ( BalR < 0, abs(BalR), 0);
+  balb := if ( balb < 0, abs(balb), 0);
+
+
+  if( ((MaxDolgR<>0) and (BalR>MaxDolgR))or
+      ((MaxDolgB<>0) and (balb>MaxDolgB)) )
+  {
+    CheckDolgDog := false;
+    var k : string;
+    case (typeVis) of
+      1:
+        {
+          k := ''#3'Выписка документов запрещена.' +
+               ''#13#13#3 + datetostr(d1,'Задолженность на DD mon YYYY года') +
+               ''#13#3 + stringnlz(BalR,10) + ' ' + RubSimv +
+               ' (' + StringNl0(balb, 13, 2) + ' ' + oValFunc.ValBaseSimv+ ')' +
+               ''#13#3 + 'при допустимой' +
+               ''#13#3 + stringnlz(MaxDolgR,10) + ' ' + RubSimv +
+               ' (' + stringnl0(MaxDolgB,13,2) + ' ' + oValFunc.ValBaseSimv+ ')';
+          message(k, Information + OkButton);
+        }
+      2:
+        {
+          k := ''#3'Договор ' + Dogovor.NoDoc + dateToStr(Dogovor.dDoc,' от DD/MM/YYYY .')+
+               ''#13#3 + 'Превышена максимальная задолженность! ' +
+               ''#13#13#3 + datetostr(d1,'Задолженность на DD mon YYYY года') +
+               ''#13#3 + stringnlz(BalR,10) + ' ' + RubSimv +
+               ' (' + StringNl0(balb, 13, 2) + ' ' + oValFunc.ValBaseSimv+ ')' +
+               ''#13#3 + 'при допустимой' +
+               ''#13#3 + stringnlz(MaxDolgR,10) + ' ' + RubSimv +
+               ' (' + stringnl0(MaxDolgB,13,2) + ' ' + oValFunc.ValBaseSimv+ ')';
+          message(k, Information + OkButton);
+        }
+      3:
+        {
+          k := ''#3'Договор ' + Dogovor.NoDoc + dateToStr(Dogovor.dDoc,' от DD/MM/YYYY .')+
+               ''#13#3 + 'задолженность превышает допустимую! ' +
+               ''#13#13#3 + datetostr(d1,'Задолженность на DD mon YYYY года') +
+               ''#13#3 + stringnlz(BalR,10) + ' ' + RubSimv +
+               ' (' + StringNl0(balb, 13, 2) + ' ' + oValFunc.ValBaseSimv+ ')' +
+               ''#13#3 + 'при допустимой' +
+               ''#13#3 + stringnlz(MaxDolgR,10) + ' ' + RubSimv +
+               ' (' + stringnl0(MaxDolgB,13,2) + ' ' + oValFunc.ValBaseSimv+ ')';
+          if (message(k + ''#13#3'Продолжать?', Information + YesNo) = cmYes)
+            CheckDolgDog := true;
+        }
+      4:
+        {
+          k := ''#3'Печать накладной ЗАПРЕЩЕНА!'+
+               ''#13#3'Договор ' + Dogovor.NoDoc + dateToStr(Dogovor.dDoc,' от DD/MM/YYYY .')+
+               ''#13#3 + 'Превышена максимальная задолженность! ' +
+               ''#13#13#3 + datetostr(d1,'Задолженность на DD mon YYYY года') +
+               ''#13#3 + stringnlz(BalR,10) + ' ' + RubSimv +
+               ' (' + StringNl0(balb, 13, 2) + ' ' + oValFunc.ValBaseSimv+ ')' +
+               ''#13#3 + 'при допустимой' +
+               ''#13#3 + stringnlz(MaxDolgR,10) + ' ' + RubSimv +
+               ' (' + stringnl0(MaxDolgB,13,2) + ' ' + oValFunc.ValBaseSimv+ ')';
+          message(k, Information + OkButton);
+        }
+    end;
+  }
+  else
+    {
+      var k : string;
+
+      case (typeVis) of
+        2:
+          {
+            k := ''#3'Договор ' + Dogovor.NoDoc + dateToStr(Dogovor.dDoc,' от DD/MM/YYYY .')+
+               ''#13#3 + 'Максимальная задолженность не превышена! ' +
+               ''#13#13#3 + datetostr(d1,'Задолженность на DD mon YYYY года') +
+               ''#13#3 + stringnlz(BalR,10) + ' ' + RubSimv +
+               ' (' + StringNl0(balb, 13, 2) + ' ' + oValFunc.ValBaseSimv+ ')' +
+               ''#13#3 + 'при допустимой' +
+               ''#13#3 + stringnlz(MaxDolgR,10) + ' ' + RubSimv +
+               ' (' + stringnl0(MaxDolgB,13,2) + ' ' + oValFunc.ValBaseSimv+ ')';
+            message(k, Information + OkButton);
+          }
+      end;
+      CheckDolgDog := true;
+    }
+}

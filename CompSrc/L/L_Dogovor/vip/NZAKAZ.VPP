@@ -1,0 +1,144 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,97 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.70                                                      ║
+ ║ Назначение    : функции для работы с НЗ                                   ║
+ ║               : 1. Удаление НЗ и спецификации НЗ                          ║
+ ║               : 2. Определение является ли НЗ владельцем                  ║
+ ║               : 3. Является ли НЗ замененным                              ║
+ ║ Ответственный : Сидоров Владимир Геннадьевич                              ║
+ ║ Параметры     :                                                           ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+create view loNZakaz
+var
+  pType : word ;
+  pRec  : comp ;
+from
+  DocInfo,
+  NZakaz,
+  SpDocs
+  ,Dogovor
+  ,CalPlan
+where
+  ((
+  pRec                ==   NZakaz.NRec   and
+  NZakaz.NRec         ==   SpDocs.cDoc   and
+  word(440)           ==   SpDocs.TiDk   and
+
+  //--для memo-поля
+  nZakaz.NRec         ==  DocInfo.cDoc    and
+  word(440)           ==  DocInfo.DocType
+  ))
+;
+
+//-- Определяет, имеет ли текущий наряд-заказ подчиненные наряд-заказы
+//-- возвращает ссылку на подчиненного
+function isNZak_Owner(pOwnRec:comp): comp;
+var tmpVal : comp;
+{
+  tmpVal := 0;
+  if (pOwnRec <> 0)
+    {
+      if (loNZakaz.GetFirst NZakaz where ((comp(pOwnRec) == NZakaz.cOwner)) = tsOk)
+        tmpVal := loNZakaz.NZakaz.NRec
+      else
+        tmpVal := 0;
+    }
+  isNZak_Owner := tmpVal;
+}
+//-- Определяет, есть ли для наряд-заказа заменяющий его наряд-заказ
+//-- возвращает ссылку на заменяющий наряд-заказ
+function isNZak_Insteaded(pNRec:comp): comp;
+var tmpVal : comp;
+{
+  tmpVal := 0;
+  if (pNRec <> 0)
+    {
+      if (loNZakaz.GetFirst NZakaz where ((comp(pNRec) == NZakaz.cInstead)) = tsOk)
+        tmpVal := loNZakaz.NZakaz.NRec
+      else
+        tmpVal := 0;
+    }
+  isNZak_Insteaded := tmpVal;
+}
+
+//-- функция удаления наряд-заказа
+//-- При удалении наряд-заказа надо удалить:
+//-- 1. спецификацию наряд-заказа
+//-- 2. StatLog для данного наряд-заказа
+//-- 3. Заголовок наряд-заказа
+function NZakaz_Delete(nRecDoc : comp;OkVis:boolean) : word ; // nRec документа
+var ret : word;
+{
+  ret := 0;
+//-- проверяем допустимость удаления наряд-заказа
+  if (isNZak_Owner(nRecDoc) <> 0)
+    {
+      if (OkVis)
+        Message(''#3'Для данного наряд-заказа есть нижестоящие!'+
+                ''#13#3'Удаление запрещено!');
+      ret := 1;
+      NZakaz_Delete := ret;
+      exit;
+    }
+  if (isNZak_Insteaded(nRecDoc) <> 0)
+    {
+      if (OkVis)
+        Message(''#3'Данный наряд-заказ заменен другим!'+
+                ''#13#3'Удаление запрещено!');
+      ret := 2;
+      NZakaz_Delete := ret;
+      exit;
+    }
+
+  loNZakaz.pRec  := nRecDoc ;
+  ret := loNZakaz.GetFirst NZakaz;
+//-- удаляем спецификацию НЗ
+  if (ret = tsOk) ret := oSpDocs.SpDocs_Delete(loNZakaz.NZakaz.NRec,440,OkVis);
+ //-- удаляем примечание НЗ в DocInfo
+  if (ret = tsOk)
+  {
+    if (loNZakaz.GetFirst DocInfo = tsOk)
+      ret := loNZakaz.delete current DocInfo;
+  }
+//-- удаляем из SoprHoz
+  if (ret = tsOk) ret := DelDocInSoprHoz(440,NZakaz.NRec);
+//-- Удаляем информацию из StatLog
+  if (ret = tsOk) ret := oStatlog.StatLog_Delete (440,NZakaz.NRec) ;
+//-- Удаляем наряд-заказ
+  if (ret = tsOk)
+    {
+      case wGetTune('Doc.NZ.FormNum') of
+        0: DelLastNumD(440,NZakaz.NoDoc);
+        1: DelLastNumD(440,substr(NZakaz.NoDoc,1,7));
+        2: DelLastNumD_(coNZakaz, SubStr(NZakaz.NoDoc,4,3) + String(Year(NZakaz.dDoc)), SubStr(NZakaz.NoDoc,8,4));
+      end;
+      ret := loNZakaz.delete current NZakaz;
+    }
+  NZakaz_Delete := ret;
+} // function NZakaz_Delete
+
+// возвращает ссылку на KLVAL
+Function Get_cValNZakaz(cNRecNZ :comp) :comp;
+{
+  Get_cValNZakaz:=0;
+  loNZakaz.pRec  := cNRecNZ;
+  if ( loNZakaz.GetFirst NZakaz = tsOk)
+   {
+     if ( (loNZakaz.NZakaz.cCalPlan<>0) and
+          (loNZakaz.GetFirst CalPlan where ((NZakaz.cCalPlan==CalPlan.nRec)) = tsOk) )
+      Get_cValNZakaz:=loNZakaz.CalPlan.cVal
+     else
+      if ( (loNZakaz.NZakaz.cAppDogovor<>0) and
+           (loNZakaz.GetFirst Dogovor where ((NZakaz.cAppDogovor==Dogovor.nRec)) = tsOk) )
+       Get_cValNZakaz:=loNZakaz.Dogovor.cVal
+      else
+       if ( (loNZakaz.NZakaz.cDogovor<>0) and
+            (loNZakaz.GetFirst Dogovor where ((NZakaz.cDogovor==Dogovor.nRec)) = tsOk) )
+        Get_cValNZakaz:=loNZakaz.Dogovor.cVal
+   }
+}

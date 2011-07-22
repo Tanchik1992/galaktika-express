@@ -1,0 +1,233 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Настройка алгоритма автоформирования внутреннего номера пкп
+//
+//********************************************************************************
+
+#define OBJINT_ALGORITM
+#define OBJINT_SETGETVID
+#define OBJINT_ACCOUNT
+
+#include objintpl.vin
+#include oCommonFunAlg.vih
+
+VipInterface AlgoritmSetup_5004 Implements oAlgoritmSetup
+
+#ifdef ATL51
+Licensed (FREE)    Parameters (cFormPl : comp)
+#end
+;
+
+//********************************************************************************
+
+Table STRUCT tblSpecFun
+(
+  NRec    : comp        ,
+  Npp     : longInt     ,
+  Name    : string[50]  ,
+  Prim    : string[255] ,
+  oform   : string[50]
+)
+With Index
+(
+ tblSpecFun01 = NRec (Unique, Surrogate),
+ tblSpecFun02 = Npp,
+ tblSpecFun03 = Name
+);
+
+//******************************************************************************
+
+Table STRUCT tblNoDoc
+(
+  NoDoc  :  string[20]
+)
+With Index
+(
+ tblNoDoc01 = NoDoc
+);
+
+//********************************************************************************
+
+#doc
+Настройка алгоритма автоформирования внутреннего номера ПКП
+#end
+Interface AlgoritmSetup_5004 'Настройка алгоритма' (, hcNoContext, sci1Esc) DoAccept, EscClose, Gray;
+
+  Show At ( , , 50, 8);
+
+Create View
+
+Var
+  cFormPl
+, cTmpNote
+, _NRec        : comp;
+
+  strFind      : string;
+
+From
+  FormPl
+, CalPlan
+, CalPlan CalPlan_S
+, PlanPays
+, Dogovor
+, tblSpecFun
+, tblSpecFun tblSF
+, tblNoDoc
+
+Where
+((
+    cFormPl          == FormPl.NRec
+AND cTmpNote         == CalPlan.nRec
+AND CalPlan.cDogovor == Dogovor.NRec
+AND CalPlan.nRec     == PlanPays.cCalPlan
+AND _NRec            == tblSF.NRec
+))
+;
+
+Parameters
+  cFormPl;
+
+#include AlgSet_St_Impl.vpp  //реализация интерфейса настройки - заглушка
+#include Alg_5004.vpp
+
+//********************************************************************************
+
+Screen scNoteHeader
+  Show At (, 1,, 1);
+
+<<
+       Запустить алгоритм при создании ПКП
+>>
+
+end;
+
+
+
+//******************************************************************************
+//------------------Окно для выбора специальных функций ------------------------
+//******************************************************************************
+
+Window wSpecFun 'Выберите специальную функцию' ('Выберите специальную функцию', hcNastrFormulaSozMc, sci1EnEsc) EscClose, DoAccept, Cyan;
+  Show at (, , 70, 20);
+
+Browse brSpecFun;
+  Show at (, , , );
+  Table tblSpecFun;
+
+Fields
+  tblSpecFun.Npp   #3'№'        : [ 1], Protect;
+  tblSpecFun.Name  #3'Функция'  : [ 5], Protect;
+  tblSpecFun.Prim  #3'Описание' : [10], Protect;
+end;
+
+//******************************************************************************
+
+HandleEvent // Windows
+
+cmInit :
+  _NRec := 0;
+
+cmDefault :
+  _NRec := tblSpecFun.nRec;
+
+end;
+end; // Windows
+
+
+//********************************************************************************
+
+Panel pnFPL
+  Table FormPl;
+
+Screen scEditFRL ('', , sci1Esc);
+  Show At (,2,,);
+
+Fields
+  FormPl.sValRes60[1]   ('Формула номера', , sci13Esc): NoProtect, PickButton;
+  FormPl.sValRes60[2]   ('Строка замены пустых значений'): NoProtect;
+  FormPl.sValRes60[3]   ('Строка-разделитель специальных функций'): NoProtect;
+<<
+   Формула
+   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   Строка замены пустых значений .@@@@@@@@@@@@@@@
+
+   Строка-разделитель  .@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+
+HandleEvent
+
+cmPick:
+  case CurField of
+    #FormPl.sValRes60[1]:
+      {
+        if (RecordsInTable(#tblSpecFun) = 0)
+          {
+            //набиваем временную таблицу формулами
+            var i : longint;
+            var Name_  : string;
+            var Prim_  : string;
+            var Oform_ : string;
+            var Oform_2: string;
+
+            for (i := 1; i <= CountSpecFunc; inc(i))
+              if (ReturnSpecFun(i, Name_, Prim_, oform_))
+                {
+                  ClearBuffer(#tblSpecFun);
+                  tblSpecFun.NRec  := 0;
+                  tblSpecFun.npp   := i;
+                  tblSpecFun.Name  := Name_;
+                  tblSpecFun.Prim  := Prim_;
+                  tblSpecFun.Oform := oform_;
+
+                  if ( Insert Current tblSpecFun <> tsOk )
+                    { }
+                }
+          }
+
+        if (GetFirst tblSpecFun <> tsOk)
+          { }
+
+
+        if RunWindowModal(wSpecFun) = cmDefault
+          {
+            ReReadRecord(#tblSF);
+            set FormPl.sValRes60[1] := FormPl.sValRes60[1] + tblSF.Oform;
+          }
+
+        RescanPanel(#FormPl);
+      }
+  end; // case
+ 
+cmUpdateRecord:
+  if (NOT isUpdateFormul(FormPl.sValRes60[1]))
+    set FormPl.sValRes60[1] := '';
+  else
+    update current FormPl;
+
+end;
+
+end;
+
+//********************************************************************************
+
+HandleEvent
+
+cmInit :
+  if ( not IsValid(#FormPl) )
+    {
+      message('Пользовательский алгоритм не найден', Error);
+      Abort;
+      Exit;
+    }
+
+cmDefault :
+  update current FormPl;
+
+
+End;
+
+End.

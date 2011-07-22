@@ -1,0 +1,151 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Реестр накладных/актов
+//
+//********************************************************************************
+
+#doc
+Назначение:
+  Реестр накладных/актов
+Параметры:
+  pMarker - маркер
+  wVidDoc - вид сопроводительного документа
+#end
+
+//******************************************************************************
+
+Interface ReestrNakl;
+
+Create View
+
+Var
+  lMCount
+, pMarker
+            : longint;
+
+  wVidDoc
+            : word;
+
+From
+  KatSopr
+, SpSopr
+, KatOrg
+, KlVal
+
+Where
+((
+    KatSopr.nRec      ==  SpSopr.cSopr
+and KatSopr.cOrgBase  ==  KatOrg.NRec
+and KatSopr.cVal      ==  KlVal.NRec
+))
+;
+
+Parameters
+  pMarker
+, wVidDoc;
+
+Form fReestrNakl ('reestrnakl.out', 'ReestrNakl') With NoVisual;
+
+Function GetHeader : string;
+Var
+  s : string;
+{
+  case wVidDoc of
+
+    101      : s := ' приходных накладных';
+    108      : s := ' накладных на прием молочного сырья';
+    1411     : s := ' дневников приемки работ';
+    1421     : s := ' накладных на отпуск лесопродукции';
+    201      : s := ' накладных на отпуск';
+    110      : s := ' актов выполненных работ';
+    111      : s := ' актов на прием услуг';
+    211      : s := ' актов на оказание услуг';
+    106, 206 : s := ' накладных на возврат по рекламации';
+
+  else
+    s := '';
+
+  end;
+
+  GetHeader := s;
+}
+
+Function PrintReestr : boolean;
+Var
+  i           : longint;
+  cMarkerRec  : comp;
+{
+  PrintReestr := false;
+
+  StartNewVisual( vtNumericVisual
+                , vfBreak  + vfConfirm + vfTimer
+                , 'Печать реестра' + GetHeader
+                , 1
+                );
+
+  fReestrNakl.Write('Реестр' + GetHeader);
+
+  for (i := 0; i < lMCount; i := i + 1)
+    {
+      if ( (not NextVisual) or (fReestrNakl.Error) )
+        {
+          StopVisual('', 0);
+
+          if ( not fReestrNakl.Error )
+            Message('Формирование отчета прервано пользователем.', OKButton);
+
+          Exit;
+        }
+
+      if ( GetMarker(pMarker, i, cMarkerRec) )
+        if ( GetFirst KatSopr where (( cMarkerRec == KatSopr.NRec )) = tsOk )
+          {
+            fReestrNakl.Write(KatSopr.nRec);
+            fReestrNakl.Write(KatSopr.dSopr);
+            fReestrNakl.Write(KatSopr.NSopr);
+            fReestrNakl.Write(KatOrg.Name);
+            fReestrNakl.Write(KatSopr.Summa);
+
+            if ( IsValid(#KlVal) )
+              fReestrNakl.Write(KatSopr.SumVal);
+            else
+              fReestrNakl.SkipFormat(1);
+
+            fReestrNakl.Write(KlVal.SimvolV);
+
+            fReestrNakl.Write(SpSopr.nRec);
+            fReestrNakl.PutEvent(feBreak);
+          }
+     }
+
+  fReestrNakl.PutEvent(feBreak);
+  StopVisual('', 0);
+
+  PrintReestr := true;
+}
+
+HandleEvent
+
+cmInit :
+{
+  Abort;
+
+  lMCount := GetMarkerCount(pMarker);
+
+  if ( lMCount = 0 )
+    Exit;
+
+  if ( PrintReestr )
+    if ( not fReestrNakl.Error )
+      fReestrNakl.ShowFile('Реестр');
+    else
+      {
+        fReestrNakl.AbortForm;
+        Message(''#3'В форме возникли ошибки.'#13#3 + 'Просмотр невозможен');
+      }
+}
+
+end;
+
+End.

@@ -1,0 +1,632 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Стандартная обработка SoprOrdB
+//******************************************************************************
+
+//******************************************************************************
+// Получение информации об налогах по позиции документа
+
+Create view loStdPrb
+var
+  posNDSR
+, posNDSV
+, bnNDS
+, bnNDSV
+, nNDS
+, nNDSV
+, nProcRn,  nProcVn     // Сумма соп. усл. до там. с налогами
+, nSumRn ,  nSumVn      // Сумма позиций матценностей с налогами
+, nSumPRn,  nSumPVn     // Сумма после таможни с налогами
+, nSumVRn,  nSumVVn     // Cумма соп. услуг по весу с налогами
+, nSumORn,  nSumOVn     // Сумма соп. услуг по объему с налогами
+, nSumKolRn,  nSumKolVn // Сумма соп. услуг по количеству с налогами
+, nSum_KP_Rn,  nSum_KP_Vn
+                          : double;
+As select
+  *
+From
+  SpDocNal;
+
+//******************************************************************************
+
+Procedure loStdPrb_InitVar;
+{
+  loStdPrb.nProcRn     := 0;   loStdPrb.nProcVn     := 0;
+  loStdPrb.nSumRn      := 0;   loStdPrb.nSumVn      := 0;
+  loStdPrb.nSumPRn     := 0;   loStdPrb.nSumPVn     := 0;
+  loStdPrb.nSumVRn     := 0;   loStdPrb.nSumVVn     := 0;
+  loStdPrb.nSumORn     := 0;   loStdPrb.nSumOVn     := 0;
+  loStdPrb.nSumKolRn   := 0;   loStdPrb.nSumKolVn   := 0;
+  loStdPrb.nSum_KP_Rn  := 0;   loStdPrb.nSum_KP_Vn  := 0;
+}
+
+//******************************************************************************
+
+Procedure CallToNalogs(var bnPrice: double; var bnVPrice: double;
+                       var nPrice: double; var nVPrice: double;
+                       Vhn: word; dOrgn: comp);
+var NalR, NalV: double;
+var NalRO, NalVO: double;
+var NalRu, NalVu: double;
+{
+  loStdPrb.posNDSV := 0;
+  loStdPrb.posNDSR := 0;
+
+  ResetBounds(#SpDocNal);
+  NalRO := 0; NalVO := 0;
+  NalRu := 0; NalVu := 0;
+  NalR := 0;  NalV  := 0;
+
+  _LOOP SpDocNal where ((SpSopr.VidSopr == SpDocNal.TipDoc AND
+                            SpSopr.NRec == SpDocNal.cSpDoc))
+    if (GetFirst KatNalog
+             where ((SpDocNal.cNalog == KatNalog.NRec)) = tsOk)
+      {
+        if (SpSopr.vidSopr = 111 OR SpSopr.vidSopr = 211) AND  //услуги отнесённые на другого контрагента
+           (KatSopr.cValut <> KSopr.cValut)
+          {
+            SpDocNal.sumVal:= oValFunc.GetAnyCurrency(KSopr.cValut, SpDocNal.sumVal, KSopr.dPrice, KatSopr.cValut); //в KatSopr.cvalut
+          }
+
+        if (dOrgN = SpDocNal.cOrg)
+          {
+            NalRO := NalRO + SpDocNal.Summa;
+            NalVO := NalVO + SpDocNal.SumVal;
+          }
+        if (KatNalog.OutUch <> 0)
+          {
+            NalRu := NalRu + SpDocNal.Summa;
+            NalVu := NalVu + SpDocNal.SumVal;
+          }
+
+        if (SpDocNal.cNalog = coGetTune('Nalog.cNalogNDS'))
+          {
+            loStdPrb.posNDSR := loStdPrb.posNDSR + SpDocNal.Summa;
+            loStdPrb.posNDSV := loStdPrb.posNDSV + SpDocNal.SumVal;
+          }
+
+        if (GetFirst KatPayment where ((KatSopr.cPayment == KatPayment.NRec)) = tsOk)
+          if ((KatPayment.wNalog AND 2) = 0 AND (SpDocNal.IsCustom AND 4) = 0 OR    //  внутренняя операция
+              (KatPayment.wNalog AND 2) <> 0 AND (SpDocNal.IsCustom AND 2) = 0       //  импортная операция
+             )
+            Continue;
+
+        NalR := NalR + SpDocNal.Summa;
+        NalV := NalV + SpDocNal.SumVal;
+      }
+
+  SetBounds(#SpDocNal);
+  if (VhN = 1)
+    {
+      bnPrice := bnPrice - NalRO;
+      bnVPrice := bnVPrice - NalVO;
+    }
+
+  nPrice := bnPrice + NalR;     nVPrice := bnVPrice + NalV;
+  bnPrice := bnPrice + NalRu;   bnVPrice := bnVPrice + NalVu;
+}
+
+
+//******************************************************************************
+/*
+  Получение цен сопутствующих услуг к накладной и процентов нацеки
+  koefr и koefv      - коэффициенты наценок на соп. услуги до определения
+                       таможенной стоимости МЦ
+  SumR, SumV         - стоимость позиций матценностей
+  SumPoslR, SumPoslV - стоимость сопутствующих услуг не входящих в таможенную
+                       стоимость накладной
+*/
+//******************************************************************************
+
+Procedure GetProcNac(
+  var ProcRb: double; var ProcVb: double;  // Сумма соп. усл. до там. без налогов
+  var ProcRn: double; var ProcVn: double;  // Сумма соп. усл. до там. с налогами
+  var SumRb  : double; var SumVb  : double;  // Сумма позиций матценностей без налогов
+  var SumRn  : double; var SumVn  : double;  // Сумма позиций матценностей с налогами
+  var SumPRb: double; var SumPVb: double;  // Сумма после таможни без налогов
+  var SumPRn: double; var SumPVn: double;  // Сумма после таможни с налогами
+  var SumVRb: double; var SumVVb: double;  // Cумма соп. услуг по весу без налогов
+  var SumVRn: double; var SumVVn: double;  // Cумма соп. услуг по весу с налогами
+  var SumORb: double; var SumOVb: double;  // Суммы соп. усулг по объему без налогов
+  var SumORn: double; var SumOVn: double;  // Сумма соп. услуг по объему с налогами
+  var SumKolRb: double; var SumKolVb: double; // Сумма соп. усл. по количеству без налогов
+  var SumKolRn: double; var SumKolVn: double; // Сумма соп. усл. по количеству с налогами
+  var Sum_KP_Rb: double; var Sum_KP_Vb: double; // Суммы соп. усулг по количеству позиций без налогов
+  var Sum_KP_Rn: double; var Sum_KP_Vn: double; // Суммы соп. усулг по количеству позиций с налогами
+  var CommonKol: double;                     //общее количество по всем  позициям МЦ
+  var VesTov: double; var ObTov  : double   // Сумма веса и объема МЦ
+  );
+var tempr, tempv: double;
+var temprn, tempvn: double;
+var vCurse, kCurse: double; // Если акты на другого контрагента в дургой валюте
+var cExtKSRec: comp;
+{
+  loStdPrb_InitVar;
+  ResetBounds(#SpSopr);
+
+  ProcRb := 0; ProcVb := 0; ProcRn := 0; ProcVn := 0;
+  SumRb  := 0; SumVb  := 0; SumRn  := 0; SumVn  := 0;
+  SumPRb := 0; SumPVb := 0; SumPRn := 0; SumPVn := 0;
+  SumVRb := 0; SumVVb := 0; SumVRn := 0; SumVVn := 0;
+  SumORb := 0; SumOVb := 0; SumORn := 0; SumOVn := 0;
+  SumKolRb := 0; SumKolVb := 0; SumKolRn := 0; SumKolVn := 0;
+  Sum_KP_Rb := 0; Sum_KP_Vb := 0; Sum_KP_Rn := 0; Sum_KP_Vn := 0;
+  CommonKol := 0;
+  VesTov := 0; ObTov  := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer,
+          'Сбор информации о сопутствующих услугах: '#13#3, 1);
+  ResetBounds(#KatMC);
+
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+    if NextVisual
+      case SpSopr.PrMc of
+      //-----------------
+        1:
+          {
+            CommonKol := CommonKol+SpSopr.KolOpl;
+            TempR := SpSopr.KolOpl * Spsopr.Price;
+            TempV := SpSopr.KolOpl * SpSopr.VPrice;
+            CallToNalogs(TempR, TempV, TempRn, TempVn, KatSopr.VhodNal, KatSopr.cOrgBase);
+
+            if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) <> tsOk)
+              {
+                SumRb := SumRb + TempR;    SumVb := SumVb + TempV;
+                SumRn := SumRn + TempRn;   SumVn := SumVn + TempVn;
+              }
+            else
+              {
+                if (boGetTune('Oper.SoprUslTara') or
+                    (KatMC.kGroupMC <> sGetTune('Tara.KodGrMcTara'))
+                    OR (sGetTune('Tara.KodGrMcTara') = ''))
+                  {
+                    SumRb := SumRb + TempR;    SumVb := SumVb + TempV;
+                    SumRn := SumRn + TempRn;   SumVn := SumVn + TempVn;
+                  }
+
+                vCurse := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+                VesTov := VesTov + if(SpSopr.Netto<>0, SpSopr.Netto, KatMC.Massa) * SpSopr.KolOpl * vCurse;
+                ObTov  := ObTov + KatMC.Volume * SpSopr.KolOpl * vCurse;
+              }
+          }
+      //-----------------
+        else // case SpSopr.PrMc of
+          {
+            tempr := SpSopr.Price;
+            tempv := SpSopr.VPrice;
+            CallToNalogs(TempR, TempV, TempRn, TempVn,
+                         KatSopr.VhodNal, KatSopr.cOrgBase);
+            #include stdprb01.vpp
+          }
+      //-----------------
+      end;
+
+  SetBounds(#KatMC);
+  RestartVisual('Сбор информации о сопутствующих услугах, отнесенных на другого контрагента', 1);
+
+  kCurse := if (KatSopr.cValut <> 0, GetCursPrice, 0)
+
+  ResetBounds(#CursVal);
+  ResetBounds(#klVal);
+
+  if ( adSoprDocSN = KatSopr.wADoc )
+    cExtKSRec := KatSopr.cADoc;
+  else
+    cExtKSRec := KatSopr.NRec;
+
+  _LOOP KSopr where ((cExtKSRec == KSopr.cKatSopr))
+    {
+      oValFunc.GetCurse(KSopr.cValut, KSopr.DPrice, vCurse);
+
+      _LOOP SpSopr where ((KSopr.NRec == SpSopr.cSopr))
+        {
+          if ((SpSopr.PrMC <> 1) AND (SpSopr.PrVoz <> 0))
+            Continue;
+
+          tempr := SpSopr.Price * SpSopr.KolOpl;
+
+          if (kCurse = 0)
+            tempv := 0
+          else
+            {
+              tempv := SpSopr.VPrice * SpSopr.KolOpl;
+
+              if (vCurse = 0)
+                tempv := (SpSopr.Price * SpSopr.KolOpl) / kCurse
+              else
+                if (KatSopr.cValut <> KSopr.cValut)
+                  {
+                    tempv := tempv * vCurse;
+                    tempv := tempv / kCurse;
+                  }
+            }
+
+          if ( adSoprDocSN = KatSopr.wADoc )
+            {
+              tempr := - tempr;
+              tempv := - tempv;
+              temprn := - temprn;
+              tempvn := - tempvn;
+            }
+
+          CallToNalogs(tempr, tempv, temprn, tempvn, KSopr.VhodNal, KSopr.cOrgBase);
+
+          if (KSopr.Reserved <> 1)
+            {
+              if (GetFirst KatMC
+                          where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk)
+                {
+                  if (boGetTune('Oper.SoprUslTara') or
+                      (KatMC.kGroupMC <> sGetTune('Tara.KodGrMcTara')) OR
+                       (sGetTune('Tara.KodGrMcTara') = ''))
+                    {
+                      #include stdprb01.vpp
+                    }
+                }
+              else
+                {
+                  #include stdprb01.vpp
+                }
+            }
+
+          NextVisual;
+        }
+    }
+
+  SetBounds(#CursVal);
+  SetBounds(#klVal);
+  StopVisual('', 0);
+  SetBounds(#SpSopr);
+}
+
+//******************************************************************************
+Create view loCntPos
+var
+  KatSoprNRec : comp;
+
+As select
+  *
+From
+  SpSopr,
+  KatMC
+
+Where
+((
+    KatSoprNRec == SpSopr.cSopr
+and word(1)     == SpSopr.PrMC
+
+and SpSopr.cMCUsl == KatMC.nRec
+));
+
+// Подсчет количества товарных матценностей в спецификациях
+function GetKolTovPos(_cKatSopr : comp) : longint;
+var tmpKol : longint;
+{
+  GetKolTovPos := 0;
+
+  loCntPos.KatSoprNRec := _cKatSopr;
+
+  if (loCntPos.GetFirst SpSopr <> tsOk)
+    Exit;
+
+  tmpKol := 0;
+
+  loCntPos._loop SpSopr
+    if (loCntPos.GetFirst KatMC = tsOk)
+      if (loCntPos.KatMC.kGroupMC <> sGetTune('Tara.KodGrMcTara'))
+        inc(tmpKol);
+
+  GetKolTovPos := tmpKol;
+}
+
+//******************************************************************************
+
+var KolTovPos, KolTovPos2   : longint; //-- количесво позиций матценностей в спецификации
+var KSopr_NRec, KSopr_NRec2 : comp;
+
+//******************************************************************************
+// Расчет цены в для позиции накладной
+Procedure SetSoprOrdBPrice(
+                            SumDRb: double; SumDVb: double; // Сумма соп. усл. до таможни без налогов
+                            SumDRn: double; SumDVn: double; // Сумма соп. усл. до таможни с налогами
+                            SumTRb: double; SumTVb: double; // Сумма позиций матценностей без налогов
+                            SumTRn: double; SumTVn: double; // Сумма позиций матценностей с налогами
+                            SumPRb: double; SumPVb: double; // Сумма соп. усл. после таможни без налогов
+                            SumPRn: double; SumPVn: double; // Сумма соп. усл. после таможни с налогами
+                            SumVRb: double; SumVVb: double; // Сумма соп. усл. по весу без налогов
+                            SumVRn: double; SumVVn: double; // Сумма соп. усл. по весу с налогами
+                            SumORb: double; SumOVb: double; // Сумма соп. усл. по объему без налогов
+                            SumORn: double; SumOVn: double; // Сумма соп. усл. по объему с налогами
+                            SumKolRb: double; SumKolVb: double; // Сумма соп. усл. по количеству без налогов
+                            SumKolRn: double; SumKolVn: double; // Сумма соп. усл. по количеству с налогами
+                            Sum_KP_Rb: double; Sum_KP_Vb: double; //
+                            Sum_KP_Rn: double; Sum_KP_Vn: double; //
+                            CommonKol: double;                         //общее количество по всем позициям МЦ
+                            VesTov: double; ObTov: double;             // Масса и объем всех позиций матценностей
+                            var bnPrice: double; var bnVPrice: double; // Общая цена позиции без налогов
+                            var nPrice: double; var nVPrice: double    // Общая цена позиции с налогами
+                          );
+
+var TempRb, TempVb: double;
+var TempRn, TempVn: double;
+var KF, SMassa, SVol: double;
+{
+  loStdPrb.bnNDS  := 0;
+  loStdPrb.nNDS   := 0;
+  loStdPrb.bnNDSV := 0;
+  loStdPrb.nNDSV  := 0;
+
+  if (SpSopr.KolOpl = 0)
+    {
+      bnPrice := 0;  bnVPrice := 0;
+      nPrice := 0;   nVPrice := 0;
+      Exit;
+    }
+
+  TempRb := SpSopr.Price * SpSopr.KolOpl;
+  TempVb := SpSopr.VPrice * SpSopr.KolOpl;
+  CallToNalogs(TempRb, TempVb, TempRn, TempVn, KatSopr.VhodNal, KatSopr.cOrgBase);
+
+  if (not boGetTune('Oper.SoprUslTara') AND
+      (KatMC.kGroupMC = sGetTune('Tara.KodGrMcTara'))
+      AND (sGetTune('Tara.KodGrMcTara')<>''))   // рассчитывать сопр. услуги
+    {                                           // по таре
+      bnPrice  := TempRb / SpSopr.KolOpl;
+      bnVPrice := TempVb / SpSopr.KolOpl;
+      nPrice   := TempRn / SpSopr.KolOpl;
+      nVPrice  := TempVn / SpSopr.KolOpl;
+
+      Exit;
+    }
+
+  if (KSopr_NRec <> KatSopr.NRec)
+    { // Считаем количесво позиций матценностей в спецификации ТОЛЬКО ОДИН РАЗ
+      KSopr_NRec := KatSopr.NRec;
+      KolTovPos  := 0;
+
+      // Добавить сопутствующие услуги на эту стоимость
+      // до таможенной границы
+      if ( (SumTRb = 0) OR (SumTVb = 0) OR (SumTRn = 0) OR (SumTVn = 0) or
+           boGetTune('Oper.SoprUslTara') OR (sGetTune('Tara.KodGrMcTara') = '') )
+        KolTovPos := GetKolTovPos(KatSopr.nRec);
+
+      if (KolTovPos = 0)
+        KolTovPos := 1;
+    }
+
+  //------------------------------------------------------------------------------
+  //KolTovPos не устраивает, нужно количество позиций без дополнительных условий
+  if (KSopr_NRec2 <> KatSopr.NRec)
+    {
+     KSopr_NRec2 := KatSopr.NRec;
+     KolTovPos2  := GetKolTovPos(KatSopr.nRec);
+
+     if (KolTovPos2 = 0)
+       KolTovPos2 := 1;
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumTRb <> 0)
+    {
+      bnPrice := TempRb * (SumTRb + SumDRb) / SumTRb;
+      loStdPrb.bnNDS := loStdPrb.nProcRn * TempRb / SumTRb;
+    }
+  else
+    {
+      bnPrice := SumDRb / KolTovPos;
+      loStdPrb.bnNDS := loStdPrb.nProcRn / KolTovPos;
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumTVb <> 0)
+    {
+      bnVPrice := TempVb * (SumTVb + SumDVb) / SumTVb
+      loStdPrb.bnNDSV := loStdPrb.nProcVn * TempVb / SumTVb;
+    }
+  else
+    {
+      bnVPrice := SumDVb / KolTovPos;
+      loStdPrb.bnNDSV := loStdPrb.nProcVn / KolTovPos;
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumTRn <> 0)
+    {
+      nPrice := TempRn * (SumTRn + SumDRn) / SumTRn
+      loStdPrb.nNDS := loStdPrb.nProcRn * TempRn / SumTRn;
+    }
+  else
+    {
+      nPrice := SumDRn / KolTovPos;
+      loStdPrb.nNDS := loStdPrb.nProcRn / KolTovPos;
+    }
+  //------------------------------------------------------------------------------
+  if (SumTVn <> 0)
+    {
+      nVPrice := TempVn * (SumTVn + SumDVn) / SumTVn
+      loStdPrb.nNDSV := loStdPrb.nProcVn * TempVn / SumTVn;
+    }
+  else
+    {
+      nVPrice := SumDVn / KolTovPos;
+      loStdPrb.nNDSV := loStdPrb.nProcVn / KolTovPos;
+    }
+
+  // Добавить сумму сопутствующей услуги, распределенной по весу и объему.
+  if (((VesTov + ObTov) > 0) AND
+      ((SumVRb + SumVVb + SumVRn + SumVVn + SumORb + SumOVb + SumORn + SumOVn) > 0))
+    {
+      ResetBounds(#KatMC);
+      if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk)
+        {
+          KF := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+          SMassa := if(SpSopr.Netto<>0, SpSopr.Netto, KatMC.Massa) * SpSopr.KolOpl * KF;
+          SVol := KatMC.Volume * SpSopr.KolOpl * KF;
+          SMassa := SMassa / VesTov;
+          SVol := SVol / ObTov;
+          bnPrice := bnPrice + SumVRb * SMassa; bnVPrice := bnVPrice + SumVVb * SMassa;
+          nPrice := nPrice + SumVRn * SMassa;   nVPrice := nVPrice + SumVVn * SMassa;
+          bnPrice := bnPrice + SumORb * SVol;   bnVPrice := bnVPrice + SumOVb * SVol;
+          nPrice := nPrice + SumORn * SVol;     nVPrice := nVPrice + SumOVn * SVol;
+
+ //-- НДС
+          loStdPrb.bnNDS := loStdPrb.bnNDS   + loStdPrb.nSumVRn * SMassa;
+          loStdPrb.nNDS := loStdPrb.nNDS     + loStdPrb.nSumVRn * SMassa;
+          loStdPrb.bnNDSV := loStdPrb.bnNDSV + loStdPrb.nSumVVn * SMassa;
+          loStdPrb.nNDSV := loStdPrb.nNDSV   + loStdPrb.nSumVVn * SMassa;
+
+          loStdPrb.bnNDS := loStdPrb.bnNDS   + loStdPrb.nSumORn * SVol;
+          loStdPrb.nNDS := loStdPrb.nNDS     + loStdPrb.nSumORn * SVol;
+          loStdPrb.bnNDSV := loStdPrb.bnNDSV + loStdPrb.nSumOVn * SVol;
+          loStdPrb.nNDSV := loStdPrb.nNDSV   + loStdPrb.nSumOVn * SVol;
+        }
+
+      SetBounds(#KatMC);
+    }
+
+  if (SumKolRb <> 0)
+    {
+      bnPrice := bnPrice + (SumKolRb*SpSopr.KolOpl/CommonKol);
+      loStdPrb.bnNDS := loStdPrb.bnNDS + (loStdPrb.nSumKolRn*SpSopr.KolOpl/CommonKol);
+    }
+  else
+    {
+      bnPrice := bnPrice + (SumKolRb/KolTovPos);
+      loStdPrb.bnNDS := loStdPrb.bnNDS + (loStdPrb.nSumKolRn/KolTovPos);
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumKolRn<>0)
+    {
+      nPrice := nPrice + (SumKolRn*SpSopr.KolOpl/CommonKol);
+      loStdPrb.nNDS := loStdPrb.nNDS + (loStdPrb.nSumKolRn*SpSopr.KolOpl/CommonKol);
+    }
+  else
+    {
+      nPrice := nPrice + (SumKolRn/KolTovPos);
+      loStdPrb.nNDS := loStdPrb.nNDS + (loStdPrb.nSumKolRn/KolTovPos);
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumKolVb <> 0)
+    {
+      bnVPrice := bnVPrice + (SumKolVb*SpSopr.KolOpl/CommonKol);
+      loStdPrb.bnNDSV := loStdPrb.bnNDSV + (loStdPrb.nSumKolVn*SpSopr.KolOpl/CommonKol);
+    }
+  else
+    {
+      bnVPrice := bnVPrice + (SumKolVb/KolTovPos);
+      loStdPrb.bnNDSV := loStdPrb.bnNDSV + (loStdPrb.nSumKolVn/KolTovPos);
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumKolVn<>0)
+    {
+      nVPrice := nVPrice + (SumKolVn*SpSopr.KolOpl/CommonKol);
+      loStdPrb.nNDSV := loStdPrb.nNDSV + (loStdPrb.nSumKolVn*SpSopr.KolOpl/CommonKol);
+    }
+  else
+    {
+      nVPrice := nVPrice + (SumKolVn/KolTovPos);
+      loStdPrb.nNDSV := loStdPrb.nNDSV + (loStdPrb.nSumKolVn/KolTovPos);
+    }
+
+  //------------------------------------------------------------------------------
+//не удалять, пригодится еще много раз для отладки
+/*   message(''#13#3' Sum_KP_Rb='+Sum_KP_Rb+
+            ''#13#3' Sum_KP_Rn= '+Sum_KP_Rn+
+            ''#13#3' SpSopr.KolOpl='+SpSopr.KolOpl+
+            ''#13#3' bnPrice='+bnPrice+
+            ''#13#3' nPrice='+nPrice+
+            ''#13#3' KolTovPos='+KolTovPos+
+            ''#13#3' KolTovPos2='+KolTovPos2
+            );*/
+
+  if (Sum_KP_Rb <> 0)
+   {
+    bnPrice := bnPrice + (Sum_KP_Rb/KolTovPos2);
+    loStdPrb.bnNDS := loStdPrb.bnNDS + (loStdPrb.nSum_KP_Rn/KolTovPos2);
+   }
+
+  if (Sum_KP_Rn<>0)
+  {
+    nPrice := nPrice + (Sum_KP_Rn/KolTovPos2);
+    loStdPrb.nNDS := loStdPrb.nNDS + (loStdPrb.nSum_KP_Rn/KolTovPos2);
+  }
+
+  if (Sum_KP_Vb <> 0)
+   {
+    bnVPrice := bnVPrice + (Sum_KP_Vb/KolTovPos2);
+    loStdPrb.bnNDSV := loStdPrb.bnNDSV + (loStdPrb.nSum_KP_Vn/KolTovPos2);
+   }
+
+  if (Sum_KP_Vn<>0)
+  {
+    nVPrice := nVPrice + (Sum_KP_Vn/KolTovPos2);
+    loStdPrb.nNDSV := loStdPrb.nNDSV + (loStdPrb.nSum_KP_Vn/KolTovPos2);
+  }
+
+//*****************************************************************
+//Добавить сопутствующие услуги на эту стоимость после
+//таможенной границы
+  if (SumTRb <> 0)
+    {
+      bnPrice := bnPrice + SumPRb * TempRb / SumTRb;
+      loStdPrb.bnNDS := loStdPrb.bnNDS + loStdPrb.nSumPRn * TempRb / SumTRb;
+    }
+  else
+    {
+      bnPrice := bnPrice + SumPRb / KolTovPos;
+      loStdPrb.bnNDS := loStdPrb.bnNDS + loStdPrb.nSumPRn/ KolTovPos;
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumTVb <> 0)
+    {
+      bnVPrice := bnVPrice + SumPVb * TempVb / SumTVb
+      loStdPrb.bnNDSV := loStdPrb.bnNDSV + loStdPrb.nSumPVn * TempVb / SumTVb;
+    }
+  else
+    {
+      bnVPrice := bnVPrice + SumPVb / KolTovPos;
+      loStdPrb.bnNDSV := loStdPrb.bnNDSV + loStdPrb.nSumPVn/ KolTovPos;
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumTRn <> 0)
+    {
+      nPrice := nPrice + SumPRn * TempRn / SumTRn
+      loStdPrb.nNDS := loStdPrb.nNDS + loStdPrb.nSumPRn * TempRn / SumTRn;
+    }
+  else
+    {
+      nPrice := nPrice + SumPRn / KolTovPos;
+      loStdPrb.nNDS := loStdPrb.nNDS + loStdPrb.nSumPRn/ KolTovPos;
+    }
+
+  //------------------------------------------------------------------------------
+  if (SumTVn <> 0)
+    {
+      nVPrice := nVPrice + SumPVn * TempVn / SumTVn
+      loStdPrb.nNDSV := loStdPrb.nNDSV + loStdPrb.nSumPVn * TempVn / SumTVn;
+    }
+  else
+    {
+      nVPrice := nVPrice + SumPVn / KolTovPos;
+      loStdPrb.nNDSV := loStdPrb.nNDSV + loStdPrb.nSumPVn/ KolTovPos;
+    }
+
+  //------------------------------------------------------------------------------
+  //Рассчитать окончательные цены
+  bnPrice := bnPrice / SpSopr.KolOpl;
+  bnVPrice := bnVPrice / SpSopr.KolOpl;
+  nPrice := nPrice / SpSopr.KolOpl;
+  nVPrice := nVPrice / SpSopr.KolOpl;
+
+
+  loStdPrb.bnNDS  := loStdPrb.bnNDS;
+  loStdPrb.nNDS   := loStdPrb.nNDS;
+  loStdPrb.bnNDSV := loStdPrb.bnNDSV;
+  loStdPrb.nNDSV  := loStdPrb.nNDSV;
+}

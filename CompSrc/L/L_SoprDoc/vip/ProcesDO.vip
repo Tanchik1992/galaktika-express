@@ -1,0 +1,756 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Интерфейс пакетной обработки ДО
+//******************************************************************************
+
+
+#include CalcFuns.vih
+#include DOfuns.vih
+#include GetDocSpecInfo.vih
+#include notes.vih
+#include oEdIzm.vih
+#include ofpmacro.vpp
+#include SDfuns.vih
+#include SHManager.vih
+#include SpNext.vih
+#include statlog.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Пакетная обработка ДО
+
+Параметры:
+  pVidDoc - вид ДО
+#end
+
+//******************************************************************************
+
+Interface ProcessingDO 'Пакетная обработка ДО' Cyan, EscClose;
+  Show at (,,110,30);
+
+//******************************************************************************
+
+Function CheckMyFilters: boolean; forward;
+Function CheckPlatDoc  : boolean; forward;
+
+//******************************************************************************
+
+#include SpNext.var
+#include oEdIzm.var
+#include DOfuns.var
+#include Notes.var            // oNotes         пояснения к статусу
+#include StatLog.var          // oStatLog       работа со статусами документов
+
+//******************************************************************************
+
+Create view
+Var
+//------------------------------------------------------------------------------
+  pVidDoc
+, pStatLogVidDoc
+, wFilter
+, fStatus
+, tipDO
+, ModifOps
+, OldModifOps
+, FuncOps
+, ModifStatus
+, GloStatus
+, GloFilter
+                : word;
+//------------------------------------------------------------------------------
+  ModifdDoc
+, fd1
+, fd2
+, Glod1
+, Glod2
+                : date;
+//------------------------------------------------------------------------------
+  ModifNote
+, GloKontr
+, GloGrPol
+, GloNote
+, fNote
+, fKontr
+, fGrPol
+                : comp;
+//------------------------------------------------------------------------------
+  DOMarker
+, IndexNo
+                : longint;
+//******************************************************************************
+
+#include rights4.vpp
+
+//******************************************************************************
+
+As select
+//------------------------------------------------------------------------------
+  if (SearchMarker(DOMarker, BaseDoc.NRec, IndexNo), '√', '')
+    ( FieldName = PickLabel )
+
+//------------------------------------------------------------------------------
+, BaseDoc.DesGr
+    ( FieldName = DocDesGr )
+
+//------------------------------------------------------------------------------
+, BaseDoc.Descr
+    ( FieldName = DocDescr )
+
+//------------------------------------------------------------------------------
+, if ( BaseDoc.cVal = 0, s_SimvRub, KlVal.SimvolV )
+    ( FieldName = KlValSimv )
+
+//------------------------------------------------------------------------------
+, ''
+    ( FieldName = t1 )
+
+//------------------------------------------------------------------------------
+#include rights2.vpp  // CanModify, CanView
+
+//------------------------------------------------------------------------------
+, BaseDoc.NRec
+
+//******************************************************************************
+
+From
+  BaseDoc
+, KatOrg
+, KlVal
+, KatOrg fKatOrg
+, KatOrg fKatOrg2
+, StepDoc
+, KatNotes
+, KatNotes NewKatNotes
+, KatNotes FiltKatNotes
+, KatMC
+, KatUsl
+, SpSopr
+, SoprHoz
+, Filial
+, KatSopr
+, Vagon
+, CursVal
+, SpDocNal
+, KlSkidka
+, BaseFin
+
+Where
+((
+    pVidDoc       ==  BaseDoc.VidDoc
+and BaseDoc.cOrg  ==  KatOrg.NRec
+and BaseDoc.cVal  ==  KlVal.NRec
+
+and fKontr        ==  fKatOrg.NRec
+and fGrPol        ==  fKatOrg2.NRec
+
+and BaseDoc.NRec  ==  StepDoc.cBaseDoc
+and StepDoc.NRec  ==  SpStep.cStepDoc
+
+and SpSopr.cMCUSL ==  KatMC.nRec   // для GetTotal
+and SpSopr.cMCUsl ==  KatUsl.nrec  // для GetTotal
+
+and BaseDoc.cNote ==  KatNotes.NRec
+and ModifNote     ==  NewKatNotes.NRec
+and fNote         ==  FiltKatNotes.NRec
+))
+
+order by BaseDoc.dDoc
+
+bounds BaseDocBycOrg =
+       GloKontr == BaseDoc.cOrg (NoIndex)
+
+bounds BaseDocBydDoc =
+       Glod1 <<= BaseDoc.dDoc (NoIndex)
+and    Glod2 >>= BaseDoc.dDoc (NoIndex)
+
+bounds BaseDocByStatus
+       GloStatus == BaseDoc.Status (NoIndex)
+
+condition BaseDocBycGrPol =
+          GloGrPol = BaseDoc.cGrPol
+
+condition BaseDocByCanView =
+          CanView
+
+condition BaseDocByFilters =
+          CheckMyFilters
+
+condition BaseDocByPlatDoc =
+          CheckPlatDoc
+
+;
+
+//******************************************************************************
+
+Parameters
+  pVidDoc;
+
+//******************************************************************************
+
+Function CheckMyFilters: boolean;
+{
+  CheckMyFilters := false;
+
+  if ( ( GloFilter and 16 ) <> 0 )
+    {
+      if ( GetFirst fastfirstrow StepDoc <> tsOK )
+        Exit;
+
+      if ( RecordExists KatSopr where (( StepDoc.nRec == KatSopr.cStepDoc )) <> tsOK )
+        Exit;
+    }
+
+  CheckMyFilters := true;
+
+  if ( ( GloFilter and 32 ) <> 0 )
+    {
+      CheckMyFilters := false;
+      if (BaseDoc.TypeDoc = 1)
+        {
+          if ( GetFirst fastfirstrow Vagon where (( BaseDoc.cNMoveCell == Vagon.nRec )) = tsOK )
+            CheckMyFilters := ( Vagon.cSertific <> 0 );
+        }
+      else
+        {
+          GetFirst fastfirstrow StepDoc where (( BaseDoc.nRec == StepDoc.cBaseDoc ));
+
+          _Loop SpStep where (( StepDoc.NRec == SpStep.cStepDoc and
+                                word(1)      == SpStep.PrMC     and
+                                SpStep.nRec  == Vagon.cSpStep ))
+           {
+             if ( Vagon.cSertific <> 0 )
+              {
+                CheckMyFilters := true;
+                Break;
+              }
+           }
+        }
+    }
+}
+
+//******************************************************************************
+
+Function CheckPlatDoc: boolean;
+{
+  CheckPlatDoc := FALSE;
+
+  if ( ( GloFilter AND 64 ) <> 0 )
+    {
+      if ( GetFirst FastFirstrow StepDoc <> tsOK )
+        Exit;
+
+       if ( RecordExists BaseFin where (( word(0)      == BaseFin.TiDkBase
+                                     AND  StepDoc.nRec == BaseFin.cStepDoc))<> tsOK )
+        Exit;
+    }
+
+  CheckPlatDoc := TRUE;
+}
+
+
+//******************************************************************************
+
+#include gettot.vpp
+#include skidtot.vpp
+#include procesdo.vpp
+
+//******************************************************************************
+
+Procedure SwitchBounds(iBound: longint; Enable: boolean);
+{
+  if ( not BoundActive(iBound) )
+    {
+      if (Enable)
+        AddBounds(iBound);
+    }
+  else
+    if (not Enable)
+      SubBounds(iBound);
+}; // procedure SetBounds
+
+//******************************************************************************
+
+Procedure SwitchCondition(iCondition: longint; Enable: boolean);
+{
+  if (not ConditionActiveInLeave(iCondition, #BaseDoc))
+    {
+      if (Enable)
+        PushConditionForLeave(iCondition, #BaseDoc);
+    }
+  else
+    {
+      if (not Enable)
+        PopConditionForLeave(iCondition, #BaseDoc);
+    };
+}; // procedure SetConditions
+
+//******************************************************************************
+
+Procedure CheckVisible(Mask: word; iField: longint);
+{
+  if ( ( ModifOps and Mask ) <> 0 )
+    SetFieldState(iField, sfVisible)
+  else
+    ClearFieldState(iField, sfVisible);
+}; // procedure CheckVisible
+
+//******************************************************************************
+
+Procedure SetFilters;
+{
+  SwitchBounds(tbBaseDocBydDoc, (GloFilter and 1) <> 0);
+
+  SwitchBounds(tbBaseDocByStatus, (GloFilter and 2) <> 0);
+
+  SwitchBounds(tbBaseDocBycOrg, (GloFilter and 4) <> 0);
+
+  SwitchCondition(tcBaseDocBycGrPol, (GloFilter and 8) <> 0);
+
+  SwitchCondition(tcBaseDocByFilters, (GloFilter and 48) <> 0);
+
+  SwitchCondition(tcBaseDocByPlatDoc, (GloFilter and 64) <> 0);
+}; // procedure SetFilters
+
+//******************************************************************************
+
+Procedure ClearFilters;
+{
+  SwitchBounds(tbBaseDocBydDoc, false);
+
+  SwitchBounds(tbBaseDocByStatus, false);
+
+  SwitchBounds(tbBaseDocBycOrg, false);
+
+  SwitchCondition(tcBaseDocBycGrPol, false);
+
+  SwitchCondition(tcBaseDocByFilters, false);
+
+  SwitchCondition(tcBaseDocByPlatDoc, false);
+}; // procedure SetFilters
+
+//******************************************************************************
+
+Window wnFilters 'Фильтры по документам' Gray, DoAccept;
+  Show at (,5,76,17);
+
+Screen scFilters (,hcProcessIDOFilter,sci1EnEsc);
+
+Fields
+  wFilter           ('Фильтры',,): noprotect;
+  fd1               ('Начальная дата периода',,): ['DD/MM/YYYY'], noprotect;
+  fd2               ('Конечная дата периода',,): ['DD/MM/YYYY'], noprotect;
+  FiltKatNotes.Name ('Статус документа',,sci13Esc): pickbutton, protect;
+  fKatOrg.Name      ('Контрагент',,sci13Esc): protect, pickbutton;
+  fKatOrg2.Name     ('Грузополучатель',,sci13Esc): protect, pickbutton;
+
+buttons
+  cmValue1, Default,,'Выполнить операцию импорта',,sci1Esc;
+  cmCancel      ,,,'Закрыть окно'              ,,sci1Esc;
+<<
+
+  Фильтры
+  [.] по дате формирования         ` За период с.@@@@@@@@@@@ по.@@@@@@@@@@@
+  [.] по статусу документа         ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] по контрагенту               ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] по грузополучателю           ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] все с накладными             `
+  [.] все с удостоверением качества`
+  [.] все с оплатой                `
+
+                <.~У~становить.>                <. ~С~нять .>
+>>
+end; // screen scFilters
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    wFilter := GloFilter;
+    fKontr := GloKontr;
+    fGrPol := GloGrPol;
+    fd1 := Glod1;
+    fd2 := Glod2;
+    fStatus := GloStatus;
+    fNote := GloNote;
+    ProcessCommand(cmValue10);
+  };
+
+cmValue1:
+  {
+    UpdateTable;
+    GloFilter := wFilter;
+    GloKontr := fKontr;
+    GloGrPol := fGrPol;
+    Glod1 := fd1;
+    Glod2 := fd2;
+    GloStatus := fStatus;
+    GloNote := fNote;
+    PutCommand(cmDefault);
+  };
+
+cmCancel:
+  {
+    GloFilter := 0;
+    ClearFilters;
+  }
+
+end; // handleevent window wnFilters
+end; // window wnFilters
+
+//******************************************************************************
+
+Screen srParams ('',hcProcessIDO,sci1EnEsc);
+  Show at (,,,5);
+
+Fields
+  ModifOps         ('Модификационные операции',,): noprotect;
+  NewKatNotes.Name ('Новое значение статуса',,sci13EnEsc): pickbutton, protect;
+  FuncOps          ('Функциональные операции',,): noprotect;
+<<
+
+  Модификационные операции                  Функциональные операции
+ [.] установить статус  `.@@@@@@@@@@@@@@@   [.] расчет надбавок/скидок        `
+>>
+end; // screen srParams
+
+//******************************************************************************
+
+Browse brListDO ('',hcProcessIDOList,sci14EnIns);
+  Show at (,6,,);
+
+  Table BaseDoc;
+
+Fields
+  { Font = { Color = if ( SearchMarker(DOMarker, BaseDoc.NRec, IndexNo), ColorMark, 0 ) } };
+  PickLabel        #3'√'            : [1], protect, NoAutoSize;
+  BaseDoc.Descr    #3'Дескр.'      ('Дескриптор(идентификатор) пользователя') : [4], protect, NoAutoSize;
+  BaseDoc.DesGr    #3'Группа'      ('Код группы пользователей') : [5], protect, NoAutoSize;
+  BaseDoc.NoDoc    #3'Номер'       ('Номер ДО') : [10], protect, NoAutoSize;
+  BaseDoc.dDoc     #3'Дата'        ('Дата вступления в силу') : [10, 'DD/MM/YYYY'], protect, NoAutoSize;
+  KatOrg.Name      #3'Контрагент'  ('Контрагент') : [15], protect;
+  KatNotes.sName   #3'Статус'      ('Статус документа') : [10], protect, NoAutoSize;
+  BaseDoc.Summa    #3'Сумма'       ('Сумма документа') : [14], [brForPrice], protect;
+  KlValSimv        #3'вал.'        ('Валюта документа') : [4], protect, NoAutoSize;
+end; // browse brListDO
+
+//******************************************************************************
+
+Panel pnParams;
+
+HandleEvent
+
+cmCheckField:
+  case CurField of
+  //------------------------------------------------------------------------------
+    #ModifOps:
+      {
+        var iField: longint;
+
+        case OldModifOps xor ModifOps of
+          1: iField := #NewKatNotes.Name;
+          2: iField := #ModifdDoc;
+         else iField := 0;
+        end; // case
+
+        if (iField <> 0) then
+          CheckVisible(OldModifOps xor ModifOps, iField);
+
+        OldModifOps := ModifOps;
+      };
+
+  //------------------------------------------------------------------------------
+    #wFilter:
+      {
+        ProcessCommand(cmValue10);
+      };
+
+  //------------------------------------------------------------------------------
+    #fd1: if ( fd1 > fd2 )
+            set fd2 := fd1;
+
+  //------------------------------------------------------------------------------
+    #fd2: if ( fd1 > fd2 )
+            set fd1 := fd2;
+
+  //------------------------------------------------------------------------------
+  end; // case
+
+cmPick:
+ {
+   var tmpStatus: word;
+
+   case CurField of
+   //------------------------------------------------------------------------------
+     #fKatOrg.Name: RunInterface('GetKatOr', fKontr, comp(0), false, comp(0), comp(0));
+
+   //------------------------------------------------------------------------------
+     #fKatOrg2.Name: RunInterface('GetKatOr', fGrPol, comp(0), false, comp(0), comp(0));
+
+   //------------------------------------------------------------------------------
+     #NewKatNotes.Name:
+       {
+         tmpStatus := 0;
+         if ( RunInterface('GetSomKatNotes', pStatLogVidDoc, word(0), tmpStatus, false, ModifNote) <> cmCancel )
+           ModifStatus := tmpStatus;
+       };
+
+   //------------------------------------------------------------------------------
+     #FiltKatNotes.Name:
+       {
+         tmpStatus := 0;
+         if ( RunInterface('GetSomKatNotes', pStatLogVidDoc, word(0), tmpStatus, false, fNote) <> cmCancel )
+           fStatus := tmpStatus;
+       };
+   //------------------------------------------------------------------------------
+   end; // case
+
+   ProcessCommand(cmValue10);
+ };
+end; // handleevent panel pnParams
+end; // panel pnParams
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    #include rights3.vpp
+
+    if ( not InitNalServ )
+      Message('Налоги не проинициализированы!', Warning + cmOk);
+
+    tipDO := pVidDoc;
+
+    DOMarker := InitMarker('DOMarker', 8, 10, 10);
+
+    ClearMarker(DOMarker);
+
+    ModifOps := 0;
+    FuncOps := 0;
+    OldModifOps := ModifOps;
+    pStatLogVidDoc := 40 ;
+
+    ModifStatus := 1;
+    ModifNote := oNotes.GetFirstNote(word(40), ModifStatus);
+    ModifdDoc := Cur_Date;
+
+    if ( not ReadMyDsk(GloFilter, 'ProcDO_GloFilter', boolean(true)) )
+      GloFilter := 0;
+
+    if ( not ReadMyDsk(GloStatus, 'ProcDO_GloStatus', boolean(true)) )
+      GloStatus := 1;
+
+    if ( not ReadMyDsk(GloNote, 'ProcDO_GloNote', boolean(true)) )
+      GloNote := oNotes.GetFirstNote(word(40), GloStatus);
+
+    if ( not ReadMyDsk(GloKontr, 'ProcDO_GloKontr', boolean(true)) )
+      GloKontr := 0;
+
+    if ( not ReadMyDsk(GloGrPol, 'ProcDO_GloGrPol', boolean(true)) )
+      GloGrPol := 0;
+
+    if ( not ReadMyDsk(Glod1, 'ProcDO_Glod1', boolean(true)) )
+      Glod1 := Sub_Months(Cur_Date, 1);
+
+    if ( not ReadMyDsk(Glod2, 'ProcDO_Glod2', boolean(true)) )
+      Glod2 := Cur_Date;
+
+    if ( Glod1 > Glod2 )
+      Glod1 := Sub_Months(Glod2, 1);
+
+    SwitchCondition(tcBaseDocByCanView, true);
+
+    ProcessCommand(cmValue10);
+    ProcessCommand(cmValue11);
+
+    SetFilters;
+
+    if ( GetFirst BaseDoc <> tsOk )
+      {
+        Message('Не найдены документы, удовлетворяющие установленным ограничениям', Warning+cmOk);
+        PutCommand(cmFilterSave);
+      };
+  };
+
+cmDone:
+  {
+    ClearMarker(DOMarker);
+    DoneMarker(DOMarker, 'DOMarker');
+
+    SaveMyDsk(GloFilter, 'ProcDO_GloFilter');
+    SaveMyDsk(GloStatus, 'ProcDO_GloStatus');
+    SaveMyDsk(GloNote, 'ProcDO_GloNote');
+    SaveMyDsk(GloKontr, 'ProcDO_GloKontr');
+    SaveMyDsk(GloGrPol, 'ProcDO_GloGrPol');
+    SaveMyDsk(Glod1, 'ProcDO_Glod1');
+    SaveMyDsk(Glod2, 'ProcDO_Glod2');
+
+    SwitchCondition(tcBaseDocByCanView, false);
+
+    ClearFilters;
+    DoneNalServ;
+  };
+
+cmEdit:
+  if (CurTable = #BaseDoc)
+    {
+      if (pVidDoc = 101)
+        {
+          PutCommand(cmDefault); // сразу заходим в ДО
+          RunInterface('VschetB', BaseDoc.NRec);
+        }
+      else
+        if (pVidDoc = 201)
+          {
+            PutCommand(cmDefault); // сразу заходим в ДО
+            RunInterface('Vschet', BaseDoc.NRec);
+          }
+    }
+
+cmMarkUnmark:
+  {
+    if ( NOT CanModify )
+      Message('Вам запрещено редактировать этот документ', Information);
+    else
+      {
+        InvertMarker(DOMarker, BaseDoc.NRec)
+  #ifdef ATL51
+        RedrawCurrentAndGo (GetCurrentFormat,true);
+  #else
+        if ( GetNext BaseDoc = tsOk )
+         {
+           CallToNeighbours(cmPosDown, #BaseDoc);
+           ReReadRecord;
+         };
+  #end
+       }
+  };
+
+cmSelectAll:
+  {
+    PushPos(#BaseDoc);
+
+    StartNewVisual(vtRotateVisual, vfTimer + vfBreak, 'Помечаю все документы...', 0);
+
+    _Loop BaseDoc
+      if ( CanModify )
+        InsertMarker(DOMarker, BaseDoc.NRec);
+
+    StopVisual('', 0);
+
+    PopPos(#BaseDoc);
+    RereadRecord(#BaseDoc);
+  };
+
+cmUnselectAll:
+  {
+    PushPos(#BaseDoc);
+    ClearMarker(DOMarker);
+    RescanPanel(#BaseDoc);
+    RereadRecord(#BaseDoc);
+    PopPos(#BaseDoc);
+  };
+
+cmValue1:
+  {
+    if ( GetMarkerCount(DOMarker) = 0 )
+      if ( CanModify )
+        InsertMarker(DOMarker, BaseDoc.NRec)
+      else
+        {
+          Message('Вам запрещено редактировать этот документ', Information);
+          Exit;
+        };
+
+    RunProcessing;
+    ClearMarker(DOMarker);
+    //GloFilter := 0;
+    ProcessCommand(cmValue10);
+    ProcessCommand(cmValue11);
+    SetFilters;
+
+    if ( GetFirst BaseDoc <> tsOk )
+      {
+        Message('Не найдены документы, удовлетворяющие установленным ограничениям', Warning+cmOk);
+        PutCommand(cmFilterSave);
+      };
+
+    RescanPanel(#BaseDoc);
+    RereadRecord(#BaseDoc);
+  };
+
+cmValue2:
+  Message('Здесь будет настройка внешних операций');
+
+cmValue10:
+  {
+    SetFieldVisible(#fd1, (wFilter and 1) <> 0);
+    SetFieldVisible(#fd2, (wFilter and 1) <> 0);
+    SetFieldVisible(#FiltKatNotes.Name, (wFilter and 2) <> 0)
+    SetFieldVisible(#fKatOrg.Name, (wFilter and 4) <> 0)
+    SetFieldVisible(#fKatOrg2.Name, (wFilter and 8) <> 0)
+  };
+
+cmValue11:
+  {
+    var w1: word; w1 := 0;
+    var w2: word; w2 := 0;
+    var w3: word; w3 := 0;
+
+    SetFieldVisible(#NewKatNotes.Name, (ModifOps and 1) <> 0);
+
+    if ( not boGetTune('PokazKach.PokazQual') )
+      {
+        w2 := w2 or 1;        // пересчет скидок
+        w3 := w3 or 32;       // фильтр по УК
+      };
+
+    ClusterDisabledField(#ModifOps, w1);
+    ClusterDisabledField(#FuncOps, w2);
+    ClusterDisabledField(#wFilter, w3);
+
+    set ModifOps := ModifOps and not w1;
+    set FuncOps := FuncOps and not w2;
+    set GloFilter := GloFilter and not w3;
+  };
+
+cmDefault:
+  ProcessCommand(cmValue1);
+
+cmFilterSave:
+  {
+    while true do
+      {
+        if (RunWindowModal(wnFilters) <> cmDefault)
+          Break;
+        else
+          {
+            ClearMarker(DOMarker);
+            SetFilters;
+
+            if ( GetFirst BaseDoc <> tsOk )
+              Message('Не найдены удовлетворяющие установленным ограничениям документы', Warning);
+            else
+              Break;
+          }
+      }
+
+    RescanPanel(#BaseDoc);
+    RereadRecord(#BaseDoc);
+  };
+
+cmHotKeys:
+  PutHotCommand(RunMenu('PrDoc_HotKeys'));
+
+cmDelOnProtect:
+  Abort;
+
+end; // handleevent
+End. // interface

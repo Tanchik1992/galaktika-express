@@ -1,0 +1,857 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Пакетное формирование документов по актам на услуги НИОКР
+//******************************************************************************
+
+#include KauReff.vih
+#include CopySopr.vih
+#include SchFactFunctions.vih
+#include Dog2Nakl.vih
+#include makenakl.vih
+#include do_gbatc.vih
+#include ExtAttr.vih
+#include SpNext.vih
+
+#doc
+Интерфейс пакетного формирования документов по актам на услуги НИОКР
+#end
+Interface NIOKR_bat 'Пакетное формирование документов' (, hcNIOKP_Paketn_Form_OtAgent,) doAccept, EscClose;
+  Show (, , 50, 22)
+
+#include SpNext.var
+
+Table STRUCT TmpSpAkt ""
+(
+  cMCUsl   : comp   "",
+  Price    : double "",
+  VPrice   : double "",
+  RPrice   : double "",
+  RVPrice  : double "" 
+
+)
+With Index
+(
+  TmpSpAkt01 = cMCUsl
+);
+
+Create view
+
+var
+//****************************************
+  CurVidSopr
+    : word;
+//****************************************
+  pMyOrg
+, pOrgAkt
+, pLastOrgAkt
+, pAgentReport
+    : comp;
+//****************************************
+  SumAgentReport
+    : double;
+//****************************************
+  dDateParams
+    : date;
+//****************************************
+  wDateParams
+, wNumPar1
+, wNumPar2
+, wParams1
+, wParams11
+, wParams2
+, wParams21
+    : word;
+//****************************************
+  sNumPref1
+, sNumInc1
+, sNumPost1
+, sNumPref2
+, sNumInc2
+, sNumPost2
+    : string;
+//****************************************
+  iKauReff       : EditKauReff;
+  oCopySopr      : objCopySopr;
+  iSf            : viSchFunc;
+  refObj         : Dog2NaklObj;
+  pMakeSoprByBuff: MakeSoprByBuff;
+  pDO            : GroupBatchGenereteDO;
+  oExtAttr       : iExtAttr;
+//****************************************
+
+From
+  Pick
+, Pick     Pick23
+, KatSopr
+, KatSopr  KatSopr2
+, SpSopr
+, Dogovor
+, IerDog
+, SpDocs
+, PlatDog
+, SchFact
+, SGetDocs
+, SDocBuf
+, SpDocBuf
+, KatUsl
+, KatOtpEd
+, StepDoc
+, BaseDoc
+, KatOrg
+, SoprHoz
+, TmpSpAkt
+;
+
+Form errr('errr.OUT', 'ERRR') with NoVisual;
+
+var DogLinks: array[1..3] of comp;
+
+Procedure SaveDogLinks(pDogovor, pAppDogovor, pCalPlan: comp);
+{
+  DogLinks[1] := pDogovor;
+  DogLinks[2] := pAppDogovor;
+  DogLinks[3] := pCalPlan;
+}
+
+Procedure RestoreDogLinks(var pDogovor, pAppDogovor, pCalPlan: comp);
+{
+  pDogovor    := DogLinks[1];
+  pAppDogovor := DogLinks[2];
+  pCalPlan    := DogLinks[3];
+}
+
+Procedure ChangeDescr(var pDescr, pDesGr : string);
+{
+  if not boGetTune('Doc.NaslDescr')
+    {
+      pDescr := sGetTune('User.Descr');
+      pDesGr := sGetTune('User.DesGr');
+    }
+  else
+    {
+      pDescr := KatSopr.Descr;
+      pDesGr := KatSopr.DesGr;
+    }
+}
+
+Procedure GenerateDO(pKatSopr: comp);
+{
+  if ( GetFirst FastFirstRow KatSopr2 where (( pKatSopr == KatSopr2.nRec )) <> tsOK )
+    Exit;
+
+  pDO.Set_MultiProtocol(TRUE);
+  pDO.Set_typeSopr(KatSopr2.VidSopr);
+  pDO.Set_BegEndDate(KatSopr2.dSopr, KatSopr2.dSopr);
+  pDO.Set_UseFilter(1);
+  pDO.Set_wDate(1);
+  pDO.Set_dDate(dDateParams);
+  pDO.Set_nNoDoc(KatSopr2.NSopr);
+
+  delete Pick where (( 22 == Pick.wList ));
+  insert Pick set Pick.wList := 22, Pick.cRec := pKatSopr;
+
+  SaveDogLinks(KatSopr2.cDogovor, KatSopr2.cAppDogovor, KatSopr2.cCalPlan);
+
+  update current KatSopr2 set
+    KatSopr2.cDogovor    := 0
+  , KatSopr2.cAppDogovor := 0
+  , KatSopr2.cCalPlan    := 0;
+
+  pDO.GenerateDOs;
+
+  RereadRecord(#KatSopr2);
+
+  RestoreDogLinks(KatSopr2.cDogovor, KatSopr2.cAppDogovor, KatSopr2.cCalPlan);
+  update current KatSopr2;
+
+  if ( GetFirst FastFirstRow StepDoc where (( KatSopr2.cStepDoc == StepDoc.nRec )) = tsOK )
+    if ( GetFirst FastFirstRow BaseDoc where (( StepDoc.cBaseDoc == BaseDoc.nRec )) = tsOK )
+      {
+        RestoreDogLinks(BaseDoc.cDogovor, BaseDoc.cAppDogovor, BaseDoc.cCalPlan);
+        ChangeDescr(BaseDoc.Descr, BaseDoc.DesGr);
+        update current BaseDoc;
+
+        case CurVidSopr of
+          111: errr.Write('     - счет на оплату агентских услуг №'
+                        + BaseDoc.NoDoc + DateToStr(BaseDoc.dDoc, ' от DD/MM/YYYY'));
+          211: errr.Write('     - счет на оплату НИОКР №'
+                        + BaseDoc.NoDoc + DateToStr(BaseDoc.dDoc, ' от DD/MM/YYYY'));
+        end;
+      }
+}
+
+Function BeforeSpSoprInsert(var SpBuf: type$SpSopr): boolean;
+var
+  Price0, VPrice0, RPrice0, RVPrice0 : double;
+{
+  Price0   := SpBuf.Price   * PlatDog.Procent / 100;
+  VPrice0  := SpBuf.VPrice  * PlatDog.Procent / 100;
+  RPrice0  := SpBuf.RPrice  * PlatDog.Procent / 100;
+  RVPrice0 := SpBuf.RVPrice * PlatDog.Procent / 100;
+
+  if ( SpBuf.KolOpl <> 0 )
+    {
+      SpBuf.Price   := FRoundRub2(Price0  * SpBuf.KolOpl) / SpBuf.KolOpl;
+      SpBuf.VPrice  := FRoundVal2(VPrice0 * SpBuf.KolOpl) / SpBuf.KolOpl;
+      SpBuf.rPrice  := FRoundRub2(rPrice0);
+      SpBuf.rVPrice := FRoundVal2(rVPrice0);
+
+      if ( GetFirst TmpSpAkt where (( SpBuf.cMCUsl == TmpSpAkt.cMCUsl )) = tsOk )
+        update current TmpSpAkt 
+           set TmpSpAkt.Price   := TmpSpAkt.Price   + Price0   - SpBuf.Price  
+             , TmpSpAkt.VPrice  := TmpSpAkt.VPrice  + VPrice0  - SpBuf.VPrice 
+             , TmpSpAkt.RPrice  := TmpSpAkt.RPrice  + RPrice0  - SpBuf.RPrice 
+             , TmpSpAkt.RVPrice := TmpSpAkt.RVPrice + RVPrice0 - SpBuf.RVPrice;
+    }
+  else
+    {
+      SpBuf.Price   := Price0;  
+      SpBuf.VPrice  := VPrice0; 
+      SpBuf.rPrice  := rPrice0; 
+      SpBuf.rVPrice := rVPrice0;
+    }
+
+  if ( pOrgAkt = pLastOrgAkt )  
+    if ( GetFirst TmpSpAkt where (( SpBuf.cMCUsl == TmpSpAkt.cMCUsl )) = tsOk )
+      {
+        SpBuf.Price   := SpBuf.Price   + TmpSpAkt.Price;
+        SpBuf.VPrice  := SpBuf.VPrice  + TmpSpAkt.VPrice;
+        SpBuf.RPrice  := SpBuf.RPrice  + TmpSpAkt.RPrice;
+        SpBuf.RVPrice := SpBuf.RVPrice + TmpSpAkt.RVPrice;
+      }
+
+  BeforeSpSoprInsert := TRUE;
+}
+
+Function BeforeKatSoprInsert(var Buf: type$KatSopr): boolean;
+var pRec: comp;
+{
+  if ( wNumPar1 = 1 )
+    {
+      if (wGetTune('FN.AvtoNum') <> 1)
+        DelLastNumD(Buf.VidSopr, Buf.NSopr);
+
+      Buf.NSopr := sNumPref1 + sNumInc1 + sNumPost1;
+      sNumInc1  := NextNumStr(sNumInc1);
+    }
+
+  Buf.dSopr     := dDateParams;
+  Buf.YearSopr  := Year(Buf.dSopr);
+  Buf.cOrgBase  := pOrgAkt;
+  Buf.cOrg      := pOrgAkt;
+  Buf.cSchFact  := 0;
+  Buf.cStepDoc  := 0;
+
+  Buf.cGruzFrom := Buf.cGruzTo;
+  Buf.cGruzTo   := pOrgAkt;
+
+  pRec := Buf.cMolTo;
+
+  Buf.cPodrTo := Buf.cMolTo;
+  Buf.cMolTo  := pRec;
+
+  case CurVidSopr of
+  //****************
+    111:
+      {
+        Buf.TipSopr := 1;
+      }
+  //****************
+    211:
+      {
+        Buf.TipSopr := 2;
+      }
+  //****************
+  end;
+
+  ChangeDescr(Buf.Descr, Buf.DesGr);
+
+  BeforeKatSoprInsert := TRUE;
+}
+
+Procedure AfterKatSoprInsert(Buf: type$KatSopr);
+{
+  if ( Buf.nRec = 0)
+    Exit;
+
+  pAgentReport := Buf.nRec;
+
+  oExtAttr.sSetAttr(coKatSopr, pAgentReport, 'НИОКР. Акт сдачи-приемки работ', string(KatSopr.nRec));
+
+  oExtAttr.sSetAttr(coKatSopr, KatSopr.nRec, 'НИОКР. Отчеты агента', 'есть');
+
+  errr.Write('     - отчет агента (акт на оказание услуг) №' + Buf.NSopr + DateToStr(Buf.dSopr, ' от DD/MM/YYYY'));
+
+  if ( (wParams11 and 1) <> 0 )
+    {
+      if ( Not iSF.DoInit(1))
+        {
+          Message('Не проинициализирован модуль обработки документов для учета НДС', Warning + OkButton);
+          FreeVipInterface(iSF);
+          Exit;
+        }
+
+      if iSF.CreateSFbyKatSopr(Buf.nRec)
+        {
+          if ( GetFirst FastFirstRow KatSopr2 where (( Buf.nRec == KatSopr2.nRec )) = tsOK )
+            if ( GetFirst FastFirstRow SchFact where (( KatSopr2.cSchFact == SchFact.nRec )) = tsOK )
+              {
+                ChangeDescr(SchFact.Descr, SchFact.DesGr);
+                SchFact.Num := KatSopr2.NSopr;
+
+                if ( update current SchFact = tsOk )
+                  errr.Write('     - счет-фактура на возмещение расходов №' + SchFact.Num);
+              }
+        }
+    }
+
+  if ( (wParams11 and 2) <> 0 )
+    GenerateDO(Buf.nRec);
+}
+
+Procedure FillSpNaklBuffer;
+{
+  ClearBuffer(#SpDocBuf);
+
+  SpDocBuf.nRec      := 0;
+  SpDocBuf.Npp       := oSpNext.GetSpNppNext(Dogovor.nRec, coSpDocs);
+  SpDocBuf.PrMC      := 2;
+  SpDocBuf.cMCUsl    := coGetTune('Dogovor.cAgentUsl');
+  SpDocBuf.KolOpl    := 0;
+  SpDocBuf.Kol       := 1;
+  SpDocBuf.KolFact   := SpDocBuf.Kol;
+  SpDocBuf.KolSkl    := SpDocBuf.Kol;
+
+  SpDocBuf.Price     := SGetDocs.Summa * SpDocs.Price / 100;
+  SpDocBuf.Summa     := SpDocBuf.Price * SpDocBuf.Kol;
+
+  if ( GetFirst FastFirstRow KatOtpEd
+          where (( SpDocBuf.PrMC   == KatOtpEd.PrMC   AND
+                   SpDocBuf.cMCUsl == KatOtpEd.cMCUsl AND
+                   word(1)         == KatOtpEd.Akt )) = tsOk )
+    SpDocBuf.cOtpEd := KatOtpEd.NRec;
+
+  if ( GetFirst FastFirstRow KatUsl where (( SpDocBuf.cMCUsl == KatUsl.nRec )) = tsOk )
+    {
+      SpDocBuf.cGrNal   := KatUsl.cGrNal;
+      SpDocBuf.cGrMCUsl := KatUsl.cGroupUsl;
+    }
+
+  SpDocBuf.cVal         := Dogovor.cVal;
+  SpDocBuf.NDS          := 0;
+  SpDocBuf.PrUsNkl      := 0;
+  SpDocBuf.ManualTax    := 0;
+  SpDocBuf.cDogovor     := Dogovor.cDogovor;
+  SpDocBuf.cAppDogovor  := Dogovor.nRec;
+
+  insert current SpDocBuf;
+}
+
+Function GetPrincipal: comp;
+{
+  GetPrincipal := pOrgAkt;
+}
+
+Screen scParams(, hcNIOKP_Paketn_Form_OtAgent,sci1EnEsc)
+Fields
+  wDateParams : NoProtect;
+  dDateParams (,,sci13EnEsc) : NoProtect;
+
+  wNumPar1    ('Алгоритм нумерации отчетов агента',,) : NoProtect;
+  sNumPref1   ('Префиксная (постоянная) часть номера',,) : NoProtect;
+  sNumInc1    ('Инкрементная часть номера',,) : NoProtect;
+  sNumPost1   ('Суфиксная (постоянная) часть номера',,) : NoProtect;
+
+  wNumPar2    ('Алгоритм нумерации актов на агентское вознаграждение',,) : NoProtect;
+  sNumPref2   ('Префиксная (постоянная) часть номера',,) : NoProtect;
+  sNumInc2    ('Инкрементная часть номера',,) : NoProtect;
+  sNumPost2   ('Суфиксная (постоянная) часть номера',,) : NoProtect;
+
+  wParams1    : NoProtect;
+  wParams11   : NoProtect;
+  wParams2    : NoProtect;
+  wParams21   : NoProtect;
+Buttons
+  cmValue1;
+  cmCanCel;
+<<
+ `Дата формируемых документов`
+  (.) задать явно     `.@@@@@@@@@@@
+  (.) из исх.документа`
+
+ `Нумерация отчетов агента`
+  (.) по настройке`
+  (.) по шаблону  `.@@@@@@@@@@.@@@@@.@@@@@
+
+ `Нумерация актов на агентское вознаграждение`
+  (.) по настройке`
+  (.) по шаблону  `.@@@@@@@@@@.@@@@@.@@@@@
+
+ `Формируемые документы`
+  [.] отчет агента (акт на оказание услуг)`
+    [.] счет-фактура`
+    [.] ДО на продажу`
+  [.] акт на агентское вознаграждение (акт на оказание услуг)`
+    [.] счет-фактура`
+    [.] ДО на продажу`
+
+  <. Формирование .>    <.    Отмена    .>
+>>
+end;
+
+HandleEvent
+
+cmInit:
+  {
+    pMyOrg := coGetTune('MyOrg');
+
+    oExtAttr.CreateAttr(coKatSopr, 'НИОКР. Акт сдачи-приемки работ', word(0));
+    oExtAttr.CreateAttr(coKatSopr, 'НИОКР. Акт на вознаграждение'  , word(0));
+
+    dDateParams := Cur_Date;
+
+    if ( Not ReadMyDsk(wParams1,  'NIOKR_bat_wParams1', TRUE) )
+      wParams1 := 1;
+
+    if ( Not ReadMyDsk(wParams2,  'NIOKR_bat_wParams2', TRUE) )
+      wParams2 := 1;
+
+    if ( Not ReadMyDsk(wParams11, 'NIOKR_bat_wParams11', TRUE) )
+      wParams11 := 3;
+
+    if ( Not ReadMyDsk(wParams21, 'NIOKR_bat_wParams21', TRUE) )
+      wParams21 := 3;
+
+    if ( Not ReadMyDsk(wDateParams, 'NIOKR_bat_wDateParams', TRUE) )
+      wDateParams := 0;
+
+    if ( Not ReadMyDsk(wNumPar1,  'NIOKR_bat_wNumPar1', TRUE) )
+      wNumPar1 := 0;
+
+    if ( Not ReadMyDsk(sNumPref1, 'NIOKR_bat_sNumPref1', TRUE) )
+      sNumPref1 := '';
+
+    if ( Not ReadMyDsk(sNumInc1,  'NIOKR_bat_sNumInc1', TRUE) )
+      sNumInc1 := '001';
+
+    if ( Not ReadMyDsk(sNumPost1, 'NIOKR_bat_sNumPost1', TRUE) )
+      sNumPost1 := '';
+
+    if ( Not ReadMyDsk(wNumPar2,  'NIOKR_bat_wNumPar2', TRUE) )
+      wNumPar2 := 0;
+
+    if ( Not ReadMyDsk(sNumPref2, 'NIOKR_bat_sNumPref2', TRUE) )
+      sNumPref2 := '';
+
+    if ( Not ReadMyDsk(sNumInc2,  'NIOKR_bat_sNumInc2', TRUE) )
+      sNumInc2 := '001';
+
+    if ( Not ReadMyDsk(sNumPost2, 'NIOKR_bat_sNumPost2', TRUE) )
+      sNumPost2 := '';
+
+    if ( coGetTune('Dogovor.cAgentUsl') = 0 )
+      {
+        Message('Не задана настройка'#13 + GetTuneName('Dogovor.cAgentUsl'), Warning);
+
+        wParams2  := 0;
+        wParams21 := 0;
+
+        ClusterDisabledField(#wParams2 , 1);
+        ClusterDisabledField(#wParams21, 3);
+      }
+
+    ClusterDisabledField(#wParams2,  (1 - wParams1));
+    ClusterDisabledField(#wParams11, 3 * (1 - wParams1));
+    ClusterDisabledField(#wParams21, 3 * (1 - wParams2));
+
+    if ( wDateParams = 0 )
+      SetFieldState(#dDateParams, sfVisible)
+    else
+      ClearFieldState(#dDateParams, sfVisible);
+
+    if ( wNumPar1 = 1 )
+      {
+        SetFieldState(#sNumPref1, sfVisible);
+        SetFieldState(#sNumInc1,  sfVisible);
+        SetFieldState(#sNumPost1, sfVisible);
+      }
+    else
+      {
+        ClearFieldState(#sNumPref1, sfVisible);
+        ClearFieldState(#sNumInc1,  sfVisible);
+        ClearFieldState(#sNumPost1, sfVisible);
+      }
+
+    if ( wNumPar2 = 1 )
+      {
+        SetFieldState(#sNumPref2, sfVisible);
+        SetFieldState(#sNumInc2,  sfVisible);
+        SetFieldState(#sNumPost2, sfVisible);
+      }
+    else
+      {
+        ClearFieldState(#sNumPref2, sfVisible);
+        ClearFieldState(#sNumInc2,  sfVisible);
+        ClearFieldState(#sNumPost2, sfVisible);
+      }
+
+    if ( (wParams1 + wParams2) = 0 )
+      DisableCommand(cmValue1)
+    else
+      EnableCommand(cmValue1);
+  }
+
+cmCheckField:
+  {
+    case CurField of
+    //**************
+      #wDateParams:
+        if ( wDateParams = 0 )
+          SetFieldState(#dDateParams, sfVisible)
+        else
+          ClearFieldState(#dDateParams, sfVisible);
+    //**************
+      #wNumPar1:
+        {
+          if ( wNumPar1 = 1 )
+            {
+              SetFieldState(#sNumPref1, sfVisible);
+              SetFieldState(#sNumInc1,  sfVisible);
+              SetFieldState(#sNumPost1, sfVisible);
+            }
+          else
+            {
+              ClearFieldState(#sNumPref1, sfVisible);
+              ClearFieldState(#sNumInc1,  sfVisible);
+              ClearFieldState(#sNumPost1, sfVisible);
+            }
+        }
+    //**************
+      #wNumPar2:
+        {
+          if ( wNumPar2 = 1 )
+            {
+              SetFieldState(#sNumPref2, sfVisible);
+              SetFieldState(#sNumInc2,  sfVisible);
+              SetFieldState(#sNumPost2, sfVisible);
+            }
+          else
+            {
+              ClearFieldState(#sNumPref2, sfVisible);
+              ClearFieldState(#sNumInc2,  sfVisible);
+              ClearFieldState(#sNumPost2, sfVisible);
+            }
+        }
+    //**************
+      #wParams1:
+        {
+          set wParams2  := wParams1;
+          set wParams11 := 3 * wParams1;
+          set wParams21 := 3 * wParams2;
+
+          ClusterDisabledField(#wParams2,  (1 - wParams1));
+          ClusterDisabledField(#wParams11, 3 * (1 - wParams1));
+          ClusterDisabledField(#wParams21, 3 * (1 - wParams2));
+        }
+    //**************
+      #wParams2:
+        {
+          set wParams21 := 3 * wParams2;
+
+          ClusterDisabledField(#wParams21, 3 * (1 - wParams2));
+        }
+    //**************
+    end;
+
+    if ( (wParams1 + wParams2) = 0 )
+      DisableCommand(cmValue1)
+    else
+      EnableCommand(cmValue1);
+  }
+
+cmValue1:
+  {
+/*
+    PackFields;
+
+    if ( ( wDateParams = 0 ) AND ( dDateParams = ZeroDate ) )
+      {
+        Message('Не задана дата формируемых документов', Warning);
+        SelectField(#dDateParams);
+        Exit;
+      }
+
+    delete Pick23 where (( word(22) == Pick23.wList ));
+
+    if ( RunInterface('GetSomeKatSopr', word(111), ZeroDate, Cur_Date, word(1), word(4)) = cmCancel )
+      Exit;
+*/
+    PutCommand(cmDefault);
+  }
+
+cmDefault:
+  {
+    PackFields;
+
+    if ( ( wDateParams = 0 ) AND ( dDateParams = ZeroDate ) )
+      {
+        Message('Не задана дата формируемых документов', Warning);
+        SelectField(#dDateParams);
+        Exit;
+      }
+
+    delete Pick23 where (( word(22) == Pick23.wList ));
+
+    if ( RunInterface('GetSomeKatSopr', word(111), ZeroDate, Cur_Date, word(1), word(4)) = cmCancel )
+      Exit;
+
+    InitNalServ;
+
+    delete Pick23 where (( word(23) == Pick23.wList ));
+    update Pick23 where (( word(22) == Pick23.wList )) set Pick23.wList := 23;
+
+    GetVipInterface(iSF);
+    GetVipRef(oCopySopr, 'iCopySopr');
+    GetVipRef(refObj, 'Dog2Nakl');
+
+    BindEvent(GetPrincipal, refObj.GetPrincipal);
+
+    BindEvent(BeforeSpSoprInsert , oCopySopr.BeforeSpSoprInsert);
+    BindEvent(BeforeKatSoprInsert, oCopySopr.BeforeKatSoprInsert);
+    BindEvent(AfterKatSoprInsert , oCopySopr.AfterKatSoprInsert);
+
+    errr.Write('Обработка актов на прием услуг');
+    errr.Write('---------------------------------');
+
+    _LOOP Pick23 where (( word(23) == Pick23.wList ))
+      {
+        if ( GetFirst FastFirstRow KatSopr Where (( Pick23.cRec == KatSopr.nRec )) <> tsOk )
+          Continue;
+
+        errr.Write('');
+        errr.Write('№' + KatSopr.NSopr + DateToStr(KatSopr.dSopr, ' от DD/MM/YYYY'));
+//******************************************************************************
+        // только по договорам НИОКР
+        if ( GetFirst FastFirstRow Dogovor where (( KatSopr.cDogovor == Dogovor.nRec )) <> tsOk )
+          {
+            errr.Write('  не связан с договором НИОКР');
+            Continue;
+          }
+
+        if ( Dogovor.VidDog <> 13 )
+          {
+            errr.Write('  связан не с договором НИОКР');
+            Continue;
+          }
+
+        if ( Dogovor.cAgentDog = 0 )
+          {
+            errr.Write('  договор НИОКР не связан с агентским договором');
+            Continue;
+          }
+
+        if ( wDateParams = 1 )
+          dDateParams := KatSopr.dSopr;
+
+        var pAgentDog: comp;
+        pAgentDog := Dogovor.cAgentDog;
+
+
+//******************************************************************************
+        // заполняет таблицу в памяти
+        _LOOP SpSopr where (( KatSopr.nRec == SpSopr.cSopr ))
+          {
+            insert current TmpSpAkt 
+               set TmpSpAkt.cMCUsl  := SpSopr.cMCUsl
+                 , TmpSpAkt.Price   := 0  
+                 , TmpSpAkt.VPrice  := 0 
+                 , TmpSpAkt.RPrice  := 0 
+                 , TmpSpAkt.RVPrice := 0;
+          }
+        
+        // ищем последний источник финансирования для накапливания на нем погрешностей от округления
+        // просматриваем источники финансирования и в них ищем организации
+
+        pLastOrgAkt := 0;
+        
+        _LOOP PlatDog where (( KatSopr.cDogovor == PlatDog.cDogovor ))
+          {
+            // только закупка - денежные средства передаются
+            if ( PlatDog.Direct <> 2 )
+              Continue;
+
+            pOrgAkt := iKauReff.GetKauReff(coSpKAU, PlatDog.cFinSource, cgKau_KatOrg);
+            
+            pLastOrgAkt := pOrgAkt;
+          }
+
+        // если среди источников финансирования последней указана собственная организация, то обнуляем
+        if (pLastOrgAkt = pMyOrg)
+          pLastOrgAkt := 0;
+
+//******************************************************************************
+        // просматриваем источники финансирования и в них ищем организации
+        _LOOP PlatDog where (( KatSopr.cDogovor == PlatDog.cDogovor ))
+          {
+//******************************************************************************
+            // только закупка - денежные средства передаются
+            if ( PlatDog.Direct <> 2 )
+              Continue;
+
+            pOrgAkt := iKauReff.GetKauReff(coSpKAU, PlatDog.cFinSource, cgKau_KatOrg);
+
+            // в источнике финансирования д.б. указана организация, но не собственная
+            if ( ( pOrgAkt = 0 ) OR ( pOrgAkt = pMyOrg ) )
+              Continue;
+//******************************************************************************
+
+            if ( GetFirst FastFirstRow KatOrg where (( pOrgAkt == KatOrg.nRec )) = tsOk )
+              errr.Write('  для контрагента "' + KatOrg.Name + '" сформированы документы:')
+            else
+              {
+                errr.Write('  контрагент с nRec = ' + string(pOrgAkt) + ' в каталоге контрагентов отсутствует');
+                Continue;
+              }
+
+            SumAgentReport := 0;
+
+            if ( wParams1 = 1 )
+              {
+                CurVidSopr := 211;
+                RereadRecord(#KatSopr);
+                oCopySopr.DoCopyDocument(KatSopr.nRec, CurVidSopr);
+
+                if ( GetFirst FastFirstRow KatSopr2 where (( pAgentReport == KatSopr2.nRec )) = tsOK )
+                  {
+                    // сумма по отчету агента для выставления акта на оказание агентских услуг
+                    SumAgentReport := KatSopr2.Summa;
+                  }
+              }
+
+            if ( wParams2 = 1 )
+              // бежим по листьям ветки агентского договора
+              _LOOP IerDog where (( pAgentDog   == IerDog.cUpRec  AND
+                                    word(1)     == IerDog.IsLeaf  AND
+                                    IerDog.cRec == Dogovor.nRec ))
+                // обрабатываем только исполняемые
+                if ( Dogovor.Status = 1 )
+                  _LOOP SpDocs where (( Dogovor.nRec == SpDocs.cDoc AND
+                                        Dogovor.TiDk == SpDocs.TiDk ))
+                    // организацию ищем среди списка принципалов
+                    if ( ( pOrgAkt = SpDocs.cMcUsl ) AND ( SpDocs.PrMC = 50 ) )
+                      {
+                        CurVidSopr := 111;
+
+                        delete all SGetDocs;
+
+                        ClearBuffer(#SGetDocs);
+
+                        SGetDocs.nRec     := Dogovor.nRec;
+                        SGetDocs.wDocType := 2;
+                        SGetDocs.Summa    := SumAgentReport; //KatSopr.Summa;
+
+                        insert current SGetDocs;
+
+                        if refObj.InitTmpTables(SGetDocs.nRec, 1 + 2)
+                          {
+                            update SDocBuf set SDocBuf.dDoc := dDateParams;
+
+                            FillSpNaklBuffer;
+
+                            RereadRecord(#SDocBuf);
+
+                            SaveDogLinks(SDocBuf.cDogovor, SDocBuf.cAppDogovor, SDocBuf.cCalPlan);
+
+                            update SDocBuf set
+                              SDocBuf.cDogovor    := 0
+                            , SDocBuf.cAppDogovor := 0
+                            , SDocBuf.cCalPlan    := 0;
+
+                            if ( pMakeSoprByBuff.MakeDocument(dDateParams, 0, '', 1 + 2 + 4) = 0 )
+                              if ( GetFirst FastFirstRow SDocBuf = tsOK )
+                                {
+                                  if ( wParams1 = 1 )
+                                    oExtAttr.sSetAttr(coKatSopr
+                                                    , pAgentReport
+                                                    , 'НИОКР. Акт на вознаграждение'
+                                                    , string(SDocBuf.cKatSopr));
+
+                                  if ( GetFirst FastFirstRow KatSopr2 where (( SDocBuf.cKatSopr == KatSopr2.nRec )) = tsOK )
+                                    {
+                                      RestoreDogLinks(KatSopr2.cDogovor, KatSopr2.cAppDogovor, KatSopr2.cCalPlan);
+
+                                      if ( wNumPar2 = 1 )
+                                        {
+                                          if (wGetTune('FN.AvtoNum') <> 1)
+                                            DelLastNumD(KatSopr2.VidSopr, KatSopr2.NSopr);
+
+                                          KatSopr2.NSopr := sNumPref2 + sNumInc2 + sNumPost2;
+                                          sNumInc2       := NextNumStr(sNumInc2);
+                                        }
+
+                                      ChangeDescr(KatSopr2.Descr, KatSopr2.DesGr);
+
+                                      update current KatSopr2;
+
+                                      update SoprHoz where (( KatSopr2.VidSopr == SoprHoz.TipDoc and
+                                                              KatSopr2.NRec    == SoprHoz.cSoprDoc ))
+                                        set SoprHoz.NoDoc       := KatSopr2.NSopr
+                                          , SoprHoz.cDogovor    := KatSopr2.cDogovor
+                                          , SoprHoz.cAppDogovor := KatSopr2.cAppDogovor
+                                          , SoprHoz.cCalPlan    := katSopr2.cCalPlan;
+
+                                      oExtAttr.sSetAttr(coKatSopr
+                                                      , KatSopr.nRec
+                                                      , 'НИОКР. Акты на вознаграждение'
+                                                      , 'есть');
+
+                                      errr.Write('     - акт на агентское вознаграждение (акт на оказание услуг) №'
+                                               + KatSopr2.NSopr + DateToStr(KatSopr2.dSopr, ' от DD/MM/YYYY'));
+                                    }
+
+                                  if ( (wParams21 and 1) <> 0 )
+                                    if iSF.DoInit(1)
+                                      if iSF.CreateSFbyKatSopr(SDocBuf.cKatSopr)
+                                        {
+                                          if ( GetFirst FastFirstRow KatSopr2 where (( SDocBuf.cKatSopr == KatSopr2.nRec )) = tsOK )
+                                            if ( GetFirst FastFirstRow SchFact where (( KatSopr2.cSchFact == SchFact.nRec )) = tsOK )
+                                              {
+                                                ChangeDescr(SchFact.Descr, SchFact.DesGr);
+                                                SchFact.Num := KatSopr2.NSopr;
+
+                                                if ( update current SchFact = tsOk )
+                                                  errr.Write('     - счет-фактура на агентское вознаграждение №' + SchFact.Num);
+                                              }
+                                        }
+
+                                  if ( (wParams21 and 2) <> 0 )
+                                    GenerateDO(SDocBuf.cKatSopr);
+                                }
+                          }
+                      }
+          }
+//******************************************************************************
+      }
+
+    if Not errr.Error
+      errr.ShowFile('Протокол формирования документов');
+
+    SaveMyDsk(wParams1,    'NIOKR_bat_wParams1');
+    SaveMyDsk(wParams2,    'NIOKR_bat_wParams2');
+    SaveMyDsk(wParams11,   'NIOKR_bat_wParams11');
+    SaveMyDsk(wParams21,   'NIOKR_bat_wParams21');
+    SaveMyDsk(wDateParams, 'NIOKR_bat_wDateParams');
+    SaveMyDsk(wNumPar1,    'NIOKR_bat_wNumPar1');
+    SaveMyDsk(sNumPref1,   'NIOKR_bat_sNumPref1');
+    SaveMyDsk(sNumInc1,    'NIOKR_bat_sNumInc1');
+    SaveMyDsk(sNumPost1,   'NIOKR_bat_sNumPost1');
+    SaveMyDsk(wNumPar2,    'NIOKR_bat_wNumPar2');
+    SaveMyDsk(sNumPref2,   'NIOKR_bat_sNumPref2');
+    SaveMyDsk(sNumInc2,    'NIOKR_bat_sNumInc2');
+    SaveMyDsk(sNumPost2,   'NIOKR_bat_sNumPost2');
+  }
+
+end;
+
+End.

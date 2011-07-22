@@ -1,0 +1,680 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Протокол формирования цены
+//******************************************************************************
+#doc
+Назначение:
+  Протокол формирования цены
+
+Параметры:
+  pKatSopr - ссылка на сопроводительный документ
+#end
+
+//******************************************************************************
+
+Interface PriceProtocol 'Протокол формирования цены' AlwaysReturn;
+
+  Show at (, , , );
+
+//******************************************************************************
+
+Table Struct MemSpProp
+(
+  PrUsl   : word
+, cSpSopr : comp
+, Koef    : double
+)
+With Index
+(
+  MemSpProp01 = PrUsl + cSpSopr
+)
+;
+
+Table Struct MemDetail
+(
+  cSpSopr : comp
+, cOrg    : comp
+, OrgName : string
+, UslName : string
+, NalName : string
+, UslSumm : double
+, NalSumm : double
+, wFlag   : word
+)
+With Index
+(
+  MemDetail01 = cSpSopr + wFlag + OrgName(length = 80) + UslName(length = 80) + NalName(length = 80)
+)
+;
+
+//******************************************************************************
+
+Create view
+
+Var
+//------------------------------------------------------------------------------
+  pKatSopr
+                : comp;
+//------------------------------------------------------------------------------
+  Summa
+                : double;
+//------------------------------------------------------------------------------
+
+From
+  KatSopr
+, KatSopr       KatSopr1
+, SpSopr
+, SpSopr        SpSopr1
+, SpSopr        SpSopUsl
+, SpDocNal
+, SpDocNal      SpDocNal1
+, SpDocNal      SpDocNalUsl
+, KatMC
+, KatUsl
+, KatUsl        KatUsl1
+, KatOrg
+, KatOrg        KatOrg1
+, KatEd
+, KatOtpEd
+, KatNalog
+, KatNalog      KatNalog1
+, KatNalog      KatNalogUsl
+, KatCity
+, KatState
+, KlVal
+, KlVal         KlVal1
+, MemSpProp
+, MemSpProp     MemSp1
+, MemSpProp     MemSpUsl
+, MemDetail
+
+Where
+((
+    pKatSopr             == KatSopr.nRec
+and KatSopr.cOrgBase     == KatOrg.nRec
+and KatSopr.cVal         == KlVal.nRec
+and KatOrg.cCity         == KatCity.nRec
+and KatOrg.cState        == KatState.nRec
+
+//МЦ
+and KatSopr.nRec         == SpSopr.cSopr
+and word(1)              == SpSopr.prMC
+and SpSopr.cMCUsl        == KatMC.nRec
+and SpSopr.cOtpEd        == KatOtpEd.nRec
+and KatMC.cED            == KatEd.nRec
+
+//все налоги
+and KatSopr.VidSopr      == SpDocNal.TipDoc
+and SpSopr.NRec          == SpDocNal.cSpDoc
+and SpDocNal.cNalog      == KatNalog.nRec
+
+//Сопутствующие услуги основного контрагента
+and KatSopr.nRec         == SpSopUsl.cSopr
+and word(3)             <<= SpSopUsl.PrMC
+and SpSopUsl.cMCUsl      == KatUsl.nRec
+
+//все налоги услуг основного контрагента
+and KatSopr.VidSopr      == SpDocNalUsl.TipDoc
+and SpSopUsl.nRec        == SpDocNalUsl.cSpDoc
+and SpDocNalUsl.cNalog   == KatNalogUsl.nRec
+
+//Сопутствующие услуги, отнесенные на другого контрагента
+and word(111)            == KatSopr1.VidSopr
+and KatSopr.nRec         == KatSopr1.cKatSopr
+and KatSopr1.cOrgBase    == KatOrg1.NRec
+and KatSopr1.cVal        == KlVal1.NRec
+and KatSopr1.nRec        == SpSopr1.cSopr
+and SpSopr1.cMCUsl       == KatUsl1.NRec
+
+//все налоги услуг, отнесенных на другого контрагента
+and word(111)            == SpDocNal1.TipDoc
+and SpSopr1.NRec         == SpDocNal1.cSpDoc
+and SpDocNal1.cNalog     == KatNalog1.NRec
+
+and SpSopUsl.PrMC        == MemSpUsl.PrUsl
+and SpSopr.nRec          == MemSpUsl.cSpSopr
+
+and SpSopr1.PrMC         == MemSp1.PrUsl
+and SpSopr.nRec          == MemSp1.cSpSopr
+))
+;
+
+//******************************************************************************
+
+Parameters
+  pKatSopr
+;
+
+//******************************************************************************
+
+Form FrmGeneral('ShPriceG.out', 'ShPriceG') with NoVisual;
+Form FrmDetail('ShPriceD.out', 'ShPriceD') with NoVisual;
+
+//*****************************************************************************
+
+Function fNDE(nRecVal: Comp): boolean;
+{
+//  fNDE := nRecVal = comp(0);
+  fNDE := true;
+}
+
+//*****************************************************************************
+
+Procedure PrintGeneral;
+Var
+  fS
+, fN
+, fN1
+, fN2
+, fN3
+, fN4
+, fTotal
+         : double;
+
+  i
+         : word;
+{
+  frmGeneral.Write(KatSopr.nRec);
+  frmGeneral.Write(KatSopr.nSopr);
+  frmGeneral.Write(KatSopr.dSopr);
+  frmGeneral.Write(KatOrg.Name);
+  frmGeneral.Write(KatOrg.UNN);
+  frmGeneral.Write(KatOrg.Addr);
+
+  frmGeneral.Write( KatOrg.IndexK + ', '
+                  + KatState.Name + ', '
+                  + KatCity.Name  + ', '
+                  + KatOrg.Addr   + ', тел.'
+                  + KatOrg.Tel
+                  );
+
+  frmGeneral.Write(if(fNDE(KatSopr.cVal), sGetTune('NDE.SimvRub'), KlVal.SimvolV));
+
+  _loop SpSopr
+    {
+      i := i + 1;
+
+      fTotal := if(fNDE(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice);
+
+      frmGeneral.Write(i);
+      frmGeneral.Write(KatMC.Name);
+      frmGeneral.Write(KatMC.BarKod);
+      frmGeneral.Write(KatOtpEd.Name);
+      frmGeneral.Write(SpSopr.KolFact);
+      frmGeneral.Write(fTotal);
+
+      fTotal := fTotal * SpSopr.KolFact;
+      frmGeneral.Write(fTotal);
+
+//------------------------------------------------------------------------------
+
+      fS := 0;
+      fN := 0;
+
+      _loop SpSopUsl
+        {
+          if ( not IsValid(#MemSpUsl) )
+            continue;
+
+          fS := fS + (if(fNDE(KatSopr.cVal), SpSopUsl.Price, SpSopUsl.VPrice) * MemSpUsl.Koef);
+          fN := fN + (if(fNDE(KatSopr.cVal), SpSopUsl.SumNDS, SpSopUsl.SumVNDS) * MemSpUsl.Koef);
+        }
+
+      fTotal := fTotal + fS + fN;
+
+      frmGeneral.Write(fS);
+      frmGeneral.Write(fN);
+
+//------------------------------------------------------------------------------
+
+      fS := 0;
+      fN := 0;
+
+      _loop KatSopr1
+        _loop SpSopr1
+          {
+            if ( not IsValid(#MemSp1) )
+              continue;
+
+            fS := fS + (if(fNDE(KatSopr1.cVal), SpSopr1.Price, SpSopr1.VPrice) * MemSp1.Koef);
+            fN := fN + (if(fNDE(KatSopr1.cVal), SpSopr1.SumNDS, SpSopr1.SumVNDS) * MemSp1.Koef);
+          }
+
+      fTotal := fTotal + fS + fN;
+
+      frmGeneral.Write(fS);
+      frmGeneral.Write(fN);
+
+//------------------------------------------------------------------------------
+
+      fN1 := 0;
+      fN2 := 0;
+      fN3 := 0;
+      fN4 := 0;
+
+      _loop SpDocNal
+        {
+          if ( SpDocNal.cNalog = coGetTune('Nalog.cNalogNDS') )
+            fN1 := fN1 + if(fNDE(KatSopr.cVal), SpDocNal.Summa, SpDocNal.SumVal);
+          else
+            if ( SpDocNal.cNalog = coGetTune('Nalog.cNalogAkcis') )
+              fN2 := fN2 + if(fNDE(KatSopr.cVal), SpDocNal.Summa, SpDocNal.SumVal);
+            else
+              if ( SpDocNal.cNalog = coGetTune('Nalog.cNalogProd') )
+                fN3 := fN3 + if(fNDE(KatSopr.cVal), SpDocNal.Summa, SpDocNal.SumVal);
+              else
+                fN4 := fN4 + if(fNDE(KatSopr.cVal), SpDocNal.Summa, SpDocNal.SumVal);
+        }
+
+      fTotal := fTotal + fN1 + fN2 + fN3 + fN4;
+
+      frmGeneral.Write(fN1);
+      frmGeneral.Write(fN2);
+      frmGeneral.Write(fN3);
+      frmGeneral.Write(fN4);
+
+      frmGeneral.Write(fN1 + fN2 + fN3 + fN4);
+      frmGeneral.Write(fTotal);
+    }
+
+  frmGeneral.PutEvent(feBreak);
+
+  if ( frmGeneral.Error )
+    frmGeneral.AbortForm;
+  else
+    frmGeneral.ShowFile('Протокол формирования цены');
+}
+
+//******************************************************************************
+
+Procedure FillDetailData;
+{
+  delete all MemDetail;
+
+  _loop SpSopr
+    {
+      MemDetail.cSpSopr := SpSopr.nRec;
+
+      //------------------------------------------------------------------------
+      // налоги к позиции
+      MemDetail.wFlag   := 0;
+      MemDetail.cOrg    := KatOrg.nRec;
+      MemDetail.OrgName := KatOrg.Name;
+      MemDetail.UslName := '';
+      MemDetail.UslSumm := 0.0;
+
+      _loop SpDocNal
+        {
+          MemDetail.NalName := KatNalog.Name;
+          MemDetail.NalSumm := if(fNDE(KatSopr.cVal), SpDocNal.Summa, SpDocNal.SumVal);
+          insert current MemDetail;
+        }
+
+      //------------------------------------------------------------------------
+      // сопутствующие услуги
+      MemDetail.wFlag   := 1;
+
+      _loop SpSopUsl
+        {
+          if ( not IsValid(#MemSpUsl) )
+            continue;
+
+          MemDetail.UslName := KatUsl.Name;
+          MemDetail.UslSumm := if(fNDE(KatSopr.cVal), SpSopUsl.Price, SpSopUsl.VPrice) * MemSpUsl.Koef;
+          MemDetail.NalName := '';
+          MemDetail.NalSumm := 0.0;
+          insert current MemDetail;
+
+          _loop SpDocNalUsl
+            {
+              MemDetail.UslSumm := 0.0;
+              MemDetail.NalName := KatNalogUsl.Name;
+              MemDetail.NalSumm := if(fNDE(KatSopr.cVal), SpDocNalUsl.Summa, SpDocNalUsl.SumVal) * MemSpUsl.Koef;
+              insert current MemDetail;
+            }
+        }
+
+      //------------------------------------------------------------------------
+      // услуги другого контрагента
+
+      _loop KatSopr1
+        {
+          MemDetail.cOrg    := KatOrg1.nRec;
+          MemDetail.OrgName := KatOrg1.Name;
+
+          _loop SpSopr1
+            {
+              if ( not IsValid(#MemSp1) )
+                continue;
+
+              MemDetail.UslName := KatUsl1.Name;
+              MemDetail.UslSumm := if(fNDE(KatSopr1.cVal), SpSopr1.Price, SpSopr1.VPrice) * MemSp1.Koef;
+              MemDetail.NalName := '';
+              MemDetail.NalSumm := 0.0;
+              insert current MemDetail;
+
+              _loop SpDocNal1
+                {
+                  MemDetail.UslSumm := 0.0;
+                  MemDetail.NalName := KatNalog1.Name;
+                  MemDetail.NalSumm := if(fNDE(KatSopr1.cVal), SpDocNal1.Summa, SpDocNal1.SumVal) * MemSp1.Koef;
+                  insert current MemDetail;
+                }
+            }
+        }
+    }
+}
+
+//******************************************************************************
+
+Procedure PrintDetailed;
+Var
+  fS
+, fN
+, fTotal
+              : double;
+
+  i
+              : word;
+
+  cKatOrgOld
+              : comp;
+
+  sKatOrgOld
+              : string;
+{
+  FillDetailData;
+
+  frmDetail.Write(KatSopr.nRec);
+  frmDetail.Write(KatSopr.nSopr);
+  frmDetail.Write(KatSopr.dSopr);
+  frmDetail.Write(KatOrg.Name);
+  frmDetail.Write(KatOrg.UNN);
+  frmDetail.Write(KatOrg.Addr);
+
+  frmDetail.Write( KatOrg.IndexK + ', '
+                 + KatState.Name + ', '
+                 + KatCity.Name  + ', '
+                 + KatOrg.Addr   + ', тел.'
+                 + KatOrg.Tel
+                 );
+
+  frmDetail.Write(if(fNDE(KatSopr.cVal), sGetTune('NDE.SimvRub'), KlVal.SimvolV));
+
+  _loop SpSopr
+    {
+      i := i + 1;
+
+      fTotal := if(fNDE(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice);
+
+      frmDetail.Write(i);
+      frmDetail.Write(KatMC.Name);
+      frmDetail.Write(KatMC.BarKod);
+      frmDetail.Write(KatOtpEd.Name);
+      frmDetail.Write(SpSopr.KolFact);
+      frmDetail.Write(fTotal);
+
+      fTotal := fTotal * SpSopr.KolFact;
+      frmDetail.Write(fTotal);
+
+      if ( GetFirst MemDetail where (( SpSopr.nRec == MemDetail.cSpSopr and word(0) == MemDetail.wFlag )) = tsOk )
+        {
+          fN := 0;
+
+          _loop MemDetail where (( SpSopr.nRec == MemDetail.cSpSopr and word(0) == MemDetail.wFlag ))
+            {
+              frmDetail.SkipFormat(1);
+              frmDetail.Write(KatOrg.Name);
+              frmDetail.SkipFormat(2);
+              frmDetail.Write(MemDetail.NalName);
+              frmDetail.Write(MemDetail.NalSumm);
+
+              fN := fN + MemDetail.NalSumm;
+            }
+
+          frmDetail.Write('Итого налогов по МЦ');
+          frmDetail.SkipFormat(4);
+          frmDetail.Write(fN);
+        }
+
+      if ( GetFirst MemDetail where (( SpSopr.nRec == MemDetail.cSpSopr and word(1) == MemDetail.wFlag )) = tsOk )
+        {
+          cKatOrgOld := comp(0);
+
+          _loop MemDetail where (( SpSopr.nRec == MemDetail.cSpSopr and word(1) == MemDetail.wFlag ))
+            {
+              if ( cKatOrgOld = comp(0) )
+                {
+                  cKatOrgOld := MemDetail.cOrg;
+                  sKatOrgOld := MemDetail.OrgName;
+
+                  fN := 0;
+                  fS := 0;
+                }
+              else
+                if ( cKatOrgOld <> MemDetail.cOrg )
+                  {
+                    frmDetail.Write('Итого услуг и налогов по');
+                    frmDetail.Write(sKatOrgOld);
+                    frmDetail.SkipFormat(1);
+                    frmDetail.Write(fS);
+                    frmDetail.SkipFormat(1);
+                    frmDetail.Write(fN);
+
+                    cKatOrgOld := MemDetail.cOrg;
+                    sKatOrgOld := MemDetail.OrgName;
+
+                    fN := 0;
+                    fS := 0;
+                  }
+
+              frmDetail.SkipFormat(1);
+              frmDetail.Write(MemDetail.OrgName);
+
+              if ( MemDetail.UslName = '' )
+                frmDetail.SkipFormat(2);
+              else
+                {
+                  frmDetail.Write(MemDetail.UslName);
+                  frmDetail.Write(MemDetail.UslSumm);
+                  fS := fS + MemDetail.UslSumm;
+                }
+
+              if ( MemDetail.NalName = '' )
+                frmDetail.SkipFormat(2);
+              else
+                {
+                  frmDetail.Write(MemDetail.NalName);
+                  frmDetail.Write(MemDetail.NalSumm);
+                  fN := fN + MemDetail.NalSumm;
+                }
+            }
+
+          frmDetail.Write('Итого услуг и налогов по');
+          frmDetail.Write(sKatOrgOld);
+          frmDetail.SkipFormat(1);
+          frmDetail.Write(fS);
+          frmDetail.SkipFormat(1);
+          frmDetail.Write(fN);
+        }
+
+      frmDetail.SkipFormat(6);
+      frmDetail.PutEvent(feBreak);
+    }
+
+  frmDetail.PutEvent(feBreak);
+
+  if ( frmDetail.Error )
+    frmDetail.AbortForm;
+  else
+    frmDetail.ShowFile('Протокол формирования цены');
+}
+
+//******************************************************************************
+
+Procedure InitSpProportion;
+Var
+  fS : double;
+{
+  delete all MemSpProp;
+
+  _loop SpSopUsl
+    {
+      if ( GetFirst MemSpProp where (( SpSopUsl.PrMC == MemSpProp.PrUsl )) = tsOk )
+        continue;
+
+      fS := 0;
+
+      _loop SpSopr
+        {
+          case SpSopUsl.PrMC of
+
+            5    : fS := fS + SpSopr.KolFact * SpSopr.Netto;
+            6    : fS := fS + (SpSopr.KolFact * KatOtpEd.Koef * KatMC.SizeX * KatMC.SizeY * KatMC.SizeZ);
+            7    : fS := fS + SpSopr.KolFact;
+
+          else
+            fS := fS + (if(fNDE(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice) * SpSopr.KolFact);
+
+          end;
+
+        }
+
+      if ( not (fS > 0.0001) )
+        continue;
+
+      _loop SpSopr
+        {
+          ClearBuffer(#MemSpProp);
+
+          MemSpProp.PrUsl   := SpSopUsl.PrMC;
+          MemSpProp.cSpSopr := SpSopr.nRec;
+
+          case SpSopUsl.PrMC of
+
+            5    : MemSpProp.Koef := SpSopr.KolFact * SpSopr.Netto / fS;
+            6    : MemSpProp.Koef := (SpSopr.KolFact * KatOtpEd.Koef * KatMC.SizeX * KatMC.SizeY * KatMC.SizeZ) / fS;
+            7    : MemSpProp.Koef := SpSopr.KolFact / fS;
+
+          else
+            MemSpProp.Koef := (if(fNDE(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice) * SpSopr.KolFact) / fS;
+
+          end;
+
+          insert current MemSpProp;
+        }
+    }
+
+  _loop KatSopr1
+    _loop SpSopr1
+      {
+        if ( GetFirst MemSpProp where (( SpSopr1.PrMC == MemSpProp.PrUsl )) = tsOk )
+          continue;
+
+        fS := 0;
+
+        _loop SpSopr
+          {
+            case SpSopr1.PrMC of
+
+              5    : fS := fS + SpSopr.KolFact * SpSopr.Netto;
+              6    : fS := fS + (SpSopr.KolFact * KatOtpEd.Koef * KatMC.SizeX * KatMC.SizeY * KatMC.SizeZ);
+              7    : fS := fS + SpSopr.KolFact;
+
+            else
+              fS := fS + (if(fNDE(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice) * SpSopr.KolFact);
+
+            end;
+
+          }
+
+        if ( not (fS > 0.0001) )
+          continue;
+
+        _loop SpSopr
+          {
+            ClearBuffer(#MemSpProp);
+
+            MemSpProp.PrUsl   := SpSopr1.PrMC;
+            MemSpProp.cSpSopr := SpSopr.nRec;
+
+            case SpSopr1.PrMC of
+
+              5    : MemSpProp.Koef := SpSopr.KolFact * SpSopr.Netto / fS;
+              6    : MemSpProp.Koef := (SpSopr.KolFact * KatOtpEd.Koef * KatMC.SizeX * KatMC.SizeY * KatMC.SizeZ) / fS;
+              7    : MemSpProp.Koef := SpSopr.KolFact / fS;
+
+            else
+              MemSpProp.Koef := (if(fNDE(KatSopr.cVal), SpSopr.Price, SpSopr.VPrice) * SpSopr.KolFact) / fS;
+
+            end;
+
+            insert current MemSpProp;
+          }
+      }
+
+//------------------------------------------------------------------------------
+/*
+  _loop MemSpProp
+    message( 'cSpSopr = ' + MemSpProp.cSpSopr
+           + ', PrUsl = ' + MemSpProp.PrUsl
+           + ', Koef = ' + MemSpProp.Koef);
+*/
+//------------------------------------------------------------------------------
+
+}
+
+
+//******************************************************************************
+
+HandleEvent  //Interface
+
+cmInit:
+{
+  Abort;
+
+  Var wRT: word;
+
+  if ( GetFirst KatSopr <> tsOk )
+    Exit;
+
+  if ( not ReadMyDSK(wRT, 'PriceProtocol_wRT', true) )
+    wRT := 0;
+
+  if ( RunDialog('PriceProtocolDialogRT', wRT) = cmCancel )
+    Exit;
+
+  SaveMyDSK(wRT, 'PriceProtocol_wRT');
+
+  InitSpProportion;
+
+  if ( wRT = 1 )
+    PrintDetailed;
+  else
+    PrintGeneral;
+}
+
+end;  //HandleEvent Interface
+
+End.
+
+//******************************************************************************
+
+PriceProtocolDialogRT DIALOG
+
+Fields
+  RepType ('Вид формы отчета',, scGalDial) : word;
+
+Buttons
+  cmOk,Default,, 'Печать',, scGalDial;
+  cmCancel,,,    'Отмена',, scGalDial;
+
+<< 'Сформировать отчет...'
+      (.) Обобщенный      `
+      (.) Детализированный`
+
+   <. ~П~ечать .>  <. ~О~тмена .>
+>>
+
+//******************************************************************************

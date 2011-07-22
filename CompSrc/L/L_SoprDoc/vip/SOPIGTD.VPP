@@ -1,0 +1,531 @@
+
+create view loImpGTD
+var
+  KatSoprNRec: comp;
+  MrkNalAkts: longint;
+from
+    KatSopr
+  , SpSopr
+  , synonym KatSopr SopKatSopr
+  , synonym SpSopr SopSpSopr
+  , KatUsl
+  , GroupUsl
+  , KatNalog
+where
+((
+             SopKatSopr.NRec == SopSpSopr.cSopr
+!and             KatSopr.NRec == SopKatSopr.cKatSopr
+and                  word(2) == SopSpSopr.PrMC
+and          SopKatSopr.NRec == SopSpSopr.cSopr
+and             KatSopr.NRec == SpSopr.cSopr
+and         SopSpSopr.cMCUsl == KatUsl.NRec
+and           SpSopr.VidSopr == SpDocNal.TipDoc
+and              SpSopr.NRec == SpDocNal.cSpDoc
+and          SpDocNal.cNalog == KatNalog.NRec
+and           SopSpSopr.NRec == SpSopHoz.cSpSopr
+and        SpSopHoz.cSoprHoz == SoprHoz.NRec
+))
+;
+
+#include vGetBk.vpp
+#include schftxo.vpp
+
+function ResetNalUsl: boolean;
+{
+  var bAsk: boolean;
+  bAsk := True;
+
+  ResetNalUsl := false;
+  BegTrans;
+  if (TrGet(loImpGTD.GetFirst SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk)
+    do {
+      if (TrGet(loImpGTD.GetFirst SopSpSopr) = tsOk)
+        do {
+          if (loImpGTD.KatUsl.cGroupUsl = coGetTune('Nalog.cGrNalUsl'))
+          {
+            if (bAsk)
+            {
+              if ( message('Уже имеются налоговые акты для данной ГТД. '#13+
+                           'Сформировать их заново?', Confirmation + YesNo
+                          ) = cmNo
+                 )
+              {
+                AbortTrans;
+                exit;
+              }
+              else bAsk := False;
+            }
+
+            loImpGTD.SopKatSopr.Summa := loImpGTD.SopKatSopr.Summa - loImpGTD.SopSpSopr.Price * loImpGTD.SopSpSopr.KolFact;
+            loImpGTD.SopKatSopr.SumVal := loImpGTD.SopKatSopr.SumVal - loImpGTD.SopSpSopr.VPrice * loImpGTD.SopSpSopr.KolFact;
+            TrF(loImpGTD.Update current SopSpSopr set
+                  SopSpSopr.Price := 0.0,
+                  SopSpSopr.VPrice := 0.0,
+                  SopSpSopr.KolFact := 0.0
+               );
+          };
+        } while (TrGet(loImpGTD.GetNext SopSpSopr) = tsOk);
+      TrF(loImpGTD.Update current SopKatSopr);
+    } while (TrGet(loImpGTD.GetNext SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk);
+  ResetNalUsl := EndTrans;
+} // function ResetNalUsl
+
+function DelEmptyNalUsl: boolean;
+var
+  c1: comp;
+{
+  DelEmptyNalUsl := false;
+  BegTrans;
+  if (TrGet(loImpGTD.GetFirst SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk)
+    do {
+      TrF(loImpGTD.Delete novisual SopSpSopr where
+            ((
+              SopKatSopr.NRec == SopSpSopr.cSopr and word(2) == SopSpSopr.PrMC and
+              (
+                KatUsl.cGroupUsl = coGetTune('Nalog.cGrNalUsl') and
+                SopSpSopr.Price = 0.0 and
+                SopSpSopr.VPrice = 0.0 and SopSpSopr.KolFact = 0.0
+              )
+            ))
+         );
+      if (TrGet(loImpGTD.GetFirst SopSpSopr) <> tsOk) {
+        DeleteMarker(loImpGTD.MrkNalAkts, loImpGTD.SopKatSopr.NRec);
+        c1 := loImpGTD.SopKatSopr.NRec;
+        PushPos(#KatSopr);
+        if (TrGet(GetFirst KatSopr where ((c1 == KatSopr.NRec))) = tsOk)
+          DeleteSoprHoz;
+        TrF(loImpGTD.Delete current SopKatSopr);
+        PopPos(#KatSopr);
+      };
+    } while (TrGet(loImpGTD.GetNext SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk);
+  DelEmptyNalUsl := EndTrans;
+} // function ResetNalUsl
+
+function UpdateSoprHozNalUsl: boolean;
+var
+  c1: comp;
+{
+  UpdateSoprHozNalUsl := false;
+  BegTrans;
+  PushPos(#KatSopr);
+  if (TrGet(loImpGTD.GetFirst SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk)
+    do {
+      c1 := loImpGTD.SopKatSopr.NRec;
+      if (TrGet(GetFirst KatSopr where ((c1 == KatSopr.NRec))) = tsOk)
+        UpdateSoprHoz;
+    } while (TrGet(loImpGTD.GetNext SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk);
+  PopPos(#KatSopr);
+  UpdateSoprHozNalUsl := EndTrans;
+}; // function UpdateSoprHozNalUsl
+
+
+function AddSopSpSopr: boolean;
+{
+  BegTrans;
+  loImpGTD.ClearBuffer(loImpGTD.tnSopSpSopr);
+  loImpGTD.SopSpSopr.cSopr := loImpGTD.SopKatSopr.NRec;
+  loImpGTD.SopSpSopr.cMCUsl := loImpGTD.KatNalog.cUsl;
+  loImpGTD.SopSpSopr.PrMC := 2;
+  loImpGTD.SopSpSopr.VidSopr := loImpGTD.SopKatSopr.VidSopr;
+  loImpGTD.SopSpSopr.cOtpEd := loImpGTD.KatUsl.cEd;
+  loImpGTD.SopSpSopr.KolFact := 1.0;
+  loImpGTD.SopSpSopr.Kol := 1.0;
+  loImpGTD.SopSpSopr.KolOpl := 1.0;
+  loImpGTD.SopSpSopr.cVal := loImpGTD.SopKatSopr.cVal;
+  loImpGTD.SopSpSopr.dSopr := loImpGTD.SopKatSopr.dSopr;
+  loImpGTD.SopSpSopr.Npp := oSpNext.GetSpNppNext(loImpGTD.SopKatSopr.NRec,loImpGTD.coSpSopr);
+  TrF(loImpGTD.Insert current SopSpSopr);
+  AddSopSpSopr := EndTrans;
+} // function AddSopSpSopr
+
+function AddNalAkt: boolean;
+{
+  BegTrans;
+  loImpGTD.ClearBuffer(loImpGTD.tnSopKatSopr);
+  loImpGTD.SopKatSopr.cKatSopr := loImpGTD.KatSoprNRec;
+  loImpGTD.SopKatSopr.VidSopr := 111;
+  loImpGTD.SopKatSopr.TipSopr := 1;
+  loImpGTD.SopKatSopr.cVal := loImpGTD.SpDocNal.cVal;
+  loImpGTD.SopKatSopr.cValut := loImpGTD.SpDocNal.cVal;
+  loImpGTD.SopKatSopr.cOrg := loImpGTD.SpDocNal.cOrg;
+  loImpGTD.SopKatSopr.cOrgBase := loImpGTD.SpDocNal.cOrg;
+  loImpGTD.SopKatSopr.Reserved := 1;
+  loImpGTD.SopKatSopr.dSopr := loImpGTD.KatSopr.dSopr;
+  loImpGTD.SopKatSopr.dPrice := loImpGTD.KatSopr.dPrice;
+  loImpGTD.SopKatSopr.YearSopr := Year(loImpGTD.KatSopr.dSopr);
+  loImpGTD.SopKatSopr.NSopr := 'Н'+loImpGTD.KatSopr.NSopr;
+  loImpGTD.SopKatSopr.Descr := loImpGTD.KatSopr.Descr;
+  loImpGTD.SopKatSopr.DesGr := loImpGTD.KatSopr.DesGr;
+  loImpGTD.SopKatSopr.VhodNal := loImpGTD.KatSopr.VhodNal;
+  loImpGTD.SopKatSopr.Status := 1-wGetTune('Doc.Buy.SoprStatus');
+  loImpGTD.SopKatSopr.cNote  := oNotes.GetFirstNote(100, loImpGTD.SopKatSopr.Status);
+  TrF(loImpGTD.Insert current SopKatSopr);
+  AddNalAkt := EndTrans;
+} // function AddNalAkt
+
+
+function GetSpNalAkt: boolean;
+{
+  GetSpNalAkt := true;
+  if (TrGet(loImpGTD.GetFirst SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk)
+    do
+      if (loImpGTD.SopKatSopr.cOrg = loImpGTD.SpDocNal.cOrg and loImpGTD.SopKatSopr.cVal = loImpGTD.SpDocNal.cVal) {
+        if (TrGet(loImpGTD.GetFirst SopSpSopr where ((SopKatSopr.NRec == SopSpSopr.cSopr and
+                                            KatNalog.cUsl == SopSpSopr.cMCUsl and
+                                            word(2) == SopSpSopr.PrMC))) <> tsOk)
+          GetSpNalAkt := AddSopSpSopr;
+        InsertMarker(loImpGTD.MrkNalAkts, loImpGTD.SopKatSopr.NRec);
+        Exit;
+      }
+    while (TrGet(loImpGTD.GetNext SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk);
+  AddNalAkt;
+  InsertMarker(loImpGTD.MrkNalAkts, loImpGTD.SopKatSopr.NRec);
+  GetSpNalAkt := AddSopSpSopr;
+} // function GetSpNalAkt
+
+function EveryKatSopr: boolean;
+{
+  EveryKatSopr := false;
+  if (TrGet(loImpGTD.GetFirst SpSopr) = tsOk)
+    do {
+      if (SpSopr.PrMC = 2)
+        if (TrGet(loImpGTD.GetFirst KatUsl where ((SpSopr.cMCUsl == KatUsl.NRec))) = tsOk)
+          if (KatUsl.cGroupUsl = coGetTune('Nalog.cGrNalUsl')) continue;
+      if (TrGet(loImpGTD.GetFirst SpDocNal) = tsOk)
+        do {
+          if (SpDocNal.cOrg <> KatSopr.cOrg) {
+            PushPos(#KatUsl);
+            ResetBounds(#KatUsl);
+            if (TrGet(loImpGTD.GetFirst KatUsl where ((KatNalog.cUsl == KatUsl.NRec))) = tsOk) {
+              if (GetSpNalAkt) {
+                var curs: double;
+                oValFunc.GetCurse(loImpGTD.SopSpSopr.cVal,
+                         if(longint(loImpGTD.SopKatSopr.dPrice)=0,loImpGTD.KatSopr.dSopr,loImpGTD.SopKatSopr.dPrice),
+                         curs);
+                if (loImpGTD.SopSpSopr.cVal = 0) {
+                  loImpGTD.SopSpSopr.Price := loImpGTD.SopSpSopr.Price + loImpGTD.SpDocNal.SumNal;
+                  loImpGTD.SopSpSopr.VPrice := loImpGTD.SopSpSopr.Price / if (Abs(curs) < 0.005, 1.0, curs);
+
+                  loImpGTD.SopSpSopr.rPrice  := loImpGTD.SopSpSopr.Price;
+                  loImpGTD.SopSpSopr.rVPrice := loImpGTD.SopSpSopr.VPrice;
+
+                  loImpGTD.SopKatSopr.Summa := loImpGTD.SopKatSopr.Summa + loImpGTD.SpDocNal.SumNal;
+                  loImpGTD.SopKatSopr.SumVal := loImpGTD.SopKatSopr.SumVal + loImpGTD.SpDocNal.SumNal / curs;
+                }
+                else
+                {
+                  loImpGTD.SopSpSopr.VPrice := loImpGTD.SopSpSopr.VPrice + loImpGTD.SpDocNal.SumNal;
+                  loImpGTD.SopSpSopr.Price := loImpGTD.SopSpSopr.VPrice * curs;
+
+                  loImpGTD.SopSpSopr.rPrice  := loImpGTD.SopSpSopr.Price;
+                  loImpGTD.SopSpSopr.rVPrice := loImpGTD.SopSpSopr.VPrice;
+
+                  loImpGTD.SopKatSopr.SumVal := loImpGTD.SopKatSopr.SumVal + loImpGTD.SpDocNal.SumNal;
+                  loImpGTD.SopKatSopr.Summa := loImpGTD.SopKatSopr.Summa + loImpGTD.SpDocNal.SumNal * curs;
+                }
+
+                loImpGTD.SopSpSopr.KolFact := 1.0;
+                loImpGTD.SopSpSopr.Kol := 1.0;
+                loImpGTD.SopSpSopr.KolOpl := 1.0;
+                TrF(loImpGTD.Update current SopSpSopr);
+                TrF(loImpGTD.Update current SopKatSopr);
+              };
+            } else {
+              _MsgInForm := true;
+              MsgForm('Не указана "налоговая" услуга для налога '#13+loImpGTD.KatNalog.Name, Warning+cmOk);
+            }
+            SetBounds(#KatUsl);
+            PopPos(#KatUsl);
+          }
+        } while (TrGet(loImpGTD.GetNext SpDocNal) = tsOk);
+    } while (TrGet(loImpGTD.GetNext SpSopr) = tsOk);
+  EveryKatSopr := true;
+} // function EveryKatSopr
+
+procedure MakeNalAkt(cKatSopr: comp);
+{
+  var tmp: boolean;
+  tmp := _MsgInForm;
+  MsgFormInit;
+
+  if (loImpGTD.GetFirst KatSopr where ((cKatSopr == KatSopr.NRec)) <> tsOk) Exit;
+
+  if (loImpGTD.GetFirst GroupUsl where ((
+        coGetTune('Nalog.cGrNalUsl') == GroupUsl.NRec
+      )) <> tsOk) {
+    message('Не установлена "налоговая" группа услуг в системной настройке', Error+OkButton);
+    Exit;
+  };
+  loImpGTD.KatSoprNRec := cKatSopr;
+  loImpGTD.MrkNalAkts := InitMarker('NalAkts', 8, 4, 4);
+  ClearMarker(loImpGTD.MrkNalAkts);
+  BegTrans;
+  if ( not ResetNalUsl() )
+  {
+    AbortTrans;
+    exit;
+  }
+  PushPos(#SpSopr);
+  EveryKatSopr;
+  PushPos(#KatSopr);
+  if (TrGet(loImpGTD.GetFirst KatSopr where ((KatSoprNRec == KatSopr.cKatSopr))) = tsOk)
+    do {
+      EveryKatSopr;
+    } while (TrGet(loImpGTD.GetNext KatSopr where ((KatSoprNRec == KatSopr.cKatSopr))) = tsOk);
+  PopPos(#KatSopr);
+  DelEmptyNalUsl;
+  PopPos(#SpSopr);
+  UpdateSoprHozNalUsl;
+  if (EndTrans) {
+    var s: string;
+    case GetMarkerCount(loImpGTD.MrkNalAkts) of
+      0: s := 'Налоговые акты не сформированы.';
+      1: s := 'Cформирован 1 налоговый акт.'
+     else s := 'Cформировано '+string(GetMarkerCount(loImpGTD.MrkNalAkts))+' налоговых акта(-ов).';
+    end;
+    message(s, Information);
+  };
+  ClearMarker(loImpGTD.MrkNalAkts);
+  DoneMarker(loImpGTD.MrkNalAkts, 'NalAkts');
+
+  MsgFormEnd;
+  _MsgInForm := tmp;
+}; // procedure MakeNalAkt
+
+procedure RegisterGTD(cKatSopr: comp);
+var
+  cVal: comp;
+  dOpl: date;
+{
+  if (not vSfInit(2)) Exit;
+  if (loImpGTD.GetFirst KatSopr where ((cKatSopr == KatSopr.NRec)) <> tsOk) Exit;
+  if (loImpGTD.GetFirst GroupUsl where ((
+        coGetTune('Nalog.cGrNalUsl') == GroupUsl.NRec
+      )) <> tsOk) {
+    MsgForm('Не установлена "налоговая" группа услуг в системной настройке', Error+OkButton);
+    Exit;
+  };
+  loImpGTD.KatSoprNRec := cKatSopr;
+  BegTrans;
+  if (not vGetKS(cKatSopr)) {
+    AbortTrans;
+    Exit;
+  };
+  vBk.cSopr := cKatSopr;
+  if (TrGet(vBk.GetFirst Bk where ((cSopr == Bk.cSopr))) = tsOk)
+    if (MsgForm('Имеющиеся записи регистрации ГТД в книге'#13+
+                'покупок будут удалены. Продолжить?',Confirmation+YesNo) = cmYes)
+    {
+      vBk._loop Bk where (( cSopr == Bk.cSopr )) {
+        SfDeleteSoprHoz(vBk.Bk.nRec);
+      }
+      TrF(vBk.Delete novisual Bk where ((cSopr == Bk.cSopr)));
+    }
+    else {
+      AbortTrans;
+      Exit;
+    };
+  SchSClc;
+  vSf.Price  := 0.0;
+  vSf.Nds    := 0.0;
+  vSf.Akciz  := 0.0;
+  vSf.Perc   := 0.0;
+  vSf.DrNal  := 0.0;
+  vSf.doZnak := 1.0;
+  vBk.ClearBuffer(vBk.tnBK);
+
+  if (vKS.KS.cVal <> 0)
+    case GetSFCreateType of
+      1:
+        {
+          vBk.BK.cVal     := vKS.KS.cVal;
+          vBk.BK.Sum[30]  := if (vKS.KS.cVal = 0 or Abs(vKS.KS.SumVal) < vSf.Zero, 1.0, vKS.KS.Summa / vKS.KS.SumVal);
+          vBk.BK.ds[1]    := vKS.KS.dPrice;
+        };
+      2:
+        {
+          vBk.BK.cVal     := 0;
+          vBk.BK.Sum[30]  := 1.0;
+        };
+     else {
+      AbortTrans;
+      exit;
+     };
+    end // case
+  else {
+    vBk.BK.cVal     := 0;
+    vBk.BK.Sum[30]  := 1.0;
+  };
+
+  vSf.cVal := vBk.BK.cVal;
+  vSfSetZero;
+
+//  спецификация ГТД
+  if (TrGet(loImpGTD.GetFirst SpSopr) = tsOk)
+    do {
+      if (not GetNalogsInfo4(loImpGTD.SpSopr.NRec, vBk.BK.cVal, vSf.Price, vSf.Nds,
+                             vSf.Akciz, vSf.Perc, vSf.DrNal, vSf.isExistNDS)) {
+        AbortTrans;
+        exit;
+      };
+      SchSNal;
+    } while (TrGet(loImpGTD.GetNext SpSopr) = tsOk);
+//  сопутствующие услуги других контрагентов
+  dOpl := Date(1, 1, 3000);
+  if (TrGet(loImpGTD.GetFirst SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk)
+    do
+      if (TrGet(loImpGTD.GetFirst SopSpSopr) = tsOk)
+        do {
+          if (loImpGTD.KatUsl.cGroupUsl <> coGetTune('Nalog.cGrNalUsl'))
+          {
+            if (vSf.cVal <> 0 and vSf.cVal <> loImpGTD.SopKatSopr.cVal) {
+              MsgForm(''#3'Не совпадают валюты ГТД и сопроводительной услуги'#13+
+                      ''#3'другого контрагента. Из-за этого нельзя сформировать'#13+
+                      ''#3'запись о регистрации ГТД в книге покупок в валюте'#13+
+                      ''#3'документа. Регистрируйте в НДЕ. Способ регистрации'#13+
+                      ''#3'устанавливается в настройке.', Warning+OkButton);
+              AbortTrans;
+              Exit;
+            };
+            if (not GetNalogsInfo4(loImpGTD.SopSpSopr.NRec, vBk.BK.cVal, vSf.Price, vSf.Nds,
+                                   vSf.Akciz, vSf.Perc, vSf.DrNal, vSf.isExistNDS)) {
+              AbortTrans;
+              exit;
+            };
+            SchSNal;
+          } else {
+            if (TrGet(loImpGTD.GetFirst SpSopHoz) = tsOk)
+              do
+                if (IsValid(loImpGTD.tnSoprHoz))
+                  if (loImpGTD.SoprHoz.DatOb < dOpl)
+                    dOpl := loImpGTD.SoprHoz.DatOb;
+              while (TrGet(loImpGTD.GetNext SpSopHoz) = tsOk);
+          };
+        } while (TrGet(loImpGTD.GetNext SopSpSopr) = tsOk);
+    while (TrGet(loImpGTD.GetNext SopKatSopr where ((KatSoprNRec == SopKatSopr.cKatSopr))) = tsOk);
+
+  SchSRound;
+  SchSCorr;
+  if (not vGetKS(cKatSopr)) {
+    AbortTrans;
+    Exit;
+  };
+  SchSExpImp(vKS.KS.cOrg);
+!  Schs2Bk;
+  vBk.BK.Sum[1]  := vSF.S1;
+  vBk.BK.Sum[2]  := vSF.S2;
+  vBk.BK.Sum[3]  := vSF.S3;
+  vBk.BK.Sum[4]  := vSF.S4;
+  vBk.BK.Sum[5]  := vSF.S5;
+  vBk.BK.Sum[6]  := vSF.S6;
+  vBk.BK.Sum[7]  := vSF.S7;
+  vBk.BK.Sum[10] := vSF.S10;
+  vBk.BK.SumIn[1]:= vSF.Si1;
+  vBk.BK.SumIn[2]:= vSF.Si2;
+  vBk.BK.Summa   := vSF.S;
+
+!  if (not BkReCalcRubEqual) {
+!    AbortTrans;
+!    Exit;
+!  };
+     vBk.Bk.Sum[11]   := vBk.Bk.Sum[1]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[12]   := vBk.Bk.Sum[2]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[13]   := vBk.Bk.Sum[3]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[14]   := vBk.Bk.Sum[4]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[15]   := vBk.Bk.Sum[5]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[16]   := vBk.Bk.Sum[6]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[17]   := vBk.Bk.Sum[7]    * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[20]   := vBk.Bk.Sum[10]   * vBk.Bk.Sum[30];
+     vBk.Bk.Sum[21]   := vBk.Bk.Summa     * vBk.Bk.Sum[30];
+     vBk.Bk.SumIn[6]  := vBk.Bk.SumIn[1]  * vBk.Bk.Sum[30];
+     vBk.Bk.SumIn[7]  := vBk.Bk.SumIn[2]  * vBk.Bk.Sum[30];
+     vBk.Bk.SumIn[10] := vBk.Bk.SumIn[5]  * vBk.Bk.Sum[30];
+
+     vSf.S1  := vBk.Bk.Sum[11];
+     vSf.S2  := vBk.Bk.Sum[12];
+     vSf.S3  := vBk.Bk.Sum[13];
+     vSf.S4  := vBk.Bk.Sum[14];
+     vSf.S5  := vBk.Bk.Sum[15];
+     vSf.S6  := vBk.Bk.Sum[16];
+     vSf.S7  := vBk.Bk.Sum[17];
+     vSf.S10 := vBk.Bk.Sum[20];
+     vSf.Si1 := vBk.Bk.SumIn[6];
+     vSf.Si2 := vBk.Bk.SumIn[7];
+     vSf.S   := vBk.Bk.Sum[21];
+     vSf.cVal:= 0;
+     vSfSetZero;
+     SchSRound;
+     vBk.Bk.Sum[11]  := vSf.S1;
+     vBk.Bk.Sum[12]  := vSf.S2;
+     vBk.Bk.Sum[13]  := vSf.S3;
+     vBk.Bk.Sum[14]  := vSf.S4;
+     vBk.Bk.Sum[15]  := vSf.S5;
+     vBk.Bk.Sum[16]  := vSf.S6;
+     vBk.Bk.Sum[17]  := vSf.S7;
+     vBk.Bk.Sum[20]  := vSf.S10;
+     vBk.Bk.SumIn[6] := vSf.Si1;
+     vBk.Bk.SumIn[7] := vSf.Si2;
+     vBk.Bk.Sum[21]  := vSf.S;
+
+  vBk.BK.Direct      := 2;
+  vBk.BK.cSopr       := cKatSopr;
+  vBk.BK.dOpl        := if (dOpl=Date(1,1,3000),Date(0,0,0),dOpl);
+  vBk.BK.dOpr        := vKS.KS.dOpr;
+!  vBk.BK.dReg        := if (loImpGTD.BK.dOpr > loImpGTD.BK.dOpl, loImpGTD.BK.dOpr, loImpGTD.BK.dOpl);
+!  vBk.BK.dReg        := vKS.KS.dOpr;
+  vBk.BK.dReg        := if (longint(vKS.KS.dOpr) = 0,
+                          vKS.KS.dSopr, vKS.KS.dOpr);
+  vBk.BK.Num         := vKS.KS.NSopr;
+  vBk.BK.cOrg        := vKS.KS.cOrg;
+  vBk.BK.cStepDoc    := vKS.KS.cStepDoc;
+  vBk.BK.Nazn        := 'Импортная ГТД N'+vKS.KS.NSopr;
+  if (vGetSD(vKS.KS.cStepDoc))
+    vBk.BK.cBaseDoc := vSD.SD.cBaseDoc;
+  // центр ответственности
+  vBk.Bk.cOtvPodr := DefaultBaseCO;
+  if (vKs.Ks.cOtvPodr <> comp(0))
+   {
+     vBk.Bk.TipOtvPodr := KatSopr.TipOtvPodr;
+     vBk.Bk.cOtvPodr   := KatSopr.cOtvPodr;
+   }
+  else
+   {
+    if(vBk.Bk.cBaseDoc <> comp(0))
+     if (vGetBD(vBk.Bk.cBaseDoc))
+      {
+       if (vBD.BD.cOtvPodr <> comp(0))
+        {
+          vBk.Bk.TipOtvPodr := vBD.BD.TipOtvPodr;
+          vBk.Bk.cOtvPodr   := vBD.BD.cOtvPodr;
+        }
+      }
+   }
+!  vBk.BK.RegDoc      := 0;     //  регистрируемая
+!  vBk.BK.TipUser     := vSf.TipRegistrGTD;
+!  vBk.BK.SubTip      := 5;
+  if (Not vGetUD(vSf.TipRegistrGTD)) {
+    vSfCreateStandTipUser;
+    if (Not vGetUD(vSf.TipRegistrGTD)) {
+      AbortTrans;
+      Exit;
+    };
+  };
+  vBK.Bk.TipUser := vSf.TipRegistrGTD;
+  vBK.Bk.SubTip  := vUD.UD.SubTip;
+  vBK.Bk.RegDoc  := if((vBK.Bk.SubTip and 16)=0, 0, 1);
+#ifdef __DescrInBookPrZk__
+  vBk.Bk.Descr   := sGetTune('User.Descr');
+  vBk.Bk.DesGr   := sGetTune('User.DesGr');
+#end
+  vBK.sTuneDescr := sGetTune('User.Descr');
+  vBK.sTuneDesGr := sGetTune('User.DesGr');
+
+!  vBkSetTip(vSf.TipRegistrGTD);
+  if ( not TrF(vBk.Insert current Bk) ) {
+    SfUpdateSoprHoz(vBk.Bk.nRec);
+    message('ГТД зарегистрирована в книге покупок.');
+  }
+  else
+    message('Не удалось зарегистрировать ГТД.')
+  EndTrans;
+}; // procedure RegisterGTD

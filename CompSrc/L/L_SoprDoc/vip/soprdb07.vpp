@@ -1,0 +1,272 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// HandleEvent из soprdocb.vip
+//******************************************************************************
+
+#include SOPRC13.VPP
+
+//******************************************************************************
+cmSetDefault:
+{
+  if (CurTable = #SpSopr) OR (CurTable = #SoprOrdB)
+   #ifdef _SOPRDOCB_VIP
+    OR (CurTable = #SpSopUsl)
+   #end
+    if (NOT OtkatToOldState(FALSE, word(0)))
+    {
+      Stop;
+      Exit;
+    }
+
+  var aKolD : double; aKolD  := 0;
+  var aSumD : double; aSumD  := 0;
+  var aVSumD: double; aVSumD := 0;
+
+  PushPos(#SoprOrdB)
+
+  _LOOP SoprOrdB
+  {
+    aKolD  := aKolD  + SoprOrdB.Kol;
+    aSumD  := aSumD  + SoprOrdB.Price;
+    aVSumD := aVSumD + SoprOrdB.VPrice;
+  }
+
+  PopPos(#SoprOrdB)
+
+  DefaultSoprOrdB;
+
+  if (SpSopr.KolOpl > aKolD)
+    SoprOrdB.Kol := SpSopr.KolOpl - SpSopr.KolPov - aKolD;
+
+  if ((KatSopr.VidSopr = 111) or (KatSopr.VidSopr = 110))
+  {
+    SoprOrdB.Price  := SpSopr.KolOpl * SpSopr.Price  - aSumD;
+    SoprOrdB.VPrice := SpSopr.KolOpl * SpSopr.VPrice - aVSumD;
+  }
+
+ #ifdef _SOPRDOCB_VIP
+  SelectField(#KatPodr.Name);
+ #end
+
+ #ifdef _AKT_211_111_VIP
+  SelectField(#KatPodr2.Name);
+ #end
+}
+
+//******************************************************************************
+cmPick:
+{
+  if (CurTable = #SpSopr) OR (CurTable = #SoprOrdB)
+   #ifdef _SOPRDOCB_VIP
+    OR (CurTable = #SpSopUsl)
+   #end
+    if (NOT OtkatToOldState(FALSE, word(0)))
+    {
+      Stop;
+      Exit;
+    }
+
+  var iFieldPodr: integer;
+  var iFieldMOL : integer;
+
+ #ifdef _AKT_211_111_VIP
+   iFieldPodr := #KatPodr2.Name;
+   iFieldMOL  := #KatMol2.Name;
+ #else
+   iFieldPodr := #KatPodr.Name;
+   iFieldMOL  := #KatMol.Name;
+ #end
+
+  if (CurField = iFieldPodr)
+  {
+   #ifdef _SOPRDOCB_VIP
+    if (GetVipRef(PAutoPlan, 'BoxAutoPlan'))
+      if PAutoPlan.IsPlanExist(SpSopr.nRec, SoprOrdB.cPodr)
+      {
+        Message(''#3'Выполнение невозможно.'#13#3+
+                'Сначала удалите план размещения МЦ.', CancelButton);
+        Abort; Exit;
+      }
+   #end
+
+    PickKatPodrName;
+
+    if (SoprOrdB.cMol = 0)         AND
+       (boGetTune('Pick.AvtoMol')) AND
+       (NOT boGetTune('Pick.AutoPickinInterface'))
+    {
+      SelectField(iFieldMol);
+        PickKatMolName;
+    }
+  }
+  else
+    if (CurField = iFieldMOL)
+      PickKatMolName;
+}
+
+//******************************************************************************
+cmDeleteRecord:
+{
+  if (Message(''#3'Удалить текущее распределение по складам ?',YesNo) = cmYes)
+  {
+   #ifdef _SOPRDOCB_VIP
+    // Удаление плана размещения по ячейкам хранения
+    if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+      if PAutoPlan.IsPlanExist (SpSopr.nRec, SoprOrdB.cPodr)
+        PAutoPlan.DeletePlan (SpSopr.nRec, SoprOrdB.cPodr);
+   #end
+
+    Delete Current SoprOrdB;
+    RescanPanel(#SoprOrdB);
+  }
+  else
+    Abort;
+}
+
+//******************************************************************************
+cmSetCurField:
+{
+  if (NOT OtkatToOldState(FALSE, word(0)))
+    Exit;
+
+  if (NOT boGetTune('Pick.AutoPickinInterface'))
+    Exit;
+
+  var iFieldPodr: integer;
+  var iFieldMOL : integer;
+
+ #ifdef _AKT_211_111_VIP
+  iFieldPodr := #KatPodr2.Name;
+  iFieldMOL  := #KatMol2.Name;
+ #else
+  iFieldPodr := #KatPodr.Name;
+  iFieldMOL  := #KatMol.Name;
+ #end
+
+  if (TarGet = iFieldPodr)
+  {
+    if (SoprOrdB.cPodr = 0)
+      PutCommand(cmPick);
+  }
+  else
+    if (TarGet = iFieldMOL)
+      if (SoprOrdB.cMol = 0)
+        PutCommand(cmPick);
+}
+
+//******************************************************************************
+cmCheckField:
+{
+  if (CurTable <> #SoprOrdB)
+    Exit;
+
+ #ifdef _SOPRDOCB_VIP
+  if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+    if PAutoPlan.IsPlanExist(SpSopr.nRec, SoprOrdB.cPodr)
+    {
+      Message(''#3'Выполнение невозможно.'#13#3+
+                  'Сначала удалите план размещения МЦ.',CancelButton);
+      Set SoprOrdB.Kol := double(OldFieldValue);
+      Exit;
+    }
+ #end
+
+  if (CurField = #SoprOrdB.Kol)
+  {
+    UpdateTable;
+    RecalcSoprOrdB (0, 0, SoprOrdB.Kol, 0, SoprOrdB.NRec);
+  }
+}
+
+cmExprFieldChanged:
+{
+  // Здесь происходит установка стоимости SpSopr.Price. Нужно для актов на прием услуг.
+  // Для накладных на данный момент это поле не актуально, поэтому обработку не делил на накладные и акты
+  // В накладных поле SoprOrdB.Price заполняется в момент создания ордера (SoprOrdB.vpp)
+  case CurField of
+    #Percent:
+    {
+     #ifdef _SOPRDOCB_VIP
+      if GetVipRef(PAutoPlan, 'BoxAutoPlan')
+        if PAutoPlan.IsPlanExist(SpSopr.nRec, SoprOrdB.cPodr)
+        {
+          Message(''#3'Выполнение невозможно.'#13#3 + 'Сначала удалите план размещения МЦ.', CancelButton);
+          Stop;
+          Exit;
+        }
+     #end
+
+      var pKol: double;
+      pKol := double(ExprFieldValue);
+
+      if (pKol > 100)
+        pKol := 100.0;
+
+      if (pKol < 0)
+        pKol := 0.0;
+
+      pKol := pKol * SpSopr.KolFact / 100;
+
+      UpdateTable;
+
+
+      RecalcSoprOrdB (0, 0, pKol, 0, SoprOrdB.NRec);
+    }
+
+    //----------------------------
+    #PercentSumma:
+    {
+      var pSum: double;
+      pSum := double(ExprFieldValue);
+
+      UpdateTable;
+      RecalcSoprOrdB (FSRoundRub(pSum), FSRoundVal(pSum), SoprOrdB.Kol, 1, SoprOrdB.NRec);
+    }
+  end;
+}
+
+//******************************************************************************
+cmCheckRecord:
+{
+  if (SoprOrdB.cPodr = 0)
+  {
+    Message(''#3'Укажите СКЛАД или удалите запись.');
+
+   #ifdef _SOPRDOCB_VIP
+    SelectField(#KatPodr.Name);
+   #end
+
+   #ifdef _AKT_211_111_VIP
+    SelectField(#KatPodr2.Name);
+   #end
+
+    Abort;
+    Exit;
+  }
+
+  if (KatSopr.VidSopr = 111) or (KatSopr.VidSopr = 110)
+    if (SoprOrdB.Price <> 0) OR (SoprOrdB.VPrice <> 0)
+      Exit;
+
+  if (SoprOrdB.Kol = 0)
+  {
+    Message(''#3'Укажите количество МЦ или удалите запись.');
+    SelectField(#SoprOrdB.Kol);
+    Abort;
+    Exit;
+  }
+}
+
+//******************************************************************************
+cmInsertRecord:
+{
+  Insert current SoprOrdB;
+  RescanPanel(#SoprOrdB);
+}
+
+cmUpdateRecord:
+{
+  Update current SoprOrdB;
+  RescanPanel(#SoprOrdB);
+}

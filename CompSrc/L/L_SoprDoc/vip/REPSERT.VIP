@@ -1,0 +1,529 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Печать удостоверения качества
+//******************************************************************************
+#include Contexts.vih
+#include xlReport.Vih //подключаем Excel
+
+#doc
+Печать удостоверения качества
+#end
+Interface RepSertif 'Печать удостоверения качества' (, hcKuzbassIRepSertific, ) EscClose, Cyan;
+  Show at (, , 110, );
+
+#include ServKau.vih
+
+Create view
+Var
+//------------------------------------------------------------------------------
+  sXLTFileName
+, sXLSFileName
+, Id
+, otch
+                : string;
+  pxlrepsetup   : xlrepsetup;
+  pXL           : XLSRepBuilder;      // Excel
+
+//------------------------------------------------------------------------------
+  sMarkerName
+                : string;
+//------------------------------------------------------------------------------
+  pNRec
+, pNastr
+, CurGroup
+                : comp;
+//------------------------------------------------------------------------------
+  Date1
+, Date2
+, Date_from
+, Date_to
+                : date;
+//------------------------------------------------------------------------------
+  cMarker
+, cCount
+, cRep
+, TmpDeskTable
+                : longint;
+//------------------------------------------------------------------------------
+  pFormat
+, pStatus
+, CurCode
+, NRec
+, wTable
+, ResWord0
+, ResName1
+, ResWord1
+, ResWord2
+, ResWord3
+, Sort
+, ResComp1
+, ExCode
+                : word;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if ( AttrNam.AttrType = 1, StringNL0(  AttrVal.vDouble, 0, 3),
+   if ( AttrNam.AttrType = 2, DateToStr(  AttrVal.vDate, 'DD/MM/YYYY'),
+    if ( AttrNam.AttrType = 3, TimeToStr(  AttrVal.vTime, 'HH: MM'), AttrVal.vString)))
+    ( FieldName = AttrValue )
+//------------------------------------------------------------------------------
+
+From
+  AttrNam
+, AttrVal
+, BaseDoc
+, ExClassSeg
+, ExClassVal
+, KatMC
+, KatNotes
+, KatOrg
+, KatOrg Keepper
+, KatOrg TasteOrg
+, KatPodr TastePodr
+, KatPokaz
+, MarAvt
+, MarPunkt MarPunktP
+, MarPunkt MarPunktR
+, Persons
+, PickRep
+, Sertific
+, Sertific RepSertific
+, SpStep
+, StepDoc
+, TempDescr
+, TempDescr  TempDescr2
+, TempIer
+, TmpKatalog
+, Tobot
+, Tobot Tobot2
+, Vagon
+, Vagon RepVagon
+, ValPokaz
+
+Where
+((
+       Sertific.NRec          == Vagon.cSertific
+  AND  pNastr                 == UserDeskRep.NRec
+  AND  UserDeskRep.ResComp[9] == RepGrLst.NRec          // группировки
+  AND  RepGrLst.NRec          == RepGrOne.cRepGrLst
+  AND  RepGrOne.cRec          == RepGroup.NRec
+  AND  RepGrOne.cRec          == RepGrSrt.NRec
+  AND  CurCode                == Tobot.Code
+  AND  CurCode                == TempDescr.Code
+  AND  CurGroup               == TempDescr.cGroup
+  AND  TempDescr.NRec         == Tempier.cGroup
+  AND  if ( IsValid(tnTempIer)
+          , TempIer.cRec
+          , TempDescr.cRec
+          )                   == Tobot2.NRec
+  AND  Tobot2.mspDoc          == RepSertific.NRec
+
+  AND  RepSertific.cNote      == KatNotes.NRec
+  AND  word(coSertific)       == AttrVal.wTable
+  AND  RepSertific.NRec       == AttrVal.cRec
+  AND  AttrVal.cAttrNam       == AttrNam.NRec
+  AND  RepSertific.NRec       == ValPokaz.cOwner
+  AND  word(coSertific)       == ValPokaz.wTable
+  AND  ValPokaz.cKatPokaz     == KatPokaz.NRec
+  AND  RepSertific.cMC        == KatMC.NRec
+  AND  RepSertific.NRec       == RepVagon.cSertific
+  AND  RepSertific.cKeepper   == Keepper.NRec
+  AND  RepSertific.cTasteOrg  == TasteOrg.NRec
+  AND  RepSertific.cTastePodr == TastePodr.NRec
+  AND  RepSertific.cOtvetstv  == Persons.NRec
+  AND  RepVagon.cOrg          == KatOrg.NRec
+  AND  RepVagon.cSpStep       == SpStep.NRec
+  AND  SpStep.cStepDoc        == StepDoc.NRec
+  AND  StepDoc.cBaseDoc       == BaseDoc.NRec
+  AND  word(coBaseDoc)        == TTNDoc.wTable
+  AND  BaseDoc.NRec           == TTNDoc.cDoc
+  AND  TTNDoc.cMarAvt         == MarAvt.NRec            // маршрут
+  AND  TTNDoc.cPunktR         == MarPunktR.NRec         // пункт разгрузки
+  AND  TTNDoc.cPunktP         == MarPunktP.NRec         // пункт погрузки
+
+))
+
+//******************************************************************************
+
+bounds byDate =  Date1    <<= Sertific.dDoc  AND
+                 Date2    >>= Sertific.dDoc
+
+//******************************************************************************
+
+order by TempIer.IsLeaf, TempIer.SortName;
+
+//******************************************************************************
+
+Parameters
+  sMarkerName;
+
+//******************************************************************************
+
+Form fPrnSert ('PrnSert.out', 'PrnSert' ) With NoVisual;
+
+//******************************************************************************
+
+Panel pSertific;
+
+Screen scrEmpty;
+  Show at (36, 1, , 17);
+  Table RepSertific;
+
+Fields
+<<
+ Группа  Дескр.   Номер
+
+ Дата оформления
+ Дата окончания
+ Статус
+ Наименование
+ Матценность
+ ГОСТ                   ТУ
+ Рег.номер
+ Держатель сертификата
+ Организация, проводившая пробы
+
+ Подразделение, проводившее пробы
+
+ Мастер ОТК
+ >>
+end; // Screen scrEmpty
+
+//******************************************************************************
+
+Screen scrSertific;
+  Show at (36, 1, , 17);
+  Table RepSertific;
+
+Fields
+  RepSertific.DesGr : Protect, Skip;
+  RepSertific.Descr : Protect, Skip;
+  RepSertific.NDoc  : Protect, Skip;
+  RepSertific.dDoc  : Protect, Skip;
+  RepSertific.dEnd  : Protect, Skip;
+  KatNotes.Name     : Protect, Skip;
+  RepSertific.Name  : Protect, Skip;
+  KatMC.Name        : Protect, Skip;
+  RepSertific.GOST  : Protect, Skip;
+  RepSertific.TU    : Protect, Skip;
+  RepSertific.NReg  : Protect, Skip;
+  Keepper.Name      : Protect, Skip;
+  TasteOrg.Name     : Protect, Skip;
+  TastePodr.Name    : Protect, Skip;
+  Persons.FIO       : Protect, Skip;
+<<
+ Группа  Дескр.   Номер
+ .@@@@@@ .@@@@@@ .@@@@@@@@@@@@@
+ Дата оформления   .@@@@@@@@@@@
+ Дата окончания    .@@@@@@@@@@@
+ Статус            .@@@@@@@@@@@@@@@@@@@@@@@@
+ Наименование.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Матценность .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ ГОСТ.@@@@@@@@@@@@@@@@@ ТУ.@@@@@@@@@@@@@@@@@
+ Рег.номер  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Держатель сертификата.@@@@@@@@@@@@@@@@@@@@@
+ Организация, проводившая пробы
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Подразделение, проводившее пробы
+ .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Мастер ОТК.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen
+
+//******************************************************************************
+
+Browse brVagons(, , sci1Esc);
+  Show at (36, 1, , 17);
+  Table RepVagon;
+
+Fields
+//------------------------------------------------------------------------------
+  RepVagon.Num
+                #3'Номер'
+                ('Номер вагона', , )
+                : [10], NoAutoSize, Protect;
+//------------------------------------------------------------------------------
+  RepVagon.Massa
+                #3'Собственный вес'
+                ('Собственный вес вагона', , )
+                : [12], [prSignsInKol], NoAutoSize, Protect;
+//------------------------------------------------------------------------------
+  RepVagon.Netto
+                #3'Вес груза'
+                ('Вес груза', , )
+                : [12], [prSignInKol], NoAutoSize, Protect;
+//------------------------------------------------------------------------------
+  RepVagon.Massa+RepVagon.Netto
+                #3'Общий вес'
+                ('Общий вес вагона с грузом', , )
+                : [12], [prSignsInKol], NoAutoSize, Protect;
+//------------------------------------------------------------------------------
+  KatOrg.Name
+                #3'Контрагент'
+                ('Контрагент из документа-основания', , )
+                : [20], Protect;
+//------------------------------------------------------------------------------
+end; // Browse
+
+//******************************************************************************
+
+Browse brAttr(, , sci1Esc);
+  Show at (36, 1, , 17);
+  Table AttrVal;
+
+Fields
+//------------------------------------------------------------------------------
+  AttrNam.Name
+                #3'Параметр'
+                ('Наименование параметра', , )
+                : [20], Protect;
+//------------------------------------------------------------------------------
+  AttrValue
+                #3'Значение'
+                ('Значение параметра', , )
+                : [10], Protect;
+//------------------------------------------------------------------------------
+end; // Browse
+
+//******************************************************************************
+
+Browse brPokaz(, , sci1Esc);
+  Show at (36, 1, , 17);
+  Table ValPokaz;
+
+Fields
+//------------------------------------------------------------------------------
+  KatPokaz.Name
+                #3'Показатель качества'
+                ('Наименование показателя качества', , )
+                : [20], Protect;
+//------------------------------------------------------------------------------
+  ValPokaz.Value
+                #3'Значение'
+                ('Значение показателя', , )
+                : [12.3], Protect;
+//------------------------------------------------------------------------------
+end; // Browse
+
+end; // Panel pSum
+
+
+//******************************************************************************
+
+Panel pSum;
+  Table TempDescr;
+
+Screen scrSum;
+  Show at (36, 18, , );
+
+Fields
+TempDescr.Sum[1]: [15.3], Protect, Skip;
+TempDescr.Sum[2]: [15.3], Protect, Skip;
+TempDescr.Sum[1]+TempDescr.Sum[2]: [15.3] Protect, Skip;
+<<
+ Масса пустых вагонов  : .@@@@@@@@@@@@@@@@@@@
+ Масса груза           : .@@@@@@@@@@@@@@@@@@@
+ Масса груженых вагонов: .@@@@@@@@@@@@@@@@@@@
+>>
+end; // Screen scrSum
+
+HandleEvent
+end; // HandleEvent Panel pSum
+end; // Panel pSum
+
+
+//******************************************************************************
+
+Panel p1;
+  Table TempDescr;
+
+Tree trTmpTree('Сtrl+P - Печать всего отчета, Alt+P - Печать с текущего уровня', , sci149EscTree);
+  Show at (1, , 35, );
+
+Fields
+  TempDescr.Name #3'Удостоверения качества'  : [70], Protect;
+End;  //'Tree
+
+
+//******************************************************************************
+
+HandleEvent  //'Panel p1
+
+cmTreeTop:
+  CurGroup := 0;
+
+cmTreeUp:
+  CurGroup := TempDescr.cGroup;
+
+cmTreeDown:
+  CurGroup := TempDescr.NRec;
+
+cmTreeNodeType:
+  if TempDescr.isLeaf = 1
+    TreeSetNodeType(trTmpTree, 2);
+
+cmPositionChanged:
+  if ( TempDescr.isLeaf <> 1 )
+    SetFormat(scrEmpty);
+  else
+    case pFormat of
+      0: SetFormat(scrSertific);
+      1: SetFormat(brVagons);
+      2: SetFormat(brAttr);
+      3: SetFormat(brPokaz);
+    end; // case
+
+cmEdit:
+  if (TempDescr.isLeaf = 1)
+    RunInterface(Sertificate, word(2), RepSertific.NRec);
+End;
+End;
+
+//******************************************************************************
+
+#include repsert.vpp
+
+//******************************************************************************
+
+HandleEvent  //HandleEvent Interface
+
+cmInit:
+{
+  pFormat := 0;
+  SetFormat(scrSertific);
+  CurCode := 401;  //код отчета
+  ID := 'L_SoprDoc\SeeReester';
+  if (not ReadMyDsk(sXLTFileName,ID,true))
+  #ifdef Atl51
+    Set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+  #else
+    Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+  #endif
+
+  if ( SMarkerName <> '')
+    {
+      PrintMarkedSertificates;
+      Abort;
+    }
+  else
+  {
+    pStatus := RunInterface('SertNastr', 401, pNastr);
+    if ( pStatus = cmCancel )
+      {
+        Abort;
+        Exit;
+      }
+
+    SetWindowTitle( wnMainWindow, 'Реестр удостоверений качества' );
+
+    case pStatus of
+    cmDefault:  //сформировать новый отчет
+      {
+        if ( NOT FillTmpDesk )
+          {
+             Message('Ошибка при заполнении временной таблицы', Error);
+             Abort;
+             Exit;
+          }
+
+        if ( NOT Fill_Tobot )
+          {
+            Abort;
+            Exit;
+          }
+
+        if ( NOT MakeTreeIer )
+          {
+            Message('Ошибка иерархического построителя.', Error);
+            Abort;
+            Exit;
+          }
+      }  //cmDefault
+   //------------------------------------------------------------------------------
+    cmOk:  //показать ранее сформированный
+      {
+        if ( GetFirst Tobot <> tsOk )
+          {
+            Message('Отчет не содержит ни одного документа!', Warning);
+            Abort;
+            Exit;
+          }
+
+        if ( NOT FillTmpDesk )
+          {
+            Message('Ошибка при заполнении временной таблицы', Error);
+            Abort;
+            Exit;
+          }
+      }
+   //------------------------------------------------------------------------------
+    end;//case
+  }
+}
+
+cmDone:
+if ( pStatus = cmDefault )
+ {
+   DoneTreeBuilder(cRep);
+   TblDeleteTable(TmpDeskTable);
+ }
+
+cmPFormat:
+  if ( TempDescr.isLeaf = 1 )
+   {
+     pFormat := pFormat + 1;
+     if ( pFormat = 4 )
+     pFormat := 0;
+     case pFormat of
+       0: SetFormat(scrSertific);
+       1: SetFormat(brVagons);
+       2: SetFormat(brAttr);
+       3: SetFormat(brPokaz);
+     end; // case
+
+     RescanPanel(#TempDescr);
+   }
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuRepSertif'));
+
+cmPrintDoc:
+  PrinTreestr(1);
+
+cmPlansNo:
+  PrinTreestr(2);
+
+cmValue10:
+  PrinTreestrExcel(1);
+
+cmvalue11:
+  PrinTreestrExcel(2);
+
+cmValue12:
+{
+  runinterface('xlrepsetup',1,ID,sXLTFileName);
+  ReadMyDsk(sXLTFileName,ID,true);
+}
+
+End;  //HandleEvent Interface
+End.  //Interface
+//******************************************************************************
+
+mnuRepSertif Menu
+{
+  = 'Печать отчета', '' , , scMenuCtx;
+  {
+    - 'Печать всего отчета      ', cmPrintDoc, 'Распечатать отчет по всем уровням иерархии'    , , 'Ctrl+P', kbCtrlP;
+    - 'Печать с текущего уровня ', cmPlansNo,  'Распечатать отчет для текущего уровня иерархии', , 'Alt+P' , kbAltP;
+  }
+  = 'Печать Excel', '' , , scMenuCtx;
+  {
+    - 'Печать всего отчета', cmValue10, 'Распечатать отчет по всем уровням иерархии', , '', ;
+    - 'Печать с текущего уровня', cmValue11, 'Распечатать отчет для текущего уровня иерархии', , '', ;
+    - 'Настройка шаблона', cmValue12, 'Настройка шаблона ', , '', ;
+  }
+}
+
+//******************************************************************************

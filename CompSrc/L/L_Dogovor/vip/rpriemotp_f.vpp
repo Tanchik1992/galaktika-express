@@ -1,0 +1,291 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика - договоры
+// Функции для Формирование распоряжений на прием-отпуск
+//******************************************************************************
+
+//******************************************************************************
+//******************************************************************************
+
+#include ShowKau.vpp
+
+Function GetKAUField(pNum : integer) : string;
+{
+  GetKAUField := #ShowKau(if(pNum = 1, SaldTune.wObj, SaldTune.wKau[pNum - 1]), if(pNum = 1, SpecMTR.cObj, SpecMTR.cKau[pNum - 1]));
+}
+
+//******************************************************************************
+//update статьи затрат для текущей позиции спецификаци
+Procedure Update_Current_SpecZatr (aZatr: comp);
+{
+  if (IsValid(#SpecZatr))
+    Update Current SpecZatr Set SpecZatr.cAddSumTune := aZatr
+  else
+    {
+      ClearBuffer(#SpecZatr);
+      SpecZatr.coTable     := coSpSopr;
+      SpecZatr.cAddSumTune := aZatr;
+      SpecZatr.cUKS        := SpSopr.cUKS;
+      Insert Current SpecZatr;
+    }
+};
+
+//******************************************************************************
+//синхронизация ссылок объекта строит. и статей затрат для работ связанных
+//с материалами для текущей позиции спецификации
+//aMode - 0: удаление,1 - объект, 2 - статья затрат
+Procedure SynchUKSObj (aRec, aUks: comp; aMode: byte);
+{
+  PushPos(#SpSopr);
+
+  case aMode of
+    0:
+      {
+        Update SpSopr where ((aRec == SpSopr.cSpSopr))
+        Set SpSopr.cSpSopr := comp(0);
+      }
+    1:
+      {
+        Update SpSopr where ((aRec == SpSopr.cSpSopr))
+        Set SpSopr.cUks := aUks;
+      }
+    2:
+      {
+        _LOOP SpSopr where ((aRec == SpSopr.cSpSopr))
+          if (aUks <> comp(0))
+            Update_Current_SpecZatr(aUks);
+          else
+            if IsValid(tnSpecZatr)
+              if (Delete Current SpecZatr <> tsOk) {};
+      }
+  end;
+
+  PopPos(#SpSopr);
+  RereadRecord(#SpSopr);
+}
+
+
+//******************************************************************************
+Procedure CheckProtect;
+{
+  bProtect := FALSE;
+
+  if (KatSopr.Status > 0)
+    bProtect := TRUE;
+
+  if (  (KatSopr.wcIzd = 0)
+     or (DscVisible = dcGrpRead)
+     or ((DscVisible = dcOwnModifAllRead) and (KatSopr.Descr != DscName))
+     or ((DscVisible = dcGrpModifAllRead) and (KatSopr.DesGr != DesGroup))
+     )
+    bProtect := TRUE;
+
+  ProtectRecord(#KatSopr, bProtect);
+  ProtectRecord(#SpSopr,  bProtect);
+}
+
+//******************************************************************************
+
+Procedure RunProtectedInput;
+{
+  if ( CurField = #KatNotes.Name )
+    {
+      ProtectRecord(#KatSopr, FALSE);
+      ProtectRecord(#SpSopr,  FALSE);
+
+      if ( RunInterface(StatLog, Word(1), KatSopr.nRec, word(442), KatSopr.Status, KatSopr.cNote, word(0)) <> cmCancel )
+        {
+          set KatSopr.Status := KatSopr.Status;
+          set KatSopr.cNote  := KatSopr.cNote;
+
+          UpdateTable;
+
+          CheckProtect;
+        }
+
+      Stop;
+      Exit;
+    }
+
+  Message('Распоряжение на прием-отпуск можно редактировать только в статусе "оформляемый" !');
+  Stop;
+}
+
+//******************************************************************************
+
+Procedure P_OtgOrder_SetDefault;
+{
+  ClearBuffer(#KatSopr);
+
+  KatSopr.wcIzd    := 1;
+  KatSopr.DesGr    := sGetTune('User.DesGr');
+  KatSopr.Descr    := sGetTune('User.Descr');
+  KatSopr.dSopr    := Cur_Date;
+  KatSopr.YearSopr := Year(Cur_Date);
+
+  RPriemOtp_Sh_NoDoc(KatSopr.Descr, KatSopr.dSopr, KatSopr.NSopr);
+
+  KatSopr.Status := 0;
+  KatSopr.cNote  := oNotes.GetFirstNote(word(442), KatSopr.Status);
+
+  CheckProtect;
+}
+
+//******************************************************************************
+
+Procedure RaspOtgr_Main_HotKeys;
+{
+  if ( UpdateTable )
+    if ( CurTable = #KatSopr )
+      PutHotCommand(RunMenu('mnuRPriemOtp'));
+}
+
+//******************************************************************************
+
+Procedure RaspOtgr_Edit_HotKeys;
+{
+  case CurTable of
+
+    #KatSopr:
+      PutHotCommand(RunMenu('mnuRPriemOtp'));
+
+    #SpSopr:
+      if UpdateTable
+        PutHotCommand(RunMenu('mnuRPriemOtpSpEdit'));
+
+  end;
+}
+
+//******************************************************************************
+
+Procedure P_RPriemOtp_PickClass;
+{
+  case CurTable of
+
+    #KatSopr:
+      RunInterface(ExClassifier, word(coKatSopr), KatSopr.nRec);
+
+    #SpSopr:
+      RunInterface(ExClassifier, word(coSpSopr), SpSopr.nRec);
+
+  end;
+}
+
+//******************************************************************************
+
+Procedure P_RPriemOtp_PickAttr;
+{
+  case CurTable of
+
+    #KatSopr:
+      RunInterface(Attribute, word(coKatSopr), KatSopr.nRec);
+
+    #SpSopr:
+      RunInterface(Attribute, word(coSpSopr), SpSopr.nRec);
+
+  end;
+}
+
+//******************************************************************************
+
+Procedure P_RPriemOtp_CtrlF3;
+{
+  if ( (KatSopr.Status > 0) or (CurTable <> #SpSopr) or (IsProtected(#SpSopr)) )
+    Exit;
+
+  PickMCKat;
+}
+
+//******************************************************************************
+
+Procedure SetWinTitle(num: word);
+{
+  var Tit: string;  Tit := 'Распоряжение на прием-отпуск МТР';
+
+  case ( num ) of
+  //-----------
+     1: Tit := Tit + '. Фильтр (дескриптор пользователя)';
+  //-----------
+     2: Tit := Tit + '. Фильтр (группа пользователей)';
+  //-----------
+     3: Tit := Tit + '. Фильтр (дата: '+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY')+')';
+  //-----------
+     4: {
+          Tit := Tit + '. Фильтр(дата: '+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+          Tit := Tit + '; дескриптор пользователя)';
+        }
+  //-----------
+     5: {
+          Tit := Tit + '. Фильтр(дата: '+DateToStr(BegDate, 'DD/MM/YYYY')+'-'+DateToStr(EndDate, 'DD/MM/YYYY');
+          Tit := Tit + '; группа пользователей)';
+        }
+  //-----------
+  end;
+
+  SetTitle(Tit);
+}
+// Установка дескрипторов на накладную
+// и переключение форматов
+
+//******************************************************************************
+
+Procedure SetDocBounds; // Установка ограничений по документу
+{
+  if ( isFilter )
+    {
+      case DscVisible of
+      //----------------
+        dcAllModif,
+        dcOwnModifAllRead,
+        dcGrpModifAllRead:
+            { //дата
+              AddBounds(tbByDate);
+              SetWinTitle(3);
+            }
+      //----------------
+        dcOwnOnly:
+            {  //дата+дескриптор
+              AddBounds(tbByDateDsc);
+              SetWinTitle(4);
+            }
+      //----------------
+        dcGrpRead,
+        dcGrpModif:
+             { //дата+группа
+               AddBounds(tbByDateGrDsc);
+               SetWinTitle(5);
+             }
+      //----------------
+      end;
+    }
+  else
+    {
+      case DscVisible of
+      //----------------
+        dcAllModif,
+        dcOwnModifAllRead,
+        dcGrpModifAllRead:
+            { // нет
+              SetWinTitle(0);
+            }
+      //----------------
+        dcOwnOnly:
+            { // дескриптор
+              AddBounds(tbByDescr);
+              SetWinTitle(1);
+            }
+      //----------------
+        dcGrpRead,
+        dcGrpModif:
+            { // группа
+              AddBounds(tbByGrDsc);
+              SetWinTitle(2);
+            }
+      //----------------
+      end;
+    }
+}
+
+
+//******************************************************************************
+

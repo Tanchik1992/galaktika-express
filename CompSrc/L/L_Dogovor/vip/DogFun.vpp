@@ -1,0 +1,1585 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Сервисные функции для договоров (соглашений)
+//********************************************************************************
+
+Procedure RecalcSumOwnerDogs(OldSumDog, OldSumNDS: double;
+                             cValDog: comp;
+                             AfterModif: boolean // TRUE - после модификации, FALSE - перед удалением
+                            );
+var
+  NRecDog   : comp;
+  dValDog   : Date;
+  dSumDog,
+  dSumNDS   : double;
+  ReCalcSum: boolean;
+{
+  NRecDog := Dogovor.nRec;
+  dValDog := oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc);
+
+  if AfterModif
+    {
+      if (Dogovor.cVal <> cValDog)
+        {
+          dSumDog := Dogovor.Summa  - oValFunc.GetAnyCurrency(cValDog, OldSumDog, dValDog, Dogovor.cVal);
+          dSumNDS := Dogovor.SumNDS - oValFunc.GetAnyCurrency(cValDog, OldSumNDS, dValDog, Dogovor.cVal);
+          cValDog := Dogovor.cVal;
+        }
+      else
+        {
+          dSumDog := Dogovor.Summa  - OldSumDog;
+          dSumNDS := Dogovor.SumNDS - OldSumNDS;
+        }
+    }
+  else
+    {
+      dSumDog := - OldSumDog;
+      dSumNDS := - OldSumNDS;
+    }
+
+  if (ABS(dSumDog) < 0.0000000001) Exit;
+  ReCalcSum := FALSE;
+  case wGetTune('Dog.SumDogSogl') of
+    1: ReCalcSum := TRUE;
+    2: ReCalcSum := (Message(FormatStr_2('%sПересчитать суммы вышестоящих документов%s ?'
+                                       , if(AfterModif, 'Изменилась сумма по соглашению.'#13, '')
+                                       , if(AfterModif, '', ''#13'перед удалением соглашения')
+                                        ), YesNo) = Yes);
+
+  end; // case
+
+  if ReCalcSum
+    oSpDocs.ReCalcSumsUpDocs(nRecDog, cValDog, dValDog, dSumDog, dSumNDS);
+}
+
+!---- расчет числа периодов по интервалу дат для периодической МЦ/услуги -----
+
+Function SpDocsNumPeriod(DateB: Date; DateE: date; Tip: word): word;
+var
+  i, k: word;
+  d1: Date;
+{
+  i := 0;
+
+  if (DateB > DateE)
+    {
+      SpDocsNumPeriod := 0;
+      Exit;
+    }
+
+  case Tip of
+  2: {  // ежегодно
+       i := Year(DateE) - Year(DateB) + 1;
+     }
+  3: {  // ежеквартально
+       i := 1 + ((Month(DateE) - 1) div 3) - ((Month(DateB) - 1) div 3);
+       i := i + 4*(Year(DateE) - Year(DateB));
+     }
+  4: {  // ежемесячно
+       i := Months_Between(DateB, DateE) + 1;
+     }
+  5: {  // еженедельно
+       d1 := DateB;
+       While (Day_Of_Week(d1) <> 7) do
+         d1 := Add_Day(d1, 1);
+       if (d1 < DateE)
+         {
+           k := CalcDaysBetweenDates(d1, Sub_Day(DateE, 1), FALSE);
+           i := (k div 7) + if((k mod 7) = 0, 0, 1) + 1;
+         }
+       else i := 1;
+     }
+  6: {  // ежедневно
+       i := CalcDaysBetweenDates(DateB, DateE, FALSE);
+     }
+  end; // case
+
+  SpDocsNumPeriod := i;
+}
+
+!------ Пересчет суммы договора (соглашения) ---------------------------------
+
+Function ReCalcSummaDogovor: boolean;
+{
+// ПИР [180.1267] ------------------------------------------------------------
+  if (   ( RecordExists CalPlan <> tsOk )
+     and ( RecordExists SpDocs <> tsOk )
+     )
+    {
+      ReCalcSummaDogovor := FALSE;
+      Exit;
+    }
+//----------------------------------------------------------------------------
+
+  ReCalcSummaDogovor := oSpDocs.ReCalcSummaDogovor(Dogovor.nRec);
+  RereadRecord(#Dogovor1);
+  RereadRecord(#Dogovor);
+  RereadRecord(#SoprHoz);
+}
+
+Function OkDeleteDogovor: boolean;
+{
+  if (RecordExists DogAttach = tsOk)
+    OkDeleteDogovor := FALSE
+  else
+    if (RecordExists CalPlan = tsOk)
+      OkDeleteDogovor := FALSE
+    else
+      if (RecordExists AktSver = tsOk)
+        OkDeleteDogovor := FALSE
+      else
+        OkDeleteDogovor := TRUE;
+}
+
+//******************************************************************************
+
+Procedure DecLastNumDog;
+Var
+  s1: string[20];
+  c1: comp;
+  cc: comp;
+{
+  c1 := coGetTune('Oper.Dogovor.AutoIntrNumAlg');
+  s1 := 'D' + string(c1) + 'Y' + string(Year(Cur_Date));
+
+  if ( GetFirst LastNumD where ((  word(100) == LastNumD.LNDType
+                               and s1        == LastNumD.LNDSubt
+                               )) = tsOk )
+    {
+      if ( comp(LastNumD.LNDNum) = oExtAtr.coGetAttrID(coDogovor, Dogovor.nRec, oExtAtr.CreateAttr(coDogovor, 'Счетчик_вн_номера', cgAttrType_Comp)) )
+        if ( GetFirst FormPl where (( c1 == FormPl.nRec )) = tsOk )
+          {
+            cc := comp(LastNumD.LNDNum) - 1;
+            update current LastNumD set LastNumD.LNDNum := LPadCh(string(cc), '0', FormPl.ResWord[21]);
+          }
+    }
+}
+
+//******************************************************************************
+
+Function DeleteDogovor: word;
+var
+  wres  : word;
+  gldt  : GlobData;
+  insTbl: InsertTblMnpl;
+{
+
+// транзакция !!
+  wres := oSpDocs.SpDocs_Delete(Dogovor.nRec, Dogovor.TiDk, TRUE);
+
+  if (wres = tsOk)
+    wres := oStatlog.StatLog_Delete(Dogovor.TiDk, Dogovor.nRec);
+
+  if (wres = tsOk)
+    if iSHoz.DeleteDoc(Dogovor.nRec, Dogovor.TiDk)
+      wres := tsOk;
+
+#ifdef __NIOKR__
+  case Dogovor.TiDk of
+    400:
+      {
+        if (Delete NoVisual DogMail where ((Dogovor.nRec == DogMail.cDogovor)) <> tsOk)
+          { }
+
+        if (Delete NoVisual UrgentM where ((Dogovor.nRec == UrgentM.cDogovor)) <> tsOk)
+          { }
+      }
+    401:
+      {
+        if (Delete NoVisual DogMail where ((Dogovor.cDogovor  == DogMail.cDogovor
+                                        AND Dogovor.NRec      == DogMail.cAppDogovor)) <> tsOk)
+          { }
+
+        if (Delete NoVisual UrgentM where ((Dogovor.cDogovor  == UrgentM.cDogovor
+                                        AND Dogovor.NRec      == UrgentM.cAppDogovor)) <> tsOk)
+          { }
+      }
+  end;
+#end
+
+  if (wres = tsOk)
+    wres := delete AttrDog where (( Dogovor.nRec == AttrDog.cDogovor ));
+
+  if (wres = tsOk)
+    wres := delete DogRelat where (( Dogovor.nRec == DogRelat.cDogovor ));
+
+  if (wres = tsOk)
+    wres := delete SpGrSch where (( word(1)      == SpGrSch.wList AND
+                                    Dogovor.nRec == SpGrSch.cBaseDoc ));
+
+  if GetVipRef(gldt, 'GlobDataSource')
+    {
+      insTbl := gldt.GetInsertTblMnpl;
+      insTbl.DeleteEnviroment(if(Dogovor.cDogovor = 0, toDogovor, toAppDog), Dogovor.nRec);
+
+      FreeVipInterface(gldt);
+
+      if ( Not NullVipRef(insTbl) )
+        FreeVipInterface(insTbl);
+    }
+
+  var Save_c1, Save_c2: comp;
+  Save_c1 := Dogovor.cDogovor;
+  Save_c2 := Dogovor.nRec;
+  var Save_TiDk: word;
+  Save_TiDk := Dogovor.TiDk;
+
+  if (wres = tsOk)
+    {
+      if (Dogovor.cDogovor <> 0)
+        RecalcSumOwnerDogs(Dogovor.Summa, Dogovor.SumNDS, Dogovor.cVal, FALSE);
+
+      DecLastNumDog;
+
+      wres := delete current Dogovor;
+    }
+
+  if (wres = tsOk)
+    {
+      oChkSchem.RemoveDocFromSpSchem(Save_c2, Save_TiDk);
+      DeleteIerDogOnDoc(Save_c1, Save_c2);
+      update Dogovor where (( Save_c2 == Dogovor.cZamena )) set Dogovor.cZamena := 0;
+      if (delete NoVisual SpGrSch
+          where (( word(1)  == SpGrSch.wList AND
+                   Save_c2  == SpGrSch.cBaseDoc)) <> tsOk) {};
+    }
+
+  DeleteDogovor := wres;
+}
+
+Function UpDateInsertDogovor: word;
+var
+  wres: word;
+{
+  UpDateInsertDogovor := 1;
+
+  if (DemoMode)
+    if (oDogFuns.TooMuchDogovors)
+      Exit;
+
+  wres := tsOk;
+
+  if ( ( c1 <> -1 ) OR IsNew )
+    {
+      wres := oDogFuns.UpdInsDogByHan(Dogovor.BufferP, TRUE);
+
+      if ( wres = tsOk )
+        SetNew(FALSE);
+    }
+  else
+    if IsModified
+      {
+        SetModified(FALSE);
+        wres := oDogFuns.UpdInsDogByHan(Dogovor.BufferP, FALSE);
+        RereadRecord(#Dogovor1);
+      }
+
+  UpDateInsertDogovor := wres;
+}
+
+!-- очистка позиции спецификации при замене наименования или группы по F3
+
+Procedure ClearSpDogovor;
+{
+  SpDocs.cGrNal       := 0;
+  SpDocs.cMoveCell    := 0;
+  SpDocs.cPriceLs     := 0;
+  SpDocs.cResOtgr     := 0;
+  SpDocs.Kol          := 0;
+  SpDocs.Price        := 0;
+  SpDocs.Summa        := 0;
+  SpDocs.MaxSumma     := 0;
+  SpDocs.MaxValue     := 0;
+  SpDocs.MinSumma     := 0;
+  SpDocs.MinValue     := 0;
+  SpDocs.ShipAddTerms := '';
+  SpDocs.ShipValType  := 0;
+}
+
+!-------- Заполнение позиции спецификации по умолчанию -------------------
+
+Procedure SetDefaultSpDog;
+{
+  if ( SpDocs.PrMC = 0 )
+    SpDocs.PrMC := if((Dogovor.Direct and 1) = 1, wGetTune('Doc.TypeSpSell'), wGetTune('Doc.TypeSpBuy')) + 1;
+
+  oDogFuns.InitSpDogBuf(SpDocs.Buffer, Dogovor.Buffer);
+}
+
+!--------  Заполнение спецификации договора из каталога МС/услуг ---------
+
+Procedure GetKatMCUsl;
+{
+  var NSpecif  : string;
+  var PrNom    : word;
+  var PrNomEx  : word;
+  var pmc_     : comp;
+  var pmcg_    : comp;
+  var nzap     : comp;
+  var firstRec : boolean;
+  var wordPV   : word;
+  var w1       : word;
+
+  PrNomEx := SpDocs.prMC;
+  PrNom := if((SpDocs.prMC = 2) or (SpDocs.prMC = 3), 2, 1);
+  firstRec := TRUE;
+  pmc_ := SpDocs.cMcUsl;
+  pmcg_ := SpDocs.cGrMcUsl;
+  case PrNom of
+  1: wordPV := 7;
+  2: wordPV := 12;
+  end; // case
+
+  if (delete Pick where ((WordPV == Pick.wList)) = tsOk) {}
+
+  case PrNom of
+  1:{
+      SaveMyDsk(pmcg_, 'GSOMMC01');
+      SaveMyDsk(if(pmcg_ <> comp(0), word(4), word(0)), 'GSOMMC00');
+      w1 := RunInterface(GetSomeMC, pmc_);
+    }
+  2:{
+      SaveMyDsk(pmcg_, 'GSOMUS02DOG');
+      w1 := RunInterface(GetSomeUsl, pmc_);
+    }
+  end; // case
+
+  if (w1 = cmCancel)
+    Abort
+  else
+    {
+      if (not IsNew)
+        {
+          if (oSpDocs.Delete_current_SpDocs(SpDocs.nRec, TRUE) <> tsOk) {}
+        }
+
+      if (RecordExists Pick where ((WordPV == Pick.wList)) = tsOk)
+        {
+          bChangeRec := TRUE;
+          _LOOP Pick where ((WordPV == Pick.wList)) ordered by index pick02
+            {
+              if ( GetFirst loSpDocs where (( SpDocs.nRec == loSpDocs.nRec )) <> tsOk )
+                oLinkMTR2Spec.DelVal(word(coSpDocs), SpDocs.nRec);
+
+              ClearBuffer(#SpDocs);
+
+              SpDocs.cMCUsl := Pick.cRec;
+              SpDocs.Kol    := Pick.PickKol;
+              SpDocs.PrMC   := PrNomEx;
+
+              SetDefaultSpDog;
+
+              #include doguks.vpp
+
+              oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+              if ( KatVidD.Direct = 1 )
+                oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.SELL'));
+              else
+                if ( KatVidD.Direct = 2 )
+                  oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.BUY'));
+
+              if ((KatUsl.TYPEUSL = 1) AND ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3)))
+                {
+                  RunInterface('GETPAR3', 0,
+                                        SpDocs.Nrec,
+                                        KatUsl.Nrec,
+                                        SpDocs.Price,
+                                        SpDocs.Kol, word(coSpDocs));
+                  oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+                }
+
+              oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+
+              SetFieldProtected(#SpDocs.Kol, FALSE);
+
+              if firstRec
+                {
+                  nzap := SpDocs.Nrec;
+                  firstRec := FALSE;
+                }
+            }
+
+          SpDocs.Nrec := nzap;
+          GetEqual(#SpDocs, 0);
+        }
+
+      RereadRecord(#SpDocs);
+      SelectField(#SpDocs.Kol);
+    }
+}
+
+!------  Заполнение спецификации договора из каталога групп МС/услуг -------
+
+Procedure GetKatGroupMCUsl;
+{
+  var NSpecif  : string;
+  var PrNom    : word;
+  var PrNomEx  : word;
+  var nzap     : comp;
+  var firstRec : boolean;
+  var wordPV   : word;
+  var w1       : word;
+
+  PrNomEx := SpDocs.prMC;
+  PrNom := if((SpDocs.prMC = 2) or (SpDocs.prMC = 3), 2, 1);
+  firstRec := TRUE;
+
+
+  case PrNom of
+  1: wordPV := 2;
+  2: wordPV := 5;
+  end; // case
+
+  if (delete Pick where ((WordPV == Pick.wList)) = tsOk) {}
+
+  case PrNom of
+  1: w1 := RunInterface(GetGrMCS , comp(0), '', TRUE);
+  2: w1 := RunInterface(GetGrUslS, comp(0), '', TRUE);
+  end; // case
+
+  if (w1 = cmCancel)
+    Abort
+  else
+    {
+      if not IsNew
+        {
+          if (oSpDocs.Delete_current_SpDocs(SpDocs.nRec, TRUE) <> tsOk) {}
+        }
+
+      if (RecordExists Pick where ((WordPV == Pick.wList)) = tsOk)
+        {
+          bChangeRec := TRUE;
+          _LOOP Pick where ((WordPV == Pick.wList)) ordered by index pick02
+            {
+              if ( GetFirst loSpDocs where (( SpDocs.nRec == loSpDocs.nRec )) <> tsOk )
+                oLinkMTR2Spec.DelVal(word(coSpDocs), SpDocs.nRec);
+
+              ClearBuffer(#SpDocs);
+
+              SpDocs.cGrMCUsl := Pick.cRec;
+              SpDocs.Kol      := 1;
+              SpDocs.PrMC     := PrNomEx;
+
+              SetDefaultSpDog;
+
+              #include doguks.vpp
+
+              oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+              if ( KatVidD.Direct = 1 )
+                oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.SELL'));
+              else
+                if ( KatVidD.Direct = 2 )
+                  oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.BUY'));
+
+              if firstRec
+                {
+                  nzap := SpDocs.Nrec;
+                  firstRec := FALSE;
+                }
+            }
+
+          SpDocs.Nrec := nzap;
+          GetEqual(#SpDocs, 0);
+        }
+
+      RereadRecord(#SpDocs);
+      SelectField(#SpDocs.Kol);
+    }
+}
+
+!------------ Заполнение спецификации договора из прайс-листа --------------
+
+Procedure GetPriceSpDog;
+{
+  var PrNrec    : comp;
+  var RVhod     : word;
+  var NRecSaved : comp;
+  var dValDog   : Date;
+  var pPrMC     : word;
+  var pPrMCEx   : word;
+  var oExtAtr   : iExtAttr;
+  var oExtCls   : iExtClass;
+
+  PrNrec  := Dogovor.cPriceLs;
+  RVhod   := Dogovor.VhodNal;
+  dValDog := oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc);
+
+  pPrMCEx := SpDocs.PrMC;
+  if (PrNrec = 0)
+    PrNrec := coGetTune('Price.cPrice');
+
+  pPrMC := if (boGetTune('Pick.AutoFilterInPrice'),
+                if ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3), word(2), word(1)),
+                word(0));
+
+  if ((PrNrec = 0) AND boGetTune('Price.GrKontr'))  // искать прайс по группе
+    if not GetKlPriceOnGroup(Dogovor.cOrg, PrNrec, RVhod, word(0), pPrMC)
+      Exit;
+
+  if (PrNrec = 0)
+    if (RunInterface(GetKlPr, PrNrec, RVhod, word(0), pPrMC) = cmCancel)
+      {
+        PrNrec := 0;         // пока неизвестен код прайс-листа
+        Abort;
+      }
+
+
+  if (PrNrec <> 0) // **************** Вставка кучей сразу ****************
+    {
+      Delete all PickPric;
+
+      var NRecSaved: comp;      NRecSaved := 0;
+      var tempw: word;
+
+      if (RunInterface(GetPrice, PrNrec, comp(0), tempw, FALSE) = cmCancel)
+        Abort
+      else
+        {
+          if (RecordExists PickPric = tsOk)
+            {
+              if (GetFirst FastFirstRow KlPrice where ((PrNrec == klPrice.NRec)) = tsOk) {}
+
+              bChangeRec := TRUE;
+
+              if ( GetFirst loSpDocs where (( SpDocs.nRec == loSpDocs.nRec )) <> tsOk )
+                oLinkMTR2Spec.DelVal(word(coSpDocs), SpDocs.nRec);
+
+              if not IsNew
+                {
+                  // delete current SpDocs;
+                  if (oSpDocs.Delete_current_SpDocs(SpDocs.nRec, TRUE) <> tsOk) {}
+                }
+
+              StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+                              ''#3'Пополнение спецификации документа выбранными '+
+                              'позициями прайс-листа...'#13#3, 1);
+
+              _LOOP PickPric ordered by PickPric.nRec
+                {
+                  if (not NextVisual)
+                    Break;
+
+                  RVhod := KlPrice.VhodNal;
+
+                  ClearBuffer(#SpDocs);
+
+                  SpDocs.cMCUsl   := PickPric.PickThing;
+                  SpDocs.cOtpEd   := PickPric.PickEd;
+                  SpDocs.Kol      := PickPric.PickKol;
+                  SpDocs.cPriceLs := PrNrec;
+
+                  case tempw of
+                    1: SpDocs.PrMC := if ((pPrMCEx = 1) or (pPrMCEx = 4) or (pPrMCEx = 5), pPrMCEx, word(1));
+                    2: SpDocs.PrMC := if ((pPrMCEx = 2) or (pPrMCEx = 3), pPrMCEx, word(2));
+                  end;
+
+                  SetDefaultSpDog;
+
+/////////////------Пересчет цен прайса при разной входимости налогов
+
+                  if ((Dogovor.VhodNal <> RVhod) AND fNal)
+                    {
+                      if (Dogovor.VhodNal = 1) // налоги входят в цену
+                        {
+                          CountNalogPrice(Dogovor.Nrec, SpDocs.Nrec, Dogovor.TiDk,
+                                          if(SpDocs.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal),
+                                          Dogovor.cOrg, SpDocs.Kol, SpDocs.cOtpEd,
+                                          dValDog, Dogovor.cVal, 0,
+                                          PickPric.PickPrc, PickPric.PickPrcV, comp(0));
+
+                          PickPric.PickPrc  := GetNalogPrice;
+                          PickPric.PickPrcV := GetNalogValPrice;
+                        }
+                      else
+                        {
+                          CountBasePrice(Dogovor.Nrec, SpDocs.Nrec, Dogovor.TiDk,
+                                         if(SpDocs.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal),
+                                         Dogovor.cOrg, SpDocs.Kol, SpDocs.cOtpEd,
+                                         dValDog, Dogovor.cVal, 0,
+                                         PickPric.PickPrc, PickPric.PickPrcV, comp(0));
+
+                          PickPric.PickPrc  := GetBasePrice;
+                          PickPric.PickPrcV := GetBaseValPrice;
+                        }
+                    }
+
+        /////////---------------------------------------------------------------------
+                  var NewPrice  : double;
+
+                  if (Dogovor.TipMoney = 1) AND (KlPrice.TipMoney<= 1)
+                    NewPrice := PickPric.PickPrc
+                  else
+                    {
+                      if (Dogovor.cVal <> KlPrice.cVal)
+                        {
+                          NewPrice := 0;
+                          if (KlPrice.cVal = 0)
+                            NewPrice := oValFunc.GetAnyCurrency(KlPrice.cVal,
+                                                                PickPric.PickPrc,
+                                                                dValDog,
+                                                                Dogovor.cVal)
+                          else
+                            NewPrice := oValFunc.GetAnyCurrency(KlPrice.cVal,
+                                                                PickPric.PickPrcV,
+                                                                dValDog,
+                                                                Dogovor.cVal);
+
+                        }
+                      else
+                        {
+                          if (Dogovor.cVal = 0)
+                            NewPrice := PickPric.PickPrc
+                          else
+                            NewPrice := PickPric.PickPrcV;
+                        }
+                    }
+
+                  SpDocs.Price := DogRound_P(Dogovor.cVal <> 0, NewPrice);
+
+                  #include doguks.vpp
+
+                  oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+                  if ( KatVidD.Direct = 1 )
+                    oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.SELL'));
+                  else
+                    if ( KatVidD.Direct = 2 )
+                      oLinkMTR2Spec.SetVal(word(coSpDocs), SpDocs.nRec, coGetTune('CelUchForModul.BUY'));
+
+                  if boGetTune('Oper.ExClassPriceLs2Docs') // Копировать в договор внешние атрибуты спецификации
+                    {
+                     oExtAtr.CopyAllAttrEx    (word(coPrices), PickPric.PickRec, word(coSpDocs), SpDocs.NRec);
+                     oExtCls.CopyAllClassValEx(word(coPrices), PickPric.PickRec, word(coSpDocs), SpDocs.NRec);
+                    }
+
+                  if ((SpDocs.PrMC <>1)AND(KatUsl.TYPEUSL = 1))
+                    {
+                      RunInterface('GETPAR3', 0,
+                                            SpDocs.Nrec,
+                                            KatUsl.Nrec,
+                                            SpDocs.Price,
+                                            SpDocs.Kol, word(coSpDocs));
+                      oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+                    }
+
+                  oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+
+                  if (NrecSaved = 0)
+                    NRecSaved := SpDocs.Nrec;
+                }
+
+              StopVisual('', 0);
+
+              if (NrecSaved > 0) // перейти на первую вставленную позицию
+                {
+                  SpDocs.Nrec := NRecSaved;
+                  GetEqual(#SpDocs, 0);
+                }
+              else
+                if (GetFirst SpDocs <> tsOk) {};
+
+              RereadRecord(#SpDocs);
+              SelectField(#SpDocs.Kol);
+            }
+        }
+    }
+}
+
+#doc
+Окно установки параметров изменения цен по выбранному прайс-листу
+#end
+Window ModPriceParDog 'Параметры пересчета' DoAccept, EscClose, Gray;
+  Show at (20,9,85,18);
+
+Screen scPar (,hcctxPriceIzmPar,sci1Esc)
+
+Fields
+  Par1 ('Вставка цены в НДЕ из прайс-листа',,), NoProtect;
+  Par2 ('Обнулять/Не обнулять цену для позиций спецификации, не найденных в прайс-листе',,), NoProtect;
+
+Buttons
+  cmCancel, Default,,'Продолжить',,sci1Esc;
+<<
+ `При вставке в договор с типом по валюте НДЕ из прайса с типом по валюте НДЕ+ВАЛ`
+
+  (.) Рублевая цена берется из прайс-листа                                    `
+  (.) Рублевая цена пересчитывается по курсу на день формирования договора    `
+
+  [.] Обнулять цену для позиций спецификации, не найденных в прайс-листе      `
+
+                        <.~П~родолжить.>
+>>
+end;
+
+end; //Window
+
+Procedure GetPriceSpDogPrices;
+Var
+  NewPrice  : double;
+
+  PrNrec    : comp;
+
+  pPrMc
+, RVhod     : word;
+
+  dValDog   : date;
+{
+  PrNrec  := Dogovor.cPriceLs;
+  RVhod   := Dogovor.VhodNal;
+  dValDog := oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc);
+
+  if ( RunInterface(GetKlPr, PrNrec, RVhod, word(1), pPrMC) = cmCancel )
+    exit;
+
+  if (GetFirst FastFirstRow KlPrice where ((PrNrec == klPrice.NRec)) <> tsOk)
+    exit;
+
+  if ( Message('Изменить цены согласно выбранного прайс-листа?', YesNo) = cmNo )
+    Exit;
+
+  RunWindowModal(ModPriceParDog);
+
+  _loop SpDocs
+    if ((klPrice.Tip + 1) = SpDocs.PrMC)
+    {
+      if ( GetFirst FastFirstRow Prices where ((  SpDocs.cMCUsl == Prices.cThing
+                                              and PrNrec        == Prices.cKlPrice
+                                              )) <> tsOk )
+        {
+          if ( Par2 = 1 )
+            {
+              SpDocs.Price := DogRound_P(Dogovor.cVal <> 0, 0);
+              oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+              oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+            }
+
+          continue;
+        }
+
+      if ( (Dogovor.VhodNal <> RVhod) and (fNal = true) )
+        {
+          if ( Dogovor.VhodNal = 1 ) // налоги входят в цену
+            {
+              CountNalogPrice(Dogovor.Nrec, SpDocs.Nrec, Dogovor.TiDk,
+                              if(SpDocs.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal),
+                              Dogovor.cOrg, SpDocs.Kol, SpDocs.cOtpEd,
+                              dValDog, Dogovor.cVal, 0,
+                              Prices.Price, Prices.SumVal, comp(0));
+
+              Prices.Price  := GetNalogPrice;
+              Prices.SumVal := GetNalogValPrice;
+            }
+          else
+            {
+              CountBasePrice(Dogovor.Nrec, SpDocs.Nrec, Dogovor.TiDk,
+                             if(SpDocs.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal),
+                             Dogovor.cOrg, SpDocs.Kol, SpDocs.cOtpEd,
+                             dValDog, Dogovor.cVal, 0,
+                             Prices.Price, Prices.SumVal, comp(0));
+
+              Prices.Price  := GetBasePrice;
+              Prices.SumVal := GetBaseValPrice;
+            }
+        }
+
+//------------------------------------------------------------------------------
+
+      if ( Dogovor.TipMoney = 1)
+        {
+          if ( Par1 <> 0 )
+            {
+              if ( Prices.cVal = 0 )
+                NewPrice := oValFunc.GetAnyCurrency(comp(0),
+                                                    Prices.Price,
+                                                    dValDog,
+                                                    Dogovor.cVal);
+              else
+                NewPrice := oValFunc.GetAnyCurrency(Prices.cVal,
+                                                    Prices.SumVal,
+                                                    dValDog,
+                                                    Dogovor.cVal);
+            }
+          else
+            NewPrice := Prices.Price;
+        }
+      else
+        {
+          if ( Dogovor.cVal <> Prices.cVal )
+            {
+              NewPrice := 0;
+
+              if ( Prices.cVal = 0 )
+                NewPrice := oValFunc.GetAnyCurrency(comp(0),
+                                                    Prices.Price,
+                                                    dValDog,
+                                                    Dogovor.cVal);
+              else
+                NewPrice := oValFunc.GetAnyCurrency(Prices.cVal,
+                                                    Prices.SumVal,
+                                                    dValDog,
+                                                    Dogovor.cVal);
+            }
+          else
+            {
+              if ( Dogovor.cVal = 0 )
+                NewPrice := Prices.Price;
+              else
+                NewPrice := Prices.SumVal;
+            }
+        }
+
+      SpDocs.cPriceLs := PrNrec;
+      SpDocs.Price    := DogRound_P(Dogovor.cVal <> 0, NewPrice);
+
+      oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+    }
+
+  RereadRecord(#SpDocs);
+  RereadRecord(#SpDocNal);
+
+  bChangeRec := true;
+}
+
+#ifdef __SMETA__
+
+!------------ Заполнение спецификации договора из сметы --------------
+
+Function GetSmetMCUSL: boolean;
+  var PrNom: word;
+  var bisNew: boolean;
+  var NSpecif  : string;
+  var nzap     : comp;
+  var firstRec: boolean;
+  var dValDog   : Date;
+  var NewPrice  : double;
+{
+  firstRec := TRUE;
+  GetSmetMCUSL := FALSE;
+  bisNew := IsNew;
+  if (RunInterface('GetSmetaMCU'
+                   , string(Dogovor.TiDk) //строковый тип документа для хранения настроек в DSK
+                   , 0       //0-строительство/1-ремонты/100-все (SmetaStroy.coTable)
+                   , 2       //контроль остатков МЦ (0-нет/1-да/2-на выбор)
+                   , 0       //на будущее
+                   , 0       //ссылка на смету
+                   , 0       //ссылка на спецификацию сметы
+                   , 0       //признак 0-МЦ/1-Услуги
+                   , 0       //1-МЦ/2-Услуга
+                   , 0       //Подразделение (для МЦ)
+                   , 0       //МОЛ           (для МЦ)
+                   , 0       //Партия        (для МЦ)
+                   , 0       //режимы выбора
+                  ) <> cmDefault) Exit;
+
+  if (not bisNew)
+    oSpDocs.Delete_current_SpDocs(SpDocs.nRec, TRUE);
+
+  _LOOP PickSmeta where ((word(0) == PickSmeta.wList))
+    {
+      _LOOP SpDocSmeta where ((coSpDocs == SpDocSmeta.coTable AND
+                                      Dogovor.NRec == SpDocSmeta.cDoc AND
+                                      PickSmeta.cPosition == SpDocSmeta.cPosition))
+        {
+          if (GetFirst SpDocsSmet where ((SpDocSmeta.cSpec == SpDocsSmet.nRec)) = tsOk)
+            {
+              if (not bisNew)
+                PushPos(#SpDocs);
+
+              if (GetFirst SpDocs where ((SpDocsSmet.nRec == SpDocs.nRec)) = tsOk)
+                oSpDocs.Delete_current_SpDocs(SpDocs.nRec, TRUE);
+
+              if (not bisNew)
+                PopPos(#SpDocs);
+            }
+        }
+    }
+
+  if (GetFirst PickSmeta where ((word(0) == PickSmeta.wList))
+                         ordered by PickSmeta.Npp = tsOk)
+    {
+      do
+        {
+          ClearBuffer(#SpDocs);
+
+          SpDocs.cMCUsl := PickSmeta.cMCUsl;
+          SpDocs.Kol    := PickSmeta.Kol;
+          SpDocs.PrMC   := PickSmeta.PrMC;
+
+          PrNom         := PickSmeta.PrMC;
+
+          //--Сметные цены
+          if (GetFirst FastFirstRow SmetaStroy
+                       where ((PickSmeta.cSmeta == SmetaStroy.NRec)) = tsOk)
+            {
+              dValDog  := oSpDocs.GetTrueDateValCurse(Dogovor.dValCurse, Dogovor.dBeg, Dogovor.dDoc);
+              NewPrice := oValFunc.GetAnyCurrency(SmetaStroy.cVal, PickSmeta.Price, dValDog, SpDocs.cVal);
+            }
+
+          KatOtpEd.cMCUSL := PickSmeta.cMCUsl;
+          KatOtpEd.Akt    := 1;
+          KatOtpEd.PrMC   := PrNom;
+          if (GetEqual(#KatOtpEd, 2))
+            {
+              SpDocs.cOtpEd := KatOtpEd.Nrec;
+              NewPrice      := NewPrice * KatOtpEd.Koef;
+              SpDocs.Kol    := SpDocs.Kol / KatOtpEd.Koef;
+              if ((KatOtpEd.Diskret = 1) AND
+                  (SpDocs.Kol - trunc(SpDocs.Kol) > 0.0001))
+                {
+                  set SpDocs.Kol := trunc(SpDocs.Kol);
+                }
+            }
+          else
+            {
+              Message(''#3'Не задана активная отпускная единица измерения'+
+                      +' для '+NSpecif+'!', Warning);
+              SpDocs.cOtpEd := 0;
+            }
+
+          SpDocs.Price := DogRound_P(Dogovor.cVal <> 0, NewPrice);
+
+          SetDefaultSpDog;
+
+          #include doguks.vpp
+
+          oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+          if ((KatUsl.TYPEUSL = 1) AND ((SpDocs.PrMC = 2) or (SpDocs.PrMC = 3)))
+            {
+              RunInterface('GETPAR3', 0,
+                                    SpDocs.Nrec,
+                                    KatUsl.Nrec,
+                                    SpDocs.Price,
+                                    SpDocs.Kol, word(coSpDocs));
+              oSpDocs.update_current_SpDocs(SpDocs.BufferP);
+            }
+
+          oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+
+          SetFieldProtected(#SpDocs.Kol, FALSE);
+
+          if firstRec
+            {
+              nzap := SpDocs.Nrec;
+              firstRec := FALSE;
+            }
+
+          oMTRFun.GenSpecMTRForUKS(coSpDocs, SpDocs.nRec, PickSmeta.cObj, PickSmeta.cAddSumTune);
+
+          //--Обновляем связь спецификации документа со сметой
+          ClearBuffer(#SpDocSmeta);
+          SpDocSmeta.coTable   := coSpDocs;
+          SpDocSmeta.cDoc      := Dogovor.NRec;
+          SpDocSmeta.cSpec     := SpDocs.nRec;
+          SpDocSmeta.cSmeta    := PickSmeta.cSmeta;
+          SpDocSmeta.cPosition := PickSmeta.cPosition;
+          SpDocSmeta.cResource := PickSmeta.cResource;
+          SpDocSmeta.TipRes    := PickSmeta.TipRes;
+          SpDocSmeta.Kol       := PickSmeta.KolJob;
+          insert current SpDocSmeta;
+        }
+      While (GetNext PickSmeta where ((word(0) == PickSmeta.wList))
+                               ordered by PickSmeta.Npp = tsOk);
+
+      Delete PickSmeta where ((word(0) == PickSmeta.wList));
+
+      SpDocs.Nrec := nzap;
+      GetEqual(#SpDocs, 0);
+    }
+  RereadRecord(#SpDocs);
+  SelectField(#SpDocs.Kol);
+  GetSmetMCUSL := TRUE;
+}
+
+#end //__SMETA__
+
+#ifdef __Realting__
+
+var RltInfo : TRltInfo;
+
+Procedure GetRltObjSpDog;
+var
+  wParam: word;
+  doPercent: double;
+  oRltFuncs: RltFuncs;
+{
+  if not UpdateTable Exit;
+  var NRecSaved: comp;
+  NRecSaved := 0;
+  if (RunInterface(GetObj4Rent
+                     , Dogovor.nRec
+                     , TRUE
+                     , Dogovor.cOrg
+                     , Dogovor.cVal
+                     , Dogovor.dBeg
+                     , Dogovor.dEnd
+                     , doPercent
+                     , wParam
+                  ) = cmCancel) Exit;
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm,
+                 ''#3'Пополнение спецификации документа выбранными '+
+                 'объектами недвижимости...'#13#3, 1);
+  _LOOP Obj4RentPick
+    {
+      if not NextVisual
+        Break;
+
+      ClearBuffer(#SpDocs);
+
+      SpDocs.cOtvPodr := 0;
+      SpDocs.cUKS     := Obj4RentPick.cObj;
+      SpDocs.cMCUsl   := Obj4RentPick.cUsl;
+      SpDocs.cOtpEd   := Obj4RentPick.cEd;
+      SpDocs.PrMC     := 2;
+/*
+  // == == == == == == == == == == == == == == == == == == == ==
+      SpDocs.Period := 4; //Период отгрузки МЦ/услуг - по месяцам
+      if (
+          (Day(Dogovor.dBeg) <> 1)
+          or
+          ((Month(Dogovor.dBeg) = Month(Dogovor.dEnd)) AND (Year(Dogovor.dBeg) = Year(Dogovor.dEnd)))
+         )
+      // SpDocs.dFrom - не первый день месяца
+      // или
+      // период договора в одном месяце
+        {
+          // количество месяцев аренды объекта
+          SpDocs.NumPeriod := 1;
+          SpDocs.dFrom := Dogovor.dBeg;
+          if ((Month(Dogovor.dBeg) = Month(Dogovor.dEnd)) AND (Year(Dogovor.dBeg) = Year(Dogovor.dEnd)))
+            // период в одном месяце
+            SpDocs.dTo := Dogovor.dEnd;
+          else
+            // последний день месяца
+            SpDocs.dTo := Date(Last_Day(SpDocs.dFrom), Month(SpDocs.dFrom), Year(SpDocs.dFrom));
+          // площадь аренды за период
+          SpDocs.KolPeriod := Round(Obj4RentPick.Value*(SpDocsNumPeriod(SpDocs.dFrom, SpDocs.dTo, 6)/Day(SpDocs.dTo)), 2);
+        }
+      else
+      // SpDocs.dFrom - первый день месяца
+      // и
+      // окончание договора не в том же месяце, что начало
+        {
+          SpDocs.dFrom := Dogovor.dBeg;
+          if (Month(Dogovor.dEnd) <> Month(Add_Day(Dogovor.dEnd, 1)))
+          // если последний день месяца
+            SpDocs.dTo := Dogovor.dEnd
+          else
+            SpDocs.dTo := Sub_Day(Date(1, Month(Dogovor.dEnd), Year(Dogovor.dEnd)), 1);
+          // количество месяцев аренды объекта
+          SpDocs.NumPeriod := SpDocsNumPeriod(SpDocs.dFrom, SpDocs.dTo, 4);
+          // площадь аренды в месяц
+          SpDocs.KolPeriod := Obj4RentPick.Value;
+        }
+      // площадь аренды за период
+      SpDocs.Kol   := SpDocs.KolPeriod*SpDocs.NumPeriod;
+      // цена аренды за период
+      SpDocs.Price := DogRound_P(Dogovor.cVal <> 0, Obj4RentPick.Price);
+  // == == == == == == == == == == == == == == == == == == == ==
+*/
+      // площадь аренды
+      SpDocs.Kol   := Obj4RentPick.Value;
+      // арендная плата в месяц
+      SpDocs.Price := Obj4RentPick.MPrice;
+      case (wParam AND 2) of
+        0: SpDocs.Kol   := SpDocs.Kol   * doPercent;
+        2: SpDocs.Price := SpDocs.Price * doPercent;
+      end;
+      SpDocs.Price := DogRound_P(Dogovor.cVal <> 0, SpDocs.Price);
+
+      SetDefaultSpDog;
+
+      oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+      oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+
+      if (NrecSaved = 0)
+        NRecSaved := SpDocs.Nrec;
+/*
+      if ((Months_Between(Dogovor.dBeg, Dogovor.dEnd) > 1) AND (Day(Dogovor.dBeg) > 1))
+      // между датами более одного месяца и начало периода не с первого дня
+        {
+          SpDocs.nRec  := GetNextNrec(#SpDocs, 0);
+          SpDocs.Code  := oSpDocs.GetSpDocsCodeNext(Dogovor.nRec, Dogovor.TiDk);
+          SpDocs.dFrom := Add_Months(Date(1, Month(Dogovor.dBeg), Year(Dogovor.dBeg)), 1);
+          if (Month(Dogovor.dEnd) <> Month(Add_Day(Dogovor.dEnd, 1)))
+          // конец периода - последний день месяца
+            SpDocs.dTo := Dogovor.dEnd
+          else
+            SpDocs.dTo := Sub_Day(Date(1, Month(Dogovor.dEnd), Year(Dogovor.dEnd)), 1);
+          // количество месяцев аренды объекта
+          SpDocs.NumPeriod := SpDocsNumPeriod(SpDocs.dFrom, SpDocs.dTo, 4);
+          // площадь аренды за период
+          SpDocs.KolPeriod := Obj4RentPick.Value;
+          // площадь аренды за период
+          SpDocs.Kol       := SpDocs.KolPeriod*SpDocs.NumPeriod;
+          // цена аренды за период
+          SpDocs.Price     := DogRound_P(Dogovor.cVal <> 0, Obj4RentPick.Price);
+
+          oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+          oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+        }
+      if (
+         // конец периода - не последний день месяца
+          (Month(Dogovor.dEnd) = Month(Add_Day(Dogovor.dEnd, 1)))
+          AND
+         // и период договора не в одном месяце
+          ((Month(Dogovor.dBeg) <> Month(Dogovor.dEnd)) or (Year(Dogovor.dBeg) <> Year(Dogovor.dEnd)))
+         )
+        {
+          SpDocs.nRec  := GetNextNrec(#SpDocs, 0);
+          SpDocs.Code  := oSpDocs.GetSpDocsCodeNext(Dogovor.nRec, Dogovor.TiDk);
+          SpDocs.dFrom := (Date(1, Month(Dogovor.dEnd), Year(Dogovor.dEnd)));
+          SpDocs.dTo   := Dogovor.dEnd;
+          // количество месяцев аренды объекта
+          SpDocs.NumPeriod := 1;
+          // площадь аренды в месяц
+          SpDocs.KolPeriod :=
+            Round(Obj4RentPick.Value*(SpDocsNumPeriod(SpDocs.dFrom, SpDocs.dTo, 6)/Last_Day(SpDocs.dTo)), 2);
+          // площадь аренды за период
+          SpDocs.Kol       := SpDocs.KolPeriod*SpDocs.NumPeriod;
+          // цена аренды за период
+          SpDocs.Price     := DogRound_P(Dogovor.cVal <> 0, Obj4RentPick.Price);
+
+          oSpDocs.insert_current_SpDocs(SpDocs.BufferP);
+
+          oSpDocs.ChangePosSpDocs(SpDocs.TiDk, Dogovor.nRec, SpDocs.nRec);
+        }
+*/
+      insert rltLinks set rltLinks.VidObj   := Obj4RentPick.VidObj,
+                          rltLinks.cObj     := Obj4RentPick.cObj,
+                          rltLinks.cSpDocs  := SpDocs.nRec,
+                          rltLinks.cDogovor := SpDocs.cDoc;
+
+      if ( ( (wParam and 1) <> 0 ) AND NOT Obj4RentPick.IsRent )
+        oRltFuncs.AddRentRec(Dogovor.dDoc,
+                             Dogovor.dBeg,
+                             Dogovor.NoDoc,
+                             Dogovor.nRec,
+                             Dogovor.cOrg,
+                             Obj4RentPick.VidObj,
+                             Obj4RentPick.cObj);
+
+    }
+  StopVisual('', 0);
+
+  oSpDocs.ReCalcSummaDogovor(Dogovor.nRec);
+
+  if (NrecSaved > 0) // перейти на первую вставленную позицию
+    GetFirst SpDocs where (( NRecSaved == SpDocs.Nrec ));
+  else
+    if (GetFirst SpDocs <> tsOk) {};
+
+  SetFieldVisible(#SpDocs.dFrom,     TRUE);
+  SetFieldVisible(#SpDocs.dTo,       TRUE);
+  SetFieldVisible(#SpDocs.NumPeriod, TRUE);
+  SetFieldVisible(#SpDocs.KolPeriod, TRUE);
+
+  RereadRecord(#SpDocs);
+  SelectField(#SpDocs.Kol);
+  oRltFuncs.GetObjInfoOnSpDocs(SpDocs.nRec, Dogovor.dBeg, RltInfo);
+  RereadRecord(#Dogovor1);
+  RereadRecord(#Dogovor);
+}
+#end // __Realting__
+
+!-------- Проверка заполнения обязательных полей договора ----------
+
+Function NotRuningDogovor: boolean;
+{
+  NotRuningDogovor :=
+    ( Dogovor.NoDoc = '' )
+     OR
+    ( Dogovor.dDoc = ZeroDate )
+     OR
+    ( Dogovor.dBeg = ZeroDate )
+     OR
+    ( Dogovor.dEnd = ZeroDate )
+     OR
+    ( Dogovor.dBeg > Dogovor.dEnd )
+     OR
+    ( Dogovor.cMyOrg = 0 )
+     OR
+    ( Dogovor.cOrg = 0 ) AND ( ( Dogovor.cDogovor <> 0 ) OR ( Dogovor.VidDog <> 14 ) )
+     OR
+    ( Dogovor.cMyOrg = Dogovor.cOrg )
+    ;
+}
+
+Function SetDefaultDogovor(var DogBuf: #TDogovor): boolean;
+{
+  SetDefaultDogovor := FALSE;
+
+  if NoSetDefault
+    Exit;
+
+  if ( CurDescr <> sGetTune('User.Descr') )
+    if ( Message('При создании нового документа выбранные ограничения '
+               + 'по менеджеру будут отменены, установятся ограничения '
+               + 'из Вашей настройки пользователя.'#13#13'Продолжить?',
+                 YesNo + Confirmation) <> cmYes )
+      Exit
+    else
+      SetDescrBounds(FALSE);
+
+  ClearAdvRecord(DogBuf);
+
+  DogBuf.cDogovor := c1;
+  DogBuf.cZamena  := c2;
+
+  oDogFuns.InitDogBuf(DogBuf);
+
+  set DogBuf.NoDoc := DogBuf.NoDoc;
+
+  SetDefaultDogovor := TRUE;
+}
+
+Procedure CancelCurrentDogovor;
+var
+  strComment: string[80];
+  Status_Old: word;
+  Note_Old: comp;
+  cSrcDog: comp;
+  LL: tCalPlanObjInterface;
+  iIerCP: IerCP;
+  oExtAtr: iExtAttr;
+  oExtCls: iExtClass;
+{
+  GetVipRef(LL, 'CalPlan');
+  BeginConcurrentTransaction(trNoLock);
+  cSrcDog := Dogovor.nRec;
+  delete all TmpDogKOD;
+
+  insert visual 'Заполнение временной таблицы'
+  into TmpDogKOD
+  (
+    NRec,
+    New_nRec,
+    cDogovor,
+    New_cDogovor
+  )
+  select
+    IerDog.cRec,
+    GetNextNRec(tnDogovor, 0),
+    Dogovor.cDogovor,
+    comp(0)
+  from IerDog, Dogovor where(( cSrcDog     == IerDog.cUpRec AND
+                               IerDog.cRec == Dogovor.nRec ));
+
+  update TmpDogKOD where ((cSrcDog == TmpDogKOD.nRec ))
+    set TmpDogKOD.New_cDogovor := Dogovor.cDogovor;
+
+  StartNewVisual(vtRotateVisual, vfTimer,
+             ''#3'Инициализация временной таблицы ...'#13#3, 1);
+
+  While (GetFirst TmpDogKOD where (( comp(0) == TmpDogKOD.New_cDogovor AND
+                                    (cSrcDog <> TmpDogKOD.nRec) )) = tsOk)
+    {
+      NextVisual;
+      update TmpDogKOD where (( comp(0)            == TmpDogKOD.New_cDogovor AND
+                               (cSrcDog            <> TmpDogKOD.nRec)        AND
+                                TmpDogKOD.cDogovor == TmpDogKOD2.nRec))
+        set TmpDogKOD.New_cDogovor := TmpDogKOD2.New_nRec;
+    }
+
+  StopVisual('', 0);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer,
+                 ''#3'Отмена договора/соглашения...'#13#3,
+                 RecordsInTable(tnTmpDogKOD));
+
+  _LOOP TmpDogKOD
+    {
+      NextVisual;
+
+      if ( GetFirst FastFirstRow Dogovor where (( TmpDogKOD.nRec == Dogovor.nRec )) <> tsOk )
+        Continue;
+
+      var NRec_OldSpDocs: comp;
+      var TiDk_Dog: word;
+
+      TiDk_Dog    := Dogovor.TiDk;
+      Status_Old  := Dogovor.Status;
+      Note_Old    := Dogovor.cNote;
+
+      update StatLog where (( Dogovor.nRec == StatLog.cDoc    AND
+                              TiDk_Dog     == StatLog.DocType ))
+        set StatLog.cDoc := TmpDogKOD.New_nRec;
+
+      update current Dogovor set Dogovor.Status := 0,
+                                 Dogovor.cNote  := oNotes.GetFirstNote(TiDk_Dog, word(0));
+
+      var Buf: type$Dogovor;
+      Buf := Dogovor.Buffer;
+      ClearBuffer(#Dogovor);
+      Dogovor.Buffer := Buf;
+
+      set Dogovor.nRec := TmpDogKOD.New_nRec;
+      Dogovor.cDogovor := TmpDogKOD.New_cDogovor;
+      Dogovor.Status   := 3;
+      Dogovor.cNote    := oNotes.GetFirstNote(Dogovor.TiDk, Dogovor.Status);
+
+      SetNew(true);
+
+      if (UpDateInsertDogovor <> tsOk) Exit;
+
+  //    if (oStatlog.StatLog_Insert(Dogovor.TiDk, Dogovor.nRec, '') <> tsOk) {}
+
+      if (Dogovor.cDogovor = comp(0))
+        strComment := 'Расторгнут на основании договора № ' + Dogovor.NoDoc +
+                      ' от ' + DateToStr(Dogovor.dDoc, 'DD/MM/YYYY')
+      else
+        strComment := 'Расторгнуто на основании соглашения № ' + Dogovor.NoDoc +
+                      ' от ' + DateToStr(Dogovor.dDoc, 'DD/MM/YYYY');
+
+      if (oStatlog.StatLog_InsNewStat(Dogovor.TiDk,
+                             Dogovor.nRec,
+                             Status_Old,
+                             Note_Old,
+                             Dogovor.Status,
+                             Dogovor.cNote,
+                             strComment) <> tsOk) {}
+
+      oExtAtr.CopyAllAttr    (word(coDogovor), TmpDogKOD.nRec, TmpDogKOD.New_nRec);
+      oExtCls.CopyAllClassVal(word(coDogovor), TmpDogKOD.nRec, TmpDogKOD.New_nRec);
+
+      AttrDog.cDogovor := TmpDogKOD.nRec;        // копируем атрибуты договора(соглашения)
+      if (GetEqual(#AttrDog, 1))
+        {
+          AttrDog.nRec := 0;
+          AttrDog.cDogovor := TmpDogKOD.New_nRec;
+          if (insert current AttrDog <> tsOk) {}
+        }
+
+      // копируем спецификацию
+      oSpDocs.MakeCopySpDocsSpecifications(TiDk_Dog, TmpDogKOD.nRec, TmpDogKOD.New_nRec, FALSE);
+      // копируем календарный план
+      iIerCP.MakeCopyIerarhyOfCalPlan(TmpDogKOD.nRec, TmpDogKOD.New_nRec, comp(0), comp(0), TRUE, TRUE, word(0));
+    }
+
+  StopVisual('', 0);
+  EndTransaction;
+
+  if GetFirst TmpDogKOD where (( c2 == TmpDogKOD.nRec )) <> tsOk {}
+  update Dogovor where (( c2 == Dogovor.nRec ))
+    set Dogovor.cZamena := TmpDogKOD.New_nRec;
+
+  _LOOP TmpDogKOD
+    if (c2 <> TmpDogKOD.nRec)
+      _LOOP Dogovor where (( TmpDogKOD.nRec == Dogovor.cZamena ))
+        if (TmpDogKOD.New_cDogovor = Dogovor.cDogovor)
+          update current Dogovor set Dogovor.cZamena := TmpDogKOD.New_nRec;
+}
+
+Function MakeCopyOfCurrentDogovor(SrcDogBuf: TDogovor;
+                                  wWhatCopy, wWhatStatus: word;
+                                  pOrg: comp;
+                                  SaveOstatok: boolean): comp;
+{
+  var NRec_NewDog  : comp;
+  var Cur_cDogovor: comp;
+  var NRec_OldSpDocs: comp;
+  var NRec_NewSpDocs: comp;
+  var dStatus: word;
+  var strComment: string[80];
+
+  MakeCopyOfCurrentDogovor := 0;
+
+  Dogovor.Buffer := type$Dogovor(SrcDogBuf);
+
+  if (Dogovor.cDogovor = comp(0))
+    strComment := 'Сформирован на основании договора № ' + Dogovor.NoDoc +
+                  ' от ' + DateToStr(Dogovor.dDoc, 'DD/MM/YYYY')
+  else
+    strComment := 'Сформировано на основании соглашения № ' + Dogovor.NoDoc +
+                  ' от ' + DateToStr(Dogovor.dDoc, 'DD/MM/YYYY');
+
+  Dogovor.nRec := 0;
+
+  Dogovor.NoDoc_Ext := '';
+  Dogovor.NoDoc     := '000000';
+!  Dogovor.dDoc      := Date(0, 0, 0);
+!  Dogovor.dInput    := Date(0, 0, 0);
+
+  Dogovor.DesGr  := sGetTune('User.DesGr');
+  Dogovor.Descr  := sGetTune('User.Descr');
+
+  Dogovor.cZamena := 0;
+
+  if (wWhatStatus = 0)
+    Dogovor.Status := 0;
+
+  Dogovor.cNote := oNotes.GetFirstNote(Dogovor.TiDk, Dogovor.Status );
+
+  if (Dogovor.cOrg <> pOrg)
+    {
+      Dogovor.cOrg := pOrg;
+      if ((GetFirst KatBank where (( pOrg == KatBank.cOrg )) ordered by index KatBank05) = tsOk) {}
+      case (Dogovor.Direct AND 1) of
+      1:  // договора на продажу
+        {
+          Dogovor.cBankPlat := KatBank.nRec;
+          Dogovor.cPlat     := pOrg;
+          Dogovor.cGrPol    := pOrg;
+        }
+      0:  // договора на закупку
+        {
+          Dogovor.cBankPol := KatBank.nRec;
+          Dogovor.cPol     := pOrg;
+          Dogovor.cGrOtp   := pOrg;
+        }
+      end; // case
+    }
+
+  SetNew(true);
+
+  if (UpDateInsertDogovor <> tsOk) Exit;
+
+  if (oStatlog.StatLog_Insert(Dogovor.TiDk, Dogovor.nRec, strComment) <> tsOk) {}
+
+  NRec_NewDog := Dogovor.nRec;
+  MakeCopyOfCurrentDogovor := NRec_NewDog;
+
+  delete safe AttrDog;
+
+  AttrDog.cDogovor := SrcDogBuf.nRec;        // копируем атрибуты договора(соглашения)
+  if (GetEqual(#AttrDog, 1))
+    {
+      AttrDog.nRec := 0;
+      AttrDog.cDogovor := NRec_NewDog;
+      if (Dogovor.cOrg <> SrcDogBuf.cOrg)
+        {
+          AttrDog.Cont_Addr := '';
+          AttrDog.Cont_FIO  := '';
+          AttrDog.Otv_FIO   := '';
+          AttrDog.Otv_Post  := '';
+          AttrDog.Sign_FIO  := '';
+          AttrDog.Sign_Post := '';
+          AttrDog.Sign_Osn  := '';
+        }
+
+      if (insert current AttrDog <> tsOk) {}
+    }
+
+  // копируем исполнение
+  _LOOP PlanDog where (( SrcDogBuf.nRec == PlanDog.cDogovor ))
+    {
+      PushPos(#PlanDog);
+
+      PlanDog.nRec     := 0;
+      PlanDog.cDogovor := Dogovor.nRec;
+
+      insert current PlanDog;
+
+      PopPos(#PlanDog);
+    }
+
+  // копируем схему платежей
+  _LOOP PlatDog where (( SrcDogBuf.nRec == PlatDog.cDogovor ))
+    {
+      PushPos(#PlatDog);
+
+      PlatDog.nRec     := 0;
+      PlatDog.cDogovor := Dogovor.nRec;
+
+      insert current PlatDog;
+
+      PopPos(#PlatDog);
+    }
+
+  if ((wWhatCopy AND 1) <> 0) // копируем спецификацию договора(соглашения)
+    oSpDocs.MakeCopySpDocsSpecifications(SrcDogBuf.TiDk, SrcDogBuf.nRec, NRec_NewDog, SaveOstatok);
+
+  if (Dogovor.cDogovor <> comp(0))          // если соглашение имеет статус
+    {                                       // отличный от "исполняется" и
+      Cur_cDogovor := Dogovor.cDogovor;     // "закрыто", штрафные санкции
+                                            // не переносятся
+      if (GetFirst FastFirstRow DopDog
+                   where ((Cur_cDogovor == DopDog.cDogovor AND
+                           word(1)      == DopDog.Status)) <> tsOk)
+        {
+          if (GetFirst FastFirstRow DopDog
+                       where ((Cur_cDogovor == DopDog.cDogovor AND
+                               word(4)      == DopDog.Status)) <> tsOk)
+            {
+              Dogovor.cShtrafPlat := 0;
+              Dogovor.cShtrafShip := 0;
+              if (update current Dogovor <> tsOk) {}
+            }
+        }
+    }
+
+  _LOOP SpGrSch where (( word(1) == SpGrSch.wList AND SrcDogBuf.nRec == SpGrSch.cBaseDoc ))
+    if (GetFirst FastFirstRow GroupSch = tsOk)
+      if ((GroupSch.cOrg = 0) or (GroupSch.cOrg = Dogovor.cOrg))
+        if (insert SpGrSch2 set SpGrSch2.wList     := 1,
+                                SpGrSch2.cGroupSch := SpGrSch.cGroupSch,
+                                SpGrSch2.cBaseDoc  := NRec_NewDog) <> tsOk {};
+
+  if (GetFirst Dogovor where (( NRec_NewDog == Dogovor.nRec )) <> tsOk) {}
+
+  if ((wWhatCopy AND 2) <> 0)
+    {
+      var iIerCP: IerCP;
+      iIerCP.MakeCopyIerarhyOfCalPlan(SrcDogBuf.nRec, NRec_NewDog, comp(0), comp(0), FALSE, TRUE, wWhatStatus);
+    }
+}
+
+Create view cDocs
+From
+  BaseDoc
+, KatSopr
+, CalPlan
+, IerCalPl
+, nZakaz
+, DogMail
+, UrgentM
+, BaseFin
+, SoprHoz
+, SmetaStroy
+, PlDgDist
+, SaldoBL
+, AktOFP
+, DocReq
+, DsIO
+, tDVDs
+, CustLic
+, PartyDS
+, TActDS
+, Indent
+;
+
+#declare ChangeLinksOnDogovor(TableName, cDogovor, cAppDog)
+  cDocs.update #TableName where (( pDogovor == #TableName.#cDogovor ))
+    set #TableName.#cAppDog := pAppDog;
+#end
+//******************************************************************************
+// привязка документов к новому соглашению
+//******************************************************************************
+Procedure ChangeLinksOnDogovor(pDogovor, pAppDog: comp);
+{
+  #ChangeLinksOnDogovor(CalPlan,cDogovor,cDogovor)
+  #ChangeLinksOnDogovor(IerCalPl,cDogovor,cDogovor)
+  #ChangeLinksOnDogovor(nZakaz,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(DogMail,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(UrgentM,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(BaseDoc,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(KatSopr,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(BaseFin,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(SoprHoz,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(SmetaStroy,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(PlDgDist,cDogovor,cAppDogovor)
+  #ChangeLinksOnDogovor(DsIO,cDogovor,cAppDog)
+  #ChangeLinksOnDogovor(tDVDs,cDogovor,cAppDog)
+  #ChangeLinksOnDogovor(TActDS,cDog,cAppDog)
+
+//******************************************************************************
+// в виду отсутствия индексов в следующих таблицах ссылки на соглашение не будет
+// SaldoBL AktOFP DocReq CustLic PartyDS
+//******************************************************************************
+}

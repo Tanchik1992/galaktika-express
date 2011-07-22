@@ -1,0 +1,110 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// Пересортировка спецификации ДО по МЦ
+//******************************************************************************
+
+{
+  if (CurTable <> #BaseDoc)
+    Exit;
+
+  var NumPP   : word;
+  var NumRec  : longint;
+
+  if (GetFirst KatSopr where ((StepDoc.NRec == KatSopr.cStepDoc)) = tsOk)
+    {
+      Message('Пересортировка недоступна при наличии накладных по документу!',
+              Information);
+      Exit;
+    }
+
+  if (not IsValid(#SpStep))
+    Exit;
+
+  if (RunWindowModal(wGetSpecSort) = cmCancel)
+    Exit;
+
+  Delete all NoVisual TempPart;
+
+  NumRec := 0;
+
+  StartNewVisual(vtNumericVisual, vfTimer + vfBreak + vfConfirm,
+                 'Обработка спецификации...', 1);
+  PushPos(#SpStep);
+
+  _LOOP SpStep
+    {
+      if not NextVisual
+        {
+          NumRec := 0;
+          Break;
+        }
+
+      ClearBuffer(#TempPart);
+      TempPart.cMC := SpStep.NRec;
+
+      case WhatSpecSort of
+      //------------------
+        0: 
+          TempPart.MCName := if (SpStep.PrMC = 1, '0' + KatMC.Name, '1' + KatUsl.Name);
+      //------------------
+        1:
+          {
+            TempPart.MCName   := if (SpStep.PrMC = 1, '0' + KatMC.BarKod, '1' + KatUsl.Kod);
+            TempPart.MCBarKod := if (SpStep.PrMC = 1, KatMC.Name, KatUsl.Name);
+          }
+      //------------------
+        2:
+          {
+            TempPart.MCName := if (SpStep.PrMC = 1, '0', '1') + if (IsValid(#GrPrice), GrPrice.Name, '');
+
+            if (IsValid(#KlPrice))
+              TempPart.MCBarKod := KlPrice.Name;
+
+            TempPart.PrName := if (SpStep.PrMC = 1, KatMC.Name, KatUsl.Name);
+          }
+      //------------------
+        3:
+          {
+            TempPart.MCName := if (SpStep.PrMC = 1, '0' + if (IsValid(#GroupMC), GroupMC.Name, '')
+                                                  , '1' + if (IsValid(#GroupUsl), GroupUsl.Name, ''));
+
+            TempPart.MCBarKod := if (SpStep.PrMC = 1, KatMC.Name, KatUsl.Name);
+
+            TempPart.PrName := if (SpStep.PrMC = 1, KatMC.BarKod, KatUsl.Kod);
+          }
+      //------------------
+      end;
+
+      Insert current TempPart;
+
+      NumRec := NumRec + 1;
+    }
+
+  StopVisual ('', 0 );
+
+  if (NumRec > 0)
+    {
+      StartNewVisual(vtIndicatorVisual, vfTimer, 'Пересортировка спецификации...', NumRec);
+      NumPP := 0;
+
+      _LOOP TempPart ordered by index TempPart01
+        {
+          NextVisual;
+          Inc(NumPP);
+
+          Update NoVisual SpStep where ((TempPart.cMC == SpStep.NRec))
+            Set SpStep.Npp := NumPP;
+        }
+
+      StopVisual ( '', 0 );
+    }
+
+  RereadRecord(#BaseDoc);
+
+  PopPos(#SpStep);
+
+  RescanPanel(#SpStep);
+}
+
+//******************************************************************************

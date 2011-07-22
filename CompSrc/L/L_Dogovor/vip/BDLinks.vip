@@ -1,0 +1,234 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 5.84 - логистика
+// Связь ДО с актами сверки, исками
+//******************************************************************************
+
+#include BD2AktSv.vih
+#include BD2Iski.vih
+#include dolg_bd.vih
+#include BD2Veks89.vih
+
+#doc
+Интерфейс просмотра связанных с ДО по договору актов сверки, исков, соглашений о реструктуризации долга
+#end
+Interface LinkDOCwithBD 'Cвязи ДО с ...' EscClose, Cyan;
+  Show at (, , , );
+
+Create view LinkDOCwithBD
+var
+  cRecBD   : comp;
+  pcoTbl: word;
+
+// сумма задолженности по оплатам
+//    AllNakl,
+//    NaklPrih,
+//    NaklRash,
+
+  AllPlat
+, PlatPrih
+, PlatRash
+, NewTotal
+, DolgPlat   : double;
+  // статус задолженности
+  StatusDolg
+  // возраст задолженности
+, AgeDolg
+, s_SimvRub  : string;
+
+  Age_Day    : longint;
+
+  winAktSv   : BD2AktSv;
+  winIski    : BD2Iski;
+  winVeks89  : BD2Veks89;
+
+As select
+  // полное наименование ДО
+  if (IsValid(tnIski1), 'ДО на пеню', GetVidBaseDocName(BaseDoc.VidDoc))
+    (FieldName = BDFullName)
+//******************************************************************************
+, if (BaseDoc.cVal = 0, s_SimvRub, KlVal1.SimVolV )
+    (FieldName = SimVolB)
+//******************************************************************************
+, BaseDoc.NRec
+
+from
+  BaseDoc
+, StepDoc
+, KatSopr
+, BaseFin
+, Iski Iski1
+, KatNotes KatNotes1
+, KlVal KlVal1
+, KatOrg KatOrg1
+
+where
+((
+          cRecBD  ==  BaseDoc.NRec
+AND BaseDoc.NRec  ==  StepDoc.cBaseDOc
+AND BaseDoc.cNote ==  KatNotes1.NRec
+AND BaseDoc.cVal  ==  KlVal1.NRec
+AND BaseDoc.cOrg  ==  KatOrg1.NRec
+AND StepDoc.NRec  ==  KatSopr.cStepDoc
+AND word(0)       ==  BaseFin.TiDkBase
+AND StepDoc.NRec  ==  BaseFin.cStepDoc
+AND BaseDoc.NRec  ==  Iski1.cBaseDoc(NoIndex)   //  для ДО на пеню
+))
+
+;
+
+Parameters
+  cRecBD
+, pcoTbl  // код просматриваемой таблицы связанной с ДО
+;
+
+//#include serv_dof.vpp    // Расчет суммы платежей по текущему ДО
+//#include serv_nak.vpp    // Расчет суммы накладных по текущему ДО
+
+var  iDolgBD  : CalcDolgBD;
+
+Screen scrInfoBD '' ('', , sci1Esc);
+  Show at (, , , 7);
+  Table BaseDoc;
+
+Fields
+   BDFullName      (''                                      ) : Skip;
+   KatNotes1.Name  ('Статус документа'                      ) : [12], Protect;
+   BaseDoc.DesGr   ('Код группы пользователей'              ) : [ 4], Protect;
+   BaseDoc.Descr   ('Дескриптор(идентификатор) пользователя') : [ 4], Protect;
+   BaseDoc.NoDoc   ('Номер документа-основания'             ) : [10], Protect;
+   BaseDoc.dDoc    ('Дата документа-основания'              ) : [10, 'DD/MM/YYYY'], Protect;
+   KatOrg1.Name    ('Наименование контрагента'              ) : [15], Protect;
+   BaseDoc.Total   ('Сумма по документу'                    ) : [16, '\2p[|-]366`666`666`666`666.88'], Protect;
+   SimvolB                                                    : [ 5], Skip;
+   StepDoc.dOplMax ('Дата оплаты регламентная'              ) : [10, 'DD/MM/YYYY'], Protect;
+   DolgPlat        ('Сумма задолженности оплат по ДО'       ) : [14.2], Protect;
+   StatusDolg      ('Состояние задолженности'               ) : Protect;
+//   AgeDolg         ('Возраст задолженности'                 ) : Protect;
+   Age_Day         ('Возраст задолженности'                 ) : Protect;
+<<
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ &Статус .@@@@@@@@@@@@
+  Группа.@@@@ &Дескр..@@@@ &Номер .@@@@@@@@@@ &Дата .@@@@@@@@@@
+  Контрагент.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  Сумма .@@@@@@@@@@@@@@@  `в` .@@@@@   &Оплатить до .@@@@@@@@@@
+  Задолженность               &Состояние          &Возраст(в днях)
+  по оплате .@@@@@@@@@@@@@@@  .@@@@@@@@@@@@@@@@@   .@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Embedded brAktSver 'Акты сверки' Interface winAktSv;// динамически грузится BD2AktSv.vih
+  Show at (, 8, , );
+ Cache = slave;
+end;
+
+Embedded brIski 'Исковые заявления, пертензии и решения суда' Interface winIski;// динамически грузится BD2Iski.vih
+  Show at (, 8, , );
+ Cache = slave;
+end;
+
+Embedded brVeks89 'Соглашения о реструктуризации долга' Interface winVeks89// динамически грузится BD2Veks89.vih
+  Show at (, 8, , );
+ Cache = slave;
+end;
+
+/*
+
+//******************************************************************************
+
+Function CountMonths(d1, d2: Date): longint;
+{
+  if (d1 >= d2)
+    CountMonths := (Year(d1)-Year(d2))*12+(Month(d1)-Month(d2))
+  else
+    CountMonths := (Year(d2)-Year(d1))*12+(Month(d2)-Month(d1))
+};
+*/
+
+HandleEvent
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    oValFunc.InitVal;
+
+    if (GetFirst BaseDoc <> tsOk)
+      Abort;
+
+//    GetSummaAllPlatDoc
+    iDolgBD.GetSumOpl_DO(BaseDoc.NRec
+                       , Cur_Date     // дата расчета
+                       , AllPlat      // сумма всех платежей по ДО
+                       , PlatPrih
+                       , PlatRash
+                       , DolgPlat);
+
+    StatusDolg := '';
+    AgeDolg    := '';
+    Age_Day    := 0;
+
+    SetFieldVisible(#StatusDolg, DolgPlat > 0.001);
+    SetFieldVisible(#Age_Day   , DolgPlat > 0.001);
+
+    if (DolgPlat > 0.001)
+      {
+        if (LongInt(StepDoc.dOplMax) > 0)
+          {
+            if (Cur_Date > StepDoc.dOplMax)
+              {
+                StatusDolg := 'просроченная';
+                Age_Day := longint(Cur_Date) - longint(StepDoc.dOplMax);
+              }
+            else
+              {
+                StatusDolg := 'текущая';
+                Age_Day    := longint(Cur_Date) - longint(BaseDoc.dDoc);
+              }
+          }
+        else
+          {
+            if (LongInt(BaseDoc.dDoc) > 0)
+              {
+                StatusDolg := 'текущая';
+                Age_Day    := longint(Cur_Date) - longint(BaseDoc.dDoc);
+              }
+          }
+/*
+       case CountMonths(Cur_Date, BaseDoc.dDoc) of
+        0:     AgeDolg := 'месяц';
+        1..3:  AgeDolg := 'квартал';
+        4..6:  AgeDolg := 'полугодие';
+        7..12: AgeDolg := 'год'
+        else   AgeDolg := 'свыше года'
+       end;
+*/
+     }
+
+    case pcoTbl of
+      coAktSver:
+        {
+          SetFormat(brAktSver);
+          SetTitle('Cвязи ДО с актами сверки')
+          winAktSv.SetParam(BaseDoc.NRec);
+        }
+      coIski:
+        {
+          SetFormat(brIski);
+          SetTitle('Cвязи ДО с исковыми заявлениями и претензиями');
+          winIski.CreateTableIski(BaseDoc.nRec);
+        }
+      coVEKSL:
+        {
+          SetFormat(brVeks89);
+          SetTitle('Cвязи ДО с соглашениями о реструктуризации долга');
+          winVeks89.SetParam(BaseDoc.NRec);
+        }
+    end;
+  }
+
+cmDone:
+   {
+     oValFunc.DoneVal;
+//     UnBindEmbeddedInterface(brAktSver);
+//     UnBindEmbeddedInterface(brIski);
+   }
+End
+End.

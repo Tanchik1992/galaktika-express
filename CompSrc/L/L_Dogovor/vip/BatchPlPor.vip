@@ -1,0 +1,1512 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Пакетное формирование платежных поручений.
+//********************************************************************************
+
+
+#include kontrbal.vih
+
+#include UKSfuns.vih
+#include DOfuns.vih
+#include SHManager.vih // описание интерфейса для работы с SoprHoz
+#include PlPorSimple.vih
+#include docs2obj.vih
+#include SchFactFunctions.vih
+#include DocSet.vih    // Наборы документов для раздельного учета
+#include ClndrDog.vih  // функции для работы с календарем из договора
+#include SelUsDoc.vih  // Объект для работы с доступными документами по кассам, РС, ВС.
+#include iSynch.vih      // синхронизация SoprHoz и BaseFin
+
+//******************************************************************************
+
+#doc
+Интерфейс пакетного формирования платежных поручений
+#end
+Interface BatchGeneretePlPor (, hcdog_plpor_avans, ) EscClose, Cyan;
+
+#include DOfuns.var
+#include UKSfuns.var
+#include iSynch.var      // синхронизация SoprHoz и BaseFin
+
+//------------------------------------------------------------------------------
+
+Table STRUCT AvansDocs "Таблица в памяти с документами"
+(
+  cOwner      : comp   "Ссылка на головной договор"
+, Direct      : word   "Направление"
+, dDoc        : Date   "Дата документа"
+, NoDoc       : s20    "Внутренний номер"
+, NoDoc_Ext   : s20    "Входящий номер"
+, SumPlat     : double "Сумма платежей по договору"
+, SumOpl      : double "Сумма оплаченных платежей по договору"
+)
+With Index
+(
+  AvansDocs00 = cOwner(Unique)
+, AvansDocs01 = dDoc      + NoDoc
+, AvansDocs02 = NoDoc     + dDoc
+, AvansDocs03 = NoDoc_Ext + dDoc
+);
+
+//------------------------------------------------------------------------------
+
+Table STRUCT AvansSpec "Авансовые платежи по документам"
+(
+  NRec         : comp    ""
+, bAvans       : boolean "авансовый ПКП"
+, cOwner       : comp    "Ссылка на головной договор"
+, cDogovor     : comp    "Ссылка на договор"
+, cAppDogovor  : comp    "Ссылка на соглашение"
+, cCalPlan     : comp    "Ссылка на ПКП"
+, DocInfo      : string  "Информация по документу"
+, Direct       : word    "Направление"
+, dFrom        : Date    "Оплатить аванс с"
+, dTo          : Date    "Оплатить аванс до"
+, dMaxOpl      : Date    "Крайняя дата оплаты"
+, dOpl         : Date    "Дата оплаты"
+, sVal         : s6      "Символ валюты"
+, Summa        : double  "Сумма к оплате по документу"
+, SumPlat      : double  "Сумма платежей по документу"
+, SumOpl       : double  "Сумма оплаченных платежей по документу"
+, SumForOpl    : double  "Сумма для оплаты"
+)
+With Index
+(
+  AvansSpec00 = NRec(Unique, Surrogate, Journal)
+, AvansSpec01 = cOwner + DocInfo  + dFrom + dTo
+, AvansSpec02 = cOwner + cDogovor + dTo
+);
+
+//------------------------------------------------------------------------------
+
+Table STRUCT MarkeredDocs "Документы для формирования"
+(
+  cRec        : comp   "",
+  cOwner      : comp   ""
+)
+With Index
+(
+  MarkeredDocs00 = cRec(Unique),
+  MarkeredDocs01 = cOwner
+);
+
+Const
+  Num_Of_Fields: word = 9;
+  FullParams: LongInt = (1 shl Num_Of_Fields) - 1;
+end
+
+//------------------------------------------------------------------------------
+
+#include DocSet.var
+
+//------------------------------------------------------------------------------
+
+Create view
+Var
+  Val_PlPor,
+  PlPor_Curse    : word;
+
+  Marker,
+  Ind,
+
+  CurOrdBnd      : longint;
+
+  wStatus,
+  optView        : word;
+
+  cfVal          : comp;
+
+  s_SimvRub      : string;
+
+//== == == == == == == == == Dog_PlPor.vpp == == == == == == == == ==
+  piPlPor        : PlPorSimple;
+  myValNo        : comp;
+  myDate         : Date;
+//== == == == == == == == == Dog_PlPor.vpp == == == == == == == == ==
+  Marker_Kontr,
+  Marker_Plat,
+  Marker_Pol,
+  Marker_VidD,
+  Marker_Stat,
+  Marker_StatSogl,
+  Marker_StatPKP,
+  DskParams      : longint;
+
+  begDate,
+  endDate        : Date;
+
+  sfDescr        : string[20];
+  sfDesGr        : string[ 4];
+
+  oCF: ClndrDog;
+
+(
+  Picked
+)
+
+As select
+  if(SearchMarker(Marker, AvansSpec.NRec, Ind), '√', ''),
+  *
+From
+   AvansDocs
+ , Dogovor
+ , Dogovor Dogovor2
+ , IerDog
+ , CalPlan
+ , CalPlan CalPlan0
+ , CalPlan CalPlan1
+ , IerCalPl
+ , PlanDog
+ , PlanPays
+ , AttrDog
+ , PlPor
+ , BaseFin
+ , MarkeredDocs
+ , AvansSpec
+ , AvansSpec AvansSpec2
+ , MarkeredDocs MarkeredDocs2
+Where
+((
+  AvansDocs.cOwner  == AvansSpec.cOwner     AND
+  AvansDocs.cOwner  == MarkeredDocs2.cOwner AND
+  Dogovor.NRec      == AttrDog.cDogovor     AND
+  AttrDog.cPodr     == fpCO.NRec            AND
+  Dogovor.cOrg      == KatOrg.NRec          AND
+  Dogovor.cVidDog   == KatVidD.NRec         AND
+  Dogovor.cProg     == KatNazna.NRec        AND
+  Dogovor.cVal      == KlVal.NRec           AND
+  MarkeredDocs.cRec == AvansSpec2.NRec
+))
+
+Bounds OnDogovorMain =
+  AvansDocs.cOwner == Dogovor.NRec
+
+Bounds OnDogovor =
+  comp(0)  == Dogovor.cDogovor AND
+  begDate <<= Dogovor.dEnd
+
+Bounds OnDogovorDescr =
+  comp(0) == Dogovor.cDogovor AND
+  sfDescr == Dogovor.Descr
+
+Bounds OnDogovorDesGr =
+  comp(0) == Dogovor.cDogovor AND
+  sfDesGr == Dogovor.DesGr
+
+Order Ord_dDoc      by AvansDocs.dDoc, AvansDocs.NoDoc
+Order Ord_NoDoc     by AvansDocs.NoDoc
+Order Ord_NoDoc_Ext by AvansDocs.NoDoc_Ext
+;
+
+form frmReport('PlatDocs.OUT', 'ERRR');
+
+
+//******************************************************************************
+
+Procedure SetMyTitle;
+{
+  SetTitle('Формирование платежей (выбрано: ' + string(RecordsInTable(#MarkeredDocs)) + ')');
+}
+
+//******************************************************************************
+
+#include dog_plpor.vpp
+
+//******************************************************************************
+
+var MasPar: array[1..6] of comp;
+
+//******************************************************************************
+
+Procedure InitMarkers;
+var DateChanged: boolean;
+{
+  Marker_Kontr    := InitMarker('MGetDocs_Kontr'   , 8, 100, 10);
+  Marker_Plat     := InitMarker('MGetDocs_Plat'    , 8, 100, 10);
+  Marker_Pol      := InitMarker('MGetDocs_Pol'     , 8, 100, 10);
+  Marker_VidD     := InitMarker('MGetDocs_VidD'    , 8, 100, 10);
+  Marker_Stat     := InitMarker('MGetDocs_Stat'    , 8, 100, 10);
+  Marker_StatPKP  := InitMarker('MGetDocs_StatPKP' , 8, 100, 10);
+  Marker_StatSogl := InitMarker('MGetDocs_StatSogl', 8, 100, 10);
+
+  if (not ReadMyDsk(MasPar[1], 'GetDAK_OtvPodr'      , DateChanged)) MasPar[1] := 0;
+  if (not ReadMyDsk(MasPar[2], 'GetDAK_Progr'        , DateChanged)) MasPar[2] := 0;
+  if (not ReadMyDsk(MasPar[3], 'GetDAK_Valut'        , DateChanged)) MasPar[3] := 0;
+  if (not ReadMyDsk(MasPar[4], 'GetDAK_KatStatus'    , DateChanged)) MasPar[4] := 0;
+  if (not ReadMyDsk(MasPar[5], 'GetDAK_KatStatusPKP' , DateChanged)) MasPar[5] := 0;
+  if (not ReadMyDsk(MasPar[6], 'GetDAK_KatStatusSogl', DateChanged)) MasPar[6] := 0;
+
+  if (not ReadMyDsk(sfDesgr, 'GetDAK_Desgr', DateChanged)) sfDesgr := '';
+  if (not ReadMyDsk(sfDescr, 'GetDAK_Descr', DateChanged)) sfDescr := '';
+
+  if (not ReadMyDsk(begDate, 'Dog2DO_Date01', DateChanged)) begDate := Date(0, 0, 0);
+  if (not ReadMyDsk(endDate, 'Dog2DO_Date02', DateChanged)) endDate := Date(1, 1, 2099);
+}
+
+
+//******************************************************************************
+
+Procedure DoneMarkers;
+{
+  DoneMarker(Marker_Kontr   , '');
+  DoneMarker(Marker_Plat    , '');
+  DoneMarker(Marker_Pol     , '');
+  DoneMarker(Marker_VidD    , '');
+  DoneMarker(Marker_Stat    , '');
+  DoneMarker(Marker_StatPKP , '');
+  DoneMarker(Marker_StatSogl, '');
+}
+
+//******************************************************************************
+
+type TDogovor = record as Table Dogovor;
+type TCalPlan = record as Table CalPlan;
+
+//******************************************************************************
+
+Function Check_Params(bDogBuf  : TDogovor;
+                      bPlanBuf: TCalPlan;
+                      OnDogovor: boolean): boolean;
+var
+  IndexDocs: longint;
+  cFld: comp;
+{
+  Check_Params := FALSE;
+  if ((DskParams AND vcGetDog_Kontr) <> 0)
+    {
+      cFld := if(OnDogovor, bDogBuf.cOrg, bPlanBuf.cOrg);
+      if (not SearchMarker(Marker_Kontr, cFld, IndexDocs))
+        Exit;
+    }
+
+  if ((DskParams AND vcGetDog_Plat) <> 0)
+    {
+      cFld := if(OnDogovor, bDogBuf.cPlat, bPlanBuf.cPlat);
+      if (not SearchMarker(Marker_Plat, cFld, IndexDocs))
+        Exit;
+    }
+
+  if ((DskParams AND vcGetDog_Pol) <> 0)
+    {
+      cFld := if(OnDogovor, bDogBuf.cPol, bPlanBuf.cPol);
+      if (not SearchMarker(Marker_Pol, cFld, IndexDocs))
+        Exit;
+    }
+
+  if OnDogovor
+    if ((DskParams AND vcGetDog_VidDoc) <> 0)
+      {
+        if (not SearchMarker(Marker_VidD, bDogBuf.cVidDog, IndexDocs))
+          Exit;
+      }
+    else
+      if (bDogBuf.Direct <> 2)
+        Exit;
+
+  if ((DskParams AND vcGetDog_OtvPodr) <> 0)
+    {
+      if OnDogovor
+        {
+          if (GetFirst FastFirstRow AttrDog
+                 where (( bDogBuf.NRec == AttrDog.cDogovor)) = tsOk)
+            {
+              if (MasPar[1] <> AttrDog.cPodr)
+                Exit;
+            }
+          else
+            Exit;
+        }
+      else
+        if (MasPar[1] <> bPlanBuf.cOtvPodr)
+          Exit;
+    }
+
+  if ((DskParams AND vcGetDog_Progr) <> 0)
+    if (MasPar[2] <> if(OnDogovor, bDogBuf.cProg, bPlanBuf.cNazna))
+      Exit;
+
+  if ((DskParams AND vcGetDog_Valut) <> 0)
+    if (MasPar[3] <> if(OnDogovor, bDogBuf.cVal, bPlanBuf.cVal))
+      Exit;
+
+  if OnDogovor
+    if ( ( bDogBuf.cDogovor = 0 ) AND ( (DskParams and vcGetDog_KatStatus) <> 0 ) )
+      {
+        if ( MasPar[4] = 0 )
+        {
+          if ( not SearchMarker(Marker_Stat, bDogBuf.cNote, IndexDocs) )
+            Exit;
+        }
+        else
+          if ( MasPar[4] <> bDogBuf.cNote )
+            Exit;
+      }
+    else
+      if ( ( bDogBuf.cDogovor <> 0 ) AND ( (DskParams and vcGetDog_KatStatusSogl) <> 0 ) )
+        if ( MasPar[6] = 0 )
+          {
+            if ( not SearchMarker(Marker_StatSogl, bDogBuf.cNote, IndexDocs) )
+              Exit;
+          }
+          else
+            if ( MasPar[6] <> bDogBuf.cNote )
+              Exit;
+
+  if ( ( (DskParams and vcGetDog_KatStatusPKP) <> 0 ) AND not OnDogovor )
+    if (MasPar[5] = 0)
+      {
+        if ( not SearchMarker(Marker_StatPKP, bPlanBuf.cNote, IndexDocs) )
+          Exit;
+      }
+      else
+        if ( MasPar[5] <> bPlanBuf.cNote )
+          Exit;
+
+  Check_Params := TRUE;
+}
+
+//******************************************************************************
+
+Function GetPlatSumsOnSomeDogovor(vardPlat: Date; varcVal: comp): double;
+var varSumm: double;
+{
+  if (varcVal = 0)
+    varSumm := if(BaseFin.Direct = 2, 1, (-1)) * BaseFin.Summa
+  else
+    if (BaseFin.cVal = varcVal)
+      varSumm := if(BaseFin.Direct = 2, 1, (-1)) * BaseFin.SumVal
+    else
+      varSumm := if(BaseFin.Direct = 2, 1, (-1)) * oValFunc.GetAnyCurrency(BaseFin.cVal, BaseFin.Summa, vardPlat, varcVal);
+
+  GetPlatSumsOnSomeDogovor := varSumm;
+}
+
+//******************************************************************************
+// Сумма выписанных платежей по договорам
+
+Procedure GetPlatSumsOnOwnerDogovor(bDogBuf: TDogovor; var varSumm, varSummOpl: double);
+var
+  TmpSum   : double;
+  vardPlat: Date;
+{
+  varSumm := 0.0; varSummOpl := 0.0;
+
+  _LOOP BaseFin where (( bDogBuf.NRec == BaseFin.cDogovor ))
+    {
+      if (BaseFin.prShtraf = 1)
+        Continue;
+
+      vardPlat := if(longint(bDogBuf.dBeg) = 0, bDogBuf.dDoc, bDogBuf.dBeg);
+      if ((bDogBuf.TipMoney = 2) AND (bDogBuf.cVal = 0) AND
+          (Longint(bDogBuf.dValCurse) <> 0))
+        vardPlat := bDogBuf.dValCurse;
+
+      TmpSum  := GetPlatSumsOnSomeDogovor(vardPlat, bDogBuf.cVal);
+      varSumm := varSumm + TmpSum;
+      if (longint(BaseFin.dDoc) <> 0)
+        varSummOpl := varSummOpl + TmpSum;
+    }
+
+  varSumm    := if (bDogBuf.Direct = 2, 1, (-1)) * varSumm;
+  varSummOpl := if (bDogBuf.Direct = 2, 1, (-1)) * varSummOpl;
+}
+
+//******************************************************************************
+// Сумма выписанных платежей по договорам
+
+Procedure GetPlatSumsOnDogovors(bDogBuf: TDogovor;
+                                pDogovor, pAddDogovor: comp;
+                                D1, D2: Date;
+                                var varSumm, varSummOpl: double);
+var
+  TmpSum   : double;
+  vardPlat: Date;
+{
+  varSumm := 0.0; varSummOpl := 0.0;
+
+  _LOOP BaseFin where (( pDogovor       == BaseFin.cDogovor    AND
+                         pAddDogovor    == BaseFin.cAppDogovor AND
+                         BaseFin.cPlPor == PlPor.NRec ))
+    {
+      if (BaseFin.prShtraf = 1)
+        Continue;
+
+      vardPlat := if(longint(bDogBuf.dBeg) = 0, bDogBuf.dDoc, bDogBuf.dBeg);
+
+      if ((bDogBuf.TipMoney = 2) AND (bDogBuf.cVal = 0) AND
+          (Longint(bDogBuf.dValCurse) <> 0))
+        vardPlat := bDogBuf.dValCurse;
+
+      TmpSum  := GetPlatSumsOnSomeDogovor(vardPlat, bDogBuf.cVal);
+
+      if ((PlPor.DatVip >= D1) AND ((PlPor.DatVip <= D2) OR longint(D2) = 0))
+        {
+          varSumm := varSumm + TmpSum;
+          if (longint(PlPor.DatOB) <> 0)
+            varSummOpl := varSummOpl + TmpSum;
+        }
+    }
+
+  varSumm    := if (bDogBuf.Direct = 2, 1, (-1)) * varSumm;
+  varSummOpl := if (bDogBuf.Direct = 2, 1, (-1)) * varSummOpl;
+}
+
+//******************************************************************************
+
+Procedure AddOwnerToList;
+{
+  if (RecordExists AvansDocs where (( Dogovor.NRec == AvansDocs.cOwner )) = tsOk)
+    Exit;
+
+  var varSumm, varSummOpl: double;
+  GetPlatSumsOnOwnerDogovor(TDogovor(Dogovor.Buffer), varSumm, varSummOpl);
+  insert AvansDocs set AvansDocs.cOwner    := Dogovor.NRec,
+                       AvansDocs.dDoc      := Dogovor.dDoc,
+                       AvansDocs.Direct    := Dogovor.Direct,
+                       AvansDocs.NoDoc     := Dogovor.NoDoc,
+                       AvansDocs.NoDoc_Ext := Dogovor.NoDoc_Ext,
+                       AvansDocs.SumPlat   := varSumm,
+                       AvansDocs.SumOpl    := varSummOpl;
+}
+
+//******************************************************************************
+// Сумма выписанных платежей по ПКП
+
+Procedure GetPlatSumsOnCalPlan(var varSumm, varSummOpl: double);
+var
+  varTmpSum: double;
+  pAppDogovor: comp;
+{
+  varSumm := 0.0; varSummOpl := 0.0;
+  pAppDogovor := if(Dogovor.NRec = Dogovor2.NRec, comp(0), Dogovor2.NRec);
+
+  // бежим по финансовым документам ПКП
+
+  _LOOP BaseFin where (( Dogovor.NRec == BaseFin.cDogovor AND
+                         pAppDogovor  == BaseFin.cAppDogovor ))
+    {
+      if ((BaseFin.prShtraf = 1) OR          // штрафной документ
+          (BaseFin.cKatSopr <> CalPlan.NRec)) // проверка ссылки на финансовый ПКП
+        Continue;
+
+      if (CalPlan.cVal = 0)
+        varTmpSum := if(BaseFin.Direct = 2, 1, -1) * BaseFin.Summa
+      else
+        if (BaseFin.cVal = CalPlan.cVal)
+          varTmpSum := if(BaseFin.Direct = 2, 1, -1) * BaseFin.SumVal
+        else
+          varTmpSum := if(BaseFin.Direct = 2, 1, -1) * oValFunc.GetAnyCurrency(BaseFin.cVal, BaseFin.Summa, CalPlan.dInput, CalPlan.cVal);
+
+      varSumm := varSumm + varTmpSum;
+
+      if (longint(BaseFin.dDoc) <> 0)
+        varSummOpl := varSummOpl + varTmpSum;
+    }
+
+  varSumm    := if (CalPlan.DirectPlat = 2, 1, (-1)) * varSumm;
+  varSummOpl := if (CalPlan.DirectPlat = 2, 1, (-1)) * varSummOpl;
+}
+
+//******************************************************************************
+
+Procedure RecalcSums;
+var Sum1, Sum2: double;
+{
+
+  _LOOP AvansDocs
+    {
+      if (GetFirst FastFirstRow Dogovor
+             where (( AvansDocs.cOwner == Dogovor.NRec )) = tsOk) {};
+      GetPlatSumsOnOwnerDogovor(TDogovor(Dogovor.Buffer), Sum1, Sum2);
+      update current AvansDocs set AvansDocs.SumPlat := Sum1,
+                                   AvansDocs.SumOpl  := Sum2;
+
+      _LOOP AvansSpec
+        {
+          if (AvansSpec.cCalPlan = 0)
+            {
+              if (GetFirst FastFirstRow Dogovor2
+                     where (( AvansSpec.cDogovor == Dogovor2.NRec )) = tsOk) {};
+              GetPlatSumsOnDogovors(TDogovor(Dogovor2.Buffer),
+                                    Dogovor.NRec,
+                                    if(Dogovor.NRec = Dogovor2.NRec, 0, Dogovor2.NRec),
+                                    AvansSpec.dFrom, AvansSpec.dTo,
+                                    Sum1, Sum2);
+            }
+          else
+            {
+              var pAppDogovor: comp;
+              pAppDogovor := if(AvansSpec.cAppDogovor = 0, AvansSpec.cOwner,
+                                                           AvansSpec.cAppDogovor);
+              if (GetFirst FastFirstRow Dogovor2
+                     where (( pAppDogovor == Dogovor2.NRec )) = tsOk) {};
+              if (GetFirst FastFirstRow CalPlan
+                     where (( AvansSpec.cCalPlan == CalPlan.NRec )) = tsOk) {};
+              GetPlatSumsOnCalPlan(Sum1, Sum2);
+            }
+
+          update current AvansSpec set AvansSpec.SumPlat := Sum1,
+                                       AvansSpec.SumOpl  := Sum2;
+        }
+    }
+}
+
+//******************************************************************************
+
+Procedure AddCalPlanToList(IsAvans: boolean);
+var Sum1, Sum2: double;
+{
+  if NOT Check_Params(TDogovor(Dogovor.Buffer),
+                      TCalPlan(CalPlan.Buffer),
+                      FALSE) Exit;
+
+  AddOwnerToList;
+
+  //добавить спецификацию авансов
+  GetPlatSumsOnCalPlan(Sum1, Sum2);
+
+  var tmpStr: string;
+  tmpStr := 'ПКП № '+CalPlan.NoDoc+
+            DateToStr(CalPlan.dInput, ' от DD/MM/YYYY г. по ')+
+            if (Dogovor2.cDogovor = 0, 'дог.', 'согл.')+
+            ' № '+Dogovor2.NoDoc+
+            DateToStr(Dogovor2.dDoc, ' от DD/MM/YYYY г.');
+
+  var TmpS: s6;
+  if (CalPlan.cVal = 0)
+    TmpS := s_SimvRub
+  else
+    if (GetFirst FastFirstRow KlVal
+           where (( CalPlan.cVal == KlVal.NRec )) = tsOk)
+      TmpS := KlVal.SimVolV;
+
+  insert AvansSpec set AvansSpec.cOwner      := Dogovor.NRec,
+                       AvansSpec.cDogovor    := 0,
+                       AvansSpec.cAppDogovor := if(Dogovor.NRec = Dogovor2.NRec, comp(0), Dogovor2.NRec),
+                       AvansSpec.cCalPlan    := CalPlan.NRec,
+                       AvansSpec.bAvans      := IsAvans,
+                       AvansSpec.Direct      := CalPlan.DirectPlat,
+                       AvansSpec.dFrom       := CalPlan.dFrom,
+                       AvansSpec.dTo         := CalPlan.dTo,
+                       AvansSpec.dMaxOpl     := CalPlan.dTo,
+                       AvansSpec.dOpl        := CalPlan.dFrom,
+                       AvansSpec.DocInfo     := tmpStr,
+                       AvansSpec.sVal        := TmpS,
+                       AvansSpec.Summa       := CalPlan.Summa,
+                       AvansSpec.SumPlat     := Sum1,
+                       AvansSpec.SumOpl      := Sum2;
+}
+
+//******************************************************************************
+
+Procedure BuildList;
+{
+  ResetBounds(#Dogovor);
+  ResetBounds(#AvansSpec);
+
+  InitMarkers;
+
+  MTClear(#AvansDocs, mfNormal);    // вместо delete all
+  MTClear(#AvansSpec, mfNormal);    // вместо delete all
+  MTClear(#MarkeredDocs, mfNormal); // вместо delete all
+
+  if ((DskParams AND vcGetDog_Descr) <> 0)
+    PushBounds(tbOnDogovorDescr)
+  else
+    if ((DskParams AND vcGetDog_DesGr) <> 0)
+      PushBounds(tbOnDogovorDesGr)
+    else
+      PushBounds(tbOnDogovor);
+
+  // просматриваем исполняемые договора
+  var DogCount: longint; DogCount := 0;
+  StartNewVisual(vtRotateVisual, vfTimer, 'Просмотр договоров ...'#13#3, 1);
+
+  _LOOP Dogovor { NextVisual; inc(DogCount); }
+
+  StopVisual('', 0);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Построение списка документов ...'#13#3, DogCount);
+
+  _LOOP Dogovor
+    {
+      NextVisual;
+      if NOT Check_Params(TDogovor(Dogovor.Buffer), TCalPlan(CalPlan.Buffer), TRUE)
+        Continue;
+
+      // просматриваем договора/соглашения самого нижнего уровня
+
+      _LOOP IerDog where (( Dogovor.NRec == IerDog.cUpRec  AND
+                            word(1)      == IerDog.IsLeaf  AND
+                            IerDog.cRec  == Dogovor2.NRec  AND
+                            IerDog.cRec  == PlanDog.cDogovor ))
+       {
+         // рассматриваем только договора/соглашения самого нижнего уровня
+         if NOT Check_Params(TDogovor(Dogovor2.Buffer), TCalPlan(CalPlan.Buffer), TRUE)
+           Continue;
+
+         var UslOnPlan: boolean;
+         if (GetFirst FastFirstRow PlanDog
+                where (( IerDog.cRec == PlanDog.cDogovor )) = tsOk)
+           UslOnPlan := (PlanDog.UslPlan AND 6) = 0
+         else
+           UslOnPlan := TRUE;
+
+         if UslOnPlan
+         // согласно календарному плану
+           {
+             // просматриваем ПКП самого нижнего уровня
+             _LOOP CalPlan0 where (( IerDog.cRec   == CalPlan0.cDogovor AND
+                                     comp(0)       == CalPlan0.cCalPlan ))
+
+               _LOOP IerCalPl where (( IerDog.cRec   == IerCalPl.cDogovor AND
+                                       CalPlan0.NRec == IerCalPl.cUpRec   AND
+                                       word(1)       == IerCalPl.IsLeaf   AND
+                                       IerCalPl.cRec == CalPlan.NRec ))
+                 {
+                   // рассматриваем только финансовые ПКП самого нижнего уровня
+                   if (CalPlan.DirectPlat = 0)
+                     Continue;
+
+                   // окончание периода действия ПКП должно попадать в период формирования
+                   if ((CalPlan.dTo > endDate) OR (CalPlan.dTo < begDate))
+                     Continue;
+
+                   // платежи по схеме пункта плана
+                   if (GetFirst FastFirstRow PlanPays where (( CalPlan.NRec == PlanPays.cCalPlan )) = tsOk)
+                     AddCalPlanToList(PlanPays.VidPlat = 1);
+                 }
+           }
+
+         if ((PlanDog.UslPlan AND 2) <> 0)
+           // по условиям исполнения авансовых платежей
+           {
+             // Проверка на соответствие периоду
+             if ((PlanDog.dBegAvans > endDate) AND (endDate <> ZeroDate) or
+                 (PlanDog.dEndAvans < begDate) AND (begDate <> ZeroDate))
+               Continue;
+
+             var d1, d2: Date;
+             d1 := if(PlanDog.dBegAvans = ZeroDate, Dogovor2.dBeg, PlanDog.dBegAvans);
+
+             if ( d1 = ZeroDate )
+               Continue;
+
+             case PlanDog.PeriodAvans of
+               0: // Авансовые платежи выплачиваются в один этап
+                  {}
+               1: // Авансовые платежи выплачиваются поквартально
+                  d1 := Date(1, ((Month(d1) - 1) div 3) + 1, Year(d1));
+               2: // Авансовые платежи выплачиваются помесячно
+                  d1 := Date(1, Month(d1), Year(d1));
+               3: // Авансовые платежи выплачиваются подекадно
+                  {
+                  case Day(d1) of
+                     1..10: d1 := Date( 1, Month(d1), Year(d1));
+                    11..20: d1 := Date(11, Month(d1), Year(d1));
+                    21..31: d1 := Date(21, Month(d1), Year(d1));
+                  end;
+                  }
+               4: // Авансовые платежи выплачиваются еженедельно
+                  {
+                    While (Day_Of_Week(d1) <> 1) do
+                      d1 := Sub_Day(d1, 1);
+                  }
+             end;
+
+             // теперь d1 - первая дата планового периода
+             var TmpS: s6;
+             if (Dogovor2.cVal = 0)
+               TmpS := s_SimvRub
+             else
+               if (GetFirst FastFirstRow KlVal
+                      where (( Dogovor2.cVal == KlVal.NRec )) = tsOk)
+                 TmpS := KlVal.SimVolV;
+
+             var tmpStr: string;
+             tmpStr := if (Dogovor2.cDogovor = 0, 'Договор', 'Соглашение')+
+                       ' № '+Dogovor2.NoDoc+
+                       DateToStr(Dogovor2.dDoc, ' от DD/MM/YYYY г.');
+
+             var pAddDogovor: comp;
+             pAddDogovor := if(Dogovor.NRec = Dogovor2.NRec, 0, Dogovor2.NRec);
+
+             AddOwnerToList;
+
+             While TRUE do
+               {
+                 case PlanDog.PeriodAvans of
+                   0: // Авансовые платежи выплачиваются в один этап
+                     {
+                       d2 := if(PlanDog.dEndAvans = ZeroDate, Dogovor2.dEnd, PlanDog.dEndAvans);
+
+                       if ( d2 = ZeroDate )
+                         Continue;
+
+                       d2 := Add_Day(d2, 1);
+                     }
+                   1: // Авансовые платежи выплачиваются поквартально
+                       d2 := Add_Months(d1, 3);
+                   2: // Авансовые платежи выплачиваются помесячно
+                       d2 := Add_Months(d1, 1);
+                   3: // Авансовые платежи выплачиваются подекадно
+                     {
+                       case Day(d1) of
+                          1: d2 := Date(11, Month(d1), Year(d1));
+                         11: d2 := Date(21, Month(d1), Year(d1));
+                         21: {d2 := Add_Months(d1, 1);
+                             d2 := Date(1, Month(d2), Year(d2));
+                            }
+                       end;
+                     }
+                   4: // Авансовые платежи выплачиваются еженедельно
+                       d2 := Add_Day(d1, 7);
+                 end;
+
+                 d2 := Sub_Day(d2, 1);
+                 // d1-d2 текущий рассматриваемый плановый период
+                 var varSumm, varSummOpl: double;
+
+                 GetPlatSumsOnDogovors(TDogovor(Dogovor2.Buffer),
+                                       Dogovor.NRec, pAddDogovor,
+                                       D1, D2,
+                                       varSumm, varSummOpl);
+                 var tmpD1, tmpD2, tmpD3: Date;
+                 tmpD1 := if(D1 < PlanDog.dBegAvans, PlanDog.dBegAvans, D1);
+                 tmpD2 := if(D2 > PlanDog.dEndAvans, PlanDog.dEndAvans, D2);
+
+                 tmpD3 := if(PlanDog.VidAvans = 0, tmpD2,
+                                                   oCF.AddWorkDay(PlanDog.cDogovor, tmpD1, PlanDog.DayAvans));
+
+                 tmpD3 := if(tmpD3 > tmpD2, tmpD2, tmpD3);
+                 tmpD3 := if(tmpD3 > PlanDog.dEndAvans, PlanDog.dEndAvans, tmpD3);
+                 insert AvansSpec
+                    set AvansSpec.cOwner      := Dogovor.NRec,
+                        AvansSpec.cDogovor    := Dogovor2.NRec,
+                        AvansSpec.cAppDogovor := pAddDogovor,
+                        AvansSpec.cCalPlan    := 0,
+                        AvansSpec.DocInfo     := tmpStr,
+                        AvansSpec.bAvans      := TRUE,
+                        AvansSpec.Direct      := Dogovor2.Direct,
+                        AvansSpec.dFrom       := tmpD1,
+                        AvansSpec.dTo         := tmpD2,
+                        AvansSpec.dMaxOpl     := tmpD3,
+                        AvansSpec.dOpl        := tmpD1,
+                        AvansSpec.sVal        := TmpS,
+                        AvansSpec.Summa       := PlanDog.SumAvans,
+                        AvansSpec.SumPlat     := varSumm,
+                        AvansSpec.SumOpl      := varSummOpl;
+                 // переходим к следующему плановому периоду
+                 d1 := Add_Day(d2, 1);
+                 if (d1 > if(PlanDog.dEndAvans = ZeroDate, Dogovor2.dEnd, PlanDog.dEndAvans)) Break;
+               }
+           }
+
+         if ((PlanDog.UslPlan AND 4) <> 0)
+           // по условиям исполнения платежей по факту
+           {
+             // Проверка на соответствие периоду
+             if ((PlanDog.dBegPlat > endDate) AND (endDate <> ZeroDate) or
+                 (PlanDog.dEndPlat < begDate) AND (begDate <> ZeroDate))
+               Continue;
+
+             var d1, d2: Date;
+             d1 := if(PlanDog.dBegPlat = ZeroDate, Dogovor2.dBeg, PlanDog.dBegPlat);
+
+             if ( d1 = ZeroDate )
+               Continue;
+
+             case PlanDog.PeriodPlat of
+               0: // Платежи по факту  выплачиваются в один этап
+                  {}
+               1: // Платежи по факту  выплачиваются поквартально
+                  d1 := Date(1, ((Month(d1) - 1) div 3) + 1, Year(d1));
+               2: // Платежи по факту  выплачиваются помесячно
+                  d1 := Date(1, Month(d1), Year(d1));
+               3: // Платежи по факту  выплачиваются подекадно
+                  {
+                  case Day(d1) of
+                     1..10: d1 := Date( 1, Month(d1), Year(d1));
+                    11..20: d1 := Date(11, Month(d1), Year(d1));
+                    21..31: d1 := Date(21, Month(d1), Year(d1));
+                  end;
+                  }
+               4: // Платежи по факту выплачиваются еженедельно
+                  {
+                    While (Day_Of_Week(d1) <> 1) do
+                      d1 := Sub_Day(d1, 1);
+                  }
+             end;
+
+             // теперь d1 - первая дата планового периода
+             var TmpS: s6;
+             if (Dogovor2.cVal = 0)
+               TmpS := s_SimvRub
+             else
+               if (GetFirst FastFirstRow KlVal
+                      where (( Dogovor2.cVal == KlVal.NRec )) = tsOk)
+                 TmpS := KlVal.SimVolV;
+
+             var tmpStr: string;
+             tmpStr := if (Dogovor2.cDogovor = 0, 'Договор', 'Соглашение')+
+                       ' № '+Dogovor2.NoDoc+
+                       DateToStr(Dogovor2.dDoc, ' от DD/MM/YYYY г.');
+
+             var pAddDogovor: comp;
+             pAddDogovor := if(Dogovor.NRec = Dogovor2.NRec, 0, Dogovor2.NRec);
+
+             AddOwnerToList;
+
+             While TRUE do
+               {
+                 case PlanDog.PeriodPlat of
+                   0: // Платежи по факту выплачиваются в один этап
+                     {
+                       d2 := if(PlanDog.dEndPlat = ZeroDate, Dogovor2.dEnd, PlanDog.dEndPlat);
+
+                       if ( d2 = ZeroDate )
+                         Continue;
+
+                       d2 := Add_Day(d2, 1);
+                     }
+                   1: // Платежи по факту  выплачиваются поквартально
+                       d2 := Add_Months(d1, 3);
+                   2: // Платежи по факту  выплачиваются помесячно
+                       d2 := Add_Months(d1, 1);
+                   3: // Платежи по факту  выплачиваются подекадно
+                     {
+                       case Day(d1) of
+                          1: d2 := Date(11, Month(d1), Year(d1));
+                         11: d2 := Date(21, Month(d1), Year(d1));
+                         21: {d2 := Add_Months(d1, 1);
+                             d2 := Date(1, Month(d2), Year(d2));
+                            }
+                       end;
+                     }
+                   4: // Платежи по факту  выплачиваются еженедельно
+                       d2 := Add_Day(d1, 7);
+                 end;
+
+                 d2 := Sub_Day(d2, 1);
+                 // d1-d2 текущий рассматриваемый плановый период
+                 var varSumm, varSummOpl: double;
+
+                 GetPlatSumsOnDogovors(TDogovor(Dogovor2.Buffer),
+                                       Dogovor.NRec, pAddDogovor,
+                                       D1, D2,
+                                       varSumm, varSummOpl);
+                 var tmpD1, tmpD2, tmpD3: Date;
+                 tmpD1 := if(D1 < PlanDog.dBegPlat, PlanDog.dBegPlat, D1);
+                 tmpD2 := if(D2 > PlanDog.dEndPlat, PlanDog.dEndPlat, D2);
+
+                 case PlanDog.VidPlat of
+                 // в течение всего планового периода, следующего за периодом поставки
+                   0: tmpD3 := tmpD2;
+                 // в течение дней с начала планового периода, следующего за периодом поставки
+                   1: tmpD3 := oCF.AddWorkDay(PlanDog.cDogovor, tmpD1, PlanDog.DayPlat);
+                 end;
+
+                 tmpD3 := if(tmpD3 > tmpD2, tmpD2, tmpD3);
+                 tmpD3 := if(tmpD3 > PlanDog.dEndPlat, PlanDog.dEndPlat, tmpD3);
+                 insert AvansSpec
+                    set AvansSpec.cOwner      := Dogovor.NRec,
+                        AvansSpec.cDogovor    := Dogovor2.NRec,
+                        AvansSpec.cAppDogovor := pAddDogovor,
+                        AvansSpec.cCalPlan    := 0,
+                        AvansSpec.DocInfo     := tmpStr,
+                        AvansSpec.bAvans      := FALSE,
+                        AvansSpec.Direct      := Dogovor2.Direct,
+                        AvansSpec.dFrom       := tmpD1,
+                        AvansSpec.dTo         := tmpD2,
+                        AvansSpec.dMaxOpl     := tmpD3,
+                        AvansSpec.dOpl        := tmpD1,
+                        AvansSpec.sVal        := TmpS,
+                        AvansSpec.Summa       := PlanDog.SumAvans,
+                        AvansSpec.SumPlat     := varSumm,
+                        AvansSpec.SumOpl      := varSummOpl;
+                 // переходим к следующему плановому периоду
+                 d1 := Add_Day(d2, 1);
+                 if (d1 > if(PlanDog.dEndPlat = ZeroDate, Dogovor2.dEnd, PlanDog.dEndPlat)) Break;
+               }
+           }
+       }
+    }
+
+  StopVisual('', 0);
+  ResetBounds(#Dogovor);
+  PushBounds(tbOnDogovorMain);
+  SetBounds(#AvansSpec);
+  DoneMarkers;
+}
+
+//******************************************************************************
+
+TabbedSheet BOTTOM tshMainBrowse;
+  Show at (, , , 15)
+
+Panel pAvansDocs;
+  Table AvansDocs;
+
+Browse brMain 'Выбор документов' (, hcdog_vbor_avanspl , sci1EnIns);
+
+Fields
+  { Font = { Bold = (RecordExists MarkeredDocs2 = tsOk) }};
+//------------------------------------------------------------------------------
+  Dogovor.DesGr
+                #3'Группа'
+                ('Код группы пользователей')
+                : [5], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  Dogovor.Descr
+                #3'Дескр.'
+                ('Дескриптор(идентификатор) пользователя')
+                : [5], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  AvansDocs.NoDoc_Ext
+                #3'Вх.номер'
+                ('Входящий номер')
+                : [8], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  AvansDocs.NoDoc
+                #3'Номер'
+                ('Внутренний номер')
+                : [8], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  AvansDocs.dDoc
+                #3'Дата'
+                ('Дата заключения')
+                : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  Dogovor.dBeg
+                #3'с'
+                ('Дата начала действия')
+                : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  Dogovor.dEnd
+                #3'по'
+                ('Дата окончания действия')
+                : [10, 'DD/MM/YYYY'], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  Dogovor.Summa
+                #3'Сумма'
+                ('Общая (планируемая) сумма')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansDocs.SumPlat
+                #3'Платежи'
+                ('Общая сумма выписанных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansDocs.SumOpl
+                #3'Оплачено'
+                ('Общая сумма оплаченных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  ''#3 + if(Dogovor.TipMoney = 1, 'НДЕ', if(Dogovor.TipMoney = 2, 'Вал-НДЕ', 'Вал'))
+                #3'Тип'
+                ('Тип документа по отношению к валюте')
+                : [7], Skip, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  if (Dogovor.cVal = 0, s_SimvRub, KlVal.SimVolV)
+                #3'Вал'
+                ('Валюта договора')
+                : [3], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatVidD.Name
+                #3'Вид'
+                ('Вид договора')
+                : [10], Protect, Centered, NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name
+                #3'Контрагент'
+                ('Наименование контрагента')
+                : [20], Protect;
+//------------------------------------------------------------------------------
+  fpCO.Name
+                #3'Центр ответственности'
+                ('Центр ответственности')
+                : [20], Protect;
+//------------------------------------------------------------------------------
+  KatNazna.Name
+                #3'Назначение'
+                ('Назначение')
+                : [18], Protect;
+//------------------------------------------------------------------------------
+end;
+
+//******************************************************************************
+
+Procedure OneUnMarkPick;
+{
+  DeleteMarker(Marker, AvansSpec.NRec);
+  delete MarkeredDocs where (( AvansSpec.NRec == MarkeredDocs.cRec ));
+}
+
+
+//******************************************************************************
+
+Procedure OneMarkPick;
+{
+  var NeedPlat: double;  NeedPlat := AvansSpec.Summa - AvansSpec.SumPlat;
+  if (AvansSpec.SumForOpl <= 0.0)
+    update current AvansSpec
+      set AvansSpec.SumForOpl := if(NeedPlat > 0.0, NeedPlat, 0.0);
+
+  InsertMarker(Marker, AvansSpec.NRec);
+
+  if (AvansSpec.SumForOpl > 0.0)
+    if (insert MarkeredDocs
+          set MarkeredDocs.cRec   := AvansSpec.NRec,
+              MarkeredDocs.cOwner := AvansSpec.cOwner) = tsOk {};
+}
+
+//******************************************************************************
+
+HandleEvent
+
+cmMarkUnMark:
+  {
+    if NOT UpdateTable
+      Exit;
+
+    _LOOP AvansSpec
+      if SearchMarker(Marker, AvansSpec.NRec, Ind)
+        OneUnMarkPick
+      else
+        OneMarkPick;
+
+    RedrawCurrentAndGo(GetCurrentFormat, TRUE);
+
+    RescanPanel(#AvansDocs);
+    RescanPanel(#AvansSpec);
+    SetMyTitle;
+  }
+
+cmSelectAll:
+  {
+    if NOT UpdateTable
+      Exit;
+
+    PushPos(#AvansDocs);
+    PushPos(#AvansSpec);
+
+    _LOOP AvansDocs
+      _LOOP AvansSpec
+        OneMarkPick;
+
+    PopPos(#AvansSpec);
+    PopPos(#AvansDocs);
+
+    RescanPanel(#AvansSpec);
+    RescanPanel(#AvansDocs);
+
+    SetMyTitle;
+  }
+
+cmUnselectAll:
+  {
+    ClearMarker(Marker);
+    delete all MarkeredDocs;
+    RescanPanel(#AvansSpec);
+    RescanPanel(#AvansDocs);
+    SetMyTitle;
+  }
+
+end;
+
+end;
+
+//******************************************************************************
+
+Panel panMarkeredDocs
+  Table MarkeredDocs;
+
+Browse brMarkeredDocs 'Формирование платежей' (, hcdog_form_avansplat, sci18EnEsc);
+
+Fields
+//------------------------------------------------------------------------------
+  AvansSpec2.DocInfo
+                #3'Документ'
+                ('Формирование по документу')
+                : [40], Protect;
+//------------------------------------------------------------------------------
+  AvansSpec2.sVal
+                #3'Вал.'
+                ('Валюта документа')
+                : [5], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec2.Summa
+                #3'Сумма'
+                ('Общая сумма')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec2.SumPlat
+                #3'Выписано'#13#3'платежей'
+                ('Общая сумма выписанных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec2.SumOpl
+                #3'Оплачено'
+                ('Общая сумма оплаченных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec2.SumForOpl
+                #3'Оплатить'
+                ('Сумма для оплаты')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec2.dOpl
+                #3'Дата'#13#3'платежа'
+                ('Дата платежа')
+                : Skip;
+//------------------------------------------------------------------------------
+end;
+
+HandleEvent
+
+cmDeleteRecord:
+  {
+    if (Message('Удалить данный планируемый платеж из списка?', YesNo) <> cmYes)
+      {
+        Abort;
+        Exit;
+      }
+
+    DeleteMarker(Marker, MarkeredDocs.cRec);
+    delete current MarkeredDocs;
+    SetMyTitle;
+  }
+
+end;
+end; //Panel
+end; //TabbedSheet
+
+//******************************************************************************
+
+Panel panPlat
+  Table AvansSpec;
+
+Browse brPlat (, , sci1EnIns);
+  Show at (, 16, , )
+
+Fields
+  { Font = { Color = if(Picked = '', 0, ColorMark) }};
+//------------------------------------------------------------------------------
+  Picked
+                #3'√'
+                : [1], Skip;
+//------------------------------------------------------------------------------
+  if(AvansSpec.bAvans, 'А', 'Ф')
+                #3'Т'
+                : [1], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec.DocInfo
+                #3'Документ'
+                ('Документ')
+                : [40], Protect;
+//------------------------------------------------------------------------------
+  DateToStr(AvansSpec.dFrom  , 'DD/MM/YYYY') + DateToStr(AvansSpec.dMaxOpl, '-DD/MM/YYYY')
+                #3'Период оплаты'
+                : [22], Skip;
+//------------------------------------------------------------------------------
+  if((AvansSpec.Direct = 2) AND (AvansSpec.cCalPlan  = 0)
+  OR (AvansSpec.Direct = 1) AND (AvansSpec.cCalPlan <> 0), '2->1', '1->2')
+                #3''
+                : [4], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec.sVal
+                #3'Вал.'
+                ('Валюта документа')
+                : [5], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec.Summa
+                #3'Сумма'
+                ('Общая сумма')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec.SumForOpl
+                #3'Оплатить'
+                ('Сумма для оплаты')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], NoProtect;
+//------------------------------------------------------------------------------
+  AvansSpec.dOpl
+                #3'Дата платежа'
+                ('Дата платежа')
+                : NoProtect;
+//------------------------------------------------------------------------------
+  AvansSpec.SumPlat
+                #3'Выписано'#13#3'платежей'
+                ('Общая сумма выписанных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec.SumOpl
+                #3'Оплачено'
+                ('Общая сумма оплаченных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+  AvansSpec.Summa-AvansSpec.SumPlat
+                #3'Остаток'
+                ('Общая сумма несформированных платежей')
+                : [10.2, '\2p[|-]3666`666`666`666.88'], Skip;
+//------------------------------------------------------------------------------
+end;
+
+//******************************************************************************
+
+Screen scrMarkeredPlatInfo (, , sci1EnEsc);
+  Show at (, 16, , )
+
+Fields
+  Val_PlPor: NoProtect;
+  PlPor_Curse (, , sci13Esc):
+    [LIST 'на дату курса договора',
+          'на дату документа',
+          'на дату оплаты'], Protect;
+
+Buttons
+  cmValue1, Default, , 'Сформировать платежи', , sci1Esc;
+<<
+`Формировать`             `Для ВАЛ-НДЕ договоров по курсу: `
+  (.) в валюте документа`  .@@@@@@@@@@@@@@@@@@@@@@@
+  (.) в НДЕ             `  <.Сформировать платежи.>
+  (.) по запросу        `
+>>
+end;
+
+HandleEvent
+
+cmUpdateRecord:
+  {
+    update current AvansSpec;
+    if (Picked = '')
+      Exit;
+
+    if (AvansSpec.SumForOpl > 0.0)
+      {
+        if (insert MarkeredDocs
+              set MarkeredDocs.cRec   := AvansSpec.NRec,
+                  MarkeredDocs.cOwner := AvansSpec.cOwner) = tsOk {};
+      }
+    else
+      delete MarkeredDocs where (( AvansSpec.NRec == MarkeredDocs.cRec ));
+
+    RescanPanel(#AvansDocs);
+    SetMyTitle;
+  }
+
+cmMarkUnMark:
+  {
+    if NOT UpdateTable
+      Exit;
+
+    if SearchMarker(Marker, AvansSpec.NRec, Ind)
+      OneUnMarkPick
+    else
+      OneMarkPick;
+
+    RedrawCurrentAndGo(GetCurrentFormat, TRUE);
+
+    RescanPanel(#AvansDocs);
+    RescanPanel(#AvansSpec);
+    SetMyTitle;
+  }
+
+cmSelectAll:
+  {
+    if NOT UpdateTable
+      Exit;
+
+    PushPos(#AvansDocs);
+    PushPos(#AvansSpec);
+
+    _LOOP AvansSpec
+      OneMarkPick;
+
+    PopPos(#AvansSpec);
+    PopPos(#AvansDocs);
+
+    RescanPanel(#AvansSpec);
+    RescanPanel(#AvansDocs);
+
+    SetMyTitle;
+  }
+
+cmUnselectAll:
+  {
+    ClearMarker(Marker);
+    delete all MarkeredDocs;
+    RescanPanel(#AvansSpec);
+    RescanPanel(#AvansDocs);
+    SetMyTitle;
+  }
+
+end;
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+  {
+    if (not GetVipRef(iSHoz, 'SHmanager'))
+      {
+        Message(''#10#13'Ошибка! Не удалось загрузить интерфейс для работы с журналом хоз. операций!', Error);
+        Abort;
+        Exit;
+      }
+
+    Marker := 0;
+    SetMyTitle;
+    if (RunInterface('BegFil', word(5), double(0.0), word(0), DskParams) = cmCancel)
+      {
+        Abort;
+        Exit;
+      }
+
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    BuildList;
+    SetColumnSorting(brMain, #AvansDocs.dDoc, 1);
+    SetOrder(tiOrd_dDoc);
+    CurOrdBnd := tiOrd_dDoc;
+    if (GetLast AvansDocs <> tsOk)
+      {
+        Message('Нет документов для формирования.', Information);
+        Abort;
+      }
+
+    Marker := InitMarker('$$$AnansMaker$$$', 8, 100, 10);
+  }
+
+cmDone:
+  if (Marker <> 0)
+    DoneMarker(Marker, '');
+
+cmHotKeys:
+  PutHotCommand(RunMenu('PrDoc_HotKeys'))
+
+cmFilterSave:
+  {
+    if (RunInterface('BegFil', word(5), double(0.0), word(0), DskParams) = cmCancel)
+      Exit;
+
+    SetFormat(brMain);
+    SetFormat(brPlat);
+    RereadRecord(#AvansSpec);
+    RereadRecord(#MarkeredDocs);
+    ClearMarker(Marker);
+    BuildList;
+    if (GetLast AvansDocs <> tsOk)
+      {
+        Message('Нет документов для формирования.', Information);
+        Abort;
+      }
+
+    SetMyTitle;
+    RereadRecord(#AvansDocs);
+    RereadRecord(#AvansSpec);
+  }
+
+cmCheckField:
+  case CurField of
+    #AvansSpec.SumForOpl:
+      {
+        var NeedPlat: double;
+        NeedPlat := AvansSpec.Summa - AvansSpec.SumPlat;
+        if (
+            (AvansSpec.SumForOpl < 0.0) or
+            (
+             (AvansSpec.SumForOpl > NeedPlat) AND (NeedPlat > 0.0)
+            )
+           )
+        {
+          Message('Сумма платежа должна быть положительной'#13#10+
+                  'и не превышать остатка по документу!', Warning);
+          Abort;
+        }
+      }
+    #AvansSpec.dOpl:
+      {
+        if (longint(AvansSpec.dOpl) = 0)
+        {
+          Message('Необходимо указать дату оплаты!', Warning);
+          Abort;
+          Exit;
+        }
+        if ((AvansSpec.dOpl > AvansSpec.dMaxOpl) or
+            (AvansSpec.dOpl < AvansSpec.dFrom)
+           )
+        {
+          Message('Дата оплаты должна попадать в период: '#13+
+                  DateToStr(AvansSpec.dFrom  , 'с DD/MM/YYYY')+
+                  DateToStr(AvansSpec.dMaxOpl, ' по DD/MM/YYYY'), Warning);
+          Abort;
+        }
+      }
+  end;
+
+cmValue1:
+  {
+    if (RecordExists MarkeredDocs <> tsOk)
+      Message('Нет документов для формирования!', Information);
+    else
+      if (Message('Сформировать платежные документы?', YesNo) = cmYes)
+        {
+          MakePlatDocs;
+          delete all MarkeredDocs;
+          RereadRecord(#MarkeredDocs);
+          RecalcSums;
+          SetMyTitle;
+        }
+  }
+
+cmChangeTabbedSheetFormat:
+  {
+    SetFormat(if (Target = brMain, brPlat, scrMarkeredPlatInfo));
+    RereadRecord(#AvansSpec);
+    RereadRecord(#MarkeredDocs);
+  }
+
+cmColumnClicked:
+  {
+    var ColSort: longint;
+    ColSort := GetColumnSorting(brMain, Target);
+
+    case Target of
+      #AvansDocs.dDoc,
+      #AvansDocs.NoDoc ,
+      #AvansDocs.NoDoc_Ext:
+        {
+          SetTableBackOrderIn(tnAvansDocs, (ColSort = -1));
+          SetColumnSorting(brMain, Target, if(ColSort <> -1, -1, 1));
+        }
+    end;
+
+    case Target of
+      #AvansDocs.NoDoc:
+        {
+          SetOrder(tiOrd_NoDoc);
+          CurOrdBnd := tiOrd_NoDoc;
+        }
+      #AvansDocs.NoDoc_Ext:
+        {
+          SetOrder(tiOrd_NoDoc_Ext);
+          CurOrdBnd := tiOrd_NoDoc_Ext;
+        }
+      #AvansDocs.dDoc:
+        {
+          SetTableBackOrderIn(tnAvansDocs, (ColSort = 1));
+          SetColumnSorting(brMain, Target, if(ColSort <> 1, 1, -1));
+          SetOrder(tiOrd_dDoc);
+          CurOrdBnd := tiOrd_dDoc;
+        }
+    end;
+
+    RescanPanel(#AvansDocs);
+  }
+end;
+
+End.
+
+//******************************************************************************

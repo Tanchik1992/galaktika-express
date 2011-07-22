@@ -1,0 +1,78 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// удаление TTNDoc
+//******************************************************************************
+
+#ifndef _TTNDOC_VPP
+#define _TTNDOC_VPP
+
+#ifNdef __SDfuns_vip__
+#error Вместо #inlude ttndoc.vpp следует использовать методы из SDfuns.vih
+#end
+
+#include CalcFuns.var
+
+// дополнительная логическая таблица
+create view loDelTTNDoc
+var
+  curTable    : word ;
+  pDoc        : comp ;
+from
+   SpSopr,
+   SpStep,
+   TTNDoc                             (Normal)
+where
+  ((
+      curTable            ==   TTNDoc.wTable
+  and pDoc                ==   TTNDoc.cDoc
+  ))
+;
+// удаление записи одной TTNDoc
+function TTNDoc_Delete (_Table:word;_NRec:comp) : word ;
+{
+  loDelTTNDoc.curTable := _Table;
+  loDelTTNDoc.pDoc     := _NRec;
+  TTNDoc_Delete := loDelTTNDoc.delete safe TTNDoc;
+  //удаление внешних атрибутов
+  RunInterface('TTNAttrAction',_Table,_NRec,0,0);
+}
+
+//-- копирование TTNDoc для другого документа
+function TTNDoc_Copy(_TableSour:word;_NRecSour:comp;
+                     _TableTarg:word;_NRectarg:comp) : word;
+var ret : word;
+{
+  TTNDoc_Copy := 0;
+  ret := loDelTTNDoc.GetFirst TTNDoc where ((_TableTarg == TTNDoc.wTable and
+                                             _NRecTarg  == TTNDoc.cDoc));
+  if (ret = tsOk)
+    {
+      TTNDoc_Delete(_TableTarg,_NRecTarg);
+    }
+  ret := loDelTTNDoc.GetFirst TTNDoc where ((_TableSour == TTNDoc.wTable and
+                                             _NRecSour  == TTNDoc.cDoc));
+  if (ret = tsOk)
+    {
+      loDelTTNDoc.TTNDoc.wTable := _TableTarg ;
+      loDelTTNDoc.TTNDoc.cDoc   := _NRecTarg ;
+      loDelTTNDoc.TTNDoc.NRec   := 0;
+      ret := loDelTTNDoc.insert current TTNDoc;
+      TTNDoc_Copy := ret;
+    }
+  //копирование внешних атрибутов
+  RunInterface('TTNAttrAction',_TableSour,_NRecSour,_TableTarg,_NRecTarg);
+//--  я сюда вставил ф-ию копирования фактических параметров расч услуги
+//-- что бы самому не лазить по всем исходникам, т.к. эта функция вызывается
+//-- там же где ф-ия для обработки TTNDoc
+  if ((_TableSour = coSpSopr) or (_TableSour = coSpStep))
+    {
+      case (_TableTarg) of
+        coSpSopr,
+        coSpStep :
+          oCalcFuns.ClcUsl_CopyFactPar(_NRecSour,_TableSour,_NRecTarg,_TableTarg);
+      end;
+    }
+}
+
+#end //_TTNDOC_VPP

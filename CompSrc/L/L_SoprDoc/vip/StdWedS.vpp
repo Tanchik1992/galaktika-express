@@ -1,0 +1,673 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Стандартная обработка событий окон для накладных
+//******************************************************************************
+
+#ifndef _STDWEDS_VPP
+#define _STDWEDS_VPP
+
+! -Key----------- <Ctrl><Enter> --------------------
+cmAttrib :
+ if (CurTable = #KatSopr) PutCommand(cmExtendetInfo)
+ else if (CurTable = #SpSopr) {
+  var CalcFlag : boolean;
+  CalcFlag := CurField = SpSopr.KolFact;
+
+#ifdef _SOPINMOV_
+  if (CurTable = #SpSopr)
+    {
+      oLinkMTR2Spec.SetObjParam(word(coSpSopr), SpSopr.nRec, if(not OtkatToOldState(false, word(0)), 1, 0));
+      oLinkMTR2Spec.SelFormat(IsValid(#SpSopr));
+    }
+  else
+    if (CurTable = #SpSopUsl)
+      {
+        oLinkMTR2Spec.SetObjParam(word(coSpSopr), SpSopUsl.nRec, if(not OtkatToOldState(false, word(0)), 1, 0));
+        oLinkMTR2Spec.SelFormat(IsValid(#SpSopUsl));
+      }
+#end
+
+  RunWindow(SpecifInfo);
+
+  if (calcflag) {
+   if (SpSopr.Kol = 0)
+    {
+      set SpSopr.Kol := SpSopr.KolFact;
+    }
+   if (SpSopr.KolFact = 0)
+    {
+      SpSopr.ProcUb := 0; set SpSopr.KolOpl := SpSopr.KolFact;
+    }
+   else set SpSopr.KolOpl := SpSopr.KolFact * (1 - SpSopr.ProcUb / 100);
+  }
+}
+! -Key------------- <Alt><M> -------------------------
+cmManagerId :
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+  SetDescriptor;
+}
+! -Key------------ <Ctrl><F3> ------------------------
+#ifndef NAK506 // Для спецификации накладных в модуле "Производство" Ctrl+F3 - дублирование позиции
+#ifndef _NAK502_
+#ifndef _NAK503_
+#ifndef _NAK504_
+cmRestoreDoc :
+#ifdef _SOPRD_201_101_VIP
+  if (CurTable = #SpSopr) and (CanEditDocument)
+  {
+    Pick_F3_CtrlF3(cmRestoreDoc);
+  }
+#else
+  if (CurTable = #SpSopr) and CanEditDocument
+    if (wGetTune('Pick.SelKatMc') <> 1)
+    {
+    if (((KatSopr.VidSopr = 101) or (KatSopr.VidSopr = 108)) and (KatSopr.cStepDoc = 0))
+      { // Александр Крахотко  1-09-98  17:50:52
+        //  Message(''#3'Выбор из справочника МЦ - не предусмотрен,'#13#3 + 'Нажимайте <F3>',CancelButton);
+        // Сидоров Володя - проверяй всегда где присоединяется данный исходник
+        // перед исправлениями
+        // Slavko 980928 - для этого случая в SOPRPRIH.VIP навешаны действия на обработчик  повторно
+        //GetMCUSLPrl
+      }
+    else
+      if ((SpSopr.PrMC = 1) and (wGetTune('Pick.CTRLF3') = 1))
+        {
+        #INCLUDE gteks.vpp
+        }
+      else
+        GetMCUSLKat;
+    }
+  else message(''#3'Выбор из каталога МЦ(Услуг) недоступен!', Information);
+#end //_SOPRD_201_101_VIP
+#end
+#end
+#end
+#end
+! -Key------------ <Ctrl><P> -------------------------
+cmPrintDoc  :
+  {
+    UpDateTable;
+    if (curTable = #SpSopr)
+     {
+
+      SelectPanel(#KatSopr);
+     }
+    PrintDocument;
+    RescanPanel(#SpSopr);
+  }
+! -Key------------- <Auto> --------------------------
+cmOpenSearch : Case CurField of
+ #Prv:
+   { var NoRnd : boolean;
+     NoRnd := false;
+     case (TypeSopr) of
+       110, 114, 101, 108, 111, 206, 1411:
+         {
+           if (wGetTune('Round.Buy') = 0)
+             NoRnd := true;
+         }
+       1411, 1421 :
+         {
+           if (wGetTune('Round.Wood') = 0)
+             NoRnd := true;
+         }
+       102, 202 :
+         {
+           if (wGetTune('Round.OtpCons') = 0)
+             NoRnd := true;
+         }
+       103, 203 :
+         {
+           if (wGetTune('Round.PrCons') = 0)
+             NoRnd := true;
+         }
+       106, 201, 204, 205, 211, 510, 513, 521, 522, 523, 550, 553, 554, 557:
+         {
+           if (wGetTune('Round.Sell') = 0)
+             NoRnd := true;
+         }
+     end;
+     if (NoRnd)
+       {
+         var GSumTov: double;
+         GSumTov := if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice);
+         if (RunDialog(GetSumTov,GSumTov) <> cmCancel)
+           {
+             if (KatSopr.cVal = 0)
+               { set SpSopr.Price := FSRoundRub(GSumTov);
+                 set SpSopr.rPrice := SpSopr.Price;
+                 CheckPrice(#SpSopr.Price);
+               }
+             else
+               { set SpSopr.VPrice := FSRoundVal(GSumTov);
+                 set SpSopr.rVPrice:=SpSopr.VPrice;
+                 CheckPrice(#SpSopr.VPrice);
+               }
+             ProcessCommand(cmCheckSumma);
+           }
+         Stop;
+       }
+     else
+       {
+         RunWindow(SpecifInfo);
+         SelectFieldinFormat(scrSpecifInfo,if(KatSopr.cVal = 0,#SpSopr.rPrice,#SpSopr.rVPrice));
+         if (KatSopr.VidSopr=word(501))
+           SelectFieldinFormat(scrSpecifInfo,if(KatSopr.cVal = 0,#SpSopr.Price,#SpSopr.VPrice));
+         Stop;
+       }
+     //SelectField(#SumPrice); - зачем эта фигня??
+   }
+ #SumPrice:
+   if (CanEditDocument)
+    { var GSumTov: double;
+      if wGetTune('Doc.IzmCenaKol') > 0
+        {
+         GSumTov := if (KatSopr.cVal = 0, SpSopr.Price, SpSopr.VPrice) * SpSopr.KolFact;
+         if (RunDialog(GetSumTov,GSumTov) <> cmCancel)
+           {
+            if wGetTune('Doc.IzmCenaKol') = 1
+               {
+                if (KatSopr.cVal <> 0)
+                   { if (SpSopr.VPrice <> 0)
+                       {
+                        set SpSopr.KolFact := GSumTov / SpSopr.VPrice;
+                       }
+                     else
+                       {
+                        if (SpSopr.KolFact <> 0)
+                          {
+                           if (Message(''#3' Изменить цену ?',YesNo) = cmYes )
+                              { set SpSopr.VPrice := FSRoundVal(GSumTov / SpSopr.KolFact);
+                                set SpSopr.rVPrice:=SpSopr.VPrice;
+                                CheckPrice(#SpSopr.VPrice); }
+                          }
+                       }
+                   }
+                else
+                   { if (SpSopr.Price <> 0)
+                       {
+                        set SpSopr.KolFact := GSumTov / SpSopr.Price;
+                       }
+                     else
+                       {
+                        if (SpSopr.KolFact <> 0)
+                          {
+                           if (Message(''#3' Изменить цену ?',YesNo) = cmYes )
+                              { set SpSopr.Price := FSRoundRub(GSumTov / SpSopr.KolFact);
+                                set SpSopr.rPrice := SpSopr.Price;
+                                CheckPrice(#SpSopr.Price);  }
+                          }
+                       }
+                   }
+               }
+            else  //Изменить цену по настр. пользователя
+               {
+                if (KatSopr.cVal <> 0)
+                   { if (SpSopr.KolFact <> 0)
+                       {
+                        set SpSopr.VPrice := FSRoundVal(GSumTov / SpSopr.KolFact);
+                        set SpSopr.rVPrice:=SpSopr.VPrice;
+                        CheckPrice(#SpSopr.VPrice);
+                       }
+                     else
+                       {
+                        if (SpSopr.VPrice <> 0)
+                          {
+                           if (Message(''#3' Изменить количество ?',YesNo) = cmYes )
+                            {
+                               set SpSopr.KolFact := GSumTov / SpSopr.VPrice;
+                            }
+                          }
+                       }
+                   }
+                else
+                   { if (SpSopr.KolFact <> 0)
+                       {
+                        set SpSopr.Price := FSRoundVal(GSumTov / SpSopr.KolFact);
+                        set SpSopr.rPrice := SpSopr.Price;
+                        CheckPrice(#SpSopr.Price);
+                       }
+                     else
+                       {
+                        if (SpSopr.Price <> 0)
+                          {
+                           if (Message(''#3' Изменить количество ?',YesNo) = cmYes )
+                            {
+                               set SpSopr.KolFact := GSumTov / SpSopr.Price;
+                            }
+                          }
+                       }
+                   }
+               }
+           }
+         ProcessCommand(cmCheckSumma);
+        }
+      else  //Запретить изменить сумму
+        {
+         Message(''#3'  В настройках пользователя Вам запрещено менять сумму.',Information);
+        }
+    }
+   else PutCommand(cmPick);
+
+end; // case CurField
+! -Key------------ <Alt><F> --------------------------
+cmNal :
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+  if curtable=#SpSopr
+    RunInterface('GetSaldoMC',SkPr, KatSopr.dSopr, SpSopr.cMCUSL, 0,0,0)
+  else
+    RunInterface('GetSaldoMC',SkPr, KatSopr.dSopr, 0, KatSopr.cPodrFrom,0,0);
+}
+
+! -Key------------ <Alt><P> --------------------------
+cmPlansNo : ViewSprTov;
+! -Key------------ <Alt><C> --------------------------
+cmPickClass:
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+  if (UpdateTable)
+    case CurTable of
+      #KatSopr:
+       if (KatSopr.Nrec <> 0)
+          {
+            SaveMyDsk((not CanEditDocumentNotMessage),'_CanEditClassifier_');
+            RunInterface(ExClassifier, word(coKatSopr), KatSopr.Nrec);
+          }
+      #SpSopr :
+        if (SpSopr.Nrec <> 0)
+          {
+            SaveMyDsk((not CanEditDocumentNotMessage),'_CanEditClassifier_');
+            RunInterface(ExClassifier, word(coSpSopr), SpSopr.Nrec);
+          }
+    end;
+}
+! -Key------------ <Alt><A> ----------------------------
+cmPickAttr:
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+  if (UpdateTable)
+    case CurTable of
+      #KatSopr:
+       if (KatSopr.Nrec <> 0)
+          {
+            SaveMyDsk((not CanEditDocumentNotMessage),'_CanEditAttribute_');
+            RunInterface(Attribute, word(coKatSopr), KatSopr.Nrec);
+            ReReadRecord(#KatSopr);
+          }
+      #SpSopr :
+        if (SpSopr.nrec <> 0)
+          {
+            SaveMyDsk((not CanEditDocumentNotMessage),'_CanEditAttribute_');
+            RunInterface(Attribute, word(coSpSopr), SpSopr.Nrec);
+            ReScanPanel(#SpSopr);
+          }
+      end;
+}
+
+cmExClassRepl:
+{
+  if (UpdateTable)
+    case CurTable of
+      #KatSopr:
+        if (KatSopr.Nrec <> 0)
+          {
+            RunInterface('ExClassRepl', word(CurTableCode), word(0), KatSopr.nRec, MarkerNZ);
+          }
+    end;
+}
+! -Key------------ <Auto> ---------------------------
+cmDone : if (CurTable = #SpSopr) { SelectPanel(#KatSopr); SelectField(#KatSopr.nSopr) }
+! -Key------------ <Ctrl><F2> ------------------------
+cmSaveDoc :
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+
+  if vo_viCheckTORO_Doc.fncCheckTORO_DOC(KatSopr.VidSopr, KatSopr.NRec, TRUE) = word(0)
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+var OldcMCUsl    : comp;   OldcMCUsl :=  SpSopr.cMCUsl;
+var OldcOtpEd    : comp;   OldcOtpEd :=  SpSopr.cOtpEd;
+var OldcPodrFrom : comp;   OldcPodrFrom := KatSopr.cPodrFrom;
+var Oldp         : comp;   Oldp         := SpSopr.cParty;
+Case CurTable of
+  #SpSopr :
+   if (SpSopr.PrMC = 1)
+     {
+       var MyPodr : comp;
+       var MyMol : comp;
+       case (KatSopr.VidSopr) of
+         101, 108, 1411:
+           {
+             if (CanEditDocument)
+                if (RunInterface(GTekOst, SpSopr.cMCUsl, SpSopr.cOtpEd, Comp(0), Comp(0),Comp(0),SpSopr.cParty) <> cmCancel)
+                   {
+                   //if (Oldp <> SpSopr.cParty)
+                    ProcessCommand(cmSetKol);
+                   }
+           }
+         604:
+           {
+             if (CanEditDocument)
+                if (RunInterface(GTekOst, SpSopr.cMCUsl, SpSopr.cOtpEd, KatSopr.cPodrTo, Comp(0),Comp(0),SpSopr.cParty) <> cmCancel)
+                   {
+                    //if (Oldp <> SpSopr.cParty)
+                    ProcessCommand(cmSetKol);
+                   };
+           }
+         201, 1421:{ if (CanEditDocument)  ProcessCommand(cmSetKol);};
+
+         202:
+           {
+             if (CanEditDocument)
+                if (RunInterface(GTekOst, SpSopr.cMCUsl, SpSopr.cOtpEd, KatSopr.cPodrFrom, MyPodr,MyMol,SpSopr.cParty) <> cmCancel)
+                   {
+                    //if (Oldp <> SpSopr.cParty)
+                    ProcessCommand(cmSetKol);
+                    if (KatSopr.cPodrFrom = 0)
+                       {
+                        set KatSopr.cPodrFrom := MyPodr;
+                        set KatSopr.cMolFrom  := MyMol;
+                        Update_Current_KatSopr;
+                       }
+                    };
+           }
+         551: { if (CanEditDocument)  ProcessCommand(cmSetKol);};
+
+         552:
+           {
+             // компилим только для нужного документа
+             #ifdef _OutRemont_
+
+             if (wGetTune('McUsl.AverageCena') = 0)
+               SaveMyDsk('ok', 'ForAveragePriceFromWorkInterface'); // передаем в GTekOst
+
+             // для ремонтов
+             SaveMyDsk(2,'GTekOst_fSkPr');
+
+             if (RunInterface(GTekOst, SpSopr.cMCUsl, SpSopr.cOtpEd, Comp(0), Comp(0), Comp(0), SpSopr.cParty) <> cmCancel)
+             {
+               Update Current SpSopr;
+             }
+
+             SaveMyDsk('cancel', 'ForAveragePriceFromWorkInterface'); // сбрасываем параметр для GTekOst
+
+             // пересчет сумм по документу
+             if (MakeAveragePrice)
+             {
+               CheckSumma(false);
+             }
+             /*
+             if (CanEditDocument)
+              if ( RunInterface('GetPartyRem'
+                         , SpSopr.cMCUsl
+                         , SpSopr.cOtpEd
+                         , KatSopr.cPodrFrom
+                         , KatSopr.cMolFrom
+                         , skPr
+                         , SpSopr.cParty
+                         , SpSopr.KolFact
+                         , SpSopr.Price
+                         ) <> cmCancel)
+              {
+                Update_Current_KatSopr;
+
+                Update Current KatSopr;
+
+                Update Current SpSopr;
+              }
+             */
+
+             #endif // _OutRemont_
+           }
+
+         else
+           {
+             //if (UKS_Used)
+             //  {
+             //    #include GetPartyObj.vpp
+             //  }
+             //else
+               {
+                if (RunInterface(GTekOst, OldcMCUsl, OldcOtpEd, OldcPodrFrom, Comp(0),Comp(0),Oldp) <> cmCancel)
+                {
+                 //if (Oldp <> SpSopr.cParty)
+                 if (CanEditDocument)
+                    {
+                     set SpSopr.cMCUsl := OldcMCUsl;
+                     set SpSopr.cOtpEd := OldcOtpEd;
+                     set KatSopr.cPodrFrom := OldcPodrFrom;
+                     set SpSopr.cParty := Oldp;
+                     ProcessCommand(cmSetKol);
+
+                     #ifdef SOPINMOV_VIP
+                     if boGetTune('DOC.AVTOCALCSRCENA')
+                      {
+                        UpDateTable;
+                        ProcessCommand(cmDocBas);
+                      }
+                     #end
+
+                     var vcKatStroynRec, vcAddSumTunenRec : comp;
+                     UpDateTable;
+                     if (UKS_Used)
+                     {
+                       if (not ReadMyDsk(vcKatStroynRec, 'GTekOst_KatStroy', false))
+                         vcKatStroynRec := 0;
+                       update current SpSopr;
+                       oMTRFun.SaveKitKauForKit(vcKatStroynRec);
+                       oMTRFun.InsSpecMTR(coSpSopr, SpSopr.nRec);
+                       ReReadRecord(#SpSopr);
+                     }
+                    }
+                 else Message(''#3'Вам запрещено редактирование данного документа...',CancelButton);
+                }
+               }
+           }
+       end;
+     #include sopr_oil.vpp
+   }
+end; // case Curtable
+}
+! -Key------------ <Ctrl><Gr(+)> ---------------------
+cmShowAll :
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+  if ((CurTable=#SpSopr) and (SpSopr.cMCUSL <> 0) and (SpSopr.PrMC = 1))
+    {
+      case SpSopr.VidSopr of
+      101, 102, 103, 108, 1411 :
+          {
+            Runinterface(GSaldDat, KatSopr.dSopr,
+              word(0),//skPr
+              SpSopr.cMCUSL,
+              (if (SoprOrdB.cPodr = comp(0), -1, SoprOrdB.cPodr)),
+              (if (SoprOrdB.cMOL = comp(0), -1, SoprOrdB.cMOL)),
+              SpSopr.cParty, SoprOrdB.cOtpEd);
+          }
+      604: RunInterface(GSaldDat, KatSopr.dOpr,
+             word(0),//skPr
+             SpSopr.cMCUSL,
+             KatSopr.cPodrTo, KatSopr.cMOLTo, SpSopr.cParty, SpSopr.cOtpEd);
+      else
+          {
+            Runinterface(GSaldDat, KatSopr.dSopr,
+              skPr,
+              SpSopr.cMCUSL,
+              KatSopr.cPodrFrom, KatSopr.cMOLFrom, SpSopr.cParty, SpSopr.cOtpEd);
+          }
+      end; // case
+    }
+}
+
+! -Key------------- <Alt><S> -------------------------
+cmAccording :
+{
+#ifdef _InRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+#ifdef _OutRemont_
+  if (fncNastrUpdate(TRUE))
+  {
+    Abort;
+    Exit;
+  }
+#end
+
+  if (TMCUSL = 1) if (Curtable = #KatSopr)
+   if (UpdateTable)
+     {
+       RunInterface(ShowOrderForSopr,KatSopr.NRec);
+       ReReadRecord(#KatSopr);
+     }
+}
+! -Key------------- <Auto> --------------------------
+!cmCancel : if ((CurTable = #KatSopr) and (isNew)) AbortNewDocument;
+cmAbortInsert : if ((CurTable = #KatSopr) and (isNew)) AbortNewDocument;
+!-Key-------------- <Alt><B> --------------------------
+cmFilterSave : if (CurTable = #KatSopr) SetSoprFlt;
+!-Key-------------- <None> --------------------------
+cmSelectPar : if (CanEditDocument) AllPickParty;
+
+#end //_STDWEDS_VPP

@@ -1,0 +1,459 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+Create view cvDP
+var
+//------------------------------------------------------------------------------
+  varNomEnter
+, IsOnPKP
+                : boolean;
+//------------------------------------------------------------------------------
+  pDirect
+, myTiDkGal
+, myTiDkUser
+                : word;
+//------------------------------------------------------------------------------
+  pSumma
+                : double;
+//------------------------------------------------------------------------------
+  varEnterCm
+                : longint;
+//------------------------------------------------------------------------------
+  varDate
+                : Date;
+//------------------------------------------------------------------------------
+  myCash
+, mySpCash
+                : comp;
+//------------------------------------------------------------------------------
+
+from
+  Dogovor
+, CalPlan
+, SpDocs
+, PlPor
+, BaseFin
+, SoprHoz
+, SpDocNal
+, KlVal
+, CashBank
+, SpGrSch
+, KatNalog
+, IerDog;
+
+//******************************************************************************
+
+#include Serv_Str.vpp
+#include direct.vpp
+
+//******************************************************************************
+
+#include KontrBal.var
+
+var iSHoz: ObjSHmanager; // интерфейс для работы с SoprHoz
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_ReCalcSum(  SumPlPor        : double;
+                                NDS             : double;
+                                NameNalog       : string;
+                            var PlPor_cVal      : comp;
+                            var PlPor_SumPlat   : double;
+                            var PlPor_SumPlatV  : double;
+                            var PlPor_NamePl3   : String
+                             );
+{
+  var SumR: double;  SumR := 0;
+  var SumV: double;  SumV := 0;
+  Var myDate: Date;  myDate := cvDP.PlPor.DatVip;
+
+  PlPor_cVal     := 0;
+  PlPor_SumPlat  := 0;
+  PlPor_SumPlatV := 0;
+
+  // TipMoney = 1 (рублевый) 2 (валютно-рублевый) 3 (валютный)
+  case cvDP.Dogovor.TipMoney of
+    1:
+      {
+        PlPor_SumPlat := SumPlPor;
+        if ((PlPor_NamePl3 = '') AND (NDS > 0))
+          {
+            SumR := (PlPor_SumPlat / if(cvDP.IsOnPKP, cvDP.CalPlan.Summa, cvDP.Dogovor.Summa)) * NDS;
+            PlPor_NamePl3 := 'Сумма ' + NameNalog + GetStrSumma(TRUE, SumR) + ' ' + sGetTune('NDE.SimvRub');
+          };
+      }
+    else
+      {
+        if (cvDP.Dogovor.TipMoney = 2) AND NOT (cvDP.IsOnPKP)
+          {
+            case PlPor_Curse of
+            //-----------------
+              0:  // По курсу
+                if (LongInt(cvDP.Dogovor.dValCurse) <> 0)
+                  myDate := cvDP.Dogovor.dValCurse;
+            //-----------------
+              1: // По курсу на дату документа
+                myDate := cvDP.Dogovor.dDoc;
+            //-----------------
+              2: // По курсу на дату оплаты
+                myDate := if (cvDP.varDate = Date(0, 0, 0), cvDP.Dogovor.dDoc, cvDP.varDate);
+            end;
+
+            PlPor_SumPlat := oValFunc.CalcRubValMoney(TRUE, cvDP.Dogovor.cVal, myDate, 0.0, cvDP.Dogovor.SummaSpec, SumPlPor);
+          }
+        else
+          {
+            oValFunc.CheckSumVal(if(cvDP.IsOnPKP, cvDP.CalPlan.cVal, cvDP.Dogovor.cVal), myDate, PlPor_SumPlat, SumPlPor);
+            PlPor_cVal     := if(cvDP.IsOnPKP, cvDP.CalPlan.cVal, cvDP.Dogovor.cVal);
+            PlPor_SumPlatV := SumPlPor;
+          }
+
+        if ((PlPor_NamePl3 = '') AND (NDS > 0))
+          {
+            SumR := 0;
+            SumV := (SumPlPor / if(cvDP.IsOnPKP, cvDP.CalPlan.Summa, cvDP.Dogovor.Summa)) * NDS;
+            oValFunc.CheckSumVal(if(cvDP.IsOnPKP, cvDP.CalPlan.cVal, cvDP.Dogovor.cVal), myDate, SumR, SumV);
+            PlPor_NamePl3 := 'Сумма ' + NameNalog + GetStrSumma(TRUE, SumR) + ' ' +
+                             sGetTune('NDE.SimvRub');
+          }
+      }
+  end;
+}
+
+//******************************************************************************
+
+Procedure _Sh_PlPor_Form_Plat;
+var
+  varcNalogNDS
+, varPlPor_cVal      : comp;
+
+  varNameNalog       : string;
+
+  varDogovor_NDS
+, varPlPor_SumPlat
+, varPlPor_SumPlatV  : double;
+
+{
+  cvDP.ClearBuffer(cvDP.tnPlPor);
+
+  case cvDP.pDirect of
+    1: // закупка
+      {
+        cvDP.PlPor.TiDK      := word(32);
+        cvDP.PlPor.cPlat     := cvDP.Dogovor.cOrg;
+        cvDP.PlPor.cBankPlat := cvDP.Dogovor.cBankPlat;
+        cvDP.PlPor.cPol      := cvDP.Dogovor.cMyOrg;
+        cvDP.PlPor.cBankPol  := cvDP.Dogovor.cBankPol;
+      }
+    2: // продажа
+      {
+        case Val_PlPor of
+        //---------------
+          0: {    // формировать в валюте документа
+               if cvDP.IsOnPKP
+                 cvDP.PlPor.TiDK := if(cvDP.CalPlan.cVal = 0, word(1), word(31))
+               else
+                 if (cvDP.Dogovor.TipMoney = 3) AND (cvDP.Dogovor.cVal <> 0)
+                   cvDP.PlPor.TiDK := word(31)
+                 else
+                   cvDP.PlPor.TiDK := word(1);
+             }
+        //---------------
+          1: {   //  в НДЕ
+               cvDP.PlPor.TiDK := word(1);
+             }
+        //---------------
+          2: {   // по запросу
+               if cvDP.IsOnPKP
+                 {
+                   if (cvDP.CalPlan.cVal = 0)
+                     cvDP.PlPor.TiDK := word(1);
+                   else
+                     if (Message('Для ПКП № '+cvDP.CalPlan.NoDoc+
+                                     ' от '+DateToStr(cvDP.CalPlan.dInput, 'DD/MM/YYYY')+''#13#3+
+                                     ' по '+if(cvDP.Dogovor.cDogovor = 0, 'договору', 'соглашению')+
+                                     ' № '+cvDP.Dogovor.NoDoc+
+                                     ' от '+DateToStr(cvDP.Dogovor.dDoc, 'DD/MM/YYYY')+''#13#3+
+                                     'сформировать валютный платеж?', YesNo) = cmYes)
+                       cvDP.PlPor.TiDK := word(31);
+                     else
+                       cvDP.PlPor.TiDK := word(1);
+                 }
+               else
+                 if (cvDP.Dogovor.TipMoney <> 3) OR (cvDP.Dogovor.cVal = 0)
+                   cvDP.PlPor.TiDK := word(1);
+                 else
+                   if (Message('Для '+
+                                   if(cvDP.Dogovor.cDogovor = 0, 'договора', 'соглашения')+
+                                   ' № '+cvDP.Dogovor.NoDoc+
+                                   ' от '+DateToStr(cvDP.Dogovor.dDoc, 'DD/MM/YYYY')+''#13#3+
+                                   'сформировать валютный платеж?', YesNo) = cmYes)
+                     cvDP.PlPor.TiDK := word(31)
+                   else
+                     cvDP.PlPor.TiDK := word(1);
+             }
+        //---------------
+        end
+
+        cvDP.PlPor.cPlat     := cvDP.Dogovor.cMyOrg;
+        cvDP.PlPor.cBankPlat := cvDP.Dogovor.cBankPlat;
+        cvDP.PlPor.cPol      := cvDP.Dogovor.cOrg;
+        cvDP.PlPor.cBankPol  := cvDP.Dogovor.cBankPol;
+      }
+  end; //case
+
+  if (cvDP.varNomEnter = FALSE)
+    {  //только при первом проходе
+      cvDP.myTiDkGal  := cvDP.PlPor.TiDK;
+      cvDP.myTiDkUser := cvDP.myTiDkGal;
+      cvDP.myCash     := 0;
+      cvDP.mySpCash   := 0;
+    }
+
+  if (iDocSet.OkManyTipDoc(iDocSet.GetDocSetByTiDkGal(cvDP.myTiDkGal)))
+    {
+      if (cvDP.varNomEnter = FALSE)
+        {  //только при первом проходе
+          cvDP.varEnterCm := RunInterface('SelUsDoc', word(cgiNo)
+                                               , cvDP.myTiDkGal, cvDP.myTiDkUser, cvDP.myCash, cvDP.mySpCash);
+          cvDP.varNomEnter := TRUE;
+        }
+
+      if (cvDP.varEnterCm = cmDefault)
+        {
+          if (cvDP.myTiDkUser = 0)
+            cvDP.myTiDkUser := cvDP.myTiDkGal;
+
+          if NOT boGetTune('Fin.Doc.Prm.DefOrg')
+            if (cvDP.GetFirst FastFirstRow CashBank where ((cvDP.myCash == CashBank.NRec)) = tsOk)
+              if (cvDP.CashBank.cPodr <> 0)
+                case cvDP.pDirect of
+                  2: cvDP.PlPor.cBankPlat := cvDP.CashBank.cPodr;
+                  1: cvDP.PlPor.cBankPol  := cvDP.CashBank.cPodr;
+                end;
+        }
+    }
+
+  cvDP.PlPor.TiDkGal := cvDP.myTiDkGal;
+  cvDP.PlPor.TiDk    := cvDP.myTiDkUser;
+  SetBitDirect(SetDirectType(cvDP.PlPor.TiDK), cvDP.PlPor.ModeDoc);
+
+  if (longint(cvDP.varDate) = 0)
+    cvDP.PlPor.DatVip := if(cvDP.IsOnPKP, cvDP.CalPlan.dInput, cvDP.Dogovor.dDoc)
+  else
+    cvDP.PlPor.DatVip := cvDP.varDate;
+
+  cvDP.PlPor.YearDoc  := Year(cvDP.PlPor.DatVip);
+
+  cvDP.PlPor.FilialNo := lGetTune('Konsolid.FilialNo');
+
+  if boGetTune('Doc.NaslDescr')
+    {
+      cvDP.PlPor.Descr := if(cvDP.IsOnPKP, cvDP.CalPlan.Descr, cvDP.Dogovor.Descr);
+      cvDP.PlPor.Desgr := if(cvDP.IsOnPKP, cvDP.CalPlan.DesGr, cvDP.Dogovor.DesGr);
+    }
+  else
+    {
+      cvDP.PlPor.Descr := sGetTune('User.Descr');
+      cvDP.PlPor.Desgr := sGetTune('User.Desgr');
+    }
+
+  // очередной номер платежного документа
+  cvDP.PlPor.NoDok :=
+    piPlPor.PlPor_GetNewNumber(cvDP.PlPor.TiDkGal, cvDP.PlPor.TiDk,
+                               cvDP.PlPor.Descr, cvDP.PlPor.DatVip);
+
+  if (cvDP.GetFirst FastFirstRow SpGrSch
+                   where (( word(1)      == SpGrSch.wList AND
+                       cvDP.Dogovor.NRec == SpGrSch.cBaseDoc )) = tsOk)
+    cvDP.PlPor.cGroupSch := cvDP.SpGrSch.cGroupSch;
+  else
+    cvDP.PlPor.cGroupSch := 0;
+
+  if (cvDP.PlPor.TiDkGal = 31)
+    {
+      // в вал. платежах это поле использ. для задания валюты расчетов
+      cvDP.PlPor.cGruzOtp  := comp(0);
+    }
+  else
+    {
+      cvDP.PlPor.cGruzOtp := if(cvDP.IsOnPKP, cvDP.CalPlan.cGrOtp,
+                                         if(cvDP.pDirect = 1, cvDP.Dogovor.cMyOrg,
+                                                         cvDP.Dogovor.cOrg));
+    }
+
+  if cvDP.IsOnPKP
+    {
+      cvDP.PlPor.cGruzPol := cvDP.CalPlan.cGrPol;
+      cvDP.PlPor.NamePl1  := if(AvansSpec2.bAvans, 'Авансовый платеж. ', 'Оплата по факту. ')+iSynch.GivenTuneNameDO + cvDP.CalPlan.NoDoc +
+                             DateToStr(cvDP.CalPlan.dInput, ' от DD/MM/YYYY г.')+
+                             ' по '+if(cvDP.Dogovor.cDogovor = 0, 'договору', 'соглашению')+
+                             ' № '+cvDP.Dogovor.NoDoc + DateToStr(cvDP.Dogovor.dDoc, ' от DD/MM/YYYY г.');
+    }
+  else
+    {
+      cvDP.PlPor.cGruzPol := if(cvDP.pDirect = 1, cvDP.Dogovor.cOrg, cvDP.Dogovor.cMyOrg);
+      cvDP.PlPor.NamePl1  := if(AvansSpec2.bAvans, 'Авансовый платеж. ', 'Оплата по факту. ')+iSynch.GivenTuneNameDO + cvDP.Dogovor.NoDoc +
+                             DateToStr(cvDP.Dogovor.dDoc, ' от DD/MM/YYYY г.');
+    }
+
+  varDogovor_NDS := 0;
+  varcNalogNDS   := coGetTune('Nalog.cNalogNDS');
+  varNameNalog   := 'налогов';
+  if (cvDP.GetFirst FastFirstRow KatNalog where ((varcNalogNDS == KatNalog.NRec)) = tsOk)
+    if NOT cvDP.IsOnPKP
+      cvDP._LOOP SpDocs where (( Dogovor.NRec == SpDocs.cDoc AND
+                                 Dogovor.TiDk == SpDocs.TiDk ))
+        cvDP._LOOP SpDocNal where (( SpDocs.NRec  == SpDocNal.cSpDoc AND
+                                     SpDocs.TiDk  == SpDocNal.TipDoc AND
+                                     varcNalogNDS == SpDocNal.cNalog ))
+           {
+             varNameNalog   := trim(cvDP.KatNalog.Name);
+
+             if (cvDP.Dogovor.TipMoney = 1)
+               varDogovor_NDS := varDogovor_NDS + cvDP.SpDocNal.SumNal
+             else
+               varDogovor_NDS := varDogovor_NDS + cvDP.SpDocNal.SumVal;
+           }
+
+  varNameNalog := varNameNalog + ' ';
+
+  _Sh_PlPor_ReCalcSum(cvDP.pSumma, varDogovor_NDS, varNameNalog,
+                      varPlPor_cVal, varPlPor_SumPlat, varPlPor_SumPlatV,
+                      cvDP.PlPor.NamePl3);
+
+  cvDP.PlPor.SumPlat  := varPlPor_SumPlat;
+  cvDP.PlPor.cVal     := varPlPor_cVal;
+  cvDP.PlPor.SumPlatV := varPlPor_SumPlatV;
+
+  if (cvDP.insert current PlPor <> tsOk)
+    {
+      Message('Ошибка создания PlPor', Error);
+      Exit;
+    }
+
+  cvDP.ClearBuffer(cvDP.tnBaseFin);
+  cvDP.BaseFin.cSoprHoz    := cvDP.GetNextNrec(cvDP.tnSoprHoz, 0);
+  cvDP.BaseFin.FilialNo    := cvDP.PlPor.FilialNo;
+  if (cvDP.Dogovor.cDogovor = 0)
+    {
+      cvDP.BaseFin.cDogovor    := cvDP.Dogovor.NRec;
+      cvDP.BaseFin.cAppDogovor := 0;
+      cvDP.BaseFin.cKatSopr    := if(cvDP.IsOnPKP, cvDP.CalPlan.NRec, comp(0));
+    }
+  else
+    {
+      if (cvDP.GetFirst FastFirstRow IerDog
+                 where (( cvDP.Dogovor.NRec == IerDog.cRec AND
+                          cvDP.Dogovor.NRec == IerDog.cUpRec )) = tsOk)
+        cvDP.BaseFin.cDogovor    := cvDP.IerDog.cDogovor
+      else // это врят ли
+        cvDP.BaseFin.cDogovor    := cvDP.Dogovor.cDogovor;
+
+      cvDP.BaseFin.cAppDogovor := cvDP.Dogovor.NRec;
+      cvDP.BaseFin.cKatSopr    := if(cvDP.IsOnPKP, cvDP.CalPlan.NRec, comp(0));
+    }
+
+  cvDP.BaseFin.cVal        := cvDP.PlPor.cVal;
+  cvDP.BaseFin.Summa       := cvDP.PlPor.SumPlat;
+  cvDP.BaseFin.SumVal      := cvDP.PlPor.SumPlatV;
+
+  cvDP.BaseFin.TipDoc      := cvDP.PlPor.TiDk;
+  cvDP.BaseFin.TiDkGal     := cvDP.PlPor.TiDkGal;
+  cvDP.BaseFin.cPlPor      := cvDP.PlPor.NRec;
+  cvDP.BaseFin.NoDoc       := cvDP.PlPor.NoDok;
+  cvDP.BaseFin.NamePl      := if(AvansSpec2.bAvans, 'Авансовый платеж', 'Оплата по факту');
+  cvDP.BaseFin.prShtraf    := if(AvansSpec2.bAvans, 2, 0);
+  cvDP.BaseFin.cOrg        := cvDP.Dogovor.cOrg;
+  cvDP.BaseFin.Direct      := cvDP.pDirect;
+  cvDP.BaseFin.Descr       := cvDP.PlPor.Descr;
+  cvDP.BaseFin.Desgr       := cvDP.PlPor.Desgr;
+
+  if (cvDP.Insert current BaseFin = tsOk) // формирование SoprHoz
+      iSynch.SynchSoprHoz(cvDP.BaseFin.BufferP);
+
+  iKB.ModiKontrBal(cvDP.PlPor.TiDkGal, cvDP.PlPor.NRec);
+} // Procedure _Sh_PlPor_Form_Plat
+
+//******************************************************************************
+
+Procedure MakePlatDocs;
+{
+  cvDP.varNomEnter := FALSE;
+  cvDP.varEnterCm := cmCancel;
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Формирование платежных документов...', RecordsInTable(#MarkeredDocs));
+
+  _LOOP MarkeredDocs
+    {
+      NextVisual;
+      var pDogovor, pCalPlan: comp;
+
+      pCalPlan := AvansSpec2.cCalPlan;
+
+      if (pCalPlan = 0)
+        {
+          pDogovor := AvansSpec2.cDogovor;
+          if (cvDP.GetFirst FastFirstRow Dogovor where (( pDogovor == Dogovor.NRec )) <> tsOk)
+            Continue;
+
+          cvDP.IsOnPKP := FALSE;
+          cvDP.pDirect := if (cvDP.Dogovor.Direct = 2, 2, 1);
+        }
+      else
+        {
+          pDogovor := if(AvansSpec2.cAppDogovor = 0, AvansSpec2.cOwner, AvansSpec2.cAppDogovor);
+          if (cvDP.GetFirst FastFirstRow Dogovor
+                   where (( pDogovor == Dogovor.NRec )) <> tsOk)
+            Continue;
+          if (cvDP.GetFirst FastFirstRow CalPlan
+                   where (( pCalPlan == CalPlan.NRec )) = tsOk)
+            {
+              cvDP.IsOnPKP := TRUE;
+              cvDP.pDirect := cvDP.CalPlan.DirectPlat;
+            }
+          else
+            Continue;
+        }
+
+      cvDP.pSumma  := AvansSpec2.SumForOpl;
+      cvDP.varDate := AvansSpec2.dOpl;
+      DeleteMarker(Marker, AvansSpec2.NRec);
+      update current AvansSpec2 set AvansSpec2.SumForOpl := 0.0;
+
+      _Sh_PlPor_Form_Plat;
+      var TmpS: string;
+
+      case cvDP.PlPor.TiDk of
+        1: TmpS := 'платежное поручение';
+       31: TmpS := 'валютное платежное поручение';
+       32: TmpS := 'платежное требование';
+      end;
+
+      frmReport.write('По документу '+AvansSpec2.DocInfo);
+      frmReport.write('  сформировано '+TmpS);
+      frmReport.write('  № '+cvDP.PlPor.NoDok+
+                       DateToStr(cvDP.PlPor.DatVip, ' от DD/MM/YYYY г.'));
+
+      if (cvDP.PlPor.cVal = 0)
+        TmpS := DoubleToStr(cvDP.PlPor.SumPlat, '\2p[|-]3666`666`666`666.88 ')+s_SimvRub
+      else
+        {
+          TmpS := DoubleToStr(cvDP.PlPor.SumPlatV, '\2p[|-]3666`666`666`666.88 ');
+
+          if (cvDP.GetFirst FastFirstRow KlVal
+               where (( PlPor.cVal == KlVal.NRec )) = tsOk)
+
+          TmpS := TmpS + cvDP.KlVal.SimVolV;
+        }
+
+      frmReport.write('  на сумму '+TmpS+'. '+cvDP.PlPor.NamePl3);
+    }
+
+  StopVisual('', 0);
+  frmReport.ShowFile('Сформированные платежные документы');
+}
+
+//******************************************************************************

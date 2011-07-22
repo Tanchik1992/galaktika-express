@@ -1,0 +1,472 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Отчет по качеству молока
+//******************************************************************************
+
+Interface PrnKachvo 'Отчет по качеству молока' Gray;
+
+  Show At (32, 9, 86, 16);
+
+#include mlyako.inc
+//------------------------------------------------------------------------------
+
+Table struct MemKachvo
+(
+  cOrg   : comp
+, Name   : string
+
+, sum21  : double
+, sum22  : double
+
+, sum31  : double
+, sum32  : double
+, sum33  : double
+
+, sum41  : double
+, sum42  : double
+
+, sum51  : double
+, sum52  : double
+
+, sum61  : double
+, sum62  : double
+, sum63  : double
+, sum64  : double
+
+, sum71  : double
+, sum72  : double
+
+, sum81  : double
+, sum82  : double
+, sum83  : double
+, sum84  : double
+
+, sum101 : double
+, sum102 : double
+
+, sum111 : double
+, sum112 : double
+, sum113 : double
+, sum114 : double
+)
+With Index
+(
+  MemKachvo01 = cOrg
+)
+;
+
+//------------------------------------------------------------------------------
+
+Create view
+
+Var
+  dReport
+             : date;
+
+  cKDS
+             : comp;
+!As select
+!,*
+
+From
+
+   GrPrice
+,  KachvoEx
+,  KatOrg
+,  KatOrgDescr
+,  KatOrgDescr KatOrgDescrList
+,  KatPayment  KatPaymentF
+,  KatPokaz
+,  KatSort
+,  KatSopr
+,  KlPrice
+,  KnDriver
+,  MarRel
+,  MarPunkt    MarPunktR
+,  MemKachvo
+,  InfoPK
+,  Prices
+,  PrKachvo
+,  RezKontr
+,  SpProbe
+,  SpSortMC
+,  SpSopr
+,  TsKachvo
+,  ValTest
+,  ValKontr
+,  ValKontr    ValKontr2
+
+where
+((
+      cKDS              ==  KatOrgDescr.Nrec
+  And KatOrgDescr.Nrec  ==  KatOrgDescrList.cGroup (noindex)
+  And KatSopr.nRec      ==  SpSopr.cSopr
+
+  And word(2)           ==  PrKachvo.TipProba
+  And coKatMc           ==  PrKachvo.wTable
+  And SpSopr.cMcUsl     ==  PrKachvo.cOwner
+  And SpSopr.cParty     ==  PrKachvo.cAnVal3   (noindex)
+
+  And PrKachvo.nRec     ==  RezKontr.cKachvoPr
+  And SpSopr.cParty     ==  RezKontr.cParty    (noindex)
+  And SpSopr.cMcUsl     ==  RezKontr.cMc       (noindex)
+  And coKatMc           ==  RezKontr.wTable    (noindex)
+
+  And PrKachvo.cWork1   ==  KatSort.nRec
+
+  And word(108)         ==  KatSopr.VidSopr
+  And KatOrg.nRec       ==  KatSopr.cOrgBase
+))
+;
+
+//******************************************************************************
+
+Form frmPrnKachvo('PrnKachvo.out', 'PrnKachvo') With NoVisual;
+
+//******************************************************************************
+Function GetPokaz(namePokaz : string) : double;
+{
+  GetPokaz := 0;
+
+  if ( GetFirst KatPokaz where (( namePokaz == KatPokaz.Name )) = tsOk )
+    if ( GetFirst ValKontr where ((  RezKontr.nRec == ValKontr.cRezKontr
+                                 AND KatPokaz.nRec == ValKontr.cKatPokaz (noindex)
+                                 )) = tsOk )
+     GetPokaz := ValKontr.Value;
+}
+
+//******************************************************************************
+//заполнение данными во временную таблицу
+Function SetMemKachvo;
+Var
+  SpKol
+, Koef
+        : double;
+{
+  _loop KatOrgDescrList
+    if GetFirst KatOrg where (( KatOrgDescrList.cRec == KatOrg.nRec )) = tsOk
+      {
+        _loop KatSopr
+          {
+            if ( Month(KatSopr.dSopr) <> Month(dReport) ) or (Year(KatSopr.dSopr) <> Year(dReport) )
+              continue;
+
+            Koef  := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(Prices.cOtpEd);
+
+            SpKol := SpSopr.KolOpl*Koef;
+
+            if GetFirst MemKachvo where (( KatOrg.nRec == MemKachvo.cOrg )) <> tsOK
+              {
+                ClearBuffer(#MemKachvo);
+
+                MemKachvo.cOrg  := KatOrg.nRec;
+                MemKachvo.Name  := KatOrg.Name;
+
+                MemKachvo.sum21 := SpSopr.KolFact*Koef;
+                MemKachvo.sum22 := SpKol;
+
+                MemKachvo.Sum31 := SpSopr.KolFact*Koef*GetPokaz(strPokaz1);
+                MemKachvo.Sum32 := SpSopr.KolFact*Koef*GetPokaz(strPokaz8);
+                MemKachvo.Sum33 := SpSopr.KolFact*Koef;
+
+                if ( GetPokaz(strPokaz2) >= 16  and GetPokaz(strPokaz2) <= 18 )
+                  MemKachvo.Sum41 := SpKol;
+
+                if ( GetPokaz(strPokaz2) >= 19  and GetPokaz(strPokaz2) <= 20 )
+                  MemKachvo.Sum42 := SpKol;
+
+                if ( GetPokaz(strPokaz4) = 1 )
+                  MemKachvo.Sum51 := SpKol;
+
+                if ( GetPokaz(strPokaz4) = 2 )
+                  MemKachvo.Sum52 := SpKol;
+
+                if ( GetPokaz(strPokaz6) <= 100 )
+                  MemKachvo.sum61 := SpKol;
+
+                if ( GetPokaz(strPokaz6) > 100 and GetPokaz(strPokaz6) <= 300 )
+                  MemKachvo.sum62 := SpKol;
+
+                if ( GetPokaz(strPokaz6) > 300 and GetPokaz(strPokaz6) <= 500 )
+                  MemKachvo.sum63 := SpKol;
+
+                if ( GetPokaz(strPokaz6) > 500 and GetPokaz(strPokaz6) <= 4000 )
+                  MemKachvo.sum64 := SpKol;
+
+                if ( GetPokaz(strPokaz3) <= 10 )
+                  MemKachvo.Sum71 := SpKol;
+
+                if ( GetPokaz(strPokaz3) > 10 )
+                  MemKachvo.Sum72 := SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.Extra') )  or
+                   ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.ExtraF') )
+                  MemKachvo.Sum81 := SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.Higher') ) or
+                   ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.HigherF') )
+                  MemKachvo.Sum82 := SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.First') ) or
+                  ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.FirstF') )
+                  MemKachvo.Sum83 := SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.Second') ) or
+                  ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.SecondF') )
+                  MemKachvo.Sum84 := SpKol;
+
+                if ( GetPokaz(strPokaz5) = 1028 )
+                  MemKachvo.Sum101 := SpKol;
+
+                if ( GetPokaz(strPokaz5) = 1027 )
+                  MemKachvo.Sum102 := SpKol;
+
+                if ( GetPokaz(strPokaz7) <= 300 )
+                  MemKachvo.sum111 := SpKol;
+
+                if ( GetPokaz(strPokaz7) > 300 and GetPokaz(strPokaz7) <= 500 )
+                  MemKachvo.sum112 := SpKol;
+
+                if ( GetPokaz(strPokaz7) > 500 and GetPokaz(strPokaz7) <= 750 )
+                  MemKachvo.sum113 := SpKol;
+
+                if ( GetPokaz(strPokaz7) > 750 and GetPokaz(strPokaz7) <= 1000 )
+                  MemKachvo.sum114 := SpKol;
+
+                Insert Current MemKachvo;
+              }
+            else
+              {
+                MemKachvo.sum21 := MemKachvo.sum21 + SpSopr.KolFact*Koef;
+                MemKachvo.sum22 := MemKachvo.sum22 + SpKol;
+                MemKachvo.Sum31 := MemKachvo.Sum31 + SpSopr.KolFact*Koef*GetPokaz(strPokaz1);
+                MemKachvo.Sum32 := MemKachvo.Sum32 + SpSopr.KolFact*Koef*GetPokaz(strPokaz8);
+                MemKachvo.Sum33 := MemKachvo.Sum33 + SpSopr.KolFact*Koef;
+
+                if ( GetPokaz(strPokaz2) >= 16  and GetPokaz(strPokaz2) <= 18 )
+                  MemKachvo.sum41 := MemKachvo.sum41 + SpKol;
+
+                if ( GetPokaz(strPokaz2) >= 19  and GetPokaz(strPokaz2) <= 20 )
+                  MemKachvo.sum42 := MemKachvo.sum42 + SpKol;
+
+                if ( GetPokaz(strPokaz4) = 1 )
+                  MemKachvo.Sum51 := MemKachvo.Sum51 + SpKol;
+
+                if ( GetPokaz(strPokaz4) = 2 )
+                  MemKachvo.Sum52 := MemKachvo.Sum52 + SpKol;
+
+                if ( GetPokaz(strPokaz6) <= 100 )
+                  MemKachvo.sum61 := MemKachvo.sum61 + SpKol;
+
+                if ( GetPokaz(strPokaz6) > 100 and GetPokaz(strPokaz6) <= 300 )
+                  MemKachvo.sum62 := MemKachvo.sum62 + SpKol;
+
+                if ( GetPokaz(strPokaz6) > 300 and GetPokaz(strPokaz6) <= 500 )
+                  MemKachvo.sum63 := MemKachvo.sum63 + SpKol;
+
+                if ( GetPokaz(strPokaz6) > 500 and GetPokaz(strPokaz6) <= 4000 )
+                  MemKachvo.sum64 := MemKachvo.sum64 + SpKol;
+
+                if ( GetPokaz(strPokaz3) <= 10 )
+                  MemKachvo.Sum71 := MemKachvo.Sum71 + SpKol;
+
+                if ( GetPokaz(strPokaz3) > 10 )
+                  MemKachvo.Sum72 := MemKachvo.Sum72 + SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.Extra') )  or
+                   ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.ExtraF') )
+                  MemKachvo.Sum81 := MemKachvo.Sum81 + SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.Higher') ) or
+                   ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.HigherF') )
+                  MemKachvo.Sum82 := MemKachvo.Sum82 + SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.First') ) or
+                  ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.FirstF') )
+                  MemKachvo.Sum83 := MemKachvo.Sum83 + SpKol;
+
+                if ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.Second') ) or
+                  ( KatSort.nRec = coGetTune('Oper.Buy.NaklPrMS.Sort.SecondF') )
+                  MemKachvo.Sum84 := MemKachvo.Sum84 + SpKol;
+
+                if ( GetPokaz(strPokaz5) = 1028 )
+                  MemKachvo.Sum101 := MemKachvo.Sum101 + SpKol;
+
+                if ( GetPokaz(strPokaz5) = 1027 )
+                  MemKachvo.Sum102 := MemKachvo.Sum102 + SpKol;
+
+                if ( GetPokaz(strPokaz7) <= 300 )
+                  MemKachvo.sum111 := MemKachvo.sum111 + SpKol;
+
+                if ( GetPokaz(strPokaz7) > 300 and GetPokaz(strPokaz7) <= 500 )
+                  MemKachvo.sum112 := MemKachvo.sum112 + SpKol;
+
+                if ( GetPokaz(strPokaz7) > 500 and GetPokaz(strPokaz7) <= 750 )
+                  MemKachvo.sum113 := MemKachvo.sum113 + SpKol;
+
+                if ( GetPokaz(strPokaz7) > 750 and GetPokaz(strPokaz7) <= 1000 )
+                  MemKachvo.sum114 := MemKachvo.sum114 + SpKol;
+
+                Update Current MemKachvo;
+              }
+          }
+      }
+}
+
+//******************************************************************************
+Function RunRep: boolean;
+{
+  RunRep := false;
+  delete all MemKachvo;
+
+  SetMemKachvo;
+
+  StartNewVisual(vtIndicatorVisual,vfTimer,'Формирование накладных',RecordsInTable(#MemKachvo));
+
+  frmPrnKachvo.write(dReport);
+  frmPrnKachvo.write(KatOrgDescr.Name);
+
+  _loop MemKachvo
+    {
+      if ( not NextVisual )
+        {
+          StopVisual('', 0);
+          exit;
+        }
+
+      frmPrnKachvo.PutEventById(feDoLoop, fcPrnKachvoMilk);
+
+      Var Sum1, Sum2, Sum3, Sum4, SumO : double;
+      SumO := MemKachvo.Sum81 + MemKachvo.Sum82 + MemKachvo.Sum83 + MemKachvo.Sum84;
+
+      Sum1 := 100*MemKachvo.Sum81/SumO;
+      Sum2 := 100*MemKachvo.sum82/SumO;
+      Sum3 := 100*MemKachvo.sum83/SumO;
+      Sum4 := 100*MemKachvo.Sum84/SumO;
+
+      frmPrnKachvo.write(MemKachvo.Name);
+      frmPrnKachvo.write(MemKachvo.sum21);
+      frmPrnKachvo.write(MemKachvo.sum22);
+
+      frmPrnKachvo.write(MemKachvo.Sum31/MemKachvo.Sum33);
+      frmPrnKachvo.write(MemKachvo.Sum32/MemKachvo.Sum33);
+
+      frmPrnKachvo.write(MemKachvo.sum41);
+      frmPrnKachvo.write(MemKachvo.sum42);
+
+      frmPrnKachvo.write(MemKachvo.Sum51);
+      frmPrnKachvo.write(MemKachvo.Sum52);
+
+      frmPrnKachvo.write(MemKachvo.sum61);
+      frmPrnKachvo.write(MemKachvo.sum62);
+      frmPrnKachvo.write(MemKachvo.Sum63);
+      frmPrnKachvo.write(MemKachvo.Sum64);
+
+      frmPrnKachvo.write(MemKachvo.sum71);
+      frmPrnKachvo.write(MemKachvo.sum72);
+      frmPrnKachvo.write(MemKachvo.Sum71 + MemKachvo.sum72);
+
+      frmPrnKachvo.write(MemKachvo.Sum81);
+      frmPrnKachvo.write(MemKachvo.sum82);
+      frmPrnKachvo.write(MemKachvo.sum83);
+      frmPrnKachvo.write(MemKachvo.Sum84);
+
+      frmPrnKachvo.write(Sum1); //91
+      frmPrnKachvo.write(Sum2); //92
+      frmPrnKachvo.write(Sum3); //93
+      frmPrnKachvo.write(Sum4); //94
+
+      frmPrnKachvo.write(MemKachvo.Sum101);
+      frmPrnKachvo.write(MemKachvo.sum102);
+
+      frmPrnKachvo.write(MemKachvo.sum111);
+      frmPrnKachvo.write(MemKachvo.Sum112);
+      frmPrnKachvo.write(MemKachvo.Sum113);
+      frmPrnKachvo.write(MemKachvo.sum114);
+
+    }
+  RunRep := true;
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+
+
+Screen scParams(, , sci13Esc);
+
+Fields
+
+  dReport          ('Дата отчета',, sci13Esc): ['Month YYYY'], NoProtect;
+  KatOrgDescr.Name ('Фильтр по группе контрагентов',, sci13Esc): Protect;
+
+Buttons
+  cmValue1, Default, , 'Сформировать', , sci1Esc;
+  cmCancel, , , 'Отменить', , sci1Esc;
+<<
+
+  Сформировать отчет за.@@@@@@@@@@@@
+
+  Группа котрагентов .@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+       <. Продолжить .>    <.   Отмена   .>
+>>
+end;
+
+//******************************************************************************
+
+HandleEvent
+
+cmInit:
+{
+  if ( not ReadMyDsk(cKDS, 'PrnKachvo_cKDS', true) )
+    cKDS := comp(0);
+
+  if ( not ReadMyDsk(dReport, 'PrnKachvo_dReport', true) )
+    dReport := ZeroDate;
+}
+
+cmPick:
+{
+  case CurField of
+
+    #KatOrgDescr.Name:
+      {
+        var tmp_KatOrgDescr : comp; tmp_KatOrgDescr := cKDS;
+
+        if ( RunInterface('GetVidOrg', tmp_KatOrgDescr, comp(0)) <> cmCancel )
+          set cKDS := tmp_KatOrgDescr;
+      }
+
+  end;
+}
+
+cmDelOnProtect:
+{
+  case CurField of
+
+   #KatOrgDescr.Name:
+     set cKDS := comp(0);
+
+  end;
+}
+
+cmValue1:
+{
+  if ( dReport = ZeroDate )
+    message('Укажите дату формирования отчета.');
+
+  if ( cKDS = comp(0) )
+    message('Укажите группу контрагентов.');
+
+  if ( RunRep )
+    frmPrnKachvo.ShowFile('Отчет по качеству молока');
+  else
+    frmPrnKachvo.AbortForm;
+
+  SaveMyDsk(cKDS   , 'PrnKachvo_cKDS');
+  SaveMyDsk(dReport, 'PrnKachvo_dReport');
+}
+
+end;
+End.

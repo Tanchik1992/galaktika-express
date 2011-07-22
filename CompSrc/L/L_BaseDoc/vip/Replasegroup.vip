@@ -1,0 +1,553 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.10 - Логистика
+// Групповая замена полей ТТИ
+//******************************************************************************
+
+#include ExtAttrClass.vih
+
+#doc
+Интерфейс групповой замены полей ТТИ
+#end
+Interface ReplaceGroup 'Групповая замена полей ТТИ' (, hci_zakup_Grupp_Zam, sci1EnEsc) EscClose,Cyan;
+  Show At (0,0,55,15)
+
+Create View ReplaceGroup
+Var
+  TTNDocRepFirm
+, TTNDocRepDriver     // Водитель
+, TTNDocRepCar        // Автомобиль
+, TTNDocRepTransp     // Способ транспортировки
+, TTNDocRepList       // Номер путевого листа
+, TTNDocRepBazis      // Базис поставки
+, TTNDocRepOtpR       // Отпуск разрешил
+, TTNDocRepSdOtp      // Сдал отправитель
+, TTNDocRepRazgr      // Пункт разгрузки
+, TTNDocRepAdres      // Адрес пункта разгрузи
+, sPost               // должность сдал отправитель 
+, sPost2              // должность отпуск разрешил
+
+                  : String;
+
+  cBaseDoc
+, cOrgAvt
+, cDriver 
+, cShipment
+, cTransp   
+, cPList 
+, cTipOtg
+, cMarOtg  
+, cAddr  
+, cMarAvt   
+, cPersons 
+, cPersons2 
+                  : comp;
+  wParam          : word;
+
+From
+  BaseDoc 
+, Marrel
+, KnDriver
+, TTNDoc 
+, TipOtg 
+, PutLst 
+, MarPunkt
+, Transp
+, WayMove
+, Pick
+, KatOrg
+, MarAvt
+, Save_drv
+, Persons
+, Persons Persons2
+, Catalogs
+, Catalogs Catalogs2
+, Appointments
+, Appointments Appointments2
+   
+Where
+((
+       Pick.cRec           == BaseDoc.NRec
+
+  AND  coBaseDoc           == TTNDoc.wTable
+  AND  BaseDoc.nRec        == TTNDoc.cDoc
+  
+  AND  cShipment           == WayMove.NRec
+  AND  WayMove.NRec        == Shipment.cWayMove (NoIndex)  //способ транспортировки
+  
+  AND  cTransp             == Transp.NRec
+  AND  cDriver             == KnDriver.nRec
+  AND  cPList              == PutLst.NRec
+  AND  cTipOtg             == TipOtg.nRec
+  AND  cPersons            == Persons.NRec                 //сдал отправитель
+  AND  Persons.AppointCur  == Appointments.NRec
+  AND  Appointments.Post   == Catalogs.NRec                //должность сдал отправитель
+
+  AND  cPersons2           == Persons2.NRec                //отпуск разрешил
+  AND  Persons2.AppointCur == Appointments2.NRec
+  AND  Appointments2.Post  == Catalogs2.NRec               //должность отпуск разрешил
+
+  AND  cOrgAvt             == KatOrg.nRec
+
+  AND  cMarOtg             == MarRel.nRec
+
+  AND  cMarAvt             == MarAvt.NRec
+))
+;
+//******************************************************************************
+Procedure SetInfoFromPutList;
+{
+  if ( cPList = 0 )
+    Exit;
+
+  set cPList        := cPList;
+  set TTNDocRepList := PutLst.Npl;
+  set cTransp       := PutLst.cTransp;
+  if TTNDocRepCar = ''
+    {
+      set cTransp       := cTransp;
+      set TTNDocRepCar  := Transp.Nomer;
+    }
+  // Выбор водителя по ТС
+  if (cDriver = 0)
+    // ищем водителя в путевом листе
+    if GetFirst Save_drv where (( cTransp == Save_drv.cTransp  AND
+                                  cPList  == Save_drv.cPutLst  AND
+                                  word(2) >> Save_Drv.TypePers
+                               )) = tsOk
+      set cDriver := Save_drv.cKndriver
+    else
+      // ищем водителя по ТС
+      if GetFirst Save_drv where (( cTransp == Save_drv.cTransp  AND
+                                    comp(0) == Save_drv.cPutLst  AND
+                                    word(2) >> Save_Drv.TypePers
+                                 )) = tsOk
+        set cDriver := Save_drv.cKndriver;
+  if TTNDocRepDriver = ''  //Водитель
+    set TTNDocRepDriver := if (IsValid(#KnDriver), KnDriver.Name, '');
+}
+//******************************************************************************
+
+Screen scrReplTTNDoc ('Групповая замена', , sci138Esc);
+
+Bevel b1 {3, 8, 52,  12, bsLowered, bsFrame};
+
+Fields
+  TTNDocRepFirm    ('Автопредприятие'        , , sci138Esc): PickButton, NoProtect;
+  TTNDocRepCar     ('Номер автомобиля'       , , sci138Esc): PickButton, NoProtect;
+  TTNDocRepDriver  ('Водитель'               , , sci138Esc): PickButton, NoProtect;
+  TTNDocRepTransp  ('Способ транспортировки' , , sci138Esc): PickButton, Protect;
+  TTNDocRepList    ('Номер путевого листа'   , , sci138Esc): PickButton, NoProtect;
+  TTNDocRepBazis   ('Базис поставки'         , , sci138Esc): PickButton, Protect;
+  TTNDocRepOtpR    ('Отпуск разрешил'        , , sci138Esc): PickButton, NoProtect;
+  TTNDocRepSdOtp   ('Сдал отправитель'       , , sci138Esc): PickButton, NoProtect;
+  TTNDocRepRazgr   ('Пункт разгрузки'        , , sci138Esc): PickButton, Protect;
+  TTNDocRepAdres   ('Адрес пункта разгрузки' , , sci138Esc): PickButton, NoProtect;
+  wParam           : NoProtect;
+
+Buttons
+  cmValue1   , , , 'Заменить поля',,;
+  cmCancel   , , , 'Отмена',,;
+
+<<
+  `Автопредприятие`        .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Номер автомобиля`       .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Водитель`               .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Способ транспортировки` .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Номер путевого листа`   .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Базис поставки`         .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Отпуск разрешил`        .@@@@@@@@@@@@@@@@@@@@@@@@
+  `Сдал отправитель`       .@@@@@@@@@@@@@@@@@@@@@@@@
+
+    `Пункт разгрузки`        .@@@@@@@@@@@@@@@@@@@@
+    `Адрес пункта разгрузки` .@@@@@@@@@@@@@@@@@@@@
+
+     [.]  Создавать TTNDoc `
+     [.]  Сохранять в DSK  `
+
+     <.  Заменить поля  .> <.     Отмена     .>
+>>
+
+End; // Screen scrReplTTNDoc
+
+HandleEvent // Interface
+
+cmInit:
+  {
+    ReadMyDsk(wParam, 'ReplaceGroup_wParam', False);
+    
+    if ((wParam and 2) = 2)
+      {
+        ReadMyDsk(TTNDocRepFirm,   'ReplaceGroup_TTNDocRepFirm', False);
+        ReadMyDsk(cOrgAvt,         'ReplaceGroup_cOrgAvt', False);
+
+        ReadMyDsk(TTNDocRepCar,    'ReplaceGroup_TTNDocRepCar', False);
+        ReadMyDsk(cTransp,         'ReplaceGroup_cTransp', False);
+
+        ReadMyDsk(TTNDocRepDriver, 'ReplaceGroup_TTNDocRepDriver', False);
+        ReadMyDsk(cDriver,         'ReplaceGroup_cDriver', False);
+                                   
+        ReadMyDsk(TTNDocRepTransp, 'ReplaceGroup_TTNDocRepTransp', False);
+        ReadMyDsk(cShipment,       'ReplaceGroup_cShipment', False);
+
+        ReadMyDsk(TTNDocRepList,   'ReplaceGroup_TTNDocRepList', False);
+        ReadMyDsk(cPList,          'ReplaceGroup_cPList', False);
+
+        ReadMyDsk(TTNDocRepBazis,  'ReplaceGroup_TTNDocRepBazis', False);
+        ReadMyDsk(cTipOtg,         'ReplaceGroup_cTipOtg', False);
+
+        ReadMyDsk(TTNDocRepOtpR,   'ReplaceGroup_TTNDocRepOtpR', False);
+        ReadMyDsk(cPersons2,       'ReplaceGroup_cPersons2', False);
+        ReadMyDsk(sPost2,          'ReplaceGroup_sPost2', False);
+
+        ReadMyDsk(TTNDocRepSdOtp,  'ReplaceGroup_TTNDocRepSdOtp', False);
+        ReadMyDsk(cPersons,        'ReplaceGroup_cPersons', False);
+        ReadMyDsk(sPost,           'ReplaceGroup_sPost', False);
+
+        ReadMyDsk(TTNDocRepRazgr,  'ReplaceGroup_TTNDocRepRazgr', False);
+        ReadMyDsk(cMarOtg,         'ReplaceGroup_cMarOtg', False);
+
+        ReadMyDsk(TTNDocRepAdres,  'ReplaceGroup_TTNDocRepAdres', False);
+        ReadMyDsk(cAddr,           'ReplaceGroup_cAddr', False);
+      }
+    else
+      {
+        TTNDocRepFirm   := '';
+        TTNDocRepCar    := '';
+        TTNDocRepDriver := '';
+        TTNDocRepTransp := '';
+        TTNDocRepList   := '';
+        TTNDocRepBazis  := '';
+        TTNDocRepRazgr  := '';
+        TTNDocRepAdres  := '';
+        sPost           := '';
+        sPost2          := '';
+        cOrgAvt   := comp(0);
+        cTransp   := comp(0);
+        cDriver   := comp(0);
+        cShipment := comp(0);
+        cPList    := comp(0);
+        cTipOtg   := comp(0);
+        cMarOtg   := comp(0);
+        cAddr     := comp(0);
+      }
+  }
+
+//******************************************************************************  
+cmCancel:
+  {
+    CloseInterface(cmDone);
+    Abort;
+  }
+
+//******************************************************************************
+cmValue1:
+{
+  var piExAttr: iExtAttr;
+
+   if (wParam and 1) <> 0
+     if TTNDocRepFirm = ''
+       {
+         message('Заполните поле `Автопредприятие`');
+         Exit;
+       }
+  _LOOP Pick where ((15 == Pick.wList))
+    {
+      if (GetFirst BaseDoc = tsOk)
+      {
+        if (GetFirst TTNDoc <> tsOk)
+          if (wParam and 1) <> 0
+            {
+              ClearBuffer(#TTNDoc);
+              TTNDoc.wTable := coBaseDoc; 
+              TTNDoc.cDoc := BaseDoc.nRec;
+              Insert Current TTNDoc;
+            }
+
+        if (GetFirst TTNDoc = tsOk)
+          {
+            if TTNDocRepFirm <> ''
+              {
+                TTnDoc.cOrgAvt := cOrgAvt;
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'НАИМЕНОВАНИЕ АВТОПРЕДПРИЯТИЯ', TTNDocRepFirm);
+              }
+
+            if TTNDocRepCar <> ''
+              {
+                TTnDoc.cTransp := cTransp;
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'АВТОМОБИЛЬ', TTNDocRepCar);
+              }
+
+            if TTNDocRepDriver <> ''
+              {
+                TTNDoc.cDriver := cDriver;
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'ВОДИТЕЛЬ', TTNDocRepDriver);
+              }
+
+            if TTNDocRepTransp <> ''
+              {
+                if GetFirst Shipment = tsOK
+                  TTNDoc.cShipment := Shipment.NRec;
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'СПОСОБ ТРАНСПОРТИРОВКИ', TTNDocRepTransp);
+              }
+
+            if TTNDocRepList <> ''
+              {
+                set TTNDoc.cPList := cPList;
+                set TTNDoc.sPList := TTNDocRepList;
+                if Update Current TTNDoc <> tsOK{}
+              }
+
+            if TTNDocRepBazis <> ''
+              {
+                if GetFirst TipOtg = tsOK
+                  set TTNDoc.cTipOtg := TipOtg.nRec;
+                if Update Current TTNDoc <> tsOK{}
+              }
+
+            if TTNDocRepOtpR <> ''
+              {
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'ОТПУСК РАЗРЕШИЛ', TTNDocRepOtpR);
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'ОТПУСК РАЗРЕШИЛ ДОЛЖНОСТЬ', sPost2);
+
+              }
+
+            if TTNDocRepSdOtp <> ''
+              {
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'СДАЛ ОТПРАВИТЕЛЬ', TTNDocRepSdOtp);
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'СДАЛ ОТПРАВИТЕЛЬ ДОЛЖНОСТЬ', sPost);
+              }
+
+            if TTNDocRepRazgr <> ''
+              {
+                if cMarAvt = 0
+                  {
+                    set TTNDoc.cPunktR := cAddr;
+                    if Update Current TTNDoc <> tsOK{}
+                  }
+                else
+                  {
+                    if (GetFirst MarRel = tsOK)
+                      set TTNDoc.cPunktR := MarRel.cMarPunkt;
+                    if Update Current TTNDoc <> tsOK{}
+                  }
+                piExAttr.sSetAttr (coTTNDoc, TTNDoc.NRec, 'АДРЕС ПУНКТА РАЗГРУЗКИ', TTNDocRepAdres);
+              }
+          }
+      }
+    }
+  message('Замена полей завершена');
+  CloseInterface(cmDone);
+}
+
+cmPick:
+  case CurField of
+//******************************************************************************
+    #TTNDocRepFirm:
+      if (RunInterface(GetKatOr, cOrgAvt, comp(0), FALSE, comp(0), comp(0)) <> cmCancel)
+        if ( GetFirst KatOrg = tsOK )
+          TTNDocRepFirm := KatOrg.Name;
+        
+//******************************************************************************
+    #TTNDocRepCar:
+      if ( RunInterface(Get_Wps, cTransp, byte(0), Cur_Date, cOrgAvt) <> cmCancel )
+        if ( getfirst Transp = tsOK )
+          set TTNDocRepCar := Transp.Nomer;
+//******************************************************************************
+    #TTNDocRepDriver:
+      {
+        if ( RunInterface(Get_Vod, cDriver, 0, Cur_Date, cOrgAvt, Comp(0)) <>cmCancel )
+          {
+            if ( getfirst KnDriver = tsOK )
+              set TTNDocRepDriver := KnDriver.Name;
+
+            //Выбор ТС по водителю, если ТС не заполнен
+            if (TTNDocRepCar = '')
+            {
+              if GetFirst Save_drv where ((cDriver == Save_drv.cKndriver AND
+                                           comp(0) == Save_drv.cPutLst (noindex)
+                                         )) = tsOk
+                Set cTransp := Save_drv.cTransp;
+              //Номер ТС
+              Set TTNDocRepCar := if(IsValid(#Transp), Transp.Nomer, '');
+            }
+          }
+      }
+
+//******************************************************************************
+    #TTNDocRepTransp:
+      if ( RunInterface(GetWayMove, cShipment) <> cmCancel )
+        if ( getfirst WayMove = tsOK )
+          set TTNDocRepTransp := WayMove.Name;
+//******************************************************************************
+    #TTNDocRepList:
+      {
+        var Date_Pl : date;
+        var Tip_Pl  : word;
+        
+        if wGetTune('Transp.TTNFiltPlDate')= 0
+           Date_Pl := date(0,0,0)
+        else
+           Date_Pl := BaseDoc.dDoc;
+
+        if wGetTune('Transp.TTNFiltPlTc')= 0
+           Tip_Pl := 0
+        else
+           Tip_Pl := 8;
+
+        if ( RunInterface(Get_put, cTransp, Tip_Pl, cPList, cOrgAvt, Date_Pl, Date_Pl, word(0), '') <> cmCancel)
+          SetInfoFromPutList;
+      }                               
+//******************************************************************************
+    #TTNDocRepBazis:
+      if (RunInterface(GetTipOtg, cTipOtg) <> cmCancel)
+        if (getfirst TipOtg = tsOK)
+            TTNDocRepBazis := TipOtg.Name;
+//******************************************************************************
+    #TTNDocRepOtpR:
+     if (RunInterface(GetPers, cPersons2 ) <> cmCancel)                             //отпуск разрешил
+       {
+         if (GetFirst Persons2 = tsOK)
+           set TTNDocRepOtpR := Persons2.FIO;
+           set sPost2        := if(IsValid(#Catalogs2), Catalogs2.Name, '');
+       }
+//******************************************************************************
+    #TTNDocRepSdOtp:
+     if RunInterface(GetPers, cPersons) <> cmCancel                                 //сдал отправитель
+       {
+         if (GetFirst Persons = tsOK)
+           set TTNDocRepSdOtp := Persons.FIO;
+           set sPost          := if(IsValid(#Catalogs), Catalogs.Name, '');
+       }
+//******************************************************************************
+    #TTNDocRepRazgr
+  , #TTNDocRepAdres:
+
+      if (cMarAvt = 0)
+        {
+          if (RunInterface(Get_Item, 1, cAddr) <> cmCancel)
+            if ( GetFirst MarPunkt where ((cAddr == MarPunkt.nRec)) = tsOK )
+              {
+                set TTNDocRepRazgr := MarPunkt.Name;
+                set TTNDocRepAdres := MarPunkt.npAddr;
+              }
+        }
+      else
+        {
+          if (RunInterface(Get_Itws, cMarAvt, cMarOtg, word(1)) <> cmCancel)
+            if (GetFirst MarRel = tsOK)
+              {
+                set TTNDocRepRazgr := MarPunkt.Name;
+                set TTNDocRepAdres := MarPunkt.npAddr;
+              }
+        }
+  End;
+
+//******************************************************************************
+cmDelOnProtect:
+  Case CurField of 
+    #TTNDocRepFirm:
+      {
+        set TTNDocRepFirm := '';
+        set cOrgAvt       := comp(0);
+      }
+
+    #TTNDocRepCar:
+      {
+        set TTNDocRepCar := '';
+        set cTransp      := comp(0);
+      }
+
+    #TTNDocRepDriver:
+      {
+        set TTNDocRepDriver := '';
+        set cDriver         := comp(0);
+      }
+
+    #TTNDocRepTransp:
+      {
+        set TTNDocRepTransp := '';
+        set cShipment       := comp(0);
+      }
+
+    #TTNDocRepList:
+      {
+        set TTNDocRepList := '';
+        set cPList        := comp(0);
+      }
+
+    #TTNDocRepBazis:
+      {
+        set TTNDocRepBazis := '';
+        set cTipOtg        := comp(0);
+      }
+
+    #TTNDocRepOtpR:
+      {
+        set TTNDocRepOtpR := '';
+        set cPersons2     := comp(0);
+        set sPost2        := '';
+      }
+
+    #TTNDocRepSdOtp:
+      {
+        set TTNDocRepSdOtp := '';
+        set cPersons       := comp(0);
+        set sPost          := '';
+      }
+
+    #TTNDocRepRazgr:
+      {
+        set TTNDocRepRazgr := '';
+        set cMarOtg        := comp(0);
+      }
+
+    #TTNDocRepAdres:
+      {
+        set TTNDocRepAdres := '';
+        set cAddr          := comp(0);
+      }
+  End;
+
+//******************************************************************************
+cmDone:
+  {
+    SaveMyDsk(wParam, 'ReplaceGroup_wParam');
+
+    if ((wParam and 2) = 2)
+      {
+        SaveMyDsk(TTNDocRepFirm,   'ReplaceGroup_TTNDocRepFirm');
+        SaveMyDsk(cOrgAvt,         'ReplaceGroup_cOrgAvt');
+
+        SaveMyDsk(TTNDocRepCar,    'ReplaceGroup_TTNDocRepCar');
+        SaveMyDsk(cTransp,         'ReplaceGroup_cTransp');
+
+        SaveMyDsk(TTNDocRepDriver, 'ReplaceGroup_TTNDocRepDriver');
+        SaveMyDsk(cDriver,         'ReplaceGroup_cDriver');
+
+        SaveMyDsk(TTNDocRepTransp, 'ReplaceGroup_TTNDocRepTransp');
+        SaveMyDsk(cShipment,       'ReplaceGroup_cShipment');
+
+        SaveMyDsk(TTNDocRepList,   'ReplaceGroup_TTNDocRepList');
+        SaveMyDsk(cPList,          'ReplaceGroup_cPList');
+                                 
+        SaveMyDsk(TTNDocRepBazis,  'ReplaceGroup_TTNDocRepBazis');
+        SaveMyDsk(cTipOtg,         'ReplaceGroup_cTipOtg');
+
+        SaveMyDsk(TTNDocRepOtpR,   'ReplaceGroup_TTNDocRepOtpR');
+        SaveMyDsk(cPersons2,       'ReplaceGroup_cPersons2');
+        SaveMyDsk(sPost2,          'ReplaceGroup_sPost2');
+                                                      
+        SaveMyDsk(TTNDocRepSdOtp,  'ReplaceGroup_TTNDocRepSdOtp');
+        SaveMyDsk(cPersons,        'ReplaceGroup_cPersons');
+        SaveMyDsk(sPost,           'ReplaceGroup_sPost');
+
+        SaveMyDsk(TTNDocRepRazgr,  'ReplaceGroup_TTNDocRepRazgr');
+        SaveMyDsk(cMarOtg,         'ReplaceGroup_cMarOtg');
+
+        SaveMyDsk(TTNDocRepAdres,  'ReplaceGroup_TTNDocRepAdres');
+        SaveMyDsk(cAddr,           'ReplaceGroup_cAddr');
+      }
+  }
+End; // HandleEvent Interface
+End. // Interface ReplaceGroup

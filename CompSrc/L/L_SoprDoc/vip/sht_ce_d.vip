@@ -1,0 +1,189 @@
+// ╔═══════════════════════════════╗
+// ║  Выбор контрагента и ДО       ║
+// ╚═══════════════════════════════╝
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Выбор контрагента и ДО
+
+Параметры:
+  pStepDoc       - ссылка на позицию ДО
+  pOrg           - ссылка на организацию
+#end
+
+//******************************************************************************
+
+Interface SHT_CE_OrgDo 'Выбор ДО'
+  ('Выбор, ДО по контрагенту',hcAllVPick,sci1EnEsc) EscClose,Cyan ;
+  show at (,,,);
+Create view loSHT_CE_OrgDo
+Var
+  begdate,
+  enddate : date ;
+  wdate   : word ;
+  pStepDoc,
+  pOrg     : comp ;
+From
+  KatOrg                             (KatORG02)
+  ,BaseDoc
+  ,StepDoc
+  ,TTNDoc
+  ,MarPunkt
+  ,synonym KatOrg ToOrg
+where
+((
+      201            ==   BaseDoc.VidDoc
+  and 2              ==   BaseDoc.Status
+  and KatOrg.nRec    ==   BaseDoc.cOrg
+  and BaseDoc.cGrPol ==   ToOrg.Nrec
+  and coBaseDoc      ==   TTNDoc.wTable
+  and BaseDoc.nRec   ==   TTNDoc.cDoc
+  and TTNDoc.cPunktR ==   MarPunkt.NRec
+))
+Bounds dDate =
+      begDate        <<=  BaseDoc.dDoc (NoIndex)
+  and endDate        >>=  BaseDoc.dDoc (NoIndex)
+;
+
+Parameters
+   pStepDoc
+  ,pOrg
+  ;
+
+#INCLUDE g_date.vpp ;
+
+Procedure SHT_CE_OrgDo_Filters_Set ;
+{
+  if (wDate = 1)
+    {
+      if (not BoundActive(tbDDate))
+        AddBounds(tbDDate) ;
+    }
+  else
+    {
+      if (BoundActive(tbDDate))
+        SubBounds(tbDDate) ;
+    }
+  ReReadRecord(#BaseDoc) ;
+}
+
+Screen brSHT_CE_OrgDo_Filters  ('Используемые фильтры по ДО',,sci1Esc) ;
+  show at (,,,4);
+  Table KatOrg ;
+Fields
+  wDate   ('Использовать фильтр') , noprotect ;
+  begDate ('Начало периода дат') , noprotect ;
+  endDate ('Конец периода дат') , noprotect ;
+<<
+  Использовать фильтр
+        [.] по датам `    от&.@@@@@@@@@@@&до&.@@@@@@@@@@@
+>>
+end ; // Screen brSHT_CE_OrgDo_Filters
+
+
+Browse brSHT_CE_OrgDo_KatOrg  ('Выбор Контрагента',,) ;
+  show at (,5,,12);
+  Table KatOrg ;
+Fields
+  KatOrg.Name 'Наименование' ('Наименование контрагента') : [60] , protect ;
+  KatOrg.Code 'Номер' ('Внутренний регистрационный номер контрагента') : [15] , protect ;
+end ; // Browse brSHT_CE_OrgDo_KatOrg
+
+Browse brSHT_CE_OrgDo_BaseDoc  ('Выбор Контрагента',,) ;
+  show at (,13,,);
+  Table BaseDoc ;
+Fields
+  BaseDoc.dDoc     'Дата'       ('Дата ДО') : [10] , protect,NoAutoSize ;
+  BaseDoc.NoDoc    'Номер'      ('Номер ДО') : [10] , protect ;
+  toOrg.Name       'Грузополучатель' ('Наименование контрагента - грузополучателя') : [20] , protect ;
+  MarPunkt.Name    'Пункт'      ('Наименование пункта разгрузки') : [20] , protect ;
+  BaseDoc.Name     'Примечание' ('Примечание к ДО') : [12] , protect ;
+end ; // Browse brSHT_CE_OrgDo_BaseDoc
+
+HandleEvent // Interface SHT_CE_OrgDo
+cmDefault :
+  {
+    if (CurTable=#KatOrg)
+      {
+        if (isValid(#BaseDoc))
+          {
+            SelectPanel(#BaseDoc) ;
+            SelectField(#BaseDoc.dDoc) ;
+            Stop ;
+          }
+        else
+          {
+            Message(''#3'Для Данного контрагента нет ДО...',CancelButton) ;
+            Stop ;
+          }
+      }
+    else
+      if (isValid(#BaseDoc))
+        {
+          pStepDoc := if (GetFirst StepDoc
+                            where ((BaseDoc.nRec == StepDoc.cBaseDoc)) = tsOk,
+                          StepDoc.nRec,comp(0))  ;
+          pOrg := KatOrg.nRec ;
+          CloseInterface(cmOk) ;
+        }
+  }
+
+cmCheckField :
+  SHT_CE_OrgDo_Filters_Set ;
+
+cmInit :
+  {
+    LoadDate(begdate,'SHT_CE_OrgDo_begdate',
+             enddate,'SHT_CE_OrgDo_enddate');
+    if (not ReadMyDsk(wdate,'SHT_CE_OrgDo_wdate',TRUE))
+      wdate := 0 ;
+
+    SHT_CE_OrgDo_Filters_Set ;
+
+    if (GetFirst <> tsOK) {} ;
+
+    ReSetBounds (#BaseDoc)
+    ReSetBounds (#KatOrg)
+    if (pStepDoc <> 0)
+      if (GetFirst StepDoc where ((pStepDoc==StepDoc.nRec))=tsOk)
+        {
+          BaseDoc.nRec := StepDoc.cBaseDoc ;
+          if (GetEqual(#BaseDoc,0))
+            pOrg := BaseDoc.cOrg ;
+          if (BaseDoc.dDoc < begDate)
+            begDate := BaseDoc.dDoc
+          if (BaseDoc.dDoc > endDate)
+            endDate := BaseDoc.dDoc
+        }
+    if (pOrg <> 0)
+      {
+        KatOrg.nRec := pOrg
+        if (not GetEqual(#KatOrg,0) )
+          pOrg := 0 ;
+      }
+    SetBounds (#KatOrg)
+    SetBounds (#BaseDoc)
+
+    SHT_CE_OrgDo_Filters_Set ;
+
+    if (pOrg = 0)
+      if (GetFirst <> tsOk) {} ;
+
+    ReReadRecord(#KatOrg) ;
+    ReReadRecord(#BaseDoc) ;
+
+    SelectPanel(#KatOrg) ;
+    SelectField(#KatOrg.Name) ;
+  } // cmInit
+
+cmPrintDoc :
+  RunMenu('Sell_Rep') ;
+
+cmDone :
+  SaveDate(begdate,'SHT_CE_OrgDo_begdate',
+           enddate,'SHT_CE_OrgDo_enddate');
+
+end ; // HandleEvent Interface SHT_CE_OrgDo
+end. // Interface SHT_CE_OrgDo

@@ -1,0 +1,126 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Печать железнодорожной накладной                          ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+! Описание номеров полей смотри в файле DOCFRM\albums.doc (форма ПД9)
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Печать железнодорожной накладной
+
+Параметры:
+  pNRec - ссылка на сопр.документ
+#end
+
+//******************************************************************************
+
+Interface PrintZhdNakl 'Печать железнодорожной накладной' EscClose;
+Create view
+var
+  x       : word;
+  pNRec   : comp;
+  tempstr : string;
+
+from
+  KatSopr,
+  NZakaz,
+  SpSopr,
+  KatMC,
+  KatOrg,
+  KatBank,
+  NPunkts;
+
+parameters pNRec;
+
+form FrmZhdn('zdNakl.rtf','zhdnakl') with novisual;
+
+procedure WriteS(Value: string);
+{
+  FrmZhdn.Write(Value);
+}
+
+Procedure WritePositions(i: word; skipflag: boolean);
+{
+  if (SkipFlag)
+    FrmZhdn.SkipFormat(6)
+  else
+    {
+      FrmZhdn.SkipFormat(3);
+      if (GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk)
+        FrmZhDn.Write(KatMC.Name)
+      else
+        FrmZhdn.SkipFormat(1);
+      FrmZhdn.SkipFormat(2);
+    }
+  case i of
+    1 : FrmZhdn.SkipFormat(1);  // 36
+    5 : FrmZhdn.SkipFormat(1);  // 47
+    6 : FrmZhdn.SkipFormat(1);  // 48
+  end;
+} // procedure WritePositions
+
+
+HandleEvent
+cmInit :
+  {
+    Abort;
+    if (GetFirst KatSopr where ((pNRec == KatSopr.NRec)) <> tsOk)
+      {
+        Message(''#3'Не найдена накладная для печати...',CancelButton);
+        Exit;
+      }
+    Writes(KatSopr.NSopr); // 02
+    FrmZhdn.SkipFormat(9); // 11,16,03,04,05,06,07,08,09
+    FrmZhdn.SkipFormat(2); // Пункт отгрузки (наш) 12,13
+    if ( (GetFirst NZakaz where ((KatSopr.cNZakaz == NZakaz.NRec)) = tsOk) and
+         (GetFirst NPunkts where ((NZakaz.cPunktR == NPunkts.NRec)) = tsOk) )
+      Writes(NPunkts.npName); // 14
+    else
+      FrmZhdn.SkipFormat(1);  // 14
+    tempstr := '';
+    if not (( (KatSopr.cGruzFrom <> 0) and
+            (GetFirst KatOrg where ((KatSopr.cGruzFrom == KatOrg.NRec)) = tsOk) ))
+      FrmZhdn.SkipFormat(1); // 17
+    else
+      {
+        Writes(KatOrg.Name);   // 17
+        tempstr := KatOrg.Addr;
+      }
+    FrmZhdn.SkipFormat(1);     // 18
+    KatOrg.Addr := '';
+    if ( (KatSopr.cGruzTo <> 0) and
+         (GetFirst KatOrg where ((KatSopr.cGruzTo == KatOrg.NRec)) = tsOk) )
+      Writes(KatOrg.Name);   // 19
+    else
+      FrmZhdn.SkipFormat(1); // 19
+    FrmZhdn.SkipFormat(1);     // 20
+    Writes(tempstr);           // 21
+    WriteS(KatOrg.Addr);       // 22
+    if (GetFirst KatOrg where ((KatSopr.cOrg == KatOrg.NRec)) = tsOk)
+      Writes(KatOrg.Name);
+    else
+      FrmZhdn.SkipFormat(1);   // 23
+    FrmZhdn.SkipFormat(14);    // 24, 26, 27, 28, 29, 37, 38, 78, 30, 34, 31, 35, 32, 35x
+    x := 1;
+    _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr))
+                                ordered by index SpSopr02
+      {
+        WritePositions(x,false); // 7
+        x := x + 1;
+        if x = 9
+          break;
+      }
+
+    while (x < 9) do
+      {
+        WritePositions(x,true);  // 7
+        x := x + 1;
+      }
+    FrmZhdn.SkipFormat(31) // 76,45,49,46,53,50,51,54,55,56,52,61,62,63,57,58,64,59
+                           // 60,65,66,67,68,69,70,71,72,73,74,75,77
+    FrmZhdn.ShowFile;
+  }
+end;
+
+End.

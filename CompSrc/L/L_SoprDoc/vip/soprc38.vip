@@ -1,0 +1,100 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#doc
+Назначение:
+  Пересчет налогов по соп. услугам (накладные на приход)
+
+Параметры:
+  pSpSopr    - ссылка на позицию сопр.документа
+  pGrNal     - ссылка на группу налогов
+  pchGrNal   - ссылка на группу налогов
+  RecKatSopr - ссылка на сопр.документ
+  _SumNDS    - сумма налогов в НДЕ
+  _SumVNDS   - сумма налогов в валюте
+#end
+
+//******************************************************************************
+
+Interface iRecalcSpSopUslNalogs EscClose, cacheable, AlwaysReturn;
+
+Create view
+var
+  pSpSopr, pGrNal, pchGrNal: comp;
+  _SumNDS, _SumVNDS: double;
+  RecKatSopr: type$KatSopr;
+
+from
+  SpSopr,
+  KatSopr,
+  SpDocNal
+
+where
+((
+  pSpSopr         ==  SpSopr.NRec      AND
+  SpSopr.cSopr    ==  KatSopr.NRec     AND
+  KatSopr.VidSopr ==  SpDocNal.TipDoc  AND
+  SpSopr.NRec     ==  SpDocNal.cSpDoc
+));
+
+Parameters
+  pSpSopr,
+  pGrNal,
+  pchGrNal,
+  RecKatSopr,
+  _SumNDS,
+  _SumVNDS
+;
+
+Procedure RecalcSpSopUslNalogs;
+var
+  vaGrNal: comp;
+  WDate   : Date;
+{
+  if (SpSopr.ManualTax <> 0)
+    Exit; // Если налоги ручные, то выход...
+
+  KatSopr.buffer := RecKatSopr;
+
+  case wGetTune('Doc.DateForRecalcNalogs') of
+    0: WDate := if (longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+    1: WDate := if (longint(KatSopr.dSopr) <> 0, KatSopr.dSopr, KatSopr.dPrice);
+  end;
+
+  if (pchGrNal <> 0)
+    vaGrNal := pchGrNal;
+  else
+    if (GetFirst SpDocNal <> tsOk)
+      vaGrNal := pGrNal;
+    else
+      vaGrNal := if (SpDocNal.cGrNal <> 0, SpDocNal.cGrNal, pGrNal);
+
+  if (KatSopr.VhodNal = 1)
+    {
+      CountBasePrice(KatSopr.NRec, SpSopr.NRec, KatSopr.VidSopr, vaGrNal,
+                        KatSopr.cOrgBase, 0, 0, WDate, KatSopr.cValut, 0,
+                        SpSopr.Price, SpSopr.VPrice, KatSopr.cPayment);
+      _SumNDS  := SpSopr.Price  - GetBasePrice;
+      _SumVNDS := SpSopr.VPrice - GetBaseValPrice;
+    }
+  else
+    {
+      CountNalogPrice(KatSopr.NRec, SpSopr.NRec, KatSopr.VidSopr, vaGrNal,
+                       KatSopr.cOrgBase, 0, 0, WDate, KatSopr.cValut, 0,
+                       SpSopr.Price, SpSopr.VPrice, KatSopr.cPayment);
+      _SumNDS  := GetNalogPrice    - SpSopr.Price;
+      _SumVNDS := GetNalogValPrice - SpSopr.VPrice;
+    }
+}
+
+HandleEvent
+cmInit:
+  {
+    RecalcSpSopUslNalogs;
+    Abort;
+  }
+end;
+End.

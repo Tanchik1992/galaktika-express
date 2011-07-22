@@ -1,0 +1,160 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#doc
+Назначение:
+   Выбор  накладных
+
+Параметры:
+  aDocument  - если указано ДО, то фильтр по ДО, иначе - (2.)
+  Kontragent - если указан контрагент - фильтр по контрагенту иначе - показывать все
+  pNrec      - позиционирование
+#end
+
+//******************************************************************************
+
+Interface Spis_Nakl ' Выбор накладной '(, hcSellWActPriemPickNakl, ) doAccept, EscClose, Cyan;
+  Show at (, , , 31);
+Create view
+var
+  pNRec,                // pNRec - Автоустановка на накладную
+  Kontragent,
+  aDocument  : comp;
+  TypeSopr   : word;
+  s_SimvRub  : string;
+  begdate,
+  enddate,
+  dForm_nakl: Date;
+
+(
+  Valut,
+  Sum,
+  SumNakl,
+  prord,
+  BDNomDes,
+  KatNomDes
+)
+
+As select
+
+  if (KatSopr.cVal = 0, if (s_SimvRub = '', 'руб.', s_SimvRub), KlVal.SimvolV),
+  if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal),
+  LPad((String(Sum) + ' ' + Valut), 20),
+  if (longint(KatSopr.dOpr) = 0, '-', '+'),
+  PrintNumber(BaseDoc.Descr, BaseDoc.NoDoc),
+  PrintNumber(KatSopr.Descr, KatSopr.NSopr),
+
+  KatSopr.*,
+  KatOrg.Name,
+  klVal.SimvolV
+
+from
+  KatSopr,
+  KatOrg,
+  KlVal,
+  StepDoc,
+  BaseDoc
+
+where
+((
+  TypeSopr          == KatSopr.VidSopr    AND
+  KatSopr.cOrgBase  == KatOrg.NRec        AND
+  KatSopr.cValut    == KlVal.NRec         AND
+
+  KatSopr.cStepDoc  == StepDoc.NRec       AND
+  StepDoc.cBaseDoc  == BaseDoc.NRec
+))
+
+ bounds FltDoc      = aDocument  == KatSopr.cStepDoc   AND
+                      TypeSopr   == KatSopr.VidSopr
+                      ordered by KatSopr.dSopr, katSopr.NSopr
+
+ bounds FltOrg      = TypeSopr   == KatSopr.VidSopr    AND
+                      Kontragent == KatSopr.cOrgBase   (NoIndex)
+                      ordered by KatSopr.dSopr, katSopr.NSopr
+
+ bounds MainBound   = TypeSopr   == KatSopr.VidSopr
+                      ordered by KatSopr.dSopr, katSopr.NSopr
+
+ bounds dMainBound  = begdate   <<= KatSopr.dSopr (Noindex) AND
+                      enddate   >>= KatSopr.dSopr (NoIndex)
+
+;
+
+Parameters
+  aDocument,    // 1. если указано ДО, то фильтр по ДО, иначе - (2.)
+  Kontragent,   // 2. если указан контрагент - фильтр по контрагенту иначе - показывать все
+  pNrec         // позиционирование
+;
+
+Panel pnSelect
+  Table KatSopr
+Browse brSelectNakl ('Для выбора приходной накладной нажмите <ENTER>', , sci1EnEsc);
+fields
+  KatSopr.dSopr 'Дата'       : [10, 'DD/MM/YYYY'], protect, NoDel;
+  KatNomDes     'Номер'      : [20], protect, Nodel;
+  BDNomDes      'Номер ДО'   : [20], protect, Nodel;
+  KatOrg.Name   'Поставщик'  : [28], protect, Nodel;
+  SumNakl       'Сумма'      : [20], protect, Nodel;
+  PrOrd         'О'          : [1],  skip;
+end; // Browse
+
+#include soprc24.vpp //Процедура фильтра дат
+
+HandleEvent
+
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuFiltrForNaklDate'));
+
+cmFilterSave:
+  if (isValid(#KatSopr) or BoundActive(tbdMainBound))
+    SetDateFlt
+  else
+    Message('Нет записей для фильтрации.', Information);
+end;
+
+end; // panel
+
+
+HandleEvent
+
+cmInit:
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    TypeSopr := 201;
+
+    if aDocument = comp(0)
+      SetOrgFlt;
+    else
+      {
+         PushBounds(tbFltDoc);
+         if (GetFirst KatSopr <> tsOk)
+           {
+              PopBounds(tbFltDoc);
+              SetOrgFlt;
+           }
+      }
+
+     IF (GetFirst KatSopr where (( pNrec == KatSopr.NRec )) <> tsOk)
+         if GetLast KatSopr = tsOk {};   //позиционирование
+
+     RereadRecord(#KatSopr);
+     ProtectRecord(#KatSopr, TRUE);
+  }
+
+cmProtectedInput:
+  Stop;
+
+cmDefault:
+  pNRec := KatSopr.NRec;
+
+end; // HandleEvent Interface
+End.
+
+mnuFiltrForNaklDate Menu
+{
+-'Фильтр по дате', cmFilterSave, 'Установка и снятие фильтра по датам', hcctxSoprFilterSave, 'Alt-B', kbAltB, sci1Esc;
+}

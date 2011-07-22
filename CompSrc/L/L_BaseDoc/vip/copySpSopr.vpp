@@ -1,0 +1,197 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// копирование спецификации приходной накладной в ДО на продажу
+//******************************************************************************
+
+#include DEIfuns.var
+
+Create view loCopySopr
+from
+  SpSopr,
+  SpOrder,
+  Pick
+;
+
+//******************************************************************************
+
+Function GetUchetPrice (pSpSopr: comp): double;
+var
+  sum: double;
+{
+  sum := 0;
+
+  loCopySopr._LOOP SpOrder where ((pSpSopr == SpOrder.cSpSopr))
+    sum := sum + loCopySopr.SpOrder.SrPrice*loCopySopr.SpOrder.Kol;
+
+  GetUchetPrice := sum/loCopySopr.SpSopr.KolOpl;
+}
+
+//******************************************************************************
+
+Function GetPriceDO: double;
+var 
+  sum0
+, sum: double;
+{
+  sum0 := 0;
+
+  case Par3 of
+  //----------
+    0: 
+      sum0 := loCopySopr.SpSopr.Price;
+  //----------
+    1: 
+      if (GetFirst Prices
+                where ((SpStep.cMCUsl == Prices.cThing AND
+                        cMCPrice      == Prices.cKlPrice)) = tsOk)
+        if ((BaseDoc.cVal <> KlPrice.cVal) AND (BaseDoc.cVal <> 0))
+            sum0 := 0;
+        else
+          {
+            SpStep.cPriceList := Prices.cKlPrice;
+            SpStep.Garant     := Prices.Garant;
+
+            if (Prices.cOtpEd = SpStep.cOtpEd)
+              sum0 := if (BaseDoc.cVal = 0, Prices.Price, Prices.SumVal);
+            else
+              {
+                var k1: double;  k1 := fEdIzm.GetKoefOtpEd(SpStep.cOtpEd);
+                var k2: double;  k2 := fEdIzm.GetKoefOtpEd(Prices.cOtpEd)
+
+                sum0 := if (BaseDoc.cVal = 0, Prices.Price, Prices.SumVal);
+                sum0 := sum0*k1/k2;
+              }
+          }
+  //----------
+    2:    
+      sum0 := GetUchetPrice(loCopySopr.SpSopr.NRec);
+  //----------
+  end;
+
+  sum := if (BaseDoc.cVal = 0, sum0, oValFunc.GetAnyCurrency(comp(0), sum0, BaseDoc.dDoc, BaseDoc.cVal));
+
+  GetPriceDO := sum;
+}
+
+
+//******************************************************************************
+
+Procedure CopySpSoprToDO;
+{
+  if ( not EditDOPosEnabled(true, true) )
+    Exit;
+
+  if (tipDO <> 201) AND (tipDO <> 1420)
+    Exit;
+
+  if (tipDO = 201)
+    if (boGetTune('Doc.Sell.NotEditDO'))
+      if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+        {
+          Message('Редактирование документа-основания при наличии'+
+                  ''#3#13'сопроводительных или платежных документов ЗАПРЕЩЕНО!',
+                  Information);
+          Exit;
+        }
+
+  if (tipDO = 1420)
+    if (boGetTune('Doc.Wood.Schet.NotEditDO'))
+      if (IsValid(tnBaseFin) OR IsValid(tnKatSopr))
+        {
+          Message('Редактирование счета лесопользователя при наличии'+
+                  ''#3#13'сопроводительных или платежных документов ЗАПРЕЩЕНО!',
+                  Information);
+          Exit;
+        }
+
+  if (CurTable <> #BaseDoc)
+    Exit;
+
+  if (not UpdateTable)
+    Exit;
+
+  if (BaseDoc.cOrg = 0)
+    {
+      Message('В документе-основании необходимо указать контрагента!', Warning+OkButton);
+      SelectField(#KatOrg.Name);
+      Exit;
+    }
+
+  if (BaseDoc.VidDoc = 1410)
+  {
+    if (RunInterface(GetSomeKatSopr, word(1410), Date(1, 1, 1900), Cur_Date, word(1), word(0)) = cmCancel)
+      Exit;
+  }
+  else
+    if (RunInterface(GetSomeKatSopr, word(101), Date(1, 1, 1900), Cur_Date, word(1), word(0)) = cmCancel)
+      Exit;
+
+  Par8 := 1;
+  if (RunWindowModal(CopyDOPar) <> cmDefault)
+    Exit;
+
+  if (Par3 = 2)
+    {
+      if (GetFirst KlPrice where ((cMCPrice == KlPrice.NRec)) = tsOk)
+        update current BaseDoc set BaseDoc.dPrice := KlPrice.dPrice;
+    }
+
+  loCopySopr._LOOP Pick where ((word(22) == Pick.wList))
+    loCopySopr._LOOP SpSopr where ((loCopySopr.Pick.cRec == SpSopr.cSopr))
+      {
+        if (loCopySopr.SpSopr.PrMC <> 1)
+          continue;
+
+        ClearBuffer(#SpStep);
+
+        SpStep.Npp      := oSpNext.GetSpNppNext(SpStep.cStepDoc, coSpStep);
+        SpStep.dDoc     := BaseDoc.dDoc;
+        SpStep.cStepDoc := StepDoc.NRec;
+        SpStep.cVal     := StepDoc.cVal;
+        SpStep.PrSkid   := 1;
+        SpStep.PrMC     := 1;
+        SpStep.cOtpEd   := loCopySopr.SpSopr.cOtpEd;
+        SpStep.cMCUSL   := loCopySopr.SpSopr.cMCUSL;
+        SpStep.cGrNal   := loCopySopr.SpSopr.cGrNal;
+
+        SpStep.Netto    := loCopySopr.SpSopr.Netto;
+        SpStep.MTara    := loCopySopr.SpSopr.MTara;
+        SpStep.wMcProp  := loCopySopr.SpSopr.wMcProp; //С-собственный, Н-несобственный товар/услуга
+        SpStep.ProcUb   := loCopySopr.SpSopr.ProcUb;
+
+        SpStep.Kol      := loCopySopr.SpSopr.KolOpl;
+        SpStep.KolSkl   := SpStep.Kol;
+
+        if (Par4 = 1)
+          SpStep.cParty := loCopySopr.SpSopr.cParty;
+
+        SpStep.Price    := GetPriceDO;
+
+        if (BaseDoc.cVal = 0)
+          {
+            SpStep.Price := oDOfuns.froundrub2_1(SpStep.Price);
+            SpStep.Summa := froundrub2(SpStep.Price*SpStep.Kol);
+          }
+        else
+          {
+            SpStep.Price := oDOfuns.froundval2_1(SpStep.Price);
+            SpStep.Summa := froundval2(SpStep.Price*SpStep.Kol);
+          }
+
+        if (insert current SpStep = tsOk)
+          if UseDEI
+            {
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 1, 0, SpStep.KolSkl, longint(0), BaseDoc.VidDoc);
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 2, 0, SpStep.Kol,    longint(0), BaseDoc.VidDoc);
+              oDEIfuns.UpdateDEIKolSpStep(SpStep.NRec, SpStep.PrMC, SpStep.cMCUsl, 3, 0, SpStep.KolOpl, longint(0), BaseDoc.VidDoc);
+            }
+      }
+
+  RereadRecord;
+  GetTotalSkid(false);
+  update current BaseDoc;
+  RereadRecord;
+}
+
+//******************************************************************************

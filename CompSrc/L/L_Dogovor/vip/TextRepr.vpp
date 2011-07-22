@@ -1,0 +1,688 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - Логистика
+// Текстовое представление договора
+//******************************************************************************
+
+var
+  WayToHandle: word;
+
+#doc
+Окно параметров замены текстового представления договора
+#end
+Window WayToParse 'Подтверждение' DoAccept, EscClose, Gray;
+  Show at (, , 40, 10);
+
+Panel paWayToParse
+Screen Scr01(, hcNoConText, sci1Esc);
+Fields
+  WayToHandle('Режим формирования'): NoProtect;
+Buttons
+  cmOk, , , 'Формировать документ', , sci1EnEsc;
+  cmCancel, , , 'Отменить формирование документа', , sci1EnEsc;
+
+<<
+
+     Исходный документ не пуст !
+
+     (.) Заместить существующий `
+     (.) Добавить в конец       `
+
+    <.Формировать.> <.Отказаться.>
+
+>>
+
+end; // Screen
+end; // Panel
+
+HandleEvent  // Window
+
+cmInit:
+  if not ReadMyDsk(WayToHandle, 'Dogovor_WayToHandle', FALSE)
+    WayToHandle := 0;
+
+cmOk:
+  PutCommand(cmDefault);
+
+cmDone:
+  SaveMyDsk(WayToHandle, 'Dogovor_WayToHandle');
+
+end; // HandleEvent - Window
+end; // Window
+
+File FormOfDocument;
+File TextOfDocument;
+
+#doc
+Окно редактирования текстового представления
+#end
+Window EditTextRepr 'Редактирование документа' EscClose;
+  Show at (, , 76, 25);
+
+Panel paEditTextRepresent
+  Show at (, , , 6);
+  Table DocInfo;
+
+Screen Scr00(, hcDogTextRepEd, sci178Esc);
+Fields
+  DocInfo.Name ('Наименование документа', , sci178Esc) : NoProtect;
+  Language.Name('Язык документа'        , , sci1378Esc): Protect;
+Buttons
+  cmNal, , , 'Формировать документ шаблону из репозитария', , sci1EnEsc;
+
+<<
+
+`Наименование`.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@`Язык`.@@@@@@@@@@@@@@@@@@
+
+                    <. Сформировать по шаблону .>
+
+>>
+
+end; // Screen
+HandleEvent
+
+cmSetDefault:
+  {
+    ClearBuffer(#DocInfo);
+    DocInfo.cDoc := Dogovor.nRec
+  }
+
+cmPick:
+  {
+    case CurField of
+      #Language.Name:
+        RunInterface('Language', word(1), DocInfo.cLang, '');
+    end;
+
+    RedrawPanel(#DocInfo);
+  }
+
+cmOpenSearch:
+  PutCommand(cmPick);
+
+cmInsertRecord:
+  insert current DocInfo;
+
+cmUpdateRecord:
+  update current DocInfo;
+
+cmDeleteRecord:
+  if ( Message('Удалить?', Warning + YesNo) = cmYes )
+    delete current DocInfo;
+
+end; // HandleEvent
+end; // Panel
+
+// поиск позиции со сбалансированной скобкой в строке
+// ....................(...........).......
+//                                 ^
+//                                 |
+Function FindBalance(S: string): integer;
+var
+  ind         // коунтер
+, k           // количество "(" минус количество ")" в строке S
+, j           // смещение последней сбалансированной")"
+, rPosition
+    : integer;
+{
+
+  k := 0;
+  j := -1;
+
+  // пробежка по строке
+  var Ch: string;
+
+  For(ind := 1; ind <= Length(S); ind := ind + 1)
+    {
+      Ch := SubStr(S, ind, 1);
+
+      if ( Ch = '(' )
+        k := k + 1
+      else
+        if ( Ch = ')' )
+          {
+            k := k - 1;
+            j := ind;
+
+            if ( k = 0 )
+              Break;
+          }
+        else
+          if ( Ch = '''' )
+            {
+              rPosition := InStr( '''', SubStr(S, ind + 1, 255));
+
+              if ( rPosition = 0 )
+                {
+                  j := -1;
+                  Break;
+                }
+              else
+                ind := ind + rPosition;
+            }
+    }
+
+  if ( k = 0 )
+    FindBalance := j
+  else
+    FindBalance := -1;
+}
+
+exception ExBadEndOfCicle;
+exception ExNeedTableName;
+exception ExTableNotSuppored;
+
+var sErrTblName: string;
+
+//--------------------------------------------------------
+Function GetFirstTable(sTblName: string): boolean;
+{
+  case UpCase(sTblName) of
+  //********************************************************
+    'SPDOCS'  : GetFirstTable := GetFirst SpDocs   = tsOK;
+    'SPDOCNAL': GetFirstTable := GetFirst SpDocNal = tsOK;
+    'SPGRSCH' : GetFirstTable := GetFirst SpGrSch  = tsOK;
+  //********************************************************
+  else
+    {
+      sErrTblName := sTblName;
+      _raise ExTableNotSuppored;
+    }
+  end;
+}
+
+//--------------------------------------------------------
+Function GetNextTable(sTblName: string): boolean;
+{
+  case UpCase(sTblName) of
+  //******************************************************
+    'SPDOCS'  : GetNextTable := GetNext SpDocs   = tsOK;
+    'SPDOCNAL': GetNextTable := GetNext SpDocNal = tsOK;
+    'SPGRSCH' : GetNextTable := GetNext SpGrSch  = tsOK;
+  //******************************************************
+  else
+    {
+      sErrTblName := sTblName;
+      _raise ExTableNotSuppored;
+    }
+  end;
+}
+
+//--------------------------------------------------------
+
+Function FormDocument(First, Last: integer) : boolean;
+var
+  i, j, k, StructEnd  : integer;
+  TableName, MetaFunc : string;
+
+{
+  if ( Last = -1 )
+    Last := RInCharCount;                     //определяем колличество символов в документе
+
+  while ( First < Last) do                    // Просмотр шаблона от First до Last
+    {
+      i := RFindText('&(', First, Last);      // Находим начало цикла
+      j := RFindText('.{LOOP', First, Last);  // и переменной
+
+      if ( (i = -1) and (j = -1) )            // Если ничего не найдено
+        {                                     // то перермещаем весь текст
+          RPutOut(First, Last);
+          First := Last;
+        }
+
+      if (    ((i  < j)  and (i <> -1))       //Переменная раньше
+           or ((i <> -1) and (j  = -1)) )
+        {
+          RPutOut(First, i);                  //Перемещаем весь текст до переменной
+
+          StructEnd := RFindEndOfStruct(i, Last, '(', ')');  //Находим окончание переменной
+
+          if ( StructEnd = -1 )               //Что-то не то со скобками
+            {
+              Message('Нарушен баланс скобок метапеременой.');
+              FormDocument := FALSE;
+              Exit;
+            }
+
+          RSetSelStart(i + 2);                //Устанавливаем начальную позицию переменной (без символов '&(')
+          RSetSelLen(StructEnd - i - 1);      //Устанавливаем длину переменной (без ')')
+          MetaFunc := RGetSelText;            //Копируем саму переменную
+
+          RSetSelStart(i);
+          RSetSelLen(StructEnd - i);
+          RPutOutWithReplace(i, StructEnd, LOTexpressionFunc(MetaFunc, '')); // Перемешаем переменную в
+                                                                             // вых документ и заменяем ее
+          First := StructEnd;
+        }
+
+      if (    ((i  > j)  and (j <> -1))       // Первый идет цикл
+           or ((j <> -1) and (i  = -1)) )
+        {
+          RPutOut(First, j - 2);              //Перемещаем весь текст до цикла
+
+          StructEnd := RFindEndOfStruct(j, Last, '.{LOOP', '.}');  //Находим окончание цикла
+
+          if ( StructEnd = -1 )               //Что-то не то со скобками
+            {
+              Message('Нарушен баланс скобок цикла.');
+              FormDocument := FALSE;
+              Exit;
+            }
+
+          TableName := RFindLoopTable(j, StructEnd);  //Находим имя таблицы ( от loop до #13)
+          k := Length(TableName);                     //Находим длину всего этого
+
+          TableName := Trim(TableName);               //а вот и нормальное имя даблицы
+
+          if ( TableName = '' )
+            _raise ExNeedTableName;
+
+          if GetFirstTable(Trim(TableName))
+            {
+              if not FormDocument(j + 6 + k, StructEnd - 3)      //запускаем ф-ю для содержимого цикла
+                {
+                  FormDocument := false;
+                  Exit;
+                }
+              while GetNextTable(Trim(TableName)) do
+                if not FormDocument(j + 6 + k, StructEnd - 3)
+                  {
+                    FormDocument := false;
+                    Exit;
+                  }
+            }
+
+          First := StructEnd + 1;
+        }
+    }
+
+  FormDocument := TRUE;
+}
+
+
+Panel paEditTextRField
+  Show at (, 7, , );
+
+Table DocInfo;
+  Text DocInfo.TextData;
+
+end; // Panel
+
+HandleEvent  // Window
+
+cmNal:
+  {
+    // выберем шаблон
+    var DocToCreate: comp;
+
+    if ( RunInterface('MouldDoc', word(1), DocToCreate) = cmCancel )
+      Exit;
+
+    if ( GetFirst FastFirstRow MouldDoc where (( DocToCreate == MouldDoc.nRec )) <> tsOk )
+      Exit;
+
+    set DocInfo.cLang := MouldDoc.cLang;
+    set DocInfo.Name  := MouldDoc.Name;
+
+    if ( GetMemoPrefix(#MouldDoc) = 'RTF' )               //Обработка RTF документа
+      {
+        var  fileName : string;
+
+        StartNewVisual(vtRotateVisual, vfTimer , 'Формирование документа...', 0);
+
+        FileName := TranslatePath('%OutputFilesDirectory%') + 'tmp.rtf';
+
+        if  not ExportMemoToFile(MouldDoc.TextData, FileName, FALSE)
+          {
+            Message('Не могу импортировать данные в файл шаблона.');
+            Exit;
+          }
+
+        if ( not RReadFile(FileName))
+          Exit;
+
+        _try
+          {
+            FormDocument(0, -1);
+
+            RSaveFile(FileName);
+            RFreeMemory;
+
+            ImportFileToMemo(DocInfo.TextData, FileName, FALSE);
+          }
+        _except on ExUserBreak:
+           Message('Формирование документа прервано пользователем.');
+        //**************************
+        _except on ExDataBase:
+          Message('Ошибка в базе ' + ExploreException, Error + OkButton);
+        //**************************
+        _except on ExTableNotSuppored:
+          Message('Цикл по таблице ' + sErrTblName + ' не поддерживается. Обратитесь к разработчикам', Error + OkButton);
+        //**************************
+        _except on ExNeedTableName:
+          Message('Требуется указать имя таблицы, по которой будет цикл (LOOP)', Error + OkButton);
+       //**************************
+        _finally
+          {
+            StopVisual('', 0);
+          }
+
+        RedrawPanel(#DocInfo);
+        Exit;
+      }
+
+    // Откроем файлы
+    if ( NOT FormOfDocument.OpenMemo(MouldDoc.TextData) )
+      Exit;
+
+    if ( NOT TextOfDocument.OpenMemo(DocInfo.TextData) )
+      {
+        FormOfDocument.Close;
+        Exit;
+      }
+
+    delete all TmpCicleTables;
+
+    _try
+      {
+        StartNewVisual(vtRotateVisual, vfTimer + vfBreak + vfConfirm, 'Формирование документа...', 0);
+
+        // займемся разборкой документа
+        // в первую очередь проверим шаблон
+        if ( FormOfDocument.GetSize = 0 )
+          {
+            Message('Шаблон пуст', Error + OkButton);
+            _doFinally;
+          }
+
+        // затем исходный документ
+        if ( TextOfDocument.GetSize <> 0 )
+          if ( RunWindowModal(WayToParse) = cmCancel )
+            _doFinally;
+
+        if ( WayToHandle = 0 )
+          {
+            TextOfDocument.Seek(0);
+            TextOfDocument.Truncate;
+          }
+        else
+          {
+            TextOfDocument.Seek(TextOfDocument.GetSize);
+            TextOfDocument.Writeln('');
+          }
+
+        // запускаем процесс разбора и формирования текстового
+        // представления документа
+        var StripLine, ResultLine: string;
+        var rPosition, LineCount : word;
+
+        // подготовили счетчик
+        LineCount := 0;
+
+        While not FormOfDocument.EOF do
+          {
+            LineCount := LineCount + 1;
+
+            iNextVisual('Формирование документа...'#13 + string(LineCount));
+
+            FormOfDocument.ReadLn(StripLine);
+
+            // дальше идет процесс расшифровки строки
+            // и поиска в ней мета переменных
+            ResultLine := '';
+
+            While TRUE do
+              {
+//******************************************************************************
+// Цикл по таблице оформляется таким образом:
+//.{LOOP Имя_Таблицы
+//.}
+// Допускаются лидирующие пробелы
+//******************************************************************************
+
+                // начало цикла по таблице
+                if ( UpCase(SubStr(trim(StripLine), 1, 7)) = '.{LOOP ' )
+                  {
+                    var BegCicle: longint;
+                    var TblCicle: string;
+
+                    TblCicle := SubStr(trim(StripLine), 8, 255);
+
+                    if ( TblCicle = '' )
+                      _raise ExNeedTableName;
+
+                    if GetFirstTable(TblCicle)
+                      {
+                        BegCicle := FormOfDocument.GetPos;
+
+//------------------------------------------------------------------------------
+// Добавление во временную таблицу циклов
+//------------------------------------------------------------------------------
+                        var CicleNo: word;
+
+                        if ( GetLast TmpCicleTables <> tsOK )
+                          CicleNo := 0
+                        else
+                          CicleNo := TmpCicleTables.No;
+
+                        ClearBuffer(#TmpCicleTables);
+
+                        TmpCicleTables.No       := CicleNo + 1;
+                        TmpCicleTables.TblName  := TblCicle;
+                        TmpCicleTables.StartPos := BegCicle;
+
+                        insert current TmpCicleTables;
+//------------------------------------------------------------------------------
+                      }
+                    else
+                      // ищем конец цикла
+                      While TRUE do
+                        {
+                          if FormOfDocument.EOF
+                            {
+                              StripLine := '';
+                              Break;
+                            }
+
+                          FormOfDocument.ReadLn(StripLine);
+
+                          // конец цикла по таблице
+                          if ( trim(StripLine) = '.}' )
+                            Break;
+                        }
+
+                    Break;
+                  }
+
+                // следующая итерация цикла
+                if ( trim(StripLine) = '.}' )
+                  if NOT IsValid(#TmpCicleTables)
+                    {
+                      _raise ExBadEndOfCicle;
+                    }
+                  else
+                    if GetNextTable(TmpCicleTables.TblName)
+                      {
+                        FormOfDocument.Seek(TmpCicleTables.StartPos);
+                        FormOfDocument.ReadLn(StripLine);
+                      }
+                    else
+                      {
+                        // цикл окончен
+                        delete current TmpCicleTables;
+
+                        if ( GetLast TmpCicleTables <> tsOK )
+                          {}
+
+                        Break;
+                      }
+
+                // ищем начало метапеременной
+                rPosition := InStr('&(', StripLine);
+                if ( rPosition = 0 )
+                  {
+                    // ага, не нашли, ну и хорошо, строка разобрана, выходим
+                    ResultLine := ResultLine + StripLine;
+                    Break;
+                  }
+
+                // есть тут переменная, есть
+                ResultLine := ResultLine + SubStr(StripLine, 1, rPosition - 1);
+
+                //------------------------------------------------------------------------------
+                StripLine := SubStr(StripLine, rPosition + 1, Length(StripLine) - rPosition);
+                // строку подготовили, ищем конец метапеременной
+
+                var ind: integer;
+                ind := FindBalance(StripLine);
+
+                if ( ind <> -1 )
+                  {
+                    // вот и чудненько!, вот и окончание метапеременной!
+                    ResultLine := ResultLine + LOTexpressionFunc(SubStr(StripLine, 2, ind - 2), '');
+                    StripLine  := SubStr(StripLine, ind + 1, 255);
+                  }
+                else
+                  {
+                    // ошибка нет конца метапеременной! - вычисляем все до конца строки
+                    ResultLine := ResultLine + LOTexpressionFunc(SubStr(StripLine, 2, 255), '');
+                    Break;
+                  }
+              }
+
+            if NOT (
+                    ( UpCase(SubStr(trim(StripLine), 1, 7)) = '.{LOOP ' )
+                     OR
+                    ( trim(StripLine) = '.}' )
+                   )
+              TextOfDocument.WriteLn(ResultLine);
+          }
+
+      }
+    //**************************
+    _except on ExUserBreak:
+      {
+        // должно бы работать
+        _try
+          {
+            TextOfDocument.Seek(0);
+            TextOfDocument.Truncate;
+          }
+        _except on ExDataBase:
+          Message('Ошибка при попытке удаления мемо-поля ' + ExploreException, Error + OkButton);
+      }
+    //**************************
+    _except on ExDataBase:
+      Message('Ошибка в базе ' + ExploreException, Error + OkButton);
+    //**************************
+    _except on ExTableNotSuppored:
+      Message('Цикл по таблице ' + sErrTblName + ' не поддерживается. Обратитесь к разработчикам', Error + OkButton);
+    //**************************
+    _except on ExNeedTableName:
+      Message('Требуется указать имя таблицы, по которой будет цикл (LOOP)', Error + OkButton);
+    //**************************
+    _except on ExBadEndOfCicle:
+      Message('Несбалансированное окончание цикла', Error + OkButton);
+    //**************************
+    _finally
+      {
+        // завершим визуализацию
+        StopVisual('', 0);
+        // и закроем мемо поля
+        TextOfDocument.Close;
+        FormOfDocument.Close;
+      }
+
+    RedrawPanel(#DocInfo);
+  }
+
+end; // HandleEvent - Window
+end; // Window
+
+#doc
+Окно просмотра текстового представления
+#end
+Window BrouseTextRepr 'Текстовое представление документа' EscClose, Cyan;
+  Show at(, , 76, 25);
+
+Panel paBrouseTextRepr
+  Show at (, , , 6);
+
+Browse bbbb (, hcDogTextRepBr, sci178EnEscA);
+  Table DocInfo;
+Fields
+  DocInfo.Name  #3'Наименование документа' ('Наименование документа'): [50], Protect;
+  Language.Name #3'Язык документа'         ('Язык документа')        : [20], Protect;
+end;
+end; // Panel
+
+HandleEvent
+
+cmInit:
+  if ( GetFirst DocInfo <> tsOk )
+    PutCommand(cmDefault);
+
+cmAddNewRec:
+  {
+    PutCommand(cmInsert);
+    RunWindowModal(EditTextRepr);
+    RedrawPanel(#DocInfo);
+  }
+
+cmDefault:
+  {
+    RunWindowModal(EditTextRepr);
+  //  update current DocInfo;
+    RedrawPanel(#DocInfo);
+  }
+
+cmPrintDoc:
+  {
+    var goAway: boolean;
+
+    goAway := FALSE;
+
+    if UpdateTable
+      {
+        PushPos(#DocInfo);
+
+        StartNewVisual(vtRotateVisual, vfTimer + vfBreak + vfConfirm, 'Печать документа...', 0);
+
+        frmListText.Write(Dogovor.NoDoc_Ext);
+        frmListText.Write(Dogovor.NoDoc);
+        frmListText.Write(Dogovor.dInput);
+
+        _LOOP DocInfo
+          {
+            if ( not NextVisual )
+              {
+                goAway := TRUE;
+                Break;
+              }
+
+            frmListText.PutEventById(feDoLoop, FCListText_LOOP1);
+            frmListText.Write(DocInfo.Name);
+            frmListText.Write(Language.Name);
+          }
+
+        StopVisual('', 0);
+
+        PopPos(#DocInfo);
+
+        if ( (NOT frmListText.Error) AND (not goAway) )
+          frmListText.ShowFile('')
+        else
+          frmListText.AbortForm;
+      }
+  }
+
+end; // HandleEvent
+
+Panel paBrouseTextRField
+  Show at (, 7, , );
+
+Table DocInfo;
+  Text DocInfo.TextData;
+end; // Panel
+
+end; // Window

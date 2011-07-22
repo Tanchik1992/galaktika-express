@@ -1,0 +1,899 @@
+/*
+ ╔═══════════════════════════════════════════════════════════════════════════╗
+ ║                     (c) 1994,98 корпорация ГАЛАКТИКА                      ║
+ ║ Проект        : ГАЛАКТИКА                                                 ║
+ ║ Система       : Оперативный контур                                        ║
+ ║ Версия        : 5.85                                                      ║
+ ║ Назначение    : Пакетное лонгирование договоров                           ║
+ ║ Ответственный : Шукан А.Л..                                               ║
+ ║ Параметры     : нет                                                       ║
+ ╚═══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include notes.vih
+#include statlog.vih
+
+#ifdef ATL51
+  #include fpCO.vih
+#end
+
+#doc
+Интерфейс лонгирования договоров
+#end
+Interface LongDog 'Лонгирование договоров' (, hcm_dogov_Longir_Dog,)
+                                           Cyan,
+                                           EscClose,
+                                           DoAccept;
+show at (,,110,27);
+
+Table STRUCT TmpDog ""
+(
+  nRec     : comp       "",
+  cGroup   : comp       "",
+  NoDoc    : string[20] "",
+  dDoc     : date       "",
+  Picked   : word       "",
+  isLeaf   : word       ""
+)
+With Index
+(
+  TmpDog01 = nRec,
+  TmpDog02 = cGroup + dDoc + NoDoc,
+  TmpDog03 = Picked
+);
+
+create view
+
+var
+  CurGroup, sav_NRec        : comp;
+  i, n, MarkerCount         : word;
+  OldEndDate, NewEndDate    : date;
+  s0, strComment, strOsnova : string[80];
+  lSetFiltr                 : string;
+  s_SimvRub : string;
+
+  oNotes   : iNotes;
+  oStatlog : vipStatlog;
+
+  wFilter, wSogl,
+  wKontr, wNazna, wVidDG, wGrDog, wFPCO : word;
+  cKontr, cNazna, cVidDG, cGrDog, cFPCO : comp;
+  MarkerKontr, MarkerNazna,
+  MarkerVidDG, MarkerCO      : longint;
+  bFormir, bRes, LevelClosed : boolean;
+
+(
+  fKontr,
+  fNazna,
+  fVidDG,
+  fGrDog,
+  fFPCO,
+
+  sDocType,
+  sDirect,
+  DogVal,
+  Picked
+)
+
+As Select
+  if ((cKontr <> 0), KatOrgFlt.Name,   if ((wKontr > 1), 'множественный выбор', '')),
+  if ((cNazna <> 0), KatNaznaFlt.Name, if ((wNazna > 1), 'множественный выбор', '')),
+  if ((cVidDG <> 0), KatVidDFlt.Name,  if ((wVidDg > 1), 'множественный выбор', '')),
+  if ((cGrDog <> 0), GroupSchFlt.Name, if ((wGrDog > 1), 'множественный выбор', '')),
+  if ((cFPCO <> 0),  FPCOFlt.Name,     if ((wFPCO  > 1), 'множественный выбор', '')),
+
+  if (isValid(tnDogovor),
+    if (Dogovor.cDogovor = 0,     // договор
+      if (Dogovor.cZamena = 0,'Договор','Отм. договор'),
+      if (Dogovor.cZamena = 0,'Уточн. согл.','Отм. согл.')),''),
+
+  if ((Dogovor.Direct mod 2) = 1, '1->2', '2->1'),
+  if (Dogovor.cVal = 0, s_SimvRub, KlVal.SimVolV),
+  if (TmpDog.Picked = 1, '√', ''),
+
+  *
+
+from
+  Dogovor,
+  Dogovor RootDogovor,
+  Dogovor AppDogovor,
+  IerDog,
+  AttrDog,
+  KatNotes,
+  StatLog,
+  KlVal,
+  KatOrg,
+  KatOrg KatOrgFlt,
+  KatNazna,
+  KatNazna KatNaznaFlt,
+  KatVidD,
+  KatVidD KatVidDFlt,
+  GroupSch,
+  GroupSch GroupSchFlt,
+  SpGrSch,
+  FPCO,
+  FPCO FPCOFlt,
+  Pick,
+  TmpDog,
+  TmpDog TmpDog2
+
+where
+((
+  cKontr          == KatOrgFlt.nRec    and
+  cNazna          == KatNaznaFlt.nRec  and
+  cVidDG          == KatVidDFlt.nRec   and
+  cGrDog          == GroupSchFlt.nRec  and
+  cFPCO           == FPCOFlt.nRec      and
+
+  CurGroup        == TmpDog.cGroup     and
+  TmpDog.nRec     == Dogovor.nRec      and
+  Dogovor.cVal    == KlVal.nRec        and
+  Dogovor.cOrg    == KatOrg.nRec       and
+  Dogovor.cNote   == KatNotes.nRec     and
+  Dogovor.cVidDog == KatVidD.nRec
+))
+;
+
+Form frmErr('Errr.out','Errr2') with novisual;
+
+function IsDogovorFilter : boolean;
+var
+  Ind1 : longint;
+  vbOk : boolean;
+{
+  IsDogovorFilter := false;
+
+  // лонгирование только для исполняемых и приостановленных договоров
+  if ((RootDogovor.Status <> 1) and (RootDogovor.Status <> 2))
+    exit;
+
+  // срок действия договора истекает до заданной даты
+  if (RootDogovor.dEnd > OldEndDate)
+    exit;
+
+  // Фильтр по контрагенту
+  if ((wFilter and 1) = 1)
+    {
+      if (not SearchMarker(MarkerKontr, RootDogovor.cOrg, Ind1))
+        exit;
+    }
+
+  // Фильтр по назначению
+  if ((wFilter and 2) = 2)
+    {
+      if (not SearchMarker(MarkerNazna, RootDogovor.cProg, Ind1))
+        exit;
+    }
+
+  // Фильтр по виду
+  if ((wFilter and 4) = 4)
+    {
+      if (not SearchMarker(MarkerVidDG, RootDogovor.cVidDog, Ind1))
+        exit;
+    }
+
+  // Фильтр по группам договоров
+  if ((wFilter and 8) = 8)
+    {
+      vbOk := false;
+      _loop SpGrSch where ((word(1)          == SpGrSch.wList and
+                            RootDogovor.nRec == SpGrSch.cBaseDoc))
+        {
+          if (GetFirst fastfirstrow Pick
+                 where ((word(4)           == Pick.wList and
+                         SpGrSch.cGroupSch == Pick.cRec)) = tsOk)
+            {
+              vbOK := true;
+              break;
+            }
+        }
+
+
+      if (not vbOK)
+        exit;
+    }
+
+  // Фильтр по центру ответственности
+  if ((wFilter and 16) = 16)
+    {
+      if (GetFirst fastfirstrow AttrDog
+             where ((RootDogovor.nRec == AttrDog.cDogovor)) <> tsOk)
+        exit;
+
+      if (GetFirst fastfirstrow Pick
+             where ((word(11)      == Pick.wList and
+                     AttrDog.cPodr == Pick.cRec)) <> tsOk)
+        exit;
+    }
+
+  IsDogovorFilter := true;
+}
+
+
+function IsSoglFilter : boolean;
+{
+  IsSoglFilter := false;
+
+  // лонгирование только для исполняемых и приостановленных соглашений
+  if ((AppDogovor.Status <> 1) and (AppDogovor.Status <> 2))
+    exit;
+
+  // срок действия соглашения истекает до заданной даты
+  if (AppDogovor.dEnd > OldEndDate)
+    exit;
+
+  IsSoglFilter := true;
+}
+
+//-----------------------------------------------------------------------
+Window winParam 'Лонгирование договоров' EscClose, Gray;
+  Show at (9,3,71,19);
+Panel panParam;
+Screen scrParam (,,sci1Esc);
+  bevel b3 {1, 5, 61, 12, bsLowered, bsBox};
+Fields
+  OldEndDate ('Дата окончания срока действия лонгируемых договоров',,sci13Esc) : [,'DD/MM/YYYY'], NoProtect;
+  NewEndDate ('Дата, до которой продлеваются сроки действия договоров',,sci13Esc) : [,'DD/MM/YYYY'], NoProtect;
+  strOsnova  ('Основание лонгирования договоров',,), NoProtect;
+  lSetFiltr (): skip, {font = {color = ColorSysBlack; bold = true}};
+  wFilter    ('Установите фильтры по договорам',,) : NoProtect;
+  fKontr     ('Установите фильтр по контрагенту',,sci13Esc) : PickButton, Protect;
+  fNazna     ('Установите фильтр по назначению',,sci13Esc) : PickButton, Protect;
+  fVidDG     ('Установите фильтр по виду договора',,sci13Esc) : PickButton, Protect;
+  fGrDog     ('Установите фильтр по группам договоров',,sci13Esc) : PickButton, Protect;
+  fFPCO      ('Установите фильтр по центру ответственности',,sci13Esc) : PickButton, Protect;
+  wSogl      ('Лонгировать соглашения или нет',,) : NoProtect;
+
+Buttons
+  cmValue1,,,'Выполнить',,sci1Esc;
+  cmCancel,,,'Отмена',,sci1Esc;
+<<
+
+  Пролонгировать договоры со сроком действия до .@@@@@@@@@@@
+  Установить новый срок действия договоров до   .@@@@@@@@@@@
+  Основание лонгирования .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+  .@@@@@@@@@@@@@@@@@@@@
+   [.]  контрагенту     ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.]  назначению      ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.]  виду            ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.]  группе договоров` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+   [.]  ЦО              ` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+   [.] лонгировать соглашения`
+
+    <. Продолжить .>                       <.   Отмена   .>
+
+>>
+end; //screen
+
+#include InitPick.vpp
+
+HandleEvent
+
+cmPick :
+  {
+    case CurField of
+    #fKontr :
+      {
+        if ((wFilter and 1) <> 1)
+          exit;
+
+        if ( RunInterface('GetSomeKontrPrim', false) <> cmCancel )
+          {
+            MarkerKontr := InitMarker('KatOrg', 8, 100, 10);
+            wKontr := GetMarkerCount(MarkerKontr);
+            if (wKontr = 1)
+              {
+                cKontr := 0
+                GetMarker(MarkerKontr, 0, cKontr);
+                set cKontr := cKontr;
+              }
+            else
+              set cKontr := 0;
+            DoneMarker(MarkerKontr, 'KatOrg');
+          }
+      }
+    #fNazna :
+      {
+        if ((wFilter and 2) <> 2)
+          exit;
+
+        if ( RunInterface('GetSomKatNazna', boolean(True), comp(0) ) <> cmCancel )
+          {
+            MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+            wNazna := GetMarkerCount(MarkerNazna);
+            if (wNazna = 1)
+              {
+                cNazna := 0;
+                GetMarker(MarkerNazna, 0, cNazna);
+                set cNazna := cNazna;
+              }
+            else
+              set cNazna := 0;
+            DoneMarker(MarkerNazna, 'MKatNazna');
+          }
+      }
+    #fVidDG :
+      {
+        if ((wFilter and 4) <> 4)
+          exit;
+
+        if (RunInterface('GetSomVidD', 0, 0, boolean(true), comp(0), word(0)) <> cmCancel)
+          {
+            MarkerVidDG := InitMarker('MKatVidD', 8, 100, 10);
+            wVidDG := GetMarkerCount(MarkerVidDG);
+            if (wVidDG = 1)
+              {
+                cVidDG := 0;
+                GetMarker(MarkerVidDG, 0, cVidDG);
+                set cVidDG := cVidDG;
+              }
+            else
+              set cVidDG := 0;
+            DoneMarker(MarkerNazna, 'MKatVidD');
+          }
+      }
+    #fGrDog :
+      {
+        if ((wFilter and 8) <> 8)
+          exit;
+
+        if (RunInterface('GetGroupSch', 3, 1, 0, True, comp(0), False) = cmDefault)
+          {
+            if (GetFirst Pick where ((word(4) == Pick.wList)) = tsOk)
+              {
+                wGrDog := 1;
+                set cGrDog := Pick.cRec;
+                if (GetNext Pick where ((word(4) == Pick.wList)) = tsOk)
+                  {
+                    wGrDog := 2;
+                    set cGrDog := 0;
+                  }
+              }
+            else
+              {
+                wGrDog := 0;
+                set cGrDog := 0;
+              }
+          }
+      }
+    #fFPCO :
+      {
+        if ((wFilter and 16) <> 16)
+          exit;
+
+        InitMarker11;
+
+        var cRec: Comp;
+        if RunInterface('GetCO', word(cgiPickMult or cgiNotClear), comp(0), comp(0), cRec) <> cmCancel
+          {
+            InitPick11(cRec);
+
+            if (GetFirst Pick where ((word(11) == Pick.wList)) = tsOk)
+              {
+                wFPCO := 1;
+                set cFPCO := Pick.cRec;
+                if (GetNext Pick where ((word(11) == Pick.wList)) = tsOk)
+                  {
+                    wFPCO := 2;
+                    set cFPCO := 0;
+                  }
+              }
+            else
+              {
+                wFPCO := 0;
+                set cFPCO := 0;
+              }
+          }
+      }
+    end; // case
+  }
+
+cmDelOnProtect :
+  {
+    case CurField of
+    #fKontr :
+      {
+        if ((wFilter and 1) <> 1)
+          exit;
+
+        MarkerKontr := InitMarker('KatOrg', 8, 100, 10);
+        ClearMarker(MarkerKontr);
+        DoneMarker(MarkerKontr, 'KatOrg');
+
+        wKontr := 0;
+        set cKontr := 0
+      }
+    #fNazna :
+      {
+        if ((wFilter and 2) <> 2)
+          exit;
+
+        MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+        ClearMarker(MarkerNazna);
+        DoneMarker(MarkerNazna, 'MKatNazna');
+
+        wNazna := 0;
+        set cNazna := 0;
+      }
+    #fVidDG :
+      {
+        if ((wFilter and 4) <> 4)
+          exit;
+
+        MarkerVidDG := InitMarker('MKatVidD', 8, 100, 10);
+        ClearMarker(MarkerVidDG);
+        DoneMarker(MarkerVidDG, 'MKatVidD');
+
+        wVidDG := 0;
+        set cVidDG := 0;
+      }
+    #fGrDog :
+      {
+        if ((wFilter and 8) <> 8)
+          exit;
+
+        Delete NoVisual Pick where ((word(4) == Pick.wList)); // для групп договоров
+
+        wGrDog := 0;
+        set cGrDog := 0;
+      }
+    #fFPCO :
+      {
+        if ((wFilter and 16) <> 16)
+          exit;
+
+        Delete NoVisual Pick where ((word(11) == Pick.wList)); // для ЦО
+
+        wFPCO := 0;
+        set cFPCO := 0;
+      }
+    end; // case
+  }
+
+end; // HandleEvent
+
+end; // panel
+
+HandleEvent
+
+cmValue1 :
+  {
+    if (NewEndDate <= OldEndDate)
+      {
+        Message(''#3'Новая дата окончания договора'+
+                  ''#13#3'должна быть больше предыдущей!', Information+OkButton);
+        exit;
+      }
+
+
+    bFormir := true;
+    CloseWindow(winParam);
+  }
+
+end; // HandleEvent
+
+end; // window
+
+Tree 1 trTmpTree ('',,sci1EnInsTree);
+  Table TmpDog;
+Fields
+  {Font = {Color = if(Picked='√', ColorMark, 0) }};
+  picked        '√'                                  : [1], skip;
+  sDocType      'Документ'   ('Договор/соглашение')  : [17], protect;
+  Dogovor.DesGr 'Группа'    ('Код группы пользователей')  : [ 5], protect;
+  Dogovor.Descr 'Дескр.'    ('Дескриптор(идентификатор) пользователя') : [ 5], protect;
+  Dogovor.dDoc  'Дата закл.'('Дата заключения договора') : [10,'DD/MM/YYYY'], protect;
+  Dogovor.dBeg  'С'         ('Начальная дата периода исполнения') : [10,'DD/MM/YYYY'], protect;
+  Dogovor.dEnd  'По'        ('Конечная дата периода исполнения') : [10,'DD/MM/YYYY'], protect;
+  Dogovor.NoDoc_Ext'Вх.номер'   ('Входящий номер') : [8], protect;
+  Dogovor.NoDoc 'Номер'     ('Внутренний номер')     : [ 7], protect;
+  KatOrg.Name   'Контрагент'('Контрагент договора')  : [22], protect;
+  KatNotes.Name 'Статус'    ('Статус договора')      : [ 8], protect;
+  KatVidD.Name  'Вид'     ('Вид документа')          : [ 8], protect;
+  if (Dogovor.TipMoney = 1,'НДЕ',
+    if (Dogovor.TipMoney = 2, 'Вал-НДЕ', 'Вал'))
+                'Тип'       ('Тип документа по отношению к валюте') : [7], skip;
+  DogVal        'Ден.ед.'   ('Валюта договора')          : [6], skip;
+  Dogovor.Summa 'Сумма'     ('Общая (планируемая) сумма') :[18,'\2p[|-]3666`666`666`666.88'], skip;
+End;  // Tree
+
+Panel p1;
+  Table TmpDog;
+
+HandleEvent  // panel p1
+
+cmTreeTop         : CurGroup := 0;
+cmTreeUp          : CurGroup := TmpDog.cGroup;
+cmTreeDown        : CurGroup := TmpDog.nRec;
+cmTreeNodeType    : if (TmpDog.isLeaf = 1)
+                      TreeSetNodeType(trTmpTree, 2);
+cmTreeNeedOwner   : TreeJumpToRecord (trTmpTree, TmpDog.cGroup);
+
+End;  // he panel
+End;  // panel
+
+HandleEvent
+
+cmInit :
+  {
+    s_SimvRub := sGetTune('NDE.SimvRub');
+    lSetFiltr := 'Установка фильтров по:';
+    CurGroup := 0;
+    bFormir  := false;
+
+    OldEndDate := Cur_Date;
+    NewEndDate := Cur_Date;
+    strOsnova  := '';
+
+    wFilter := 0;
+    wKontr  := 0;
+    wNazna  := 0;
+    wVidDg  := 0;
+    wGrDog  := 0;
+    wFPCO   := 0;
+
+    cKontr  := 0;
+    cNazna  := 0;
+    cVidDg  := 0;
+    cGrDog  := 0;
+    cFPCO   := 0;
+
+    delete all TmpDog;     // Чистим временную таблицу
+
+    Delete NoVisual Pick where ((word(4) == Pick.wList)); // для групп договоров
+
+    Delete NoVisual Pick where ((word(11) == Pick.wList)); // для ЦО
+
+    MarkerKontr := InitMarker('KatOrg', 8, 100, 10);
+    ClearMarker(MarkerKontr);
+    DoneMarker(MarkerKontr, 'KatOrg');
+
+    MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+    ClearMarker(MarkerNazna);
+    DoneMarker(MarkerNazna, 'MKatNazna');
+
+    MarkerVidDG := InitMarker('MKatVidD', 8, 100, 10);
+    ClearMarker(MarkerVidDG);
+    DoneMarker(MarkerVidDG, 'MKatVidD');
+
+    RunWindowModal(winParam);
+
+    if bFormir
+      {
+        MarkerKontr := InitMarker('KatOrg',    8, 100, 10);
+        MarkerNazna := InitMarker('MKatNazna', 8, 100, 10);
+        MarkerVidDG := InitMarker('MKatVidD',  8, 100, 10);
+
+        StartNewVisual(vtRotateVisual, vfTimer, ''#3'Лонгирование договоров...'#13#3,1);
+
+        ReSetBounds(#TmpDog);
+
+        bFormir := false;
+        _loop RootDogovor where ((comp(0) == RootDogovor.cDogovor))
+          {
+            if (not NextVisual)
+              {
+                bFormir := false;
+                break;
+              }
+
+            if IsDogovorFilter
+              {
+                bFormir := true;
+
+                _loop IerDog where ((RootDogovor.nRec == IerDog.cUpRec))
+                  {
+                    if (GetFirst fastfirstrow AppDogovor
+                           where ((IerDog.cRec == AppDogovor.nRec)) = tsOk)
+                      {
+                        if (IerDog.cUpRec <> IerDog.cRec)
+                          {
+                            if (wSogl = 0) // лонгируются только договоры
+                              continue;
+
+                            if (not IsSoglFilter)
+                              continue;
+                          }
+
+                        TmpDog.nRec   := AppDogovor.nRec;
+                        TmpDog.cGroup := AppDogovor.cDogovor;
+                        TmpDog.NoDoc  := AppDogovor.NoDoc;
+                        TmpDog.dDoc   := AppDogovor.dDoc;
+                        TmpDog.Picked := 0;
+                        TmpDog.isLeaf := IerDog.IsLeaf;
+                        if (insert current TmpDog <> tsOk) {}
+                      }
+                  }
+              }
+          }
+
+        if bFormir
+          {
+            _loop TmpDog
+              {
+                if (TmpDog.cGroup = comp(0))
+                  continue;
+
+                if (GetFirst fastfirstrow TmpDog2
+                       where ((TmpDog.cGroup == TmpDog2.nRec)) <> tsOk)
+                  {
+                    _loop IerDog where ((TmpDog.nRec == IerDog.cRec))
+                      {
+                        if (GetFirst fastfirstrow AppDogovor
+                               where ((IerDog.cRec == AppDogovor.nRec)) = tsOk)
+                          {
+                            if (GetFirst fastfirstrow TmpDog2
+                                   where ((IerDog.cUpRec == TmpDog2.nRec)) <> tsOk)
+                              {
+                                TmpDog.nRec   := AppDogovor.nRec;
+                                TmpDog.cGroup := AppDogovor.cDogovor;
+                                TmpDog.NoDoc  := AppDogovor.NoDoc;
+                                TmpDog.dDoc   := AppDogovor.dDoc;
+                                TmpDog.Picked := 0;
+                                TmpDog.isLeaf := IerDog.IsLeaf;
+                                if (insert current TmpDog <> tsOk) {}
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+        SetBounds(#TmpDog);
+
+        StopVisual('', 0);
+
+        DoneMarker(MarkerKontr, 'KatOrg');
+        DoneMarker(MarkerNazna, 'MKatNazna');
+        DoneMarker(MarkerVidDG, 'MKatVidD');
+
+        if bFormir
+          {
+            SetFormat(trTmpTree);
+            SetWindowTitle(wnMainWindow,'Выбор документов для лонгирования');
+          }
+        else
+          {
+            Message('Ни один документ не удовлетворяет заданным условиям!');
+
+            abort;
+            exit;
+          }
+      }
+    else
+      {
+        abort;
+        exit;
+      }
+  }
+
+cmDefault :
+  {
+    if (GetFirst TmpDog where ((word(1) == TmpDog.Picked)) <> tsOk)
+      {
+        Message('Ни один документ не выбран для лонгирования!');
+
+        abort;
+        exit;
+      }
+
+    ResetBounds(#TmpDog);
+
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Лонгирование договоров...'#13#3,1);
+
+    frmErr.Write('Реестр пролонгированных документов :');
+    frmErr.SkipFormat(1);
+
+    _loop TmpDog where ((word(1) == TmpDog.Picked))
+      {
+        if (not NextVisual)
+          break;
+
+        if ((Dogovor.Status <> 1) and (Dogovor.Status <> 2))
+          continue;
+
+        if (Dogovor.dEnd < NewEndDate)
+          Dogovor.dEnd := NewEndDate
+        else
+          continue;
+
+        if (update current Dogovor <> tsOk)
+          {
+            if (Dogovor.cDogovor = comp(0))
+              Message('Договор № ' + Dogovor.NoDoc+ ' от '+ DateToStr(Dogovor.dDoc,'DD/MM/YYYY') +
+                      ' не доступен для редактирования!', Warning)
+            else
+              Message('Соглашение № ' + Dogovor.NoDoc+ ' от '+ DateToStr(Dogovor.dDoc,'DD/MM/YYYY') +
+                      ' не доступно для редактирования!', Warning);
+
+            break;
+          }
+
+        if (Dogovor.cDogovor = comp(0))
+          {
+            strComment := 'Договор продлен до ' + DateToStr(Dogovor.dEnd,'DD/MM/YYYY') +
+                          if(strOsnova<>'', '. ' + strOsnova, '.');
+          }
+        else
+          {
+            strComment := 'Соглашение продлено до ' + DateToStr(Dogovor.dEnd,'DD/MM/YYYY') +
+                          if(strOsnova<>'', '. ' + strOsnova, '.');
+          }
+
+        if (oStatlog.StatLog_Insert(Dogovor.TiDk,Dogovor.nRec,strComment) <> tsOk)
+          {
+            Message('Ошибка добавления записи в историю изменения статусов!', Error)
+            break;
+          }
+
+        frmErr.Write('Срок действия ' + if(Dogovor.cDogovor=comp(0),'договора','соглашения') +
+                     ' № ' + Dogovor.NoDoc + ' от ' + DateToStr(Dogovor.dDoc,'DD/MM/YYYY') +
+                     ' продлен до ' + DateToStr(Dogovor.dEnd,'DD/MM/YYYY') + '.');
+      }
+
+    StopVisual('', 0);
+
+    SetBounds(#TmpDog);
+
+    frmErr.PutEvent(feBreak);
+
+    if (not frmErr.Error)
+      frmErr.ShowFile('');
+    else
+      frmErr.AbortForm;
+  }
+
+cmHotKeys :
+  {
+    PutHotCommand(RunMenu('mnuGetDogTree'));
+  }
+
+cmMarkUnMark :
+  {
+    if (TmpDog.Picked = 1)
+      {
+        update current TmpDog set TmpDog.Picked := 0;
+
+        if TreeCloseNode(trTmpTree)
+          LevelClosed := true
+        else
+          LevelClosed := false;
+
+        PushPos(#TmpDog);
+        n:=0;
+        if TreeGetNext(trTmpTree)
+          {
+            sav_NRec := TmpDog.nRec;
+            TreeGetPrev(trTmpTree);
+          }
+        if TreeOpenNode(trTmpTree)
+          {
+            n := n + 1;
+            PushPos(#TmpDog);
+          }
+
+        if TreeGetNext(trTmpTree)
+          do
+            {
+              if (TmpDog.nRec = sav_NRec)
+                Break;
+
+              update current TmpDog set TmpDog.Picked := 0;
+
+              if TreeOpenNode(trTmpTree)
+                {
+                  n := n + 1;
+                  PushPos(#TmpDog);
+                }
+            }
+          while TreeGetNext(trTmpTree);
+
+        FOR (i:=1; i<=n; i:=i+1)
+          {
+            PopPos(#TmpDog);
+            TreeCloseNode(trTmpTree);
+          }
+        PopPos(#TmpDog);
+        if (LevelClosed)
+          TreeOpenNode(trTmpTree);
+        TreeJumpToRecord(trTmpTree, TmpDog.nRec);
+      }
+    else
+      {
+        sav_NRec := TmpDog.nRec;
+
+        TreePushPos(trTmpTree);
+        ResetBounds(#TmpDog);
+
+        while (GetFirst TmpDog where ((sav_NRec == TmpDog.nRec)) = tsOk) do
+          {
+            sav_NRec := TmpDog.cGroup;
+
+            update current TmpDog set TmpDog.Picked := 1;
+          }
+
+        SetBounds(#TmpDog);
+        TreePopPos(trTmpTree);
+      }
+
+    TreeGetNext(trTmpTree);
+    RescanPanel(#TmpDog);
+  }
+
+cmSelectAll :
+  {
+    TreePushPos(trTmpTree);
+
+    ResetBounds(#TmpDog);
+    _loop TmpDog
+      update current TmpDog set TmpDog.Picked := 1;
+    SetBounds(#TmpDog);
+
+    TreePopPos(trTmpTree);
+    ReReadRecord(#TmpDog);
+  }
+
+cmUnSelectAll :
+  {
+    TreePushPos(trTmpTree);
+
+    ResetBounds(#TmpDog);
+    _loop TmpDog
+      update current TmpDog set TmpDog.Picked := 0;
+    SetBounds(#TmpDog);
+
+    TreePopPos(trTmpTree);
+    ReReadRecord(#TmpDog);
+  }
+
+cmShowAll : // Раскрыть все ветки
+  {
+    sav_NRec := TmpDog.nRec;
+
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Раскрытие всех веток...'#13#3,1);
+    if (TreeGetFirst(trTmpTree))
+      {
+        do
+          {
+            NextVisual;
+            TreeOpenNode(trTmpTree);
+          }
+        While TreeGetNext(trTmpTree);
+      }
+    StopVisual('', 0);
+
+    TreeJumpToRecord(trTmpTree, sav_NRec);
+    ReScanPanel(#TmpDog);
+  }
+
+cmHideAll : // Свернуть все ветки
+  {
+    StartNewVisual(vtRotateVisual, vfTimer, ''#3'Сворачивание всех веток...'#13#3,1);
+    While (TmpDog.cGroup <> 0)
+      {
+        NextVisual;
+        TreeJumpToRecord(trTmpTree, TmpDog.cGroup);
+      }
+    StopVisual('', 0);
+    sav_NRec := TmpDog.nRec;
+
+    if (TreeGetFirst(trTmpTree))
+    do
+      TreeCloseNode(trTmpTree);
+    while TreeGetNext(trTmpTree);
+
+    TreeJumpToRecord(trTmpTree, sav_NRec);
+    ReScanPanel(#TmpDog);
+  }
+
+end; // HandleEvent
+
+end. // interface
+
+mnuGetDogTree Menu
+{
+- 'Раскрыть все ветки',cmShowAll,'Разворачивает все дерево документов',,'Ctrl +',kbCtrlGrayPlus,sci1Esc;
+- 'Свернуть все ветки',cmHideAll,'Сворачивает все дерево документов',,'Ctrl -',kbCtrlGrayMinus,sci1Esc;
+}

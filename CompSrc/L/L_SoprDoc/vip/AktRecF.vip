@@ -1,0 +1,163 @@
+!
+!Get_Summ собирает сумму по накладным на возврат по рекламации
+!по конкретному ДО (_KatSoprVidSopr=106 в сбыте,_KatSoprVidSopr=206 в снабжении)
+!
+!
+
+#include AktRecF.vih
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Сервисные функции накладных на возврат по рекламации
+
+Параметры:
+  Параметров нет - используется как объектный интерфейс
+#end
+
+//******************************************************************************
+
+Interface AktrecF;
+
+create view
+var
+  c_StepDocNrec      : comp;
+  wKatSopr,wKatSoprR,
+  No_Function        : word;
+  myKatSopr_NRec     : comp;
+
+  dNakl              : date;
+  SumR, SumV         : double;
+
+  (
+  cKatSopr_NRec
+  )
+as select
+  if (No_Function = 1, KatSopr.NRec, // для Get_Summ
+                       myKatSopr_NRec) // для FindKSopr
+from
+    KatSopr                     // накладные по ДО
+  , SpSopr
+  , SpOrder                     // ордера накладной
+  , synonym SpSopr SpSoprR      // спец-я рекламационной накладной
+  , synonym KatSopr KatSoprR    // рекламационные накладные по KatSopr
+
+where
+((
+  // для Get_Summ
+      c_StepDocNrec    == KatSopr.cStepDoc
+  and wKatSopr         == KatSopr.VidSopr
+  and cKatSopr_NRec    == SpSopr.cSopr
+  and word(1)          == SpSopr.PrMC
+  and SpSopr.NRec      == SpOrder.cSpSopr
+
+//  and wKatSoprR        == SpSoprR.VidSopr
+//  and date(0,0,0)      << SpSoprR.dSopr
+  and SpOrder.NRec     == SpSoprR.cSpOrder// (NoIndex)
+  and SpSoprR.cSopr    == KatSoprR.NRec
+))
+;
+
+function Culc_Summ(_cVal : comp; _vhodnal:word) : double;
+  {
+  if (_cVal = 0)
+    Culc_Summ := SpSoprR.KolFact * SpSoprR.Price + if(_vhodnal <> 1,SpSoprR.SumNDS,0);
+  else
+    Culc_Summ := SpSoprR.KolFact * SpSoprR.VPrice + if(_vhodnal <> 1,SpSoprR.SumVNDS,0);
+  }
+
+function Get_Summ( BaseDoc_Direct : word;
+                   StepDocNrec    : comp;
+                   _cVal          : comp) : double;
+  {
+  Get_Summ      := 0;
+  No_Function   := 1;
+  c_StepDocNrec := StepDocNrec;
+  var NeedProved : boolean;
+  NeedProved := wGetTune('Oper.SoprInBalans') = 1;
+
+  case BaseDoc_Direct of
+   1:{ //сбыт
+      wKatSopr  := 201;
+      wKatSoprR := 106;
+     }
+   2:{//снабжение
+      wKatSopr  := 101;
+      wKatSoprR := 206;
+     }
+   else
+   {
+//    message('Не могу определить направление ДО(сбыт-снабжение'+' BaseDoc_Direct='+string(BaseDoc_Direct)+').Обратитесь к разработчикам');
+    exit;
+   }
+  end;
+
+  _LOOP KatSopr
+    if (NeedProved and (date(0,0,0) = KatSopr.dOpr) )
+      continue;
+    else
+    _LOOP SpSopr
+      _LOOP SpOrder
+        _LOOP SpSoprR
+        {
+          If (NeedProved and (date(0,0,0) = SpSoprR.dOprTTN) ) continue;
+          If (SpSoprR.VidSopr <> wKatSoprR) continue;
+
+              if (_cVal = 0) // ДО рублевый
+                SumV := Culc_Summ(0,KatSoprR.VhodNal);
+              else           // ДО валютный
+                {
+                  if (SpSoprR.cVal = _cVal)
+                    SumV := Culc_Summ(SpSoprR.cVal,KatSoprR.VhodNal);
+                  else
+                    {
+                      SumR := Culc_Summ(SpSoprR.cVal,KatSoprR.VhodNal);
+                      //--------
+                      if (isValid(#KatSoprR) and (longint(KatSoprR.dPrice) <> 0))
+                        dNakl := KatSoprR.dPrice;
+                      else
+                      if (longint(SpSoprR.dOprTTN) <> 0)
+                        dNakl := SpSoprR.dOprTTN;
+                      else
+                        dNakl := SpSoprR.dSopr;
+                      //--------
+                      SumV := oValFunc.GetAnyCurrency(SpSoprR.cVal, SumR, dNakl, _cVal);
+                    }
+                }
+              Get_Summ := Get_Summ + SumV;
+        }
+  }
+
+
+function FindKSopr(VidSoprR : word; pKSopr : comp) : string;
+var Marker,IndexM : longint;
+  {
+  FindKSopr      := '';
+  No_Function    := 2;
+//  wKatSoprR      := VidSoprR;
+  myKatSopr_NRec := pKSopr;
+  Marker         := InitMarker('FindKSopr_temp',8,10,10);
+  ClearMarker(Marker);
+
+  StartNewVisual(vtNumericVisual,vfTimer+vfBreak+vfConfirm,
+             ''#3'Проверка наличия рекл.накладных',1);
+  _LOOP SpSopr
+    _LOOP SpOrder
+      _LOOP SpSoprR
+       {
+        If (SpSoprR.VidSopr <> VidSoprR) continue;
+
+        if (isValid(#KatSoprR))
+          if (not SearchMarker(Marker,KatsoprR.NRec,IndexM))
+            {
+             if not NextVisual break;
+             InsertMarker(Marker,KatsoprR.NRec);
+             FindKSopr := FindKSopr + KatsoprR.NSopr + ' ';
+            }
+       }
+   StopVisual('',0);
+   DoneMarker(Marker,'FindKSopr_temp');
+  }
+
+end.

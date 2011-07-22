@@ -1,0 +1,602 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Печать счета с разными ставками налогов
+//
+//********************************************************************************
+
+#include katorg.vih
+#include DOfuns.vih
+
+Table struct TmpNdsPri ""
+(
+  Name    : string[80] ""
+, PrMc    : word       ""
+, TnKod   : string[20] ""
+, cSpStep : comp       ""
+)
+With index
+(
+  TmpNdsPri01 = PrMc + TnKod + Name
+);
+
+#doc
+Печать счета с разными ставками налогов
+#end
+Interface NdsPri;
+  Show at (,,, 31);
+
+#include DOfuns.var
+
+Create view vNdsPri
+
+Var
+  NumPP
+             : integer;
+
+  isfirst
+, doview
+             : boolean;
+
+  vrem
+, tnsum
+, tnsumnds
+, obSum
+, obSumNDS
+, cenabez
+, cbezrez
+, cbezreztn
+, cbezrezit
+, reztnds
+, reztnnds
+, reznds
+, RezSumT
+, RezSumTn
+, RezSum
+, NdsPos
+             : double;
+
+  kodtn
+             : string[20];
+
+  simvolb
+             : string[4];
+
+  BaseDocRec // Eugene
+, sv_cVal
+             : comp;
+
+  sv_Skidka
+, sv_Total
+, sv_NDS
+, sv_DopProc
+             : double;
+
+  sv_VhodNal
+, sv_VhSkid
+, sv_VidDoc
+, sv_TipMoney
+, sv_KolDn
+, TSFlag
+, page_flag
+             : word;
+
+  LL
+             : KatOrgObj;
+
+As select
+  if ( SpStep.prMC = 1, KatMC.TNVed, KatUsl.KodGrNal)    ( FieldName = TnKod )
+
+, BaseDoc.nRec
+, BaseDoc.Descr
+, BaseDoc.nodoc
+, BaseDoc.ddoc
+, BaseDoc.Name
+, BaseDoc.cval
+, BaseDoc.vhodnal
+, BaseDoc.viddoc
+, BaseDoc.skidka
+, BaseDoc.vhskid
+, BaseDoc.total
+, BaseDoc.nds
+, BaseDoc.tipmoney
+, BaseDoc.dopproc
+, BaseDoc.koldn
+, SpStep.*
+, KatMC.Name
+, KatMC.TNVed
+, KatMC.BarKod
+, KatUsl.Name
+, KatUsl.KodGrNal
+, KatUsl.Kod
+, KatOtpEd.Name
+, katorg.Name
+, katorg.addr
+, katorg.tel
+, katbank.Name
+, katbank.mfo1
+, katbank.schet1
+, myorg.Name
+, myorg.addr
+, myorg.tel
+, mybank.Name
+, mybank.mfo1
+, mybank.schet1
+, klval.simvolv
+
+From
+  Synonym Pick Pick2
+, BaseDoc
+, SpStep
+, KatMC
+, KatUsl
+, KatOtpEd
+, KatOrg
+, KatBank
+, KlVal
+, Synonym KatBank MyBank
+, Synonym KatOrg MyOrg
+, TmpNdsPri
+
+Where
+((
+    word(15)           == Pick2.wList
+and Pick2.cRec         == BaseDoc.nRec
+and BaseDoc.cOrg       == KatOrg.nRec
+and BaseDoc.cBank      == KatBank.nRec
+and BaseDoc.cMyBank    == MyBank.nRec
+and BaseDoc.cVal       == KlVal.nRec
+and Pick2.cRec         == StepDoc.cBaseDoc
+and StepDoc.nRec       == SpStep.cStepDoc
+and SpStep.cMCUSL      == KatMC.nRec
+and SpStep.cMCUSL      == KatUsl.nRec
+and SpStep.cOtpEd      == KatOtpEd.nRec
+and coGetTune('MyOrg') == MyOrg.nRec
+))
+Order By Pick2.wList, Pick2.PickNum
+;
+
+Parameters
+  page_flag;
+
+Form frmNDSPri('BDocNDS.OUT', 'BDocNDS');
+
+//-------------------------------------------------------------------------------
+
+#include prndocs.vpp
+
+//-------------------------------------------------------------------------------
+
+Function GPrice : double;
+{
+  GPrice := (SpStep.Summa + if(BaseDoc.VhodNal=1,0,SpStep.Nds)) / SpStep.Kol;
+}
+
+//-------------------------------------------------------------------------------
+
+HandleEvent
+
+cmInit :
+{
+  GetVipRef(LL, 'KatOrg');
+
+//------------- шапка документа ------------------------------------------------
+
+  doview := false;
+  frmNDSPri.SetGroup(if(BaseDoc.VhodNal = 1, 'С налогами', 'Без налогов'));
+
+  TSFlag := 0;
+
+  _loop Pick2
+    {
+      if ( TSFlag = 1 )
+        if ( page_flag = 1 )
+          {
+            frmNDSPri.PutEventById(fefalse, fcDelimiterNDS);
+            frmNDSPri.write(' ');
+          }
+        else
+          {
+            frmNDSPri.PutEventById(fetrue, fcDelimiterNDS);
+            frmNDSPri.Skipformat(1);
+          }
+
+      TSFlag := 1;
+
+      BaseDocRec := BaseDoc.nRec;
+
+      if ( BaseDoc.cVal = 0 )
+       SimVolB := sGetTune('NDE.SimvRub')
+      else
+       SimVolB := KlVal.SimVolV;
+
+      frmNDSPri.Write(BaseDoc.nRec);
+      frmNDSPri.Write(BaseDoc.Descr);
+      frmNDSPri.Write(BaseDoc.NoDoc);
+      frmNDSPri.Write(BaseDoc.dDoc);  //'DD/MM/YY'
+
+      // поставщик
+      // ПИР 101.23518
+      GetInfoKatOrg(MyOrg.nRec, MyBank.nRec, InfoKO);
+      frmNDSPri.Write(InfoKO.KOName);
+      frmNDSPri.Write(InfoKO.KBName);
+      frmNDSPri.Write(InfoKO.KBSchet1);
+      frmNDSPri.Write(InfoKO.KBMFO1);
+      frmNDSPri.Write(InfoKO.KOAddr);
+      frmNDSPri.Write(InfoKO.KOTel );
+
+/*
+      frmNDSPri.Write(MyOrg.Name);
+      frmNDSPri.Write(MyBank.Name);
+      frmNDSPri.Write(MyBank.Schet1);
+      frmNDSPri.Write(MyBank.MFO1);
+      frmNDSPri.Write(MyOrg.Addr);
+      frmNDSPri.Write(MyOrg.Tel);
+*/
+      // получатель
+      // ПИР 101.23518 // shaf
+      GetInfoKatOrg( BaseDoc.cOrg
+                   , BaseDoc.cBank
+                   , InfoKO
+                   );
+
+      frmNDSPri.Write(InfoKO.KOName);
+      frmNDSPri.Write(InfoKO.KBName);
+      frmNDSPri.Write(InfoKO.KBSchet1);
+      frmNDSPri.Write(InfoKO.KBMFO1);
+      frmNDSPri.Write(InfoKO.KOAddr);
+      frmNDSPri.Write(InfoKO.KOTel );
+      frmNDSPri.Write(BaseDoc.Name);
+/*
+      frmNDSPri.Write(KatOrg.Name);
+      frmNDSPri.Write(KatBank.Name);
+      frmNDSPri.Write(KatBank.Schet1);
+      frmNDSPri.Write(KatBank.MFO1);
+      frmNDSPri.Write(KatOrg.Addr);
+      frmNDSPri.Write(KatOrg.Tel);
+      frmNDSPri.Write(BaseDoc.Name);
+*/
+
+//-------Формирование спецификации документа-------------------
+
+      KodTn   := '';
+      isfirst := true;
+      NumPP   := 0;
+      NdsPos  := 0;
+
+      delete all NoVisual TmpNdsPri;
+
+      _loop SpStep
+        Insert TmpNdsPri set TmpNdsPri.cSpStep  := SpStep.nRec
+                           , TmpNdsPri.prMC     := SpStep.prMC
+                           , TmpNdsPri.TnKod    := Katmc.tnved
+                           , TmpNdsPri.Name     := Katmc.Name;
+
+      _loop TmpNdsPri where (( TmpNdspri.cSpStep == SpStep.nRec ))
+                      Ordered By index TmpNdsPri01
+        {
+          NdsPos := 0;
+
+          if ( (KodTn <> TnKod) and (not isFirst) )
+            {
+
+//---------Итого по группе ТНВЭД--------------------------------
+              frmNDSPri.PutEvent(feBreak);
+              frmNDSPri.Write(RezSumTn, 2);
+              frmNDSPri.Write(cBezRezTn, 2);
+
+              cBezRezIt := cBezRezIt + cBezRezTn;
+              cBezRezTn := 0;
+              RezSum    := RezSum + RezSumTn;
+              RezSumTn  := 0;
+
+              frmNDSPri.Write(RezTnNDS, 2);
+
+              RezNDS    := RezNDS + RezTnNDS;
+              RezTnNDS  := 0;
+
+              if ( BaseDoc.VhodNal = 1 )
+                {
+                  frmNDSPri.Write('Итого с учетом налогов');
+                  frmNDSPri.Write(tnSum, 2);
+                  frmNDSPri.Write(SimVolB);
+                  frmNDSPri.Write('НДС');
+                  frmNDSPri.Write(tnSumNDS, 2);
+                  frmNDSPri.Write(SimVolB);
+                  frmNDSPri.SkipFormat(3);
+                }
+              else
+                {
+                  frmNDSPri.Write('Итого без учета налогов');
+                  frmNDSPri.Write(tnSum, 2);
+                  frmNDSPri.Write(SimVolB);
+                  frmNDSPri.Write('НДС');
+                  frmNDSPri.Write(tnSumNDS, 2);
+                  frmNDSPri.Write(SimVolB);
+                  frmNDSPri.Write('Итого с учетом налогов');
+                  frmNDSPri.Write(tnSum + tnSumNDS, 2);
+                  frmNDSPri.Write(SimVolB);
+                }
+
+              frmNDSPri.Write(TnKod);
+
+              obSum    := obSum + tnSum;
+              RezNds   := RezNds + RezTnNds;
+              RezTnNds := 0;
+              obSumNDS := obSumNDS + tnSumNds;
+              tnSum    := 0;
+              tnSumNds := 0;
+            }
+
+          if ( isFirst )
+            {
+              doview    := true;
+              isFirst   := false;
+              tnSum     := 0;
+              RezTnNds  := 0;
+              RezNds    := 0;
+              RezSumTn  := 0;
+              RezSum    := 0;
+              tnSumNds  := 0;
+              CBezRezTn := 0;
+              CBezRezIt := 0;
+              obSum     := 0;
+              obSumNDS  := 0;
+              frmNDSPri.Write(TnKod);
+            }
+
+          NumPP := NumPP + 1;
+
+          frmNDSPri.Write(SpStep.nRec);
+          frmNDSPri.Write(NumPP);
+
+          if ( SpStep.prMC = 1 ) // товар
+            {
+              frmNDSPri.Write(KatMC.BarKod);
+              frmNDSPri.Write(KatMC.Name);
+            }
+          else                 // услуга
+            {
+              frmNDSPri.Write(KatUsl.Kod);
+              frmNDSPri.Write(KatUsl.Name);
+            }
+
+          frmNDSPri.Write(KatOtpEd.Name);
+          frmNDSPri.Write(SpStep.Kol, 3);
+          frmNDSPri.Write(SpStep.Price, 2); // цена как есть из документа
+
+          if ( SpStep.PrSkid = 1 )
+            {
+              NdsPos := SpStep.Nds / (1 - SpStep.VlSkid / 100);
+
+              Vrem := if ( BaseDoc.VhodNal = 1
+                         , (SpStep.Price * SpStep.Kol)
+                         , (SpStep.Price * SpStep.Kol + NDSPos)
+                         ) * SpStep.VlSkid / 100;
+
+              Vrem := oDOfuns.doRound(BaseDoc.cVal, BaseDoc.VidDoc, vrem);
+            }
+          else
+            {
+              NdsPos := SpStep.Nds * ((SpStep.Price * SpStep.Kol)
+                      / (SpStep.Price * SpStep.Kol-SpStep.VlSkid));
+
+              Vrem := SpStep.VlSkid;
+            }
+
+          frmNDSPri.Write(Vrem, 2);      // скидка к товарной позиции
+
+          tnSum := tnSum + SpStep.Price*SpStep.Kol;
+          KodTn := TnKod;
+
+// РАСЧЕТ НДС результирующего после скидок ------------------------------
+
+          if ( BaseDoc.VhodNal = 1 )     // налоги входят
+            {
+              CenaBez := SpStep.Price - NDSPos / SpStep.Kol;
+              RezTNDS := NDSPos * (GPrice / SpStep.Price);
+            }
+          else
+            {
+              CenaBez := SpStep.Price;
+              RezTNDS := NDSPos * (GPrice / (SpStep.Price + NDSPos / SpStep.Kol));
+            }
+
+          cBezRez   := GPrice-RezTNDS / SpStep.Kol;
+          cBezRezTn := cBezRezTn + cBezRez * SpStep.Kol;
+          RezTnNDS  := RezTnNDS + RezTNDS;
+
+//---------------------------------------
+          if ( BaseDoc.VhodNal = 1 )     // налоги входят в цену
+            {
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, GPrice), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, cBezRez), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, cBezRez * SpStep.Kol), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, SpStep.NDS), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, RezTNDS), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, SpStep.Price * SpStep.Kol) - NDSPos, 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, SpStep.Price * SpStep.Kol), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, GPrice * SpStep.Kol), 2);
+
+              RezSumT := oDOfuns.doRound(BaseDoc.cVal, BaseDoc.VidDoc, GPrice * SpStep.Kol);
+            }
+          else
+            {
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, GPrice), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(0           , BaseDoc.VidDoc, cBezRez), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(0           , BaseDoc.VidDoc, cBezRez * SpStep.Kol), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, SpStep.NDS), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, RezTNDS), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, SpStep.Price * SpStep.Kol), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, SpStep.Price * SpStep.Kol), 2);
+              frmNDSPri.Write(oDOfuns.DoRound(BaseDoc.cVal, BaseDoc.VidDoc, GPrice * SpStep.Kol), 2);
+
+              RezSumT := oDOfuns.doRound(BaseDoc.cVal, BaseDoc.VidDoc, GPrice * SpStep.Kol);
+            }
+
+          RezSumTn    := RezSumTn + RezSumT;
+          tnSumNDS    := tnSumNDS + NDSPos;
+
+          sv_Skidka   := BaseDoc.skidka;
+          sv_VhodNal  := BaseDoc.vhodnal;
+          sv_VhSkid   := BaseDoc.vhskid;
+          sv_cVal     := BaseDoc.cval;
+          sv_VidDoc   := BaseDoc.viddoc;
+          sv_Total    := BaseDoc.total;
+          sv_NDS      := BaseDoc.nds;
+          sv_TipMoney := BaseDoc.tipmoney;
+          sv_DopProc  := BaseDoc.dopproc;
+          sv_KolDn    := BaseDoc.koldn;
+        }
+
+// итого по группе ТНВЭД ------------------------------------------------------
+
+        frmNDSPri.PutEvent(feBreak);
+        frmNDSPri.Write(RezSumTn, 2);
+        frmNDSPri.Write(cBezRezTn, 2);
+
+        cBezRezIt := cBezRezIt + cBezRezTn;
+        cBezRezTn := 0;
+        RezSum    := RezSum + RezSumTn;
+        RezSumTn  := 0;
+
+        frmNDSPri.Write(RezTnNDS, 2);
+
+        RezNDS    := RezNDS + RezTnNDS;
+        RezTnNDS  := 0;
+
+        if ( sv_VhodNal = 1 )
+          {
+            frmNDSPri.Write('Итого с учетом налогов');
+            frmNDSPri.Write(tnSum, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.Write('НДС');
+            frmNDSPri.Write(tnSumNDS, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.SkipFormat(3);
+          }
+        else
+          {
+            frmNDSPri.Write('Итого без учета налогов');
+            frmNDSPri.Write(tnSum, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.Write('НДС');
+            frmNDSPri.Write(tnSumNDS, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.Write('Итого с учетом налогов');
+            frmNDSPri.Write(tnSum + tnSumNDS, 2);
+            frmNDSPri.Write(SimVolB);
+          }
+
+        obSum    := obSum + tnSum;
+        obSumNDS := obSumNDS + tnSumNds;
+        RezSum   := RezSum + RezSumTn;
+        RezNDS   := RezNDS + RezTnNds;
+        tnSum    := 0;
+        tnSumNds := 0;
+
+//--------Итоги по счету---------------------------------------------
+
+        frmNDSPri.PutEvent(feBreak);
+        frmNDSPri.Write(RezSum, 2);
+        frmNDSPri.Write(CBezRezIt, 2);
+        frmNDSPri.Write(RezNDS, 2);
+
+        if ( sv_VhodNal = 1 )
+          {
+            frmNDSPri.Write('Итого с учетом налогов');
+            frmNDSPri.Write(obSum, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.Write('НДС');
+            frmNDSPri.Write(obSumNDS, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.SkipFormat(3);
+          }
+        else
+          {
+            frmNDSPri.Write('Итого без учета налогов');
+            frmNDSPri.Write(obSum, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.Write('НДС');
+            frmNDSPri.Write(obSumNDS, 2);
+            frmNDSPri.Write(SimVolB);
+            frmNDSPri.Write('Итого с учетом налогов');
+            frmNDSPri.Write(obSum + obSumNDS, 2);
+            frmNDSPri.Write(SimVolB);
+          }
+
+//--------Скидка по документу---------------------------------------
+
+        if ( sv_Skidka <> 0 )
+          {
+            frmNDSPri.Write('Скидка к сумме по документу ');
+            frmNDSPri.Write(sv_Skidka, 2);
+
+            if ( sv_VhSkid = 1 )
+              {
+                vrem := oDOfuns.doRound(BaseDoc.cVal, sv_VidDoc, sv_Total / (1 - sv_Skidka / 100) - sv_Total);
+
+                frmNDSPri.Write(' %');
+                frmNDSPri.Write(vrem, 2);
+                frmNDSPri.Write(SimvolB);
+              }
+            else
+              {
+                vrem := sv_Skidka;
+
+                frmNDSPri.Write(SimvolB);
+                frmNDSPri.SkipFormat(2);
+              }
+
+          }
+        else
+          frmNDSPri.SkipFormat(5);
+
+//---------Итого к оплате-------------------------------------------
+        frmNDSPri.Write(sv_Total, 2);
+        frmNDSPri.Write(SimvolB);
+        frmNDSPri.Write(sv_NDS, 2);
+
+//         frmNDSPri.Write(SimvolB);
+        frmNDSPri.Write(doubletostring(sv_cVal, sv_Total));
+
+        if ( (sv_TipMoney = 2) and (sv_DopProc <> 0) )
+          {
+            frmNDSPri.Write('Процент к курсу на день оплаты ');
+            frmNDSPri.Write(sv_DopProc, 2);
+          }
+        else
+          frmNDSPri.SkipFormat(2);
+
+        frmNDSPri.Write(sv_KolDn, 0);
+    }
+
+  frmNDSPri.PutEventById(fefalse, fcDelimiterNDS);
+  frmNDSPri.Skipformat(1);
+  frmNDSPri.PutEvent(feBreak);
+
+  if ( not frmNDSPri.error )
+    {
+      if ( doview )
+        {
+          Case sv_VidDoc of
+
+            201 : frmNDSPri.ShowFile('Документ-основание на продажу');
+            202 : frmNDSPri.ShowFile('Документ-основание отпуска на консигнацию');
+            1420: frmNDSPri.ShowFile('Счет лесопользователя');
+            else  frmNDSPri.ShowFile('Документ-основание');
+
+          end;
+        }
+      else
+        frmNDSPri.abortForm;
+    }
+  else
+    frmNDSPri.abortForm;
+
+  Abort;
+}
+
+end; // HandleEvent
+
+end.

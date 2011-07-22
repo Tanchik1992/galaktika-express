@@ -1,0 +1,716 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - документы-основания
+// Подсчет сумм по ДО
+//******************************************************************************
+
+/*
+!!!ВНИМАНИЕ!!!
+При подключении данного INCLUDE в основной таблице интерфейса необходимы подцепки
+
+Bounds ForGetTotal =
+      BaseDoc.NRec            == StepDoc.cBaseDoc
+  AND StepDoc.NRec            == SpStep.cStepDoc
+  AND SpStep.cMCUSL           == KatMC.NRec
+  AND SpStep.cMCUSL           == KatUsl.NRec
+
+!!!БЕЗ ЭТОГО РАБОТАТЬ НЕ БУДЕТ!!!
+*/
+
+#include DOfuns.var
+#include CalcFuns.var
+
+#include RESPROC.tune
+
+//******************************************************************************
+
+Create view cGetTot
+From
+  SpStep
+, SpDocNal;
+
+//******************************************************************************
+
+#include dosoprh.vpp            // функции для работы с SoprHoz
+
+//******************************************************************************
+
+var SumMCU: double;             // для ValSkidPos
+var Zapret: word;
+var NeedTotalCount: boolean;
+
+
+//******************************************************************************
+
+Function _kurs: double;
+{
+  var res: double;
+
+  if ( (BaseDoc.TipMoney = 2) AND (BaseDoc.ValCurse <> 0) )
+    res := BaseDoc.ValCurse * (1 + BaseDoc.DopProc / 100);
+  else
+    if oValFunc.GetCurse(BaseDoc.cVal, BaseDoc.dDoc, res)
+      res := res * (1 + BaseDoc.DopProc / 100);
+
+  _kurs := res;
+}
+
+//******************************************************************************
+
+#ifdef _RETTARA_
+
+//******************************************************************************
+
+Procedure DelSpDocNalNDS;
+var
+  pSpStep
+, Nalog_cNalogNDS: comp;
+  TipNal: word;
+{
+  pSpStep         := SpStep.NRec;
+  Nalog_cNalogNDS := coGetTuneRes('Nalog.cNalogNDS', ResTunes.Nalog_cNalogNDS);
+  TipNal          := 1000 + BaseDoc.VidDoc;
+
+  if (cGetTot.GetFirst FastFirstRow SpDocNal
+         where ((pSpStep         == SpDocNal.cSpDoc AND
+                 TipNal          == SpDocNal.TipDoc AND
+                 Nalog_cNalogNDS == SpDocNal.cNalog)) = tsOk)
+    {
+      SpStep.NDS := SpStep.NDS - cGetTot.SpDocNal.SumVal;
+      SpStep.ManualTax := 1;
+      update current SpStep;
+      cGetTot.delete current SpDocNal;
+    }
+}
+#end
+
+//******************************************************************************
+
+Function GetNalGr: comp;
+var
+  cGN, pSpStep: comp;
+  TipNal: word;
+{
+  if (SpStep.cGrNal <> 0)
+    cGN := SpStep.cGrNal
+  else
+    {
+      TipNal := 1000 + BaseDoc.VidDoc;
+      pSpStep := SpStep.nRec;
+
+      if (cGetTot.GetFirst FastFirstRow SpDocNal
+             where(( pSpStep == SpDocNal.cSpDoc  AND
+                     TipNal  == SpDocNal.TipDoc )) = tsOk)
+        cGN := cGetTot.SpDocNal.cGrNal
+      else
+        cGN := if(SpStep.PrMC = 1, KatMC.cGrNal, KatUsl.cGrNal);
+
+      SpStep.cGrNal := cGN;
+      update current SpStep;
+    }
+
+  GetNalGr := cGN;
+}
+
+//******************************************************************************
+
+Procedure CalcSumPos; // расчет полей SpStep.Summa и SpStep.Sumval
+{                     // при изменении атрибутов позиции
+  case SpStep.PrMC of
+  //-----------------
+    1
+  , 2
+  , 4..8:
+        {
+          SpStep.Price := oDOfuns.DoRoundP(BaseDoc.cVal, tipDo, SpStep.Price);
+          SpStep.SumVal := 0;
+        }
+  //-----------------
+    3:  // сумма по соп услуге как % со всеми скидками
+      {
+        SpStep.Price  := 0;
+        SpStep.SumVal := 0;
+      }
+  //-----------------
+  end; // case
+}
+
+//******************************************************************************
+
+Function ValSkidPos(sum_: double): double;
+{
+  ValSkidPos := 0;
+
+  case (sum_) of
+  //------------
+    0:
+      {
+        var SRas    : double;  sRas     := 0;
+        var pStepDoc: comp;    pStepDoc := StepDoc.NRec;
+
+        cGetTot._LOOP SpStep where ((pStepDoc == SpStep.cStepDoc))
+        if (cGetTot.SpStep.PrMC <> 3)
+          {
+            SRas := SRas + if (cGetTot.SpStep.PrSkid = 1,
+                    cGetTot.SpStep.Price * cGetTot.SpStep.Kol * (1-cGetTot.SpStep.VlSkid/100), //скидка %
+                    cGetTot.SpStep.Price * cGetTot.SpStep.Kol - cGetTot.SpStep.VlSkid); //скидка сумма
+          }
+
+        sum_ := sRas;
+      }
+  //------------
+   else
+     ValSkidPos := BaseDoc.Skidka*(if (SpStep.PrSkid = 1,
+                    SpStep.Price * SpStep.Kol *(1-SpStep.VlSkid/100), //скидка %
+                    SpStep.Price * SpStep.Kol - SpStep.VlSkid) )/sum_;
+  //------------
+  end;
+}
+
+// при изменении атрибутов позиции расчет суммы со всеми скидками
+
+//******************************************************************************
+
+Function GetSumPos: double;
+{
+  var Sum: double;  GetSumPos := 0;
+
+  case SpStep.PrMC of
+  //-----------------
+    1
+  , 2
+  , 4..8:  // товар или простая услуга
+      {
+        Sum := SpStep.Price * SpStep.Kol;
+        GetSumPos := if (SpStep.PrSkid = 1, Sum*(1-SpStep.VlSkid/100), //скидка %
+                                            Sum - SpStep.VlSkid); //скидка сумма
+        if (BaseDoc.Skidka <> 0)
+          case BaseDoc.VhSkid of
+          //--------------------
+            1:
+              {
+                #ifdef _RETTARA_
+                if (wGetTuneRes('Tara.SkTara', ResTunes.Tara_SkTara) = 0)
+                  {
+                    if (SpStep.PrMc <> 1)
+                      GetSumPos := GetSumPos*(1-BaseDoc.Skidka/100);
+                    else
+                      if ((sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara) = '') or
+                          (KatMC.kGroupMC <> sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara)))
+                        GetSumPos := GetSumPos*(1-BaseDoc.Skidka/100);
+                  }
+                else
+                #end
+                  GetSumPos := GetSumPos*(1-BaseDoc.Skidka/100);
+              }
+          //--------------------
+            2:
+              {
+                #ifdef _RETTARA_
+                if (wGetTuneRes('Tara.SkTara', ResTunes.Tara_SkTara) = 0)
+                  {
+                    if (SpStep.PrMc <> 1)
+                      GetSumPos := GetSumPos - ValSkidPos(SumMCU);
+                    else
+                      if ((sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara) = '') or
+                          (KatMC.kGroupMC <> sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara)))
+                        GetSumPos := GetSumPos - ValSkidPos(SumMCU);
+                  }
+                else
+                #end
+
+                  GetSumPos := GetSumPos - ValSkidPos(SumMCU);
+              }
+          //--------------------
+          end; // case
+      }
+  //-----------------
+    3:
+      {
+        var SumGet: double;  SumGet := 0;
+
+        if (SpStep.cSpMC = 0)
+          {
+            var cRec: comp; cRec := StepDoc.NRec;
+
+            cGetTot._LOOP SpStep where (( cRec == SpStep.cStepDoc AND word(3) >> SpStep.PrMC ))
+              SumGet := SumGet + cGetTot.SpStep.Summa;
+          }
+        else
+          {
+            var cRec: comp;  cRec := SpStep.cSpMC;
+
+            if (cGetTot.GetFirst FastFirstRow SpStep where (( cRec == SpStep.NRec )) = tsOk)
+              SumGet := cGetTot.SpStep.Summa;
+          }
+
+        GetSumPos := SumGet*SpStep.KolSkl/100;
+      }
+  //-----------------
+  end; // case
+}
+
+//******************************************************************************
+
+Procedure ChangeSumSopUsl(var SpSumma: double);
+// параметр - сумма товаров/услуг для применения %
+// при изменении атрибутов позиции пересчет суммы по соп. услугам
+{
+  var sPos: double;
+  var pSpMC: comp;
+  var pRec  : comp;
+  var dValNalog: Date;
+
+  dValNalog := if (BaseDoc.dValCurse = Date(0, 0, 0), BaseDoc.dDoc, BaseDoc.dValCurse);
+
+  if (BaseDoc.Direct <> 2)  // нужны только входящие ДО
+    Exit;
+
+  PushPos(#SpStep);
+  ResetBounds(#SpStep);
+
+  _LOOP SpStep where (( StepDoc.NRec == SpStep.cStepDoc AND
+                        word(3)      == SpStep.PrMC ))
+    {
+      // расчет налогов если неручные (SpStep.ManualTax = 0)
+      // с новым GetSumPos: ProcEugen(GetSumPos)
+
+      if (SpStep.cSpMC = 0)
+        {
+          sPos := SpSumma*SpStep.KolSkl/100;
+          SpStep.Summa := sPos;
+        }
+      else
+        {
+          pSpMC := SpStep.cSpMC;
+          pRec  := SpStep.NRec;
+          sPos := if (GetFirst SpStep where ((pSpMC == SpStep.NRec)) = tsOk, SpStep.Summa, 0);
+
+          if (GetFirst SpStep where ((pRec == SpStep.NRec)) = tsOk)
+            {
+              SpStep.Summa := sPos*SpStep.KolSkl/100;
+              sPos := SpStep.Summa;
+            }
+        }
+
+      if (SpStep.ManualTax = 0)  //неручные
+        {
+          SpStep.Nds := 0;
+
+          if (BaseDoc.VhodNal = 1) // налоги входят
+            {
+              if (CountBasePrice(BaseDoc.NRec, SpStep.NRec, tipDo+1000, GetNalGr, BaseDoc.cOrg
+                                 , if(SpStep.PrMC>2,0,SpStep.Kol)
+                                 , if(SpStep.PrMC>2,0,SpStep.cOtpEd)
+                                 , dValNalog, BaseDoc.cVal
+                                 , 0, 0, sPos, BaseDoc.cPayment))
+                SpStep.Nds := sPos - GetBaseValPrice
+            }
+          else
+            {
+              if (CountNalogPrice(BaseDoc.NRec, SpStep.NRec, tipDo+1000, GetNalGr, BaseDoc.cOrg
+                                  , if(SpStep.PrMC>2,0,SpStep.Kol)
+                                  , if(SpStep.PrMC>2,0,SpStep.cOtpEd)
+                                  , dValNalog, BaseDoc.cVal
+                                  , 0, 0, sPos, BaseDoc.cPayment))
+                SpStep.Nds := GetNaLogValPrice - sPos
+            }
+        }
+
+      update current spstep;
+    }
+
+  SetBounds(#SpStep);
+  PopPos(#SpStep);
+}
+
+//******************************************************************************
+
+#include soprc00.vpp
+
+//******************************************************************************
+
+//******************************************************************************
+
+#ifdef _AkcisNalog_
+
+//******************************************************************************
+
+Function QuickNDS: double;              // Перерасчет суммы налога по позиции ДО
+{
+  var d: double;
+
+ _LOOP SpDocNal
+   d := d + SpDocNal.Summa;
+
+  QuickNDS := d;
+}
+#end
+
+//******************************************************************************
+
+Procedure ChangePos (IsGrNal: comp); // для пересчета при изменении атрибутики позиции
+{
+  if (Zapret = 1)
+    Exit; //запрет установлен
+
+  var dValNalog: Date;  dValNalog := if (BaseDoc.dValCurse = Date(0, 0, 0), BaseDoc.dDoc, BaseDoc.dValCurse);
+  var IsGr: comp;       IsGr := if (IsGrNal = 0, GetNalGr, IsGrNal);
+
+  CalcSumPos;
+
+  if ((SpStep.Kol = 0) OR (if(SpStep.PrMC = 3, FALSE, SpStep.Price = 0)))
+    {
+      SpStep.Summa := 0;
+
+      if (SpStep.ManualTax = 0)
+        {
+          SpStep.Nds := 0;
+
+          var pSpStep: comp; pSpStep := SpStep.nRec;
+          var wVidDoc: word; wVidDoc := BaseDoc.VidDoc + 1000;
+
+          cGetTot.delete SpDocNal
+            where(( pSpStep == SpDocNal.cSpDoc  AND
+                    wVidDoc == SpDocNal.TipDoc  ));
+        }
+
+      Exit;
+    }
+
+  if (BaseDoc.VidDoc <> 501) AND (BaseDoc.VidDoc <> 502)
+    SpStep.Summa := oDOfuns.DoRound(BaseDoc.cVal, tipDo, GetSumPos);
+  else
+    {
+      var dSumPos: double;  dSumPos := GetSumPos;
+      var dKurs: double;    dKurs := if(_kurs = 0, 1, _kurs);
+
+      SpStep.Summa  := if (BaseDoc.cVal<>0, oDOfuns.DoRoundNde(tipDo, dSumPos)*dKurs, oDOfuns.DoRoundNde(tipDo, dSumPos));
+      SpStep.SumVal := if (BaseDoc.cVal<>0, oDOfuns.DoRoundVlt(tipDo, dSumPos)      , oDOfuns.DoRoundVlt(tipDo, dSumPos)/dKurs);
+    }
+
+  if (BaseDoc.VidDoc = 101 OR BaseDoc.VidDoc = 1410) // Для расчета таможенных сборов в ДО на закупку
+    update current SpStep;
+
+  // расчет налогов proceugen(SpStep.Summa)
+  // если неручные (SpStep.ManualTax = 0)
+  // SpStep.Nds := возврат в валюте ДО
+  // Для производственных ДО Не надо ,  там налогов НЕТ
+  if (BaseDoc.VidDoc = 501) OR (BaseDoc.VidDoc = 502)
+    Exit;
+
+  if (SpStep.ManualTax <> 0)  //неручные
+    Exit;
+
+  var sPos: double;  sPos := SpStep.Summa + oCalcFuns.ValNac_getPricePos(SpStep.NRec, coSpStep);
+
+  SpStep.Nds := 0;
+
+  if (BaseDoc.VhodNal = 1) // налоги входят
+    {
+      if (CountBasePrice(BaseDoc.NRec, SpStep.NRec, tipDo+1000, IsGr, BaseDoc.cOrg
+                         , if(SpStep.PrMC>2,0,SpStep.Kol)
+                         , if(SpStep.PrMC>2,0,SpStep.cOtpEd)
+                         , dValNalog, BaseDoc.cVal
+                         , 0, 0, sPos, BaseDoc.cPayment))
+        SpStep.Nds := sPos - GetBaseValPrice
+    }
+  else
+    {
+      if (CountNalogPrice(BaseDoc.NRec, SpStep.NRec, tipDo+1000, IsGr, BaseDoc.cOrg
+                          , if(SpStep.PrMC>2,0,SpStep.Kol)
+                          , if(SpStep.PrMC>2,0,SpStep.cOtpEd)
+                          , dValNalog, BaseDoc.cVal
+                          , 0, 0, sPos, BaseDoc.cPayment))
+        SpStep.Nds := GetNaLogValPrice - sPos
+    }
+
+  #ifdef _RETTARA_
+  if (SpStep.PrVoz = 1)
+    DelSpDocNalNDS;
+  #end
+
+  #ifdef _AkcisNalog_
+  if (TipDO = 201 OR TipDO = 1420)
+    if (SpStep.ManualTax = 0)
+      if (AkcisNalog(SpStep.cPriceList))
+        SpStep.NDS := QuickNDS;
+  #end
+}
+
+//******************************************************************************
+
+Procedure GetTotal (var GroupCalc: boolean);
+// пересчет всех позиций с расчетом налогов: TRUE-групповая калькуляция
+{
+  var VGetSumPos: double;
+  var SumS: double;             SumS := 0;
+  var TotalS: double;
+  var sumGet: double;           sumGet := 0;
+  var wasGrCalc: boolean;       wasGrCalc := FALSE;
+  var bsum: double;             bSum := 0;
+
+  #ifdef __vschet__
+  if (wGetTune('Oper.AlgSkid') = 1) // если работаем по сложным скидкам для ДО на продажу
+    IsNeedReCalcSloznSkid := TRUE;
+  #end
+
+  if (
+      (BaseDoc.SpecYes <> 0) OR
+      ((BaseDoc.VidDoc <> 111) AND (BaseDoc.VidDoc <> 211))
+     )
+    BaseDoc.Total := 0;
+
+  BaseDoc.Summa := 0;
+  BaseDoc.SumVal := 0;
+  BaseDoc.NDS := 0;
+
+  SumMCU := 0;
+
+  if (Zapret = 1)
+    Exit;                       // установлен запрет
+
+  if (NeedTotalCount)           // устанавливается после снятия запрета
+    GroupCalc := FALSE;
+
+  NeedTotalCount := FALSE;
+
+  PushPos(#SpStep);
+  ResetBounds(#SpStep);
+
+  //расчет общей суммы по всем кроме %услуг:
+  if (BaseDoc.Skidka <> 0) AND (BaseDoc.VhSkid = 2)
+
+    _LOOP SpStep where (( StepDoc.NRec == SpStep.cStepDoc ))
+      {
+        if NOT wasGrCalc
+          StartNewVisual(vtNumericVisual, 0, 'Расчет суммы...', 1);
+
+        wasGrCalc := TRUE;
+
+        NextVisual;
+        if (SpStep.PrMC = 3)
+          continue;
+
+        #ifdef _RETTARA_
+        if (wGetTuneRes('Tara.SkTara', ResTunes.Tara_SkTara) = 0) AND
+            (KatMC.kGroupMC = sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara)) AND
+             (sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara) <> '')
+          continue;
+        #end
+
+        SumMCU := SumMCU + if (SpStep.PrSkid = 1,
+                                SpStep.Price * SpStep.Kol *(1-SpStep.VlSkid/100), // скидка %
+                                SpStep.Price * SpStep.Kol - SpStep.VlSkid);       // скидка сумма
+       }
+
+  if (wasGrCalc)
+    RestartVisual('Расчет по документу...', 1);
+
+  var pGetDocSpecInfo: GetDocSpecInfo;
+
+  if boGetTuneRes('Oper.Netto&Tara_AutoCalc', ResTunes.Netto_Tara_Control)
+    {
+      BaseDoc.Netto := 0;
+      BaseDoc.mTara := 0;
+    }
+
+  //---основной цикл:
+
+  _LOOP SpStep where (( StepDoc.NRec == SpStep.cStepDoc ))
+               ordered by SpStep.PrMC
+    {
+      if boGetTuneRes('Oper.Netto&Tara_AutoCalc', ResTunes.Netto_Tara_Control)
+        if (SpStep.PrMC = 1)
+          {
+            var MassaTov, MassaTara: double;
+            pGetDocSpecInfo.GetOneSpecInfo(coBaseDoc, SpStep.NRec, MassaTov, MassaTara);
+
+            BaseDoc.Netto := BaseDoc.Netto + MassaTov;
+            BaseDoc.mTara := BaseDoc.mTara + MassaTara;
+          }
+
+      if (GroupCalc = FALSE)
+        {
+          if NOT wasGrCalc
+            StartNewVisual(vtNumericVisual, 0, 'Расчет по документу...', 1);
+
+          wasGrCalc := TRUE;
+
+          ChangePos(comp(0));
+          update current SpStep;
+        }
+
+      bSum := bSum + SpStep.Summa;
+
+      if (SpStep.prMC <>3 ) //сумма без %услуг
+        {
+          VGetSumPos := SpStep.Summa;
+          SumS := SumS + VGetSumPos;
+          BaseDoc.Nds := BaseDoc.Nds + SpStep.Nds;
+        }
+
+      if (SpStep.PrMC = 1)    // сумма по товарам и услугам (для ChangeSumSopUsl)
+        if ((boGetTuneRes('Oper.SoprUslTara', ResTunes.Tara_SoprUslTara)) OR // Распределение сопутствующих услуг по таре
+            (Pos(Upcase(Trim(sGetTuneRes('Tara.KodGrMcTara', ResTunes.Tara_KodGrMcTara))), Upcase(KatMC.kGroupMC)) <> 1))  // или МЦ - не тара
+          SumGet := SumGet + SpStep.Summa;
+
+      if (wasGrCalc)
+        NextVisual;
+    }
+
+  if (BaseDoc.VhodNal = 2)
+    BaseDoc.TotalNDE := oDOfuns.DoRoundNDE(BaseDoc.VidDoc, bSum*_kurs) + oDOfuns.DoRoundNDE(BaseDoc.VidDoc, BaseDoc.Nds * _kurs)
+  else
+    BaseDoc.TotalNDE := oDOfuns.DoRoundNDE(BaseDoc.VidDoc, bSum*_kurs);
+
+  //расчет %соп.услуг
+  if (BaseDoc.Direct = 2)  // входящие ДО
+    {
+      ChangeSumSopUsl(SumGet);
+
+      if (wasGrCalc)
+        RestartVisual('Обработка сопутствующих услуг...', 1);
+
+      _LOOP SpStep where ((StepDoc.NRec == SpStep.cStepDoc AND
+                           word(3)      == SpStep.PrMC ))
+        {
+          if (wasGrCalc)
+            NextVisual;
+
+          VGetSumPos := SpStep.Summa;
+          SumS := SumS + VGetSumPos;
+          BaseDoc.Nds := BaseDoc.Nds + SpStep.Nds;
+        }
+    }
+
+  if (wasGrCalc)
+    StopVisual('', 0);
+
+  SetBounds(#SpStep);
+  PopPos(#SpStep);
+
+  RescanPanel(#SpStep);
+  RereadRecord(#SpStep);
+
+  BaseDoc.Summa := SumS;
+
+  //--------------------------------------------------------------------------
+
+  if ((BaseDoc.VidDoc <> 111) AND (BaseDoc.VidDoc <> 211))
+    set BaseDoc.Total := SumS + if (BaseDoc.VhodNal = 1, 0, BaseDoc.Nds);
+  else
+    if (BaseDoc.SpecYes <> 0)
+      {
+        TotalS := SumS + if (BaseDoc.VhodNal = 1, 0, BaseDoc.Nds);
+        set BaseDoc.Total := TotalS      * BaseDoc.ProcOpl / 100.0;
+        set BaseDoc.Nds   := BaseDoc.Nds * BaseDoc.ProcOpl / 100.0;
+      }
+    else
+      {
+        set BaseDoc.Summa := 0.0;
+
+        var cGrNalDO: comp;
+        var dValNalog: Date;
+
+        dValNalog := if (BaseDoc.dValCurse = Date(0, 0, 0), BaseDoc.dDoc, BaseDoc.dValCurse);
+
+        var pBaseDoc: comp; pBaseDoc := BaseDoc.nRec;
+        var wVidDoc : word; wVidDoc  := BaseDoc.VidDoc + 2000;
+
+        if (cGetTot.GetFirst FastFirstRow SpDocNal
+            where ((pBaseDoc == SpDocNal.cDoc  AND
+                    wVidDoc  == SpDocNal.TipDoc)) = tsOk)
+          {
+            cGrNalDO := cGetTot.SpDocNal.cGrNal;
+
+            set BaseDoc.Nds := 0;
+
+            if (CountBasePrice(BaseDoc.NRec, BaseDoc.NRec, tipDo+2000, cGrNalDO,
+                               BaseDoc.cOrg, 0, comp(0), dValNalog,
+                               BaseDoc.cVal, 0, 0, BaseDoc.Total,
+                               BaseDoc.cPayment))
+              set BaseDoc.Nds := BaseDoc.Total - GetBaseValPrice
+          }
+      }
+
+  //--------------------------------------------------------------------------
+
+  if (update current BaseDoc <> tsOk)
+    { }
+
+  StepDoc.Summa  := if (BaseDoc.cVal = 0, BaseDoc.Total, 0);
+  StepDoc.SumVal := if (BaseDoc.cVal = 0, 0, BaseDoc.Total);
+
+  if (update current StepDoc <> tsOk)
+    { }
+
+  case BaseDoc.VidDoc of
+    101, 102, 111, 201, 202, 211, 510, 550, 1410, 1420:
+      {
+        if ( RecordExists SoprHoz = tsOk )
+          UpDateDoSoprHoz
+        else
+          InsertDoSoprHoz;
+      }
+  end;
+
+  #ifdef __NewOFP__ // обновит ФО (Платежный календарь)
+  piOFPOut.OnChangeBaseDoc(TBaseDoc(BaseDoc.buffer), cgCom_BaseDocRecalc);
+  #end //__NewOFP__
+
+  RereadRecord(#BaseDoc);
+}
+
+//******************************************************************************
+
+Function AutoCalcUsl: boolean;  // Пересчет всех позиций с расчетом налогов и с автопересчетом расчетных услуг
+{
+  AutoCalcUsl := FALSE;
+
+  PushPos(#SpStep);
+  ResetBounds(#SpStep);
+
+  var IsExistRaschUsl: boolean;  IsExistRaschUsl := FALSE;
+
+  _LOOP SpStep where ((StepDoc.NRec == SpStep.cStepDoc  AND
+                       Word(2)      == SpStep.PrMC))
+    if (KatUsl.TypeUsl = 1)                     // Пересчет расчетных услуг
+      {
+        IsExistRaschUsl := TRUE;
+        RunInterface('GETPAR1', 1, SpStep.NRec, KatUsl.NRec, SpStep.Price, SpStep.KolSkl, word(coSpStep));
+        Set SpStep.Price := SpStep.Price;
+        Set SpStep.Kol := SpStep.KolSkl;
+        Update current SpStep;
+      }
+
+  // Пересчет позиций документа с учетом расчетных услуг, если необходимо
+  if (IsExistRaschUsl)
+    {
+      AutoCalcUsl := TRUE;
+      GetTotal(FALSE);
+    }
+
+  SetBounds(#SpStep);
+  PopPos(#SpStep);
+  RereadRecord(#SpStep);
+}
+
+//******************************************************************************
+
+Function GetTotalNDS(pDoc: comp): double;
+var
+  Nalog_cNalogNDS: comp;
+  TipNal: word;
+{
+  Result := 0;
+
+  Nalog_cNalogNDS := coGetTuneRes('Nalog.cNalogNDS', ResTunes.Nalog_cNalogNDS);
+  TipNal          := 1000 + BaseDoc.VidDoc;
+
+  cGetTot._LOOP SpDocNal
+         where (( pDoc            == SpDocNal.cDoc   AND
+                  TipNal          == SpDocNal.TipDoc AND
+                  Nalog_cNalogNDS == SpDocNal.cNalog ))
+    Result := Result + cGetTot.SpDocNal.Summa;
+}

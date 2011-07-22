@@ -1,0 +1,531 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Контроль ДО
+//******************************************************************************
+
+#include basedoc.vih
+#include EditDoc.vih
+
+//******************************************************************************
+
+#doc
+Интерфейс удаления ДО
+#end
+Interface DelSchet;
+
+#include EditDoc.var
+
+Table struct BaseDoc4Del
+(
+  cRec   : comp
+, sSort  : string[26]
+)
+With index
+(
+  DelSchet01 = sSort
+)
+;
+
+Create view
+Var
+//------------------------------------------------------------------------------
+  begdate
+, enddate
+        : date;
+//------------------------------------------------------------------------------
+  delany
+, bShowDelList
+, bExit
+        : boolean;
+//------------------------------------------------------------------------------
+  w
+, w1
+, wParam
+, TipDO
+        : word;
+//------------------------------------------------------------------------------
+  LL
+, LL101
+, LL102
+, LL111
+, LL201
+, LL202
+, LL211
+, LL501
+, LL510
+, LL520
+, LL1410
+, LL1420
+        : BaseDocDeleterObj;
+//------------------------------------------------------------------------------
+From
+  BaseDoc
+, BaseDoc BaseDoc2
+, StepDoc
+, BaseFin
+, KatSopr
+, SpStep
+, KatOrg
+, BaseDoc4Del
+, Pick
+, Pick Pick1
+
+//------------------------------------------------------------------------------
+Where
+((
+  word(2)          == BaseDoc.Status   and
+  TipDO            == BaseDoc.VidDoc   and
+  begdate         <<= BaseDoc.dDoc     and
+  BaseDoc.nRec     == StepDoc.cBaseDoc and
+  StepDoc.cBaseDoc == BaseFin.cBaseDoc and
+  StepDoc.nRec     == KatSopr.cStepDoc and
+  StepDoc.nRec     == SpStep.cStepDoc  and
+  BaseDoc4Del.cRec == BaseDoc2.nRec    and
+  BaseDoc2.cOrg    == KatOrg.nRec      and
+
+  word(22)         == Pick.wList       and
+  word(22)         == Pick1.wList      and
+  BaseDoc4Del.cRec == Pick1.cRec
+))
+
+Bounds ByEndDate = enddate >>= BaseDoc.dDoc(NoIndex);
+;
+//------------------------------------------------------------------------------
+
+Form frmErr('AbonErr.OUT', 'ERRR') with NoVisual;
+
+//******************************************************************************
+
+Function GetDates(var d1, d2: date; var w1: word): boolean;
+{
+  GetDates := FALSE;
+
+  while TRUE do
+    {
+      if ( RunDialog('GetIntervalCheckDO', d1, d2, w1) = cmCancel )
+        Exit;
+
+      if ( ( d1 <> ZeroDate ) AND ( d2 <> ZeroDate ) AND ( d2 >= d1 ) AND ( w1 <> 0 ) )
+        Break;
+
+      if ( ( d1 <> ZeroDate ) AND ( d2 <> ZeroDate ) AND ( d2 >= d1 ) AND ( w1 = 0 ) )
+        Message('Не заданы типы ДО...', CancelButton + Warning)
+      else
+        if ( d1 = ZeroDate )
+          Message('Первая дата не может быть нулевой...', CancelButton + Warning)
+        else
+          if ( d2 = ZeroDate )
+            Message('Вторая дата не может быть нулевой...', CancelButton + Warning)
+          else
+            Message('Вторая дата должна быть не меньше первой...', CancelButton + Information);
+    }
+
+  GetDates := TRUE;
+}
+
+//******************************************************************************
+
+Function GetStrVid(vd : word; var _s : string; var _w : word): boolean;
+{
+  GetStrVid := TRUE;
+
+  case vd of
+    101: { _s := 'снабжение';               _w :=   1; }
+    102: { _s := 'прием на консигнацию';    _w :=   2; }
+    111: { _s := 'предоплата закупок';      _w :=   4; }
+    201: { _s := 'сбыт';                    _w :=   8; }
+    202: { _s := 'отпуск на консигнацию';   _w :=  16; }
+    211: { _s := 'предоплата продаж';       _w :=  32; }
+    501: { _s := 'отпуск в производство';   _w :=  64; }
+    510: { _s := 'заявка на обслуживание';  _w := 128; }
+    520: { _s := 'давальческая обработка';  _w := 256; }
+    1410: { _s := 'наряд-акт (УЛХ) ';        _w := 512; }
+    1420: { _s := 'счет лесопользователя';   _w := 1024;}
+  else
+    {
+      _s := '';
+      GetStrVid := FALSE;
+    }
+  end;
+}
+
+//******************************************************************************
+
+Function StrVidDoc(vd: word): string;
+Var
+  _s : string;
+  _w : word;
+{
+  GetStrVid(vd, _s, _w);
+  StrVidDoc := _s;
+}
+
+//******************************************************************************
+
+Procedure doDeleteDoc;
+var
+  s: string;
+  i: longint;
+{
+  i := 0;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Подсчет документов к удалению', 1);
+
+  _loop Pick
+    {
+      NextVisual;
+      i := i + 1;
+    }
+
+  StopVisual('', 0);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Удаление документов-оснований', i);
+
+  _loop BaseDoc4Del
+    {
+      GetStrVid(BaseDoc2.VidDoc, s, w1);
+      s := ' (' + s + ') ';
+
+      if ( NOT IsValid(#Pick1) )
+        frmErr.write('Отказ от удаления: ДО ' + s + f_sNumDate(BaseDoc2.NoDoc, BaseDoc2.dDoc), Error);
+      else
+        {
+          NextVisual;
+
+          delany := TRUE;
+
+          _try
+            {
+              case BaseDoc2.VidDoc of
+                101: { if (w and 1) = 0
+                         { GetVipRef(LL101, 'VSchetB'); w := w or 1; }
+                       LL := LL101 };
+                102: { if (w and 2) = 0
+                         { GetVipRef(LL102, 'ConsigB'); w := w or 2; }
+                       LL := LL102 };
+                111: { if (w and 4) = 0
+                         { GetVipRef(LL111, 'VSchetPB'); w := w or 4; }
+                       LL := LL111 };
+                201: { if (w and 8) = 0
+                         { GetVipRef(LL201, 'VSchet'); w := w or 8; }
+                       LL := LL201 };
+                202: { if (w and 16) = 0
+                         { GetVipRef(LL202, 'Consig'); w := w or 16; }
+                       LL := LL202 };
+                211: { if (w and 32) = 0
+                         { GetVipRef(LL211, 'VSchetP'); w := w or 32; }
+                       LL := LL211 };
+                501: { if (w and 64) = 0
+                         { GetVipRef(LL501, 'ManufSch'); w := w or 64; }
+                       LL := LL501 };
+                510: { if (w and 128) = 0
+                         { GetVipRef(LL510, 'ManServis'); w := w or 128; }
+                       LL := LL510 };
+                520: { if (w and 256) = 0
+                         { GetVipRef(LL520, 'dssch'); w := w or 256; }
+                       LL := LL520 };
+                1410:{ if (w and 512) = 0
+                         { GetVipRef(LL1410, 'NZ_Wood'); w := w or 512; }
+                       LL := LL1410 };
+                1420:{ if (w and 1024) = 0
+                         { GetVipRef(LL1420, 'VSchet_Wood'); w := w or 1024; }
+                       LL := LL1420 };
+              end;
+
+              LL.DeleteBaseDoc(BaseDoc2.nRec, BaseDoc2.VidDoc);
+
+              frmErr.write('Удалено ДО ' + s + f_sNumDate(BaseDoc2.NoDoc, BaseDoc2.dDoc), Error);
+            }
+
+          _except
+            On ExObjIfcNoLoad :
+               {
+                 frmErr.write('Ошибка удаления ExObjIfcNoLoad: ' +
+                              'ДО ' + s + f_sNumDate(BaseDoc2.NoDoc, BaseDoc2.dDoc) + ' удалить не удалось ',
+                              Error);
+               };
+            On ExObjIfcNoImpl :
+               {
+                 frmErr.write('Ошибка удаления ExObjIfcNoImpl: ' +
+                              'ДО ' + s + f_sNumDate(BaseDoc2.NoDoc, BaseDoc2.dDoc) + ' удалить не удалось ',
+                              Error);
+               };
+            On ExObjIfcBadVar :
+               {
+                 frmErr.write('Ошибка удаления ExObjIfcBadVar: ' +
+                              'ДО ' + s + f_sNumDate(BaseDoc2.NoDoc, BaseDoc2.dDoc) + ' удалить не удалось ',
+                              Error);
+               };
+        }
+    }
+
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+
+Window wnDocs 'Выбранные ДО будут удалены по нажатию Enter' (,, sci1EnEsc) doAccept, EscClose, Cyan;
+
+Browse brDel('Enter - удалить выбранные ДО',, sci14EnInsEsc);
+  Show  at (,,,);
+  Table BaseDoc4Del;
+
+Fields
+                                 {Font = {Color = if (IsValid(#Pick1), ColorMark, 0) }};
+
+  if(IsValid(#Pick1), 'V', '')   ''
+                                 : [1], Protect, NoAutoSize;
+
+  BaseDoc2.dDoc                  #3'Дата'
+                                 : [10,'DD/MM/YYYY'], Protect, NoAutoSize;
+
+  BaseDoc2.DesGr                 #3'Код группы'#13#3'пользователя'
+                                 : [12], Protect, NoAutoSize;
+
+  BaseDoc2.Descr                 #3'Дескриптор'#13#3'пользователя'
+                                 : [12], Protect, NoAutoSize;
+
+  BaseDoc2.NoDoc                 #3'Номер'#13#3'документа'
+                                 : [12], Protect, NoAutoSize;
+
+  KatOrg.Name                    #3'Контрагент'
+                                 : [18], Protect, NoAutoSize;
+
+  StrVidDoc(BaseDoc2.VidDoc)     #3'Тип документа'
+                                 : [18], Protect, NoAutoSize;
+
+end; // Browse
+
+HandleEvent // Window wnDocs
+
+cmInit :
+  {
+    bExit := TRUE;
+  }
+
+cmEdit:
+  {
+    if ( NOT IsValid(#BaseDoc2) )
+      Exit;
+
+    iEditDoc.RunEditBaseDoc(BaseDoc2.VidDoc, BaseDoc2.nRec);
+
+    ReReadRecord(#BaseDoc4Del);
+  }
+
+cmDefault :
+  {
+    if ( RecordExists Pick <> tsOk )
+      {
+        Message('Не выбрано ни одного ДО');
+        Abort;
+        Exit;
+      }
+    else
+      if ( Message('Удалить выбранные документы-основания?', YesNo) = No )
+        {
+          Abort;
+          Exit;
+        }
+
+    doDeleteDoc;
+    bExit := FALSE;
+  }
+
+cmMarkUnMark :
+  {
+    if ( IsValid(#Pick1) )
+      {
+        delete current Pick1;
+      }
+    else
+      {
+        ClearBuffer(#Pick);
+        Pick.cRec  := BaseDoc2.nRec;
+        Pick.wList := 22;
+        Insert current Pick;
+      }
+
+#ifdef ATL51
+    RedrawCurrentAndGo(GetCurrentFormat, TRUE);
+    ReScanPanel(#BaseDoc4Del);
+#else
+    if ( GetNext BaseDoc4Del = tsOk )
+      CallToNeighbours(cmPosDown, #BaseDoc4Del);
+
+    ReReadRecord;
+#end
+  }
+
+cmSelectAll :
+  {
+    delete safe Pick;
+
+    _loop BaseDoc4Del
+      {
+        ClearBuffer(#Pick);
+        Pick.cRec  := BaseDoc2.nRec;
+        Pick.wList := 22;
+        Insert current Pick;
+      }
+
+    RescanPanel(#BaseDoc4Del);
+  }
+
+cmUnSelectAll :
+  {
+    delete safe Pick;
+    RescanPanel(#BaseDoc4Del);
+  }
+
+end;
+end; // Window wnDocs
+
+//******************************************************************************
+Procedure CheckOneVid(wTip: word);
+var
+  s: string;
+  i: longint;
+{
+  if NOT GetStrVid(wTip, s, w1)
+    Exit;
+
+  if ( (wParam and w1) = 0 )
+    Exit;
+
+  TipDO := wTip;
+
+  i := 0;
+
+  StartNewVisual(vtRotateVisual, vfTimer, 'Подсчет документов-оснований (' + s + ')', 1);
+
+  _loop BaseDoc
+    {
+      NextVisual;
+      i := i + 1;
+    }
+
+  StopVisual('', 0);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer, 'Контроль документов-оснований (' + s + ')', i);
+
+  _loop BaseDoc
+    {
+      NextVisual;
+
+      if ( RecordExists BaseFin = tsOk )
+        Continue;
+
+      if ( RecordExists KatSopr = tsOk )
+        Continue;
+
+      insert BaseDoc4Del
+        set BaseDoc4Del.cRec  := BaseDoc.nRec
+          , BaseDoc4Del.sSort := string(To_Days(BaseDoc.dDoc)) + BaseDoc.NoDoc;
+
+      Pick.cRec  := BaseDoc.nRec;
+      Pick.wList := 22;
+
+      insert current Pick;
+
+      bShowDelList := TRUE;
+    }
+
+  StopVisual('', 0);
+}
+//******************************************************************************
+HandleEvent // Interface
+
+cmInit:
+  {
+    begdate := Cur_Date;
+    enddate := Cur_Date;
+
+    delany       := FALSE;
+    bShowDelList := FALSE;
+
+    w := 0;
+
+    delete pick;
+
+    if not GetDates(begdate, enddate, wParam)
+      {
+        Abort;
+        Exit;
+      }
+
+    if ( enddate <> ZeroDate )
+      AddBounds(tbByEndDate);
+
+    CheckOneVid(101);
+    CheckOneVid(102);
+    CheckOneVid(111);
+    CheckOneVid(201);
+    CheckOneVid(202);
+    CheckOneVid(211);
+    CheckOneVid(501);
+    CheckOneVid(510);
+    CheckOneVid(520);
+    CheckOneVid(1410);
+    CheckOneVid(1420);
+
+    if ( not bShowDelList )
+      Message('Процедура контроля завершена'#13+
+              'Ни один документ не попадает под указанные условия', OkButton);
+    else
+      {
+        RunWindowModal(wnDocs);
+
+        if ( not bExit )
+          {
+            if delany
+              if ( Message('Пересчитать резервы по матценностям, снять просроченные резервы?', Confirmation + YesNo) = cmYes )
+                RunInterface('SnReserv', enddate);
+
+            if frmErr.Error
+              frmErr.AbortForm;
+            else
+              frmErr.ShowFile('Протокол контроля ДО')
+          }
+      }
+
+    Abort;
+  }
+
+end;
+End.
+
+//******************************************************************************
+
+GetIntervalCheckDO DIALOG
+  HelpCtx hcNastrM1AdmTestDoc;
+  StatusCtx scGalDial;
+
+Fields
+  myd1 ('Введите дату начала интервала'): Date [, 'DD/MM/YYYY'];
+  myd2 ('Введите дату конца интервала'): Date [, 'DD/MM/YYYY'];
+  myw3 ('Включение/выключение текущего режима, должен остаться включен хотя бы один'): word;
+
+Buttons
+  cmOk, Default, , 'Ввод';
+  cmCancel, , , 'Отмена';
+
+<<'Параметры режима контроля ДО'
+ ╓─────────────────────────────────────────────╖
+ ║`Проверять ДО с`.@@@@@@@@@@@`по`.@@@@@@@@@@@ ║
+ ╟─────────────────────────────────────────────╢
+ ║         [.] снабжение              `        ║
+ ║         [.] прием на консигнацию   `        ║
+ ║         [.] предоплата закупок     `        ║
+ ║         [.] сбыт                   `        ║
+ ║         [.] отпуск на консигнацию  `        ║
+ ║         [.] предоплата продаж      `        ║
+ ║         [.] отпуск в производство  `        ║
+ ║         [.] заявка на обслуживание `        ║
+ ║         [.] давальческая обработка `        ║
+ ╙─────────────────────────────────────────────╜
+      <.~П~родолжить.>       <. ~О~тмена .>
+>>
+
+//******************************************************************************

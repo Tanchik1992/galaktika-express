@@ -1,0 +1,993 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - сопроводительные документы
+// Интерфейс ввода сопутсвующих услуг, отнесенных на другого контрагента
+//******************************************************************************
+
+#define _SOPUSL_VIP
+
+#include Actualit.vih  // обьектный интерфес Поддержки актуальности сальдо
+#include ofpmacro.vpp
+#include KatSopr.vih   // подключение объектных интерфейсов, общих для сопроводительных документов
+
+//********************************************************************************
+
+#doc
+Назначение:
+  Интерфейс ввода сопутсвующих услуг, отнесенных на другого контрагента
+
+Параметры:
+  RecSopr  - ссылка на сопроводительный документ
+  TypeSopr - вид сопроводительного документа
+#end
+
+//********************************************************************************
+
+Interface SoprUsl 'Сопутствующие услуги, отнесенные на другого контрагента' EscClose;
+  Show at (, , , );
+
+//******************************************************************************
+#include Actualit.var  // переменная типа VipInterface SaldoActuality
+#include KatSopr.var   // объектные переменные, общие для сопр.документов
+//******************************************************************************
+
+Create view
+var
+  myPlansNo     // Текущий план счетов
+, RecSopr       // Код накладной по сопутсвующим услугам
+                : comp;
+
+  TMCUSL        // Признак МЦ/услуга (для работы *.vpp)
+, TypeSopr      // тип сопровдительного документа (для работы *.vpp)
+                : word;
+
+  Curse
+, SumSpNalogs   // Сумма налогов в НДЕ по позиции спецификации
+                : double;
+
+  s_SimvRub     : string;
+
+  forSopr_Price
+, forSopr_VPrice: word;
+
+
+As select
+//------------------------------------------------------------------------------
+  LPad(if (KatSopr.cVal = 0, String(KatSopr.Summa, 16, forSopr_Price),
+     String(KatSopr.SumVal, 16, forSopr_VPrice)), 16)
+    ( FieldName = Summ )
+//------------------------------------------------------------------------------
+, if (SpSopr.cOtpEd = 0, KatEd.Name, KatOtpEd.Name)
+    ( FieldName = OtpEd )
+//------------------------------------------------------------------------------
+, LPad(if (KatSopr.cVal = 0, String(SpSopr.Price, 12, forSopr_Price),
+     String(SpSopr.VPrice, 12, forSopr_VPrice)), 12)
+    ( FieldName = Prv )
+//------------------------------------------------------------------------------
+, LPad(if (KatSopr.cVal = 0, String(SpSopr.Price* SpSopr.kolfact, 12, forSopr_Price),
+     String(SpSopr.VPrice* SpSopr.kolfact, 12, forSopr_VPrice)), 12)
+    ( FieldName = SumPrice )
+//------------------------------------------------------------------------------
+, if (KatSopr.Reserved = 1, 'Входит', 'Не входит')
+    ( FieldName = TamSt )
+//------------------------------------------------------------------------------
+, if (SpSopr.ManualTax = 1, 'ручные', 'расчетные')
+    ( FieldName = AutoNalogs )
+//------------------------------------------------------------------------------
+, (string(SpSopr.SumNDS, 14, 2) + ' '+ if (s_SimvRub = '', 'руб.', s_SimvRub))
+    ( FieldName = StrSumNal )
+//------------------------------------------------------------------------------
+, if (KatSopr.cVal = 0,
+     if (s_SimvRub <> '', s_SimvRub, 'руб.'), KlVal.SimVolV)
+    ( FieldName = Valut )
+//------------------------------------------------------------------------------
+, if (SpDocNal.cVal = 0, s_SimvRub, NalValut.SimvolV)
+    ( FieldName = ValutNal )
+//------------------------------------------------------------------------------
+
+, KatSopr.*
+, SpSopr.*
+, KatUsl.*
+, KatOrg.Name
+, KlVal.SimvolV
+
+From
+  SpSopr (SpSopr02)
+, KatSopr KKSopr
+, KatOrg NalOrg
+, KlVal NalValut
+, SpDocNal
+, KatNalog
+, TempNo
+, TTNDoc
+, KATSOPR
+, KATED
+, KATOTPED
+, KLVAL
+, KATORG
+, BASEDOC
+, SPSTEP
+, SPDOCS
+, FILIAL
+, Kontras
+, KatMc
+, Pick
+, SpOrder
+, SpSopHoz
+, OBOROT
+, SpOtpEd
+Where
+((
+       RecSopr          == KatSopr.cKatSopr
+  AND  RecSopr          == KKSopr.NRec
+  AND  KatSopr.NRec     == SpSopr.cSopr
+  AND  KatSopr.cOrgBase == KatOrg.NRec
+  AND  SpSopr.cMCUsl    == KatUsl.NRec
+  AND  SpSopr.cOtpEd    == KatOtpEd.NRec
+  AND  KatSopr.VidSopr  == SoprHoz.TipDoc
+  AND  KatSopr.NRec     == SoprHoz.cSoprDoc
+  AND  KatSopr.cValut   == klVal.NRec
+  AND  coKatSopr        == TTNDoc.wTable
+  AND  KatSopr.NRec     == TTNDoc.cDoc
+  AND  TypeSopr         == SpDocNal.TipDoc
+  AND  SpSopr.NRec      == SpDocNal.cSpDoc
+  AND  SpDocNal.cNalog  == KatNalog.NRec
+  AND  SpDocNal.cOrg    == NalOrg.NRec
+  AND  SpDocNal.cVal    == NalValut.NRec
+));
+
+//******************************************************************************
+Parameters
+  RecSopr
+, TypeSopr
+;
+//******************************************************************************
+
+#include KontrBal.var
+#include LinkGrPL.var
+#include sopconst.inc
+#include SoprAll.vpp  // общие функции сопроводительных документов
+
+//******************************************************************************
+
+Function FSRoundRub(Value: double): double;
+{
+  FSRoundRub := FRoundRub1(Value);
+}
+
+//******************************************************************************
+
+Function FSRoundVal(Value: double): double;
+{
+  FSRoundVal := FRoundVal1(Value);
+}
+
+//******************************************************************************
+
+#include soprval.vpp // Обработка налогов по документу
+
+//******************************************************************************
+
+Function getKolZnak(RRub: double): word; //-- возвращает кол-во знаков после запятой
+var lRub: word;
+{
+  if (RRub = 0.0001)
+    {
+      lRub := 4;
+      getKolZnak := lRub;
+      Exit;
+    }
+
+  if (RRub = 0.001)
+    {
+      lRub := 3;
+      getKolZnak := lRub;
+      Exit;
+    }
+
+  lRub := 2;
+
+  getKolZnak := lRub;
+}
+
+//******************************************************************************
+
+Procedure SetNaklRoundFormat(VSopr: word); //-- установить точность вывода сумм в зависимости от настройки
+{
+  ForSopr_Price  := 2;
+  ForSopr_VPrice := 2;
+
+  case (VSopr) of
+    110,
+    114,
+    101, 108, 111,
+    206:
+      {
+        if (wGetTune('Round.Buy') <> 0)
+          {
+            ForSopr_Price  := getKolZnak(doGetTune('Round.BuyDORub'));
+            ForSopr_VPrice := getKolZnak(doGetTune('Round.BuyDOVal'));
+          }
+      }
+
+    1411, 1421:
+      {
+        if (wGetTune('Round.Wood') <> 0)
+          {
+            ForSopr_Price  := getKolZnak(doGetTune('Round.WoodRub'));
+            ForSopr_VPrice := getKolZnak(doGetTune('Round.WoodVal'));
+          }
+      }
+
+    102,
+    202:
+      {
+        if (wGetTune('Round.OtpCons') <> 0)
+          {
+            ForSopr_Price  := getKolZnak(doGetTune('Round.OtpConsRub'));
+            ForSopr_VPrice := getKolZnak(doGetTune('Round.OtpConsVal'));
+          }
+      }
+
+    103,
+    203:
+      {
+        if (wGetTune('Round.PrCons') <> 0)
+          {
+            ForSopr_Price  := getKolZnak(doGetTune('Round.PrConsRub'));
+            ForSopr_VPrice := getKolZnak(doGetTune('Round.PrConsVal'));
+          }
+      }
+
+    106,
+    201, 204, 205, 211,
+    510, 513, 521, 522,
+    523, 550..553, 554, 557:
+      {
+        if (wGetTune('Round.Sell') <> 0)
+          {
+            ForSopr_Price  := getKolZnak(doGetTune('Round.SellDORub'));
+            ForSopr_VPrice := getKolZnak(doGetTune('Round.SellDOVal'));
+          }
+      }
+
+  end;
+
+  SetPrecisionGroup('brForSopr_Vprice',  ForSopr_VPrice );
+  SetPrecisionGroup('brForSopr_price',   ForSopr_Price );
+}
+
+//******************************************************************************
+
+Procedure RecalcNalogs(aGrNal: comp; chGrNal: comp);
+var vaGrNal: comp;
+{
+  if (SpSopr.ManualTax <> 0)
+    Exit; // Если налоги ручные, то выход...
+
+  var WDate: date;  WDate := if (longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+
+  ResetBounds(#SpDocNal);
+
+  if (chGrNal <> 0)
+    vaGrNal := chGrNal;
+  else
+    if (GetFirst SpDocNal where
+              ((SpSopr.NRec == SpDocNal.cSpDoc AND
+            KatSopr.VidSopr == SpDocNal.TipDoc)) = tsOk)
+      vaGrNal := SpDocNal.cGrNal;
+    else
+      vaGrNal := aGrNal;
+
+  set SpSopr.cGrNal := vaGrNal;
+
+  SetBounds(#SpDocNal);
+  if (KatSopr.VhodNal = 1)
+    {
+      CountBasePrice(KatSopr.NRec, SpSopr.NRec, KatSopr.VidSopr, vaGrNal,
+                          KatSopr.cOrgBase, SpSopr.KolFact, SpSopr.cOtpEd, WDate,
+                          KatSopr.cValut, 0, SpSopr.Price * SpSopr.KolOpl, SpSopr.VPrice * SpSopr.KolOpl,
+                          KatSopr.cPayment);
+
+      SpSopr.SumNDS := (SpSopr.Price * SpSopr.KolOpl) - GetBasePrice;
+      set SpSopr.SumVNDS := (SpSopr.VPrice * SpSopr.KolOpl) - GetBaseValPrice;
+    }
+  else
+    {
+      CountNalogPrice(KatSopr.NRec, SpSopr.NRec, KatSopr.VidSopr, vaGrNal,
+                          KatSopr.cOrgBase, SpSopr.KolFact, SpSopr.cOtpEd, WDate,
+                          KatSopr.cValut, 0, SpSopr.Price * SpSopr.KolOpl, SpSopr.VPrice * SpSopr.KolOpl,
+                          KatSopr.cPayment);
+
+      SpSopr.SumNDS := GetNalogPrice - (SpSopr.Price * SpSopr.KolOpl);
+      set SpSopr.SumVNDS := GetNalogValPrice - (SpSopr.VPrice * SpSopr.KolOpl);
+    }
+
+  if (CurTable = #KatSopr)
+    Exit;
+
+  RereadRecord(#SpDocNal);
+  SumspNalogs := GetNalogSumma;
+  set SpSopr.SumNDS := SpSopr.SumNDS;
+}
+
+//******************************************************************************
+
+Procedure CalcSumNalogs;// Перерасчет сумм налогов по позиции накладной
+{
+  SpSopr.SumNDS := 0;
+  SpSopr.SumVNDS := 0;
+  SumSpNalogs := 0;
+  PushPos(#SpDocNal);
+
+  _LOOP SpDocNal
+    {
+      SumSpNalogs := SumSpNalogs + SpDocNal.Summa;
+      if (SpDocNal.cOrg = KatSopr.cOrgBase)
+        {
+          SpSopr.SumNDS := SpSopr.SumNDS + SpDocNal.Summa;
+          SpSopr.SumVNDS := SpSopr.SumVNDS + SpDocNal.SumVal;
+        }
+    }
+
+  PopPos(#SpDocNal);
+  if (CurTable = #KatSopr)
+    Exit;
+
+  if (not IsProtected(#SpSopr))
+    set SpSopr.SumNDS := SpSopr.SumNDS
+  else
+    RedrawPanel(#SpSopr);
+}
+
+//******************************************************************************
+
+Procedure ChangeSpDocNalOrg(OldOrg: comp; NewOrg: comp);
+{
+  if (OldOrg = NewOrg)
+    Exit;
+
+  StartNewVisual(vtNumericVisual, vfTimer, 'Изменение контрагента по налогам: ', 1);
+
+  _LOOP SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc AND
+                         KatSopr.NRec == SpDocNal.cDoc))
+    if (SpDocNal.cOrg = OldOrg)
+      {
+        SpDocNal.cOrg := NewOrg;
+        Update current SpDocNal;
+      }
+
+  StopVisual('', 0);
+}
+
+//******************************************************************************
+// Перерассчитывает необходимые парамтеры в позиции сопроводительного
+// документа и возвращает коэффициент если необходимы дополнительные
+// перерасчеты
+
+Function ChangeOtpEd: double;
+{
+  ChangeOtpEd := 1;
+  var Kf    : double;     kf    := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+  var NROtp: comp;       NROtp := SpSopr.cOtpEd;
+
+  if (RunInterface(GetOtpEd, SpSopr.cMCUsl, SpSopr.cOtpEd, if (SpSopr.PrMC = 1, 1, 2)) = cmCancel)
+    Exit;
+
+  if (NrOtp <> SpSopr.cOtpEd)
+    Exit;
+
+  Kf := kf / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+  SpSopr.KolFact := SpSopr.KolFact * kf;
+  SpSopr.KolOpl := SpSopr.KolOpl * kf;
+  SpSopr.Kol := SpSopr.Kol * kf;
+  SpSopr.Price := SpSopr.Price / kf;
+  SpSopr.VPrice := SpSopr.VPrice / kf;
+  ChangeOtpEd := kf;
+
+  RedrawPanel(#SpSopr);
+}
+
+//#include soprgen.vpp  // Общая обработка сопроводительных документов
+#include rcsum.vpp    // Перерасчет суммы по сопроводительному документу
+
+
+//******************************************************************************
+
+Procedure DoDeleteCurrentSpSopr;
+{
+  if NOT IsValid(tnSpSopr)
+    Exit;
+
+  set KatSopr.Summa := KatSopr.Summa -
+                       SpSopr.KolFact * SpSopr.Price -
+                       if (KatSopr.VhodNal <> 1, SpSopr.SumNDS, 0);
+
+  set KatSopr.SumVal := KatSopr.SumVal -
+                        SpSopr.VPrice * SpSopr.KolFact -
+                        if (KatSopr.VhodNal <> 1, SpSopr.SumVNDS, 0);
+
+  set KatSopr.sNalogs := KatSopr.sNalogs - SpSopr.SumNDS;
+  set KatSopr.svNalogs := KatSopr.svNalogs - SpSopr.SumVNDS;
+
+  Update_Current_KatSopr;
+
+  if (Delete NoVisual SpDocNal
+                where ((TypeSopr == SpDocNal.TipDoc AND
+                        SpSopr.NRec == SpDocNal.cSpDoc)) <> tsOk) {};
+  oSDfuns.SpSopr_Delete (SpSopr.NRec);
+} // Procedure DoDeleteCurrentSpSopr
+
+//******************************************************************************
+
+#include gMCKat.vpp   // Выбор услуг из каталога
+#include wspdocna.vpp // Обработка налогов по позици акта
+
+//******************************************************************************
+
+Window SpecifInfo 'Перечень услуг' EscClose; Show at (5, 5, 75, 16);
+
+//******************************************************************************
+
+Panel panSpecifInfo
+  Table SpSopr;
+
+Screen scrSpecifInfo
+
+Fields
+ KatUSL.Name   ('Наименование услуги.Выбирается из классификатора', , sci178Esc): Protect;
+ KatUSL.Kod    ('Код услуги.Выбирается из классификатора', , sci178Esc): Protect;
+ SpSopr.Kol    ('Количество услуг по акту', , sci178Esc): [prSignsInKol];
+ SpSopr.KolFact('Фактически реализованное количество', , sci178Esc): [prSignsInKol];
+ OtpEd         ('Наименование прейскурантной единицы', , sci1378Esc): Protect;
+ SpSopr.Price  ('Цена приобретения в национальной валюте', , sci178Esc): [brForSopr_Price];
+ SpSopr.VPrice ('Цена приобретения в валюте', , sci1378Esc): [brForSopr_VPrice];
+ klVal.Simvolv ('Символ валюты.', , sci1378Esc): Protect;
+ AutoNalogs    ('Налоги рассчитываются автоматически или вручную?', hcSpsoprAutoNalogs, sci1378Esc): Protect;
+ StrSumNal     ('Сумма налогов по позиции в НДЕ', hcSpSoprStrSumNal, sci1378Esc): Protect;
+
+Buttons
+ cmSetGrNal   , , , 'Выбор группы налогов для позиции', hcSpsoprSetGrNal, sci178Esc;
+ cmAttrib, , , 'Просмотр/редактирование налогов к позиции документа', hcSpSoprEditNalogs, sci178Esc;
+<<
+ Наименование услуги                           Номенклатурный номер
+.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.@@@@@@@@@@@@@@@@@@@@
+`Количество по документу`.@@@@@@@@@@@@@`фактически`.@@@@@@@@@@@@@@@
+`Отпускная единица измерения`.@@@@@@@@@@@@@@@
+`Цена` .@@@@@@@@@@@@@ `Цена в валюте`.@@@@@@@@@@@@@@@@.@@@@@@@@@
+     Налоги .@@@@@@@@@@@ на сумму .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+          <.~Г~руппа налогов.>   <.~Н~алоги к позиции.>
+>>
+end; // Screen
+
+#include shannal.vpp // Обработка налогов к позиции спецификации
+
+end; // Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmOpenSearch:
+  PutCommand(cmPick);
+
+cmInit:
+  CalcSumNalogs;
+
+cmSetGrNal:
+  {
+    var tGrNal: comp;
+    if (RunInterface(GetGrNal, tGrNal, word(0)) <> cmCancel)
+      {
+        set SpSopr.ManualTax := 0;
+        RecalcNalogs(0, tGrNal);
+        RecalcSumm(FALSE);
+      }
+  }
+
+cmAttrib:
+  {
+    RunWindowModal(EditNalogs);
+    CalcSumNalogs;
+    RecalcSumm(FALSE);
+  }
+
+end; // HandleEvent Window
+end; // Window specifinfo
+
+//******************************************************************************
+
+Panel Header
+  Show at (, , , 6)
+  Table KatSopr;
+
+Browse brHeader Fields
+//------------------------------------------------------------------------------
+  KatSopr.NSopr
+                #3'№ документа' ('Номер документа', , sci178Esc)
+                : [10], NoAutoSize;
+//------------------------------------------------------------------------------
+  KatOrg.Name
+                #3'Контрагент' ('Название организации контрагента', , sci1378Esc)
+                : [28], Protect, {Font = {BackColor = if (KatSopr.cOrgBase = 0, ColorNeed, 0)}};
+//------------------------------------------------------------------------------
+  Summ
+                #3'Сумма'
+                : [16], Skip;
+//------------------------------------------------------------------------------
+  Valut
+                #3'Валюта' ('Валюта, в которой производилась оплата. Выбирается из классификатора.', , sci1378Esc)
+                : [6], Protect;
+//------------------------------------------------------------------------------
+  TamSt
+                #3'Там.ст.' ('Признак вхождения услуг в таможенную стоимость МЦ', , sci1378Esc)
+                : [9], Protect;
+//------------------------------------------------------------------------------
+end; // Bhowse
+
+//******************************************************************************
+
+HandleEvent
+
+cmCheckRecord:
+  if (KatSopr.cOrgBase = 0)
+    {
+      if ( UpdateTable )
+       {
+        Message('Не задана организация подрядчика...');
+        Abort;
+       }
+    }
+  else
+    {
+      if (not boGetTune('Oper.AutoCalcBalance'))
+        {
+          if (wGetTune('Oper.SoprInBalans') = 0)
+            Delete NoVisual Kontras
+               where ((KatSopr.cOrg == Kontras.cOrg AND
+                       KatSopr.dSopr <<= Kontras.dKonSal))
+          else
+            if (longint(KatSopr.dOpr) <> 0)
+              Delete NoVisual Kontras
+                where ((KatSopr.cOrg == Kontras.cOrg AND
+                        KatSopr.dOpr <<= Kontras.dKonSal));
+        }
+      RecalcSumm(TRUE);
+      oSDfuns.UpdateSoprHoz(KatSopr.Buffer);
+    }
+
+cmSetDefault:
+  {
+    KatSopr.NSopr := KKSopr.NSopr;
+    KatSopr.dSopr := KKSopr.dSopr;
+    KatSopr.Descr := KKSopr.Descr;
+    KatSopr.cVal := KKSopr.cVal;
+    KatSopr.cKatSopr := KKSopr.NRec;
+    KatSopr.dPrice := KKSopr.dPrice;
+    KatSopr.cValut := KKSopr.cValut;
+    KatSopr.DesGr := KKSopr.DesGr;
+
+    KatSopr.VidSopr := TypeSopr;
+    KatSopr.YearSopr := Year(Cur_Date);
+    KatSopr.VhodNal := KKSopr.VhodNal;
+    KatSopr.Reserved := 0;
+
+    SelectField(#KatOrg.Name);
+  }
+
+cmInsertRecord:
+  Insert current KatSopr;
+
+cmUpdateRecord:
+{
+  Update_Current_KatSopr;
+}
+
+cmDeleteRecord:
+  if Message('Удалить акт на сопутствующие услуги?', YesNo) = cmYes
+    {
+      StartNewVisual(vtNumericVisual, vfTimer, 'Удаляются хозоперации...', 1);
+      if (GetFirst SoprHoz = tsOk)
+        {
+          iSaldoActuality.DropActualityForPlansSch(0); // сброс актуальности сальдо для всех планов счетов
+
+          Delete NoVisual Oborot
+             where ((SoprHoz.TipDoc == Oborot.TiDk AND
+                     SoprHoz.cSoprDoc == Oborot.cSoprDoc));
+
+          Delete current SoprHoz;
+        }
+
+      SetVisualHeader('Удаляются налоги по позициям...');
+
+      _LOOP SpSopr
+        {
+          NextVisual;
+          Delete NoVisual SpDocNal
+             where ((TypeSopr == SpDocNal.TipDoc AND
+                     SpSopr.NRec == SpDocNal.cSpDoc));
+        }
+
+      NextVisual;
+      SetVisualHeader('Удаляются позиции...');
+      delete safe novisual SpSopr;
+      SetVisualHeader('Удаляется документ...');
+      oStatlog.StatLog_Delete (100, KatSopr.NRec); //-- удаление статусов
+      oSDfuns.KatSopr_Delete(KatSopr.NRec);
+      RereadRecord(#SpSopr);
+      StopVisual('', 0);
+    }
+
+cmPick:
+  Case CurField of
+  //**************
+    #KatOrg.Name:
+      if (RunInterface(GetKatOr, KatSopr.cOrgBase, comp(0), FALSE, comp(0), comp(0)) <> cmCancel)
+        {
+          var OldOrg: comp;     OldOrg := KatSopr.cOrg;
+          KatSopr.cOrg := KatSopr.cOrgBase;
+          ChangeSpDocNalOrg(OldOrg, KatSopr.cOrg);
+        }
+  //**************
+    #Valut:
+      if (( NOT IsNew ) AND (IsValid(tnSpSopr)))
+        Message('Нельзя изменить валюту, т.к. в документе уже имеются позиции спецификации...', CancelButton);
+      else
+        if (KatSopr.cStepDoc <> 0)
+          Message('Валюта уже связана с документом-основанием...', CancelButton)
+        else
+          {
+            if (RunInterface(GetValKod, KatSopr.cVal) <> cmCancel)
+              {
+                set KatSopr.cValut := KatSopr.cVal;
+                set KatSopr.dPrice := Date(0, 0, 0);
+              }
+          }
+  //**************
+    #TamSt:
+      set KatSopr.Reserved := if (KatSopr.Reserved = 0, 1, 0);
+  //**************
+  end; // case CurField For cmPick
+
+cmDelOnProtect:
+  case CurField of
+    #Valut:
+      if (( IsNew ) OR (not IsValid(#SpSopr)))
+        {
+          set KatSopr.cVal := 0;
+          set KatSopr.dPrice := Date(0, 0, 0);
+        }
+  end; // case
+
+end;
+
+end; // Panel
+
+//******************************************************************************
+
+Panel Specif
+  Show at (, 7, , )
+  Table SpSopr;
+
+Browse brSpecif
+
+Fields
+//------------------------------------------------------------------------------
+  KatUsl.Kod
+                #3'Код услуги'
+                ('Код услуги. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [12], Protect;
+//------------------------------------------------------------------------------
+  KatUsl.Name
+                #3'Название услуги'
+                ('Название услуги. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [20], Protect;
+//------------------------------------------------------------------------------
+  OtpEd
+                #3'ЕдИзм'
+                ('Единица измерения. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [5], Protect;
+//------------------------------------------------------------------------------
+  SpSopr.KolFact
+                #3'Количество'
+                ('<Ctrl><Enter> - расширенная информация', , sci178Esc)
+                : [11], [prSignsInKol];
+//------------------------------------------------------------------------------
+  Prv
+                #3'Цена'
+                ('Цена сопутствующей услуги. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [12], Protect;
+//------------------------------------------------------------------------------
+  SumPrice
+                #3'Стоимость'
+                ('<Ctrl><Enter> - расширенная информация', , sci178Esc)
+                : [12], Skip;
+//------------------------------------------------------------------------------
+end;
+
+//******************************************************************************
+
+Browse brSpecif1
+Fields
+//------------------------------------------------------------------------------
+  KatUsl.Name
+                #3'Название услуги'
+                ('Название услуги. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [25], Protect;
+//------------------------------------------------------------------------------
+  KatUsl.Kod
+                #3'Код услуги'
+                ('Код услуги. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [7], Protect;
+//------------------------------------------------------------------------------
+  OtpEd
+                #3'ЕдИзм'
+                ('Единица измерения. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [5], Protect;
+//------------------------------------------------------------------------------
+  SpSopr.KolFact
+                #3'Количество'
+                ('<Ctrl><Enter> - расширенная информация', , sci178Esc)
+                : [11], [prSignsInKol];
+//------------------------------------------------------------------------------
+  Prv
+                #3'Цена'
+                ('Цена сопутствующей услуги. <Ctrl><Enter> - расширенная информация', , sci1378Esc)
+                : [12], Protect;
+//------------------------------------------------------------------------------
+  SumPrice
+                #3'Стоимость'
+                ('<Ctrl><Enter> - расширенная информация', , sci178Esc)
+                : [12], Skip;
+//------------------------------------------------------------------------------
+end;
+
+//******************************************************************************
+
+HandleEvent
+
+cmCheckRecord:
+  if (SpSopr.cMCUsl = 0)
+    {
+      Message('Нет названия услуги...', CancelButton);
+      Abort;
+    }
+  else
+    if (SpSopr.KolFact = 0)
+      {
+        Message('Не указано количество услуги...', CancelButton);
+        Abort;
+      }
+    else
+      set KatSopr.dOpr := KatSopr.dOpr;
+
+cmSetDefault:
+  if (IsProtected(#KatSopr))
+    Abort;
+  else
+    {
+      SpSopr.cSopr := KatSopr.NRec;
+      SpSopr.dSopr := KatSopr.dSopr;
+      SpSopr.dOprTTN := KatSopr.dOpr;
+      SpSopr.VidSopr := KatSopr.VidSopr;
+      SpSopr.PrMC := 2;
+      SpSopr.cVal := KatSopr.cValut;
+      PutCommand(cmDoSelField);
+    }
+
+cmSetCurField:
+  case Target of
+  //------------
+    #KatUsl.Name
+  , #KatUsl.Kod:
+      if (SpSopr.cMCUsl = 0)
+        PutCommand(cmPick);
+  //------------
+  end;
+
+cmInsertRecord:
+  {
+    SpSopr.Npp := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+    Insert current SpSopr;
+  }
+
+cmUpdateRecord:
+  Update current SpSopr;
+
+cmDeleteRecord:
+  if (Message('Удалить услугу?', YesNo) <> cmYes)
+    Abort;
+  else
+    {
+      DoDeleteCurrentSpSopr;
+      set KatSopr.Summa := KatSopr.Summa;
+      RedrawPanel(#KatSopr);
+    }
+
+cmDelete:
+  if (IsNew)
+    {
+      KatSopr.Summa := KatSopr.Summa - SpSopr.Price * SpSopr.KolFact;
+      set KatSopr.SumVal := KatSopr.SumVal - SpSopr.VPrice * SpSopr.KolFact;
+    }
+
+cmPick:
+  case CurField of
+  //--------------
+    #KatUsl.Name,
+    #Kod:
+      GetMCUslKat;
+  //--------------
+    #OtpEd:
+      ChangeOtpEd;
+  //--------------
+    #SimvolV:
+      if (KatSopr.cVal = 0)
+        Message('Валюту нельзя менять, т.к. документ составлен по валютной накладной...', CancelButton);
+      else
+        {
+          if (RunInterface(GetCurse, KatSopr.dSopr, SpSopr.cVal, Curse) <> cmCancel)
+            if (SpSopr.cVal <> KatSopr.cValut)
+              if (not UpdateTable)
+                SpSopr.cVal := KatSopr.cValut;
+              else
+                {
+                   KatSopr.cValut := SpSopr.cVal;
+                   PushPos(#SpSopr);
+
+                   _LOOP SpSopr
+                     {
+                       SpSopr.cVal := KatSopr.cValut;
+                       Update current SpSopr;
+                     }
+
+                   PopPos(#SpSopr);
+                }
+
+          RereadRecord(#SpSopr);
+        }
+  //--------------
+  end;
+
+cmCheckField:
+  {
+    var WDate: Date;
+
+    WDate := if (longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+
+    case CurField of
+    //--------------
+      #SpSopr.VPrice:
+        {
+          if (longint(KatSopr.dPrice) = 0)
+            if (KatSopr.cValut <> 0)
+              {
+                if (RunInterface(GetDCurse, Date(0, 0, 0), KatSopr.cValut, KatSopr.dPrice) = cmCancel)
+                  set KatSopr.dPrice := KatSopr.dSopr;
+
+                Update_Current_KatSopr;
+              }
+
+          WDate := if (longint(KatSopr.dPrice) <> 0, KatSopr.dPrice, KatSopr.dSopr);
+
+          SpSopr.VPrice := FSRoundVal(SpSopr.VPrice);
+
+          if ((SpSopr.cVal <> 0) AND (SpSopr.Price = 0))
+            {
+              var res: double;
+              oValFunc.GetCurse(KatSopr.cValut, WDate, res);
+
+              KatSopr.Summa := KatSopr.Summa - SpSopr.Price * SpSopr.KolFact;
+              set SpSopr.Price := FSRoundRub(SpSopr.VPrice * res);
+              KatSopr.Summa := FSRoundRub(KatSopr.Summa + SpSopr.Price * SpSopr.KolFact);
+              RedrawPanel(#SpSopr);
+            }
+
+          KatSopr.SumVal := KatSopr.SumVal - double(OldFieldValue) * SpSopr.KolFact;
+          set KatSopr.SumVal := FSRoundVal(KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolFact);
+        }
+    //--------------
+      #SpSopr.Price:
+        {
+          if (longint(KatSopr.dPrice) = 0)
+            if (KatSopr.cValut <> 0)
+              {
+                if (RunInterface(GetDCurse, Date(0, 0, 0), KatSopr.cValut, KatSopr.dPrice) = cmCancel)
+                  set KatSopr.dPrice := KatSopr.dSopr;
+
+                Update_Current_KatSopr;
+              }
+
+          if (longint(KatSopr.dPrice) <> 0) WDate := KatSopr.dPrice else WDate := KatSopr.dSopr;
+          SpSopr.Price := FSRoundRub(SpSopr.Price);
+          if ((SpSopr.cVal <> 0) AND (SpSopr.VPrice = 0))
+            {
+              var res: double;
+              oValFunc.GetCurse(KatSopr.cValut, WDate, res);
+
+              KatSopr.SumVal := KatSopr.SumVal - SpSopr.VPrice * SpSopr.KolFact;
+              set SpSopr.VPrice := FSRoundVal(SpSopr.Price / res);
+              KatSopr.SumVal := FSRoundVal(KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolFact);
+            }
+
+          KatSopr.Summa := KatSopr.Summa - double(OldFieldValue) * SpSopr.KolFact;
+          set KatSopr.Summa := FSRoundRub(KatSopr.Summa + SpSopr.Price * SpSopr.KolFact);
+        }
+    //--------------
+      #SpSopr.KolFact:
+        {
+          SpSopr.KolOpl := SpSopr.KolFact; SpSopr.ProcUb := 0; SpSopr.Kol := SpSopr.KolFact
+          KatSopr.Summa := KatSopr.Summa - double(OldFieldValue) * SpSopr.Price;
+          KatSopr.Summa := FSRoundRub(KatSopr.Summa + SpSopr.Price * SpSopr.KolFact);
+          KatSopr.SumVal := KatSopr.SumVal - double(OldFieldValue) * SpSopr.VPrice;
+          set KatSopr.SumVal := FSRoundVal(KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolFact);
+        }
+    //--------------
+      #SpSopr.Kol:
+        {
+          SpSopr.KolOpl := SpSopr.Kol; SpSopr.ProcUb := 0; SpSopr.KolFact := SpSopr.Kol
+          KatSopr.Summa := KatSopr.Summa - double(OldFieldValue) * SpSopr.Price;
+          KatSopr.Summa := FSRoundRub(KatSopr.Summa + SpSopr.Price * SpSopr.KolFact);
+          KatSopr.SumVal := KatSopr.SumVal - double(OldFieldValue) * SpSopr.VPrice;
+          set KatSopr.SumVal := FSRoundVal(KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolFact);
+        };
+    //--------------
+    end;
+
+    if (SpSopr.ManualTax = 0)
+      RecalcNalogs(KatUsl.cGrNal, SpSopr.cGrNal)
+    else
+      CalcSumNalogs;
+
+    RecalcSumm(FALSE);
+  }
+
+end; // HandleEvent
+end; //Panel
+
+//******************************************************************************
+
+HandleEvent
+
+cmDoSelField:
+  SelectField(#KatUsl.Name);
+
+cmInit:
+  {
+    TMCUSL := 2;
+    s_SimvRub := sGetTune('NDE.SimvRub');
+
+    if (TYPESOPR = 0)
+      TYPESOPR := 111;
+
+    SetNaklRoundFormat(TypeSopr);//-- классы точности
+    SetFormat(if (wGetTune('Pick.SortUSL') = 0, brSpecif1, brSpecif));
+    InitNalServ;
+  }
+
+cmDone:
+  DoneNalServ;
+
+cmOpenSearch:
+  case CurField of
+  //--------------
+    #Prv:
+      {
+        SelectFieldInFormat(scrSpecifInfo, if (KatSopr.cVal = 0, #SpSopr.Price, #SpSopr.VPrice));
+        RunWindow(SpecifInfo);
+        Stop;
+      }
+  //--------------
+    else
+      PutCommand(cmPick);
+  //--------------
+ end; // case
+
+cmAttrib:
+  if (CurTable = #spSopr)
+    RunWindow(SpecifInfo);
+
+end;
+End. // Interface;
+
+//******************************************************************************

@@ -1,0 +1,259 @@
+//Кол-во по позиции ДО в спецификации накладных в отпускных (учетных) единицах
+Function KolInSpSopr(aSpStep: comp; koef: double): double;
+Var tKol: double;
+{
+  tKol := double(0);
+  _Loop KatSopr
+    _Loop SpSopr where (( aSpStep      == SpSopr.cSpStep  and
+                          KatSopr.NRec == SpSopr.cSopr ))
+
+        tKol := tKol + SpSopr.KolFact * koef;
+
+  KolInSpSopr := tKol;
+}
+
+//разрез распределения
+function GetTmpDogRasp(aDog,aAppDog,aPlan: comp): boolean;
+{
+  if GetFirst TmpDogRasp where (( aDog    ==  TmpDogRasp.cDog    and
+                                  aAppDog ==  TmpDogRasp.cAppDog and
+                                  aPlan   ==  TmpDogRasp.cPlan      )) = tsOk
+
+    GetTmpDogRasp := false
+  else
+    {
+      GetTmpDogRasp      := true;
+      TmpDogRasp.cDog    := aDog;
+      TmpDogRasp.cAppDog := aAppDog;
+      TmpDogRasp.cPlan   := aPlan;
+      insert current TmpDogRasp;
+    }
+  pCurDogRasp := TmpDogRasp.NRec;
+}
+
+function InsTmpMcRasp(aMC: comp; adInput: date): boolean;
+var
+  koefp : double;
+{
+  if GetFirst TmpMCRasp = tsOk
+    InsTmpMcRasp := false
+  else
+    {
+      koefp := 1;
+      if SpStep.cOtpEd <> 0 
+        koefp := KatOtpEd.koef;
+      ClearBuffer(tnTmpMCRasp);
+      TmpMCRasp.Kol      := double(0);
+      TmpMCRasp.KolOrd   := double(0);
+      TmpMCRasp.KolOrd2  := double(0);
+      TmpMCRasp.KolPlan  := double(0);
+      TmpMCRasp.KolUth   := SpStep.KolSkl * koefp - KolInSpSopr(SpStep.NRec,koefp);
+      TmpMCRasp.cDogRasp := pCurDogRasp;
+      TmpMCRasp.cPodr    := KatPodr.NRec;
+      TmpMCRasp.cSpStep  := SpStep.NRec;
+      TmpMCRasp.cMC      := aMC;
+      TmpMCRasp.dMin     := _dRasp;
+      TmpMCRasp.dMax     := _dRasp;
+      TmpMCRasp.dInput   := adInput;
+      insert current TmpMCRasp;
+      InsTmpMcRasp := true;
+    }
+}
+
+//проверяет и удаляет с предупреждением накладные, привязанные к ДО 
+Function CheckNakl: boolean;
+var
+  Mark: longint;
+  objDel: objDelSopr;
+{
+  CheckNakl := true;
+  if (not LoadVipRef(objDel, 'DelSopr')) 
+    {
+      message('Не загрузился интерфейс objDelSopr.',mfError);
+      CheckNakl := false;
+      Exit;
+    }
+
+  if GetFirst KatSopr = tsOk
+    if (message('По ДО уже сформированы накладные.'#10#13 +
+                'Удалить их?', YesNo) = cmYes)
+      {
+        Mark := InitMarker('KatSoprVIP',8,100,10,true);
+        ClearMarker(Mark);
+        _Loop KatSopr 
+        {
+          InsertMarker(Mark, KatSopr.NRec); 
+        }
+        if (GetMarkerCount(Mark) > 0)
+          CheckNakl := objDel.DeleteMarkSopr(Mark, false);
+
+        DoneMarker(Mark,'KatSoprVIP');
+      }
+    else
+      CheckNakl := false;
+
+  if (not NullVipRef(objDel))
+    FreeVipInterface(objDel);
+}
+
+//кол-во для протокола
+Procedure InsProtKol(aSopr,aSpSopr: comp; aKolPlan,aKolOrd: double);
+{
+  if GetFirst TmpProtKol where ((aSopr   == TmpProtKol.cSopr  and
+                                 aSpSopr == TmpProtKol.cSpSopr )) <> tsOk
+    {
+      TmpProtKol.cSopr   := aSopr;
+      TmpProtKol.cSpSopr := aSpSopr;
+      TmpProtKol.KolPlan := aKolPlan;
+      TmpProtKol.KolOrd  := aKolOrd;
+      insert current TmpProtKol;
+    }
+  else
+    {
+      TmpProtKol.KolPlan := aKolPlan;
+      TmpProtKol.KolOrd  := aKolOrd;
+      update current TmpProtKol;
+    }
+}
+
+//сохранение кол-ва после распределения
+Procedure SaveProtKol;
+{
+  ResetBounds(#TmpDogRasp);
+  ResetBounds(#TmpMCRasp);
+
+  _Loop KatSopr
+    _Loop SpSopr where ((KatSopr.NRec == SpSopr.cSopr)) ordered by index SpSopr02
+      if GetFirst SpStep where ((SpSopr.cSpStep == SpStep.NRec)) = tsOk
+        if GetFirst TmpDogRasp where ((KatSopr.cDogovor    == TmpDogRasp.cDog    and
+                                       KatSopr.cAppDogovor == TmpDogRasp.cAppDog and
+                                       KatSopr.cCalPlan    == TmpDogRasp.cPlan    )) = tsOk
+          if GetFirst TmpMCRasp where ((SpStep.Nrec     == TmpMcRasp.cSpStep  and
+                                        TmpDogRasp.Nrec == TmpMCRasp.cDogRasp )) = tsOk
+            InsProtKol(KatSopr.NRec, SpSopr.NRec, TmpMCRasp.KolPlan, TmpMCRasp.KolOrd2);
+
+  SetBounds(#TmpDogRasp);
+  SetBounds(#TmpMCRasp);
+}
+
+//печать протокола формирования
+Procedure PrintRasp;
+var tKoef: double;
+    tDog, tAppDog, tCalPlan: comp;
+{
+  StartNewVisual(vtIndicatorVisual,vfTimer,'Формирование протокола', iNaklCount);
+  frmRasp.write(BaseDoc.NRec);
+  frmRasp.write(BaseDoc.noDoc);
+  frmRasp.write(BaseDoc.dDoc);
+  if GetFirst KatOrg where ((BaseDoc.cOrg == KatOrg.NRec)) = tsOk
+    frmRasp.write(KatOrg.Name)
+  else
+    frmRasp.SkipFormat(1);
+
+  ResetBounds(#KatPodr);
+  ResetBounds(#Dogovor);
+  ResetBounds(#CalPlan);
+  ResetBounds(#TmpDogRasp);
+  ResetBounds(#TmpMCRasp);
+
+  _Loop KatSopr
+    {
+      frmRasp.write(KatSopr.NRec);
+      frmRasp.write(KatSopr.NSopr);
+      frmRasp.write(KatSopr.dSopr);
+
+      if GetFirst KatPodr 
+        where ((if(KatSopr.VidSopr=101, KatSopr.cPodrTo, KatSopr.cPodrFrom) == KatPodr.NRec)) = tsOk
+          frmRasp.write(KatPodr.Name)
+      else
+        frmRasp.SkipFormat(1);
+
+      if GetFirst Dogovor where ((KatSopr.cDogovor == Dogovor.NRec)) = tsOk
+        {
+          frmRasp.write(Dogovor.NoDoc);
+          frmRasp.write(Dogovor.dInput);
+          frmRasp.write(Dogovor.dBeg);
+          frmRasp.write(Dogovor.dEnd);
+          tDog := Dogovor.NRec;
+        }
+      else
+        frmRasp.SkipFormat(4);
+
+      if GetFirst Dogovor where ((KatSopr.cAppDogovor == Dogovor.NRec)) = tsOk
+        {
+          frmRasp.write(Dogovor.NoDoc);
+          frmRasp.write(Dogovor.dInput);
+          frmRasp.write(Dogovor.dBeg);
+          frmRasp.write(Dogovor.dEnd);
+          tAppDog := Dogovor.NRec;
+        }
+      else
+        frmRasp.SkipFormat(4);
+
+      if GetFirst CalPlan where ((KatSopr.cCalPlan == CalPlan.NRec)) = tsOk
+        {
+          frmRasp.write(CalPlan.NoDoc);
+          frmRasp.write(CalPlan.dInput);
+          frmRasp.write(CalPlan.dFrom);
+          frmRasp.write(CalPlan.dTO);
+          tCalPlan := CalPlan.NRec;
+        }
+      else
+        frmRasp.SkipFormat(4);
+
+      _Loop SpSopr where ((KatSopr.NRec == SpSopr.cSopr)) ordered by index SpSopr02
+        {
+          frmRasp.write(SpSopr.NRec);
+          frmRasp.write(SpSopr.Npp);
+
+          if GetFirst KatMC where ((SpSopr.cMCUsl == KatMC.NRec)) = tsOk
+            frmRasp.write(KatMC.Name)
+          else
+            {
+              frmRasp.SkipFormat(6);
+              Continue;
+            }
+
+          if GetFirst SpStep where ((SpSopr.cSpStep == SpStep.NRec)) <> tsOk
+            frmRasp.SkipFormat(4);
+          else
+            {
+              tKoef := 1;
+
+              if SpStep.cOtpEd = 0
+                frmRasp.SkipFormat(1)
+              else
+                {
+                  tKoef := KatOtpEd.koef
+                  frmRasp.write(KatOtpEd.Name);
+                }
+
+              frmRasp.write(SpStep.KolSkl);
+
+              if GetFirst TmpProtKol where ((KatSopr.NRec == TmpProtKol.cSopr    and
+                                             SpSopr.NRec  == TmpProtKol.cSpSopr )) = tsOk
+                {
+                  frmRasp.write(TmpProtKol.KolPlan/tKoef);
+                  frmRasp.write(TmpProtKol.KolOrd/tKoef);
+                }
+              else
+                frmRasp.SkipFormat(2)
+            }
+
+          frmRasp.write(SpSopr.KolFact);
+        }
+
+      frmRasp.PutEvent(feBreak);
+      NextVisual;
+    }
+
+  frmRasp.PutEvent(feBreak);
+  SetBounds(#KatPodr);
+  SetBounds(#Dogovor);
+  SetBounds(#CalPlan);
+  SetBounds(#TmpDogRasp);
+  SetBounds(#TmpMCRasp);
+  StopVisual('',0);
+  if (not frmRasp.Error)
+    frmRasp.ShowFile('');
+}

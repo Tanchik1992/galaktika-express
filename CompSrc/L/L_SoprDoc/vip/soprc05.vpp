@@ -1,0 +1,156 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// процедуры/функции для работы в сопроводительных документах
+//******************************************************************************
+
+
+#ifNdef _soprc05_VPP
+#define _soprc05_VPP
+
+#include OtkatIsFun.vpp
+
+#include SDfuns.var
+
+//******************************************************************************
+// Доступ к изменению привязки СД к договору/соглашению/ПКП по настройке
+//******************************************************************************
+Function CanLinkDogovor(Msg: boolean): boolean;
+{
+  CanLinkDogovor := FALSE;
+
+  #define __NeedCanLinkDogovor__
+
+  #ifdef AKT_SPIS_VIP
+    #undef __NeedCanLinkDogovor__
+  #end
+
+  #ifdef INV_RASH_VIP
+    #undef __NeedCanLinkDogovor__
+  #end
+
+  #ifdef _AktPereocNZS_vih_
+    #undef __NeedCanLinkDogovor__
+  #end
+
+  #ifdef __NeedCanLinkDogovor__
+  case CurField of
+    #Dogovor.NoDoc   , #Dogovor.dDoc
+  , #AppDogovor.NoDoc, #AppDogovor.dDoc
+  , #CalPlan.NoDoc   , #CalPlan.dInput
+      : {}
+  else
+    Exit;
+  end;
+
+  if Not boGetTune('Doc.SD.CanLinkDogovor')
+    Exit;
+
+  if ( ( KatSopr.cDogovor <> 0 ) AND Msg )
+    if ( Message('Документ уже связан с договором/соглашением/ПКП.'#13'Продолжить?', Confirmation + YesNo) <> cmYes )
+     Exit;
+
+  CanLinkDogovor := TRUE;
+  #end // __NeedCanLinkDogovor__
+
+  #undef __NeedCanLinkDogovor__
+}
+
+//******************************************************************************
+// проверка на возможность редактирование существующей записи
+Function OtkatToOldState(mess: boolean; TW: word): boolean;
+var
+  _t         : time;
+  _nRec      : comp;
+  _isCurField: word;
+  tSpSopr    : comp;
+
+{
+  OtkatToOldState := FALSE;
+
+  // проаерки не должны распространяться на редактирование новой записи
+  if (IsNew) AND (CurTable = #KatSopr)
+  {
+    OtkatToOldState := TRUE;
+    Exit;
+  }
+
+  tSpSopr := SpSopr.NRec;
+
+  if (isCurTable = coSpSopr)
+    if (IsNew)
+      tSpSopr := comp(0)
+    else
+      if (NOT IsValid(#SpSopr))
+        tSpSopr := comp(0);
+
+  _isCurField := isCurField;
+
+  if (NOT oOtkatToOldState.OtkatToOldState(KatSopr.nRec
+                                         , tSpSopr
+                                         , mess
+                                         , FunIsEditSoprVisible
+                                         , isProtectedKatSopr
+                                         , _isCurField
+                                         , isCurTable
+                                         , isCurCommand
+                                           ))
+  {
+    Exit;
+  }
+
+ #ifdef _AKT_211_111_VIP
+  if (CurTable = #KatSopr)
+    if (isNew)
+    {
+      Insert Current KatSopr;
+      SetNew(false);
+      Update_Current_KatSopr;
+    }
+ #end
+
+  OtkatToOldState := TRUE;
+}
+
+#ifdef _AKT_211_111_VIP
+Procedure FromDocAutoCalcUsl;
+{
+  var TmpBul: boolean;
+  TmpBul := FALSE;
+  var tmpPrice, tmprPrice, tmpKolOpl, tmpKolFact, tmpKol: double;
+
+  PushPos(#SpSopr);
+
+  _LOOP SpSopr
+    if (KatUsl.TYPEUSL = 1) AND (SpSopr.PrMC <> 1) AND (KatSopr.wADoc <> cgCustomAkt)
+    {
+      if (KatSopr.cVal = 0)
+        RunInterface('GETPAR2', 1, SpSopr.Nrec, KatUsl.Nrec, SpSopr.Price, SpSopr.KolFact, word(coSpSopr))
+      else
+        RunInterface('GETPAR2', 1, SpSopr.Nrec, KatUsl.Nrec, SpSopr.VPrice, SpSopr.KolFact, word(coSpSopr));
+
+      if Update Current SpSopr <> tsOk{};
+
+      CheckSumma(FALSE);
+
+      TmpBul := TRUE;
+    }
+
+  PopPos(#SpSopr);
+
+  if (TmpBul)
+    CheckSumma(true);//персчет всего документа
+}
+
+
+Procedure procDocAutoCalcUsl;
+{
+  //пир 101.27116
+  case wGetTune('Doc.AutoCalcUsl') of
+    0: {};//нет пересчета
+    1: FromDocAutoCalcUsl;
+  end;
+}
+
+#end // _AKT_211_111_VIP
+#end // _soprc05_VPP

@@ -1,0 +1,810 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+//
+//******************************************************************************
+
+//******************************************************************************
+#include tgFpVal.vih
+#include xlReport.Vih  //Excel
+#include oEdIzm.vih
+//******************************************************************************
+
+Interface iRepSNakl 'Отчет по состоянию накладных на получение МЦ' ( , hcBCTO_Otch_Sost_Nakl, )EscClose, Cyan;
+  Show at (,,100,20);
+
+Const
+  CurCode = 4101;
+end;
+//******************************************************************************
+Var pxlrepsetup : xlrepsetup;
+//******************************************************************************
+
+Create View
+Var
+  cNastr
+, CurGroup  : comp;
+
+  NumPick
+, Len1
+, Len2
+, Len3      : Word;
+
+  cRep      : LongInt;
+
+  ID
+, sXLSFileName
+, sXLTFileName : string;
+
+  pXL       : XLSRepBuilder;      // Excel
+
+As select
+  *
+
+from
+  KatSopr
+, SpSopr
+, SpSopr SpActMC
+, TempDescr
+, TempDescr TempDescr2
+, UserDeskRep
+, TempIer
+, Tobot
+, Tobot Tobot2
+, RepGrLst
+, SpecZatr
+, RepGrOne
+, RepGroup
+, RepGrSrt
+, RepGrSrt RepGrSrt2
+, KatMC
+, KatMC KatMC2
+, Dogovor
+, SpDocs
+, SpDocs SpDocs2
+, SpOrder
+, PickRep
+, TmpKatalog
+
+where
+((
+      cNastr                  == UserDeskRep.NRec
+  AND KatSopr.NRec            == SpSopr.cSopr
+  AND word(1)                 == SpSopr.PrMc
+  AND SpSopr.cMcUsl           == KatMC.NRec
+  AND SpSopr.NRec             == SpOrder.cSpSopr
+
+  AND TempDescr.NRec          == TempIer.cGroup
+  AND TempDescr.cRecKat       == Tobot2.NRec
+  AND Tobot2.Cut[6]           == KatMC2.NRec
+
+  AND UserDeskRep.ResComp[40] == RepGrLst.NRec
+  AND RepGrLst.NRec           == RepGrOne.cRepGrLst
+  AND RepGrOne.cRec           == RepGroup.NRec
+  AND RepGrOne.cRec           == RepGrSrt.NRec         // сорт просто
+  AND RepGrOne.ResComp[1]     == RepGrSrt2.NRec        // сорт.в группе
+  AND CurCode                 == Tobot.Code
+))
+
+bounds byDate =
+        word(101)              ==  KatSopr.VidSopr
+    AND UserDeskRep.ResDate[1] <<= KatSopr.dSopr
+    AND UserDeskRep.ResDate[2] >>= KatSopr.dSopr
+
+bounds byTree =
+        CurCode      == TempDescr.Code
+    AND CurGroup     == TempDescr.cGroup
+;
+
+Var
+   //'Группировка договоров
+   mLevel    : Array [10] of Word;
+   mTable    : Array [10] of Word;
+   mPrefix   : Array [10] of String;
+   mHierar   : Array [10] of Word;
+   mKol      : Array [10] of Word;
+   mGrupSort : Array [10] of Word;
+   mPrint    : Array [10] of Word;
+   mSpec     : Array [10] of Word;
+
+//************************************************************************
+
+Panel p1
+
+Tree trTmpTree('',,sci1EscTree);
+  Show at (,,,);
+  Table TempDescr;
+Fields
+  TempDescr.Name   #3'Аналитика' ('',,)    : [30], Protect;
+  TempDescr.Sum[1] #3'Сумма по накладной'  : [16.2,'\2p[|-]366`666`666`666.88'], Protect, LessNull;
+  TempDescr.Sum[2] #3'Сумма товаров в пути': [16.2,'\2p[|-]366`666`666`666.88'], Protect, LessNull;
+  TempDescr.Sum[3] #3'Закрыто актами'      : [16.2,'\2p[|-]366`666`666`666.88'], Protect, LessNull;
+End;
+end;
+
+Procedure PrintDocuments;
+var
+  i      : word;
+  Otstup : string;
+{
+#ifdef Gal8_1
+  ID := 'L_SoprDoc\OtchNakl';
+#else
+  ID := 'oper\OtchNakl';
+#end
+
+  if (UserDeskRep.ResName[5] = '')
+    {
+      if (not ReadMyDsk(sXLTFileName,ID,true))
+#ifdef Atl51
+        set sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + ID + '.xlt';
+#else
+        Set sXLTFileName := StartPathName + 'XLS\' + ID + '.xlt';
+#endif
+    }
+  else
+    set sXLTFileName := UserDeskRep.ResName[5];
+
+  if not pxlrepsetup.checkParam(0,ID,sXLTFileName)
+    runinterface('xlrepsetup',1,ID,sXLTFileName);
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+!  Set sXLSFileName := pXL.CreateXLT(sXLTFileName, True);
+  Set sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);
+  pXL.SetStringVar('CurDate', DateToStr(Cur_Date, 'DD/MM/YYYY'));
+  pXL.SetStringVar('bDate'  , DateToStr(UserDeskRep.ResDate[1], 'DD/MM/YYYY'));
+  pXL.SetStringVar('eDate'  , DateToStr(UserDeskRep.ResDate[2], 'DD/MM/YYYY'));
+  pXL.PublishVar;  // Excel
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('Nakl');
+  pXL.CreateTblFld('Level');
+  pXL.CreateTblFld('Analit');
+  pXL.CreateTblFld('PID');
+  pXL.CreateTblFld('SummaO');
+  pXL.CreateTblFld('SummaNF');
+  pXL.CreateTblFld('SummaF');
+  pXL.CreateTblFld('SummaP');
+
+  TreePushPos(trTmpTree);
+
+  if (TreeGetFirstEx(trTmpTree))
+    do
+      {
+        Otstup := '';
+
+        for (i := 1; i <= TreeLevel(trTmpTree); i := i + 1)
+          Otstup := Otstup + '    ';
+
+        pXL.ClearTblBuffer;
+        pXL.SetTblStringFldValue('Level'  , String(TreeLevel(trTmpTree)));
+        pXL.SetTblStringFldValue('Analit' , Otstup + TempDescr.Name);
+        pXL.SetTblStringFldValue('PID'    , if(TempDescr.isLeaf = 1, if(isValid(#KatMC2), KatMC2.BarKod, ''), ''));
+        pXL.SetTblNumberFldValue('SummaO' , TempDescr.Sum[1]);
+        pXL.SetTblNumberFldValue('SummaNF', TempDescr.Sum[2]);
+        pXL.SetTblNumberFldValue('SummaF' , TempDescr.Sum[3]);
+        pXL.SetTblNumberFldValue('SummaP' , TempDescr.Sum[4]);
+        pXL.InsTblRow;
+      }
+    while TreeGetNextEx(trTmpTree) AND NextVisual
+
+  TreePopPos(trTmpTree);
+
+  pXL.PublishTbl('Nakl');
+  pXL.LoadReport(sXLSFileName);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+
+  ReScanPanel(#TempDescr);
+  ReReadRecord(#TempDescr);
+}
+
+TableEvent Table TempDescr
+cmTreeTop      : CurGroup := 0;
+cmTreeUp       : CurGroup := TempDescr.cGroup;
+cmTreeDown     : CurGroup := TempDescr.NRec;
+cmTreeNodeType :   if ( TempDescr.IsLeaf = 1 )
+    TreeSetNodeType(trTmpTree, ntfText);
+end;
+
+//************************************************************************
+//
+Function KolZakr : double;
+var dUsed : double;
+{
+  KolZakr := 0;
+
+  dUsed := 0;
+
+  _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cAddSumTune))
+    {
+      if (SpecZatr.coTable = 0)
+        if (GetFirst SpActMC where ((SpecZatr.cUKS == SpActMC.NRec)) = tsOk)
+          if (SpActMC.cMCUsl = SpSopr.cMCUsl)
+            dUsed := dUsed + double(SpecZatr.cSpec);
+    }
+
+  KolZakr := 0.000001 * dUsed / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+}
+
+Function KolZakrCompl : double;
+var dUsed : double;
+{
+  KolZakrCompl := 0;
+
+  dUsed := 0;
+
+  _LOOP SpecZatr where ((SpSopr.NRec == SpecZatr.cAddSumTune))
+    {
+      if (SpecZatr.coTable = 0)
+        if (GetFirst SpActMC where ((SpecZatr.cUKS == SpActMC.NRec)) = tsOk)
+          if (SpActMC.cMCUsl = SpDocs2.cMCUsl)
+            dUsed := dUsed + double(SpecZatr.cSpec);
+    }
+
+  KolZakrCompl := 0.000001 * dUsed / fEdIzm.GetKoefOtpEd(SpDocs2.cOtpEd);
+}
+
+//************************************************************************
+Function CheckTovPut : boolean;
+{
+  CheckTovPut := FALSE;
+
+  if (UserDeskRep.ResWord[29] = 0)
+    Exit;
+
+  if (UserDeskRep.ResComp[9] <> Comp(0))
+    {
+      if (GetFirst Dogovor where ((UserDeskRep.ResComp[9] == Dogovor.NRec)) = tsOk )
+        if (Dogovor.TiDk = word(400))
+          {
+            if (UserDeskRep.ResComp[9] <> KatSopr.cDogovor )
+              Exit;
+          }
+        else
+          if (UserDeskRep.ResComp[9] <> KatSopr.cAppDogovor )
+            Exit;
+    }
+  else
+      {
+        var cDogS : comp; cDogS := comp(0);
+
+        cDogS := if (KatSopr.cAppDogovor <> comp(0), KatSopr.cAppDogovor,
+                   if (KatSopr.cDogovor <> comp(0), KatSopr.cDogovor, comp(0)));
+
+        if (cDogS = comp(0))
+          Exit;
+
+        if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                     UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                     UserDeskRep.ResWord[19] == PickRep.wList        and
+                                     cDogS                   == PickRep.cRec )) <> tsOk)
+          Exit;
+      }
+
+  CheckTovPut := TRUE;
+}
+
+//************************************************************************
+//
+Function ChkFilter : boolean;
+{
+  ChkFilter := FALSE;
+
+  // фильтр по контрагенту
+  if ((UserDeskRep.ResWord[3] and 1) = 1)
+    {
+      // единичный фильтр
+      if (UserDeskRep.ResComp[7] <> Comp(0))
+        {
+          if (UserDeskRep.ResComp[7] <> KatSopr.cOrgBase )
+            Exit;
+        }
+      // множественный фильтр
+      else
+        {
+          if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                       UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                       UserDeskRep.ResWord[17] == PickRep.wList        and
+                                       KatSopr.cOrgBase        == PickRep.cRec )) <> tsOk)
+            Exit;
+        }
+    }
+
+  // фильтр по мол
+  if ((UserDeskRep.ResWord[3] and 8) = 8)
+    {
+      // единичный фильтр
+      if (UserDeskRep.ResComp[5] <> Comp(0))
+        {
+          if (UserDeskRep.ResComp[5] <> KatSopr.cMolTo )
+            Exit;
+        }
+      // множественный фильтр
+      else
+        {
+          if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                       UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                       UserDeskRep.ResWord[15] == PickRep.wList        and
+                                       KatSopr.cMolTo          == PickRep.cRec )) <> tsOk)
+            Exit;
+        }
+    }
+
+  // фильтр по складу
+  if ((UserDeskRep.ResWord[3] and 4) = 4)
+    {
+      // единичный фильтр
+      if (UserDeskRep.ResComp[6] <> Comp(0))
+        {
+          if (UserDeskRep.ResComp[6] <> KatSopr.cPodrTo )
+            Exit;
+        }
+      // множественный фильтр
+      else
+        {
+          if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                       UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                       UserDeskRep.ResWord[16] == PickRep.wList        and
+                                       KatSopr.cPodrTo         == PickRep.cRec )) <> tsOk)
+            Exit;
+        }
+    }
+
+  // Фильтр по договорам
+  if ((UserDeskRep.ResWord[3] and 2) = 2)
+    if (UserDeskRep.ResComp[8] <> Comp(0))
+      {
+        if (GetFirst Dogovor where ((UserDeskRep.ResComp[8] == Dogovor.NRec)) = tsOk )
+          if (Dogovor.TiDk = word(400))
+            {
+              if (UserDeskRep.ResComp[8] <> KatSopr.cDogovor )
+                Exit;
+            }
+          else
+            if (UserDeskRep.ResComp[8] <> KatSopr.cAppDogovor )
+              Exit;
+      }
+    else
+      {
+        var cDogS : comp; cDogS := comp(0);
+
+        cDogS := if (KatSopr.cAppDogovor <> comp(0), KatSopr.cAppDogovor,
+                   if (KatSopr.cDogovor <> comp(0), KatSopr.cDogovor, comp(0)));
+
+        if (cDogS = comp(0))
+          Exit;
+
+        if (GetFirst PickRep where ((UserName                == PickRep.OwnName      and
+                                     UserDeskRep.NRec        == PickRep.cUserDeskRep and
+                                     UserDeskRep.ResWord[18] == PickRep.wList        and
+                                     cDogS                   == PickRep.cRec )) <> tsOk)
+          Exit;
+      }
+
+  ChkFilter := TRUE;
+}
+
+//************************************************************************
+// Выгрузка в Tobot
+//
+
+Function InsertTobot (Sum1, Sum2 : double) : Boolean;
+var i : word;
+
+{
+  InsertTobot := True;
+
+  ClearBuffer(#Tobot);
+
+  Tobot.IsLeaf    := 1;
+  Tobot.NameGroup := TmpKatalog.Name;
+
+  //'Группировка договоров
+  For( i:=1; i<=Len1; i:=i+1 )
+    {
+      Case mLevel[i] of
+        1 : Tobot.Group[i] := KatSopr.cOrgBase;
+        2 : Tobot.Group[i] := if (KatSopr.cAppDogovor <> comp(0), KatSopr.cAppDogovor, KatSopr.cDogovor);
+        3 : Tobot.Group[i] := KatSopr.cPodrTo;
+        4 : Tobot.Group[i] := KatSopr.cMolTo;
+        5 : Tobot.Group[i] := KatSopr.NRec;
+        6 : Tobot.Group[i] := TmpKatalog.NRec;
+      End;
+    }
+
+  Tobot.Cut[1] := KatSopr.cOrgBase;
+  Tobot.Cut[2] := KatSopr.cDogovor;
+  Tobot.Cut[3] := KatSopr.cPodrTo;
+  Tobot.Cut[4] := KatSopr.cMolTo;
+  Tobot.Cut[5] := KatSopr.NRec;
+  Tobot.Cut[6] := TmpKatalog.cRec;
+  Tobot.Cut[7] := TmpKatalog.cGroup;
+
+  Tobot.Sum[1] := Sum1;
+  Tobot.Sum[3] := Sum2;
+  Tobot.Sum[2] := if (CheckTovPut, Tobot.Sum[1] - Tobot.Sum[3], 0);
+
+  if (insert current Tobot <> tsOk)
+    {
+      InsertTobot := False;
+      Message(''#3'Ошибка добавления в таблицу Tobot. Обратитесь к администратору системы.', Error);
+    }
+}
+
+
+Function FillTobot : Boolean;
+var
+  cDoc, cCompl          : comp;
+  wTiDk, VhNal          : word;
+  SumNDS0, Koef, Price0 : double;
+  Kol0, KolCompl        : double;
+  Summa1, Summa2        : double;
+  bOkCompl              : boolean;
+
+{
+  FillTobot := True;
+
+  if ( Delete Safe Tobot <> tsOk )
+    {
+      FillTobot := False
+      Message(''#3'Ошибка удаления в таблице Tobot. Обратитесь к администратору системы.', Error);
+      Exit;
+    }
+
+  ResetBounds(#TempDescr);
+
+  _LOOP TempDescr Where (( CurCode == TempDescr.Code ))
+    {
+      if ( Delete all TempIer <> tsOk )
+        {
+          FillTobot := False
+          Message(''#3'Ошибка удаления в таблице TempIer. Обратитесь к администратору системы.', Error);
+          Exit;
+        }
+
+      if ( Delete all TempDescr <> tsOk )
+        {
+          FillTobot := False;
+          Message(''#3'Ошибка удаления в таблице TempDescr. Обратитесь к администратору системы.', Error);
+          Exit;
+        }
+    }
+
+  SetBounds(#TempDescr);
+
+  //удаляем записи из TmpKatalog
+  if ( delete all NoVisual TmpKatalog <> tsOk )
+    {
+      FillTobot := false;
+      Message(''#3'Ошибка удаления в таблице TmpKatalog. Обратитесь к администратору системы.', Error);
+      Exit;
+    }
+
+  StartNewVisual(vtNumericVisual, vfTimer+vfBreak+vfConfirm, ''#3'Отбор документов для отчета', 1);
+  oValFunc.InitVal;
+
+  // заполнение таблицы в памяти спецификацией накладной с раскрытием составляющих комплектных МЦ
+  _LOOP KatSopr
+    if (ChkFilter)
+      {
+        if (KatSopr.cCalPlan <> 0)
+          {
+            cDoc  := KatSopr.cCalPlan;
+            wTiDk := 403;
+          }
+        else
+          {
+            if (KatSopr.cAppDogovor <> 0)
+              {
+                cDoc  := KatSopr.cAppDogovor;
+                wTiDk := 401;
+              }
+            else
+              {
+                cDoc  := KatSopr.cDogovor;
+                wTiDk := 400;
+              }
+          }
+
+        VhNal := KatSopr.VhodNal;
+
+        if (KatSopr.cDogovor <> 0)
+          if ( GetFirst Dogovor where (( KatSopr.cDogovor == Dogovor.NRec )) = tsOk )
+            VhNal := Dogovor.VhodNal;
+
+        _LOOP SpSopr
+          {
+            if ( Not NextVisual )
+              {
+                oValFunc.DoneVal;
+                FillTobot := False;
+                StopVisual('',0);
+                Exit;
+              }
+
+            if (GetFirst TmpKatalog where (( word(0)    == TmpKatalog.Code and
+                                             KatMC.NRec == TmpKatalog.cRec )) <> tsOk)
+              {
+                ClearBuffer(#TmpKatalog);
+
+                TmpKatalog.Code   := 0;
+                TmpKatalog.cGroup := 0;
+                TmpKatalog.cRec   := KatMC.NRec;
+                TmpKatalog.Name   := KatMC.Name;
+
+                if (insert current TmpKatalog <> tsOk)
+                  {
+                    Message(''#3'Ошибка добавления в таблице TmpKatalog.', Error);
+                    exit;
+                  }
+              }
+
+            cCompl := TmpKatalog.NRec;
+
+            SumNDS0  := SpSopr.SumNDS / SpSopr.KolFact;
+            Price0   := SpSopr.Price - if (KatSopr.VhodNal = 1, SumNDS0, 0)
+            KolCompl := KolZakr;
+
+            bOkCompl := FALSE;
+
+            if (cDoc <> 0)
+              {
+                _LOOP SpDocs where (( wTiDk   == SpDocs.TiDk AND
+                                      cDoc    == SpDocs.cDoc AND
+                                      word(1) == SpDocs.PrMC ))
+                  {
+                    if (SpDocs.cMCUsl <> SpSopr.cMCUsl)
+                      Continue;
+
+                    _LOOP SpDocs2 where (( word(438)   == SpDocs2.TiDk AND
+                                           SpDocs.NRec == SpDocs2.cDoc ))
+                      {
+                        if ( GetFirst KatMC2 where (( SpDocs2.cMCUsl == KatMC2.NRec )) = tsOk )
+                          {
+                            if (GetFirst TmpKatalog where (( word(0)     == TmpKatalog.Code and
+                                                             KatMC2.NRec == TmpKatalog.cRec and
+                                                             cCompl      == TmpKatalog.cGroup (NoIndex) )) <> tsOk)
+                              {
+                                ClearBuffer(#TmpKatalog);
+
+                                TmpKatalog.Code   := 0;
+                                TmpKatalog.cGroup := cCompl;
+                                TmpKatalog.cRec   := KatMC2.NRec;
+                                TmpKatalog.Name   := KatMC2.Name;
+
+                                if (insert current TmpKatalog <> tsOk)
+                                  {
+                                    Message(''#3'Ошибка добавления в таблице TmpKatalog.', Error);
+                                    exit;
+                                  }
+                              }
+
+                            // количество составляющей в единице комплекта в накладной
+                            Kol0   := SpDocs2.Kol * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) / fEdIzm.GetKoefOtpEd(SpDocs.cOtpEd);           // количество для учетной единицы
+                            Koef   := SpDocs.SumNDS / SpDocs.Summa;
+                            Price0 := SpDocs2.Price - if (VhNal = 1, SpDocs2.Price * Koef, 0);
+
+                            Summa1 := SpSopr.KolFact * Kol0 * Price0;
+                            Summa2 := (KolZakrCompl + KolCompl * Kol0) * Price0;
+
+                            if (Not InsertTobot(Summa1, Summa2))
+                              {
+                                oValFunc.DoneVal;
+                                FillTobot := False;
+                                StopVisual('',0);
+                                Exit;
+                              }
+
+                            bOkCompl := TRUE;
+                          }
+                      }
+
+                    if bOkCompl
+                      Break;
+                  }
+              }
+
+            if (GetFirst TmpKatalog where (( cCompl == TmpKatalog.NRec )) = tsOk)
+              {
+                if bOkCompl
+                  {
+                    Summa1 := 0;
+                    Summa2 := 0;
+                  }
+                else
+                  {
+                    Summa1 := SpSopr.KolFact * Price0;
+                    Summa2 := KolCompl * Price0;
+                  }
+
+                if (Not InsertTobot(Summa1, Summa2))
+                  {
+                    oValFunc.DoneVal;
+                    FillTobot := False;
+                    StopVisual('',0);
+                    Exit;
+                  }
+              }
+          }
+      }
+
+  oValFunc.DoneVal;
+  StopVisual('',0);
+}
+//************************************************************************
+
+Function MakeTree : boolean;
+{
+  MakeTree := FALSE;
+
+  CurGroup := 0;
+
+  Var i : Word;
+
+  Len1  := 0;  // реальное число уровней группировки
+  Len2  := 0;  // реальное число уровней сортировки
+  Len3  := 0;  // реальное число уровней сортировки
+
+  var bGMC : boolean; bGMC := FALSE;
+
+  // Группировка
+  if (GetFirst RepGrLst = tsOk)
+    for (i:=GetFirst RepGrOne; ((i=tsOk)and(Len1<5)); i:=GetNext RepGrOne)
+      {
+        Len1            := Len1 + 1;
+        mLevel[Len1]    := RepGroup.Nomer;
+        mTable[Len1]    := RepGroup.wTable;
+        mPrefix[Len1]   := RepGrOne.ResName[1];
+        mHierar[Len1]   := RepGrOne.ResWord[1];
+        mKol[Len1]      := RepGrOne.ResWord[2];
+        mGrupSort[Len1] := RepGrSrt2.Nomer;
+        mPrint[Len1]    := RepGrOne.ResWord[3];
+      }
+
+  Len1            := Len1 + 1;
+  mLevel[Len1]    := 6;
+  mTable[Len1]    := coTmpKatalog; //coKatMC;
+  mGrupSort[Len1] := 0;
+
+  if (FillTobot)
+    {
+      if (GetFirst Tobot <> tsOk)
+        {
+          Message(''#3'Отчет не содержит ни одного документа');
+          Abort;
+          Exit;
+        }
+      else
+        MakeTree := TRUE;
+
+      cRep := InitTreeBuilder(#Tobot);
+
+      if (cRep <> 0)
+        {
+          SetTempIndex(cRep, Byte(3));
+
+          var nParam : LongInt;
+
+          for (i:=1; i<=Len1; i:=i+1)
+            {
+              nParam := 0;
+
+              if (mHierar[i] = 0)
+                nParam := nParam or tsNoExpand;
+
+              if (mPrefix[i] = '')
+                nParam := nParam or tsNoPrefix;
+
+              if (i = Len1 - 1)
+                TuneStructName( cRep, i, 1);
+
+              if (mTable[i] = coTmpKatalog)
+                TuneLevel(cRep, i, mTable[i], tsNoPrefix, '', 1, 0, 0)
+              else
+                TuneLevel(cRep, i, mTable[i], nParam, mPrefix[i], 1, mGrupSort[i], mKol[i]);
+            }
+
+          if (not BuildTunedTree(cRep, CurCode))
+            {
+              Abort;
+              Exit;
+            }
+
+          ResetBounds(#TempDescr);
+
+          delete TempDescr where (( CurCode == TempDescr.Code and
+                                    word(1) == TempDescr.IsLeaf ));
+
+          // проход для установления значков
+          _loop TempDescr where (( CurCode == TempDescr.Code ))
+            {
+              if ( GetFirst FastFirstRow TempDescr2 where ((  CurCode        == TempDescr2.Code
+                                                          and TempDescr.nRec == TempDescr2.cGroup )) = tsOk )
+                TempDescr.IsLeaf := 0;
+              else
+                TempDescr.IsLeaf := 1;
+
+              Update current TempDescr;
+            }
+
+          SetBounds(#TempDescr);
+          RescanPanel(#TempDescr);
+          RescanPanel(#TempDescr)
+        }
+      else
+        {
+          Message(''#3'Ошибка иерархического построителя.', Error);
+          MakeTree := FALSE;
+          Abort;
+          Exit;
+        }
+    }
+  else
+    {
+      MakeTree := FALSE;
+      Abort;
+      Exit;
+    }
+
+}
+HandleEvent
+cmInit:
+  {
+    cNastr := comp(0);
+    CurGroup := 0;
+
+    if NOT BoundActive(tbbyTree)
+      AddBounds(tbbyTree)
+
+    if NOT BoundActive(tbbyDate)
+      AddBounds(tbbyDate)
+
+    if (RunInterface('iNastRep', cgReport_4101, cNastr) <> cmCancel)
+      {
+        if GetFirst UserDeskRep <> tsOk
+          {
+            Abort;
+            Exit;
+          }
+
+        if NOT MakeTree
+          {
+            Abort;
+            Exit;
+          }
+      }
+    else
+      {
+        Abort;
+        Exit;
+      }
+  }
+
+cmPrintDoc:
+  PrintDocuments;
+/*
+cmEdit:
+  if (TempDescr.isLeaf = 1)
+    {
+      PutCommand(cmEdit);
+      RunInterface(SoprDocB, word(101), Tobot2.Cut[5]);
+    }
+*/
+cmHotKeys:
+  PutHotCommand(RunMenu('mnuRepNakl'));
+
+End; // HandleEvent
+end.
+
+//***************************************************************************
+mnuRepNakl Menu
+{
+- 'Печать отчета', cmPrintDoc, 'Печать отчета', , 'Сtrl+P', kbCtrlP, sci1Esc;
+}

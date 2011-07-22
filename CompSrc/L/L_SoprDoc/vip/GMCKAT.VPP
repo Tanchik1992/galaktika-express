@@ -1,0 +1,355 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 5.85 - логистика
+// Групповой выбор МЦ (Услуг) из каталога в сопроводительных документах
+//********************************************************************************
+
+#ifndef _GMCKAT_VPP
+#define _GMCKAT_VPP
+
+#ifndef _GMCKAT_VPP1
+#define _GMCKAT_VPP1
+
+#include soprgen.vpp
+#include MSfunc.vpp
+
+
+#include CheckKol.vpp
+
+//********************************************************************************
+// вставка выбранных МЦ/услуг
+Function IsGetMCUSLKat: boolean;
+var
+  wLst : word;
+  PrNom: word;
+  sv_  : word;
+  mu   : comp;
+  bInsTara: boolean;
+{
+  IsGetMCUSLKat := FALSE;
+
+  if (CurTable <> #SpSopr)
+    Exit;
+
+  bInsTara := FALSE;
+#ifndef peresort
+  wLst := if (SpSopr.Prmc = 1, 7, 12);
+#else
+  wLst := 7;
+#end
+  Delete Pick where ((wLst == Pick.wList));
+
+  if KatSopr.vidSopr >=600 AND KatSopr.vidSopr <=606
+    {
+      ReadMyDsk(sv_, 'PickMC_EdIzm_Okr', TRUE);
+      SaveMyDsk(wGetTune('Pick.cOtpEdForPick'), 'PickMC_EdIzm_Okr');
+    }
+
+  if KatSopr.vidSopr = 630 OR KatSopr.vidSopr = 632
+    {
+      ReadMyDsk(sv_, 'PickMC_EdIzm_Okr', TRUE);
+      SaveMyDsk(1, 'PickMC_EdIzm_Okr');
+    }
+
+  PrNom := SpSopr.PrMC;
+  mu    := SpSopr.cMCUsl;
+
+  var ResPick: word;
+#ifndef peresort
+  if (PrNom = 1)
+    ResPick := RunInterface(GetSomeMC, mu)
+  else
+    ResPick := RunInterface(GetSomeUsl, mu);
+#else
+  ResPick := RunInterface(GetSomeMC, mu)
+#end
+
+  if (KatSopr.vidSopr >=600 AND KatSopr.vidSopr <=606) OR KatSopr.vidSopr = 630 OR KatSopr.vidSopr = 632
+    SaveMyDsk(sv_, 'PickMC_EdIzm_Okr');
+
+  if (ResPick = cmCancel)
+      Exit;
+
+  IsGetMCUSLKat := TRUE;
+
+  InitMCInfo(KatSopr.dSopr);
+
+  if (PrNom = 1) AND ((TypeSopr >= 501) OR (TypeSopr = 204) OR (TypeSopr = 201))
+  {
+    SkladProizv(0);
+
+    if (TypeSopr >= 502) AND (TypeSopr <= 506)
+      SkladProizv(1);
+
+    LockValOt(TRUE);
+  }
+
+  if (GetFirst Pick where ((wLst == Pick.wList)) ordered by index Pick02 = tsOk)
+  {
+    if (NOT isNew)
+      DoDeleteCurrentSpSopr; // замена текущей записи
+#ifdef _LINKMTR2SPEC_
+#ifdef __MTR_TO_SPEC__
+    else
+      oLinkMTR2Spec.DelVal(word(coSpSopr), SpSopr.nRec);
+#end
+#end
+
+    StartNewVisual(vtNumericVisual, vfTimer, 'Добавление помеченных позиций: ', 1);
+
+    _LOOP Pick where ((wLst == Pick.wList)) ordered by index Pick02
+    {
+      NextVisual;
+
+      ClearBuffer(#SpSopr);
+
+      var b: boolean;
+
+      if (wGetTune('Pick.cOtpedForPick') = 1) AND // Количество в документах при выборе из каталога МЦ (активных, учетных)
+         (KatSopr.VidSopr >= 600 AND KatSopr.VidSopr <= 606)
+        SpSopr.cOtpEd := fEdIzm.GetUchOtpEdNRec(Pick.cRec, PrNom);
+      else
+        SpSopr.cOtpEd := fEdIzm.GetAktOtpEdNRec(Pick.cRec, PrNom);
+
+      if (PrNom > 2)
+        Pick.PickKol := 1;
+
+      if (Pick.PickKol <> 0)
+        fEdIzm.CheckKolDiskret(Pick.PickKol, SpSopr.cOtpEd, TRUE, TRUE);
+
+      var koefp: double;
+      koefp := fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+      SpSopr.cMcUsl  := Pick.cRec;
+      SpSopr.cVal    := KatSopr.cValut;
+      SpSopr.PrMC    := PrNom;
+      SpSopr.cSopr   := KatSopr.NRec;
+      SpSopr.VidSopr := KatSopr.VidSopr;
+      SpSopr.dSopr   := KatSopr.dSopr;
+      SpSopr.dOprttn := KatSopr.dOpr;
+      SpSopr.Kol     := Pick.PickKol;
+      SpSopr.KolFact := Pick.PickKol;
+      SpSopr.KolOpl  := Pick.PickKol;
+
+      if (SpSopr.VidSopr = 115)
+        {
+          if (KatSopr.cKatSopr <> 0)
+            {
+              SpSopr.KolFact := CheckKolSpSopr(KatSopr.NRec, SpSopr.cMCUSL, SpSopr.cOtpEd, Pick.PickKol, SpSopr.NRec, FALSE);
+            }
+          else
+            {
+              if (KatSopr.cDogovor <> 0 OR KatSopr.cAppDogovor <> 0)
+                SpSopr.KolFact := CheckKolSpSopr(KatSopr.NRec, Pick.cRec, SpSopr.cOtpEd, Pick.PickKol, SpSopr.NRec, FALSE)
+              else
+                SpSopr.KolFact := Pick.PickKol;
+            }
+        }
+      else
+        {
+          SpSopr.KolFact := Pick.PickKol;
+        }
+
+
+      SpSopr.Kol     := SpSopr.KolFact;
+      SpSopr.KolOpl  := SpSopr.KolFact;
+
+      if (SpSopr.VidSopr = 629 or SpSopr.VidSopr = 610 or SpSopr.VidSopr = 1610)
+        SpSopr.cSpSopr := 0;
+
+      if (PrNom = 1)
+      {
+        if (GetFirst KatMc where ((Pick.cRec == KatMC.NRec)) = tsOk)
+        {
+          SpSopr.ProcUb := oSDfuns.GetNormUbFromKatalog(SpSopr.VidSopr, 0, KatMC.NormUb);
+          SpSopr.KolOpl := Pick.PickKol * (1 - SpSopr.ProcUb / 100);
+          SpSopr.Netto  := KatMC.Massa;
+          SpSopr.mTara  := KatMC.mTara;
+        }
+
+        if (TypeSopr < 501)
+        {
+          SpSopr.Price := 0;
+          SpSopr.rPrice := SpSopr.Price;
+          SpSopr.VPrice := 0;
+          SpSopr.rVPrice := SpSopr.VPrice;
+        }
+        else
+        {
+          SpSopr.cVal := StepMCInfo(Pick.cRec, SpSopr.cVal,
+                                    if (KatSopr.cPodrFrom = 0, comp(-1), KatSopr.cPodrFrom),
+                                    if (KatSopr.cMolFrom  = 0, comp(-1), KatSopr.cMolFrom),
+                                    if (SpSopr.cParty     = 0, comp(-1), SpSopr.cParty));
+
+          SpSopr.Price   := AveragePrice  * koefp;
+          SpSopr.rPrice  := SpSopr.Price;
+          SpSopr.VPrice  := AverageVPrice * koefp;
+          SpSopr.rVPrice := SpSopr.VPrice;
+        }
+
+        if (TypeSopr = 204)
+        {
+          SpSopr.cVal := StepMCInfo(Pick.cRec, SpSopr.cVal,
+                                    if (KatSopr.cPodrFrom = 0, comp(-1), KatSopr.cPodrFrom),
+                                    if (KatSopr.cMolFrom  = 0, comp(-1), KatSopr.cMolFrom),
+                                    if (SpSopr.cParty     = 0, comp(-1), SpSopr.cParty));
+
+          SpSopr.Price   := AveragePrice * koefp;
+          SpSopr.rPrice  := SpSopr.Price;
+          SpSopr.VPrice  := AverageVPrice * koefp;
+          SpSopr.rVPrice := SpSopr.VPrice;
+        }
+
+        // CalcPriceFromPrihod - выбор свободного прихода
+        // для док-тов 201 204 600-606 630
+        // Методика списания подразделения="по фактической цене прихода"
+        CalcPriceFromPrihod(TRUE);
+
+        if (KatSopr.VidSopr >= 600) AND (KatSopr.VidSopr <= 625) OR (KatSopr.VidSopr  = 204)
+        {
+          SpSopr.rPrice  := SpSopr.price;
+          SpSopr.rvPrice := SpSopr.vPrice;
+          SpSopr.price   := FRoundRubOrd(1, SpSopr.rPrice  * SpSopr.kolFact)/SpSopr.kolFact;
+          SpSopr.vPrice  := FRoundValOrd(1, SpSopr.rVPrice * SpSopr.kolFact)/SpSopr.kolFact;
+        }
+
+        if (KatSopr.VidSopr = 201 AND boGetTune('Sklad.AvtoCalcSrCenaNakl'))
+        { //ПИР 103.2095
+          SpSopr.cVal := StepMCInfo(Pick.cRec, SpSopr.cVal,
+                                    if (KatSopr.cPodrFrom = 0, comp(-1), KatSopr.cPodrFrom),
+                                    if (KatSopr.cMolFrom  = 0, comp(-1), KatSopr.cMolFrom),
+                                    if (SpSopr.cParty     = 0, comp(-1), SpSopr.cParty));
+          SpSopr.Price   := AveragePrice * koefp;
+          SpSopr.rPrice  := SpSopr.Price;
+          SpSopr.VPrice  := AverageVPrice * koefp;
+          SpSopr.rVPrice := SpSopr.VPrice;
+        }
+      }
+
+      if ( (KatSopr.VidSopr = 111) and (SpSopr.PrMC > 3) )
+        {
+          if ( KatSopr.cVal = 0 )
+            SpSopr.Price  := Pick.PickKol;
+          else
+            SpSopr.VPrice := Pick.PickKol;
+        }
+
+     #ifdef _SOPRDOC_VIP
+      #include ukschsum.vpp
+     #end
+
+     #ifdef SOPINMOV_VIP
+      #include ukschsum.vpp
+     #end
+
+     #ifdef _AKT110_
+      #include ukschsum.vpp
+     #end
+
+      SpSopr.Npp  := oSpNext.GetSpNppNext(KatSopr.NRec, coSpSopr);
+      #ifdef peresort
+      SpSopr.Npp := GetNextNpp(if(CurTable=#SpSopr, TRUE, FALSE));
+      #end
+#ifndef __MTR_TO_SPEC__
+      SpSopr.cUKS := KatSopr.cUKS;
+#end
+
+      // расчет грузовых мест
+      ReCalcGrM;
+
+      Insert Current SpSopr;
+
+#ifdef _LINKMTR2SPEC_
+#ifdef __MTR_TO_SPEC__
+      case TypeSopr of
+        201, 106, 211, 114  : oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.SELL'), false);
+        101, 108, 206, 111  : oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, coGetTune('CelUchForModul.BUY'), false);
+        1610, 610, 629, 110, 210, 229  : oLinkMTR2Spec.SetValU(word(coSpSopr), SpSopr.nRec, 0, true);
+      end;
+
+      oLinkMTR2Spec.SelFormat(true);
+
+      oMTRFun.GenSpecMTRForUKS(coSpSopr, SpSopr.nRec, KatSopr.cUKS, 0);
+#end
+#end
+#ifndef peresort
+      if (SpSopr.PrMC = 1)
+#end
+      {
+        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 1, 0, SpSopr.Kolfact, 0);
+        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 2, 0, SpSopr.Kol,     0);
+        oDEIfuns.UpdateDEIKolSpSopr(SpSopr.NRec, SPSopr.Vidsopr, SpSopr.cMCUsl, SpSopr.PrMC, 3, 0, SpSopr.KolOpl,  0);
+      }
+
+     #ifdef _SOPRDOC_VIP
+      #define _CLCUSL_
+     #end
+
+     #ifdef _AKTUSL_VIP
+      #define _CLCUSL_
+     #end
+
+     #ifdef _CLCUSL_
+      if (SpSopr.PrMC <> 1) AND (KatUsl.TypeUsl = 1)
+      {
+        if (KatSopr.cVal = 0)
+          RunInterface('GETPAR2', 0, SpSopr.Nrec, KatUsl.Nrec, SpSopr.Price,  SpSopr.KolFact, word(coSpSopr))
+        else
+          RunInterface('GETPAR2', 0, SpSopr.Nrec, KatUsl.Nrec, SpSopr.VPrice, SpSopr.KolFact, word(coSpSopr));
+
+        if (KatSopr.cVal = 0)
+          CheckPrice(#SpSopr.Price)
+        else
+          CheckPrice(#SpSopr.VPrice);
+
+        CheckSpSoprKol2(#SpSopr.KolFact);
+
+        RecalcNalogs(if (SpSopr.PrMC=1, KatMC.cGrNal, KatUsl.cGrNal), 0);
+
+        UpDate Current SpSopr;
+      }
+     #end //_CLCUSL_
+
+      // вставка тары
+      if (oSoprTara.CheckTaraAutoPaste(KatSopr.VidSopr))
+        if (GetFirst fastfirstrow SpOtpEd where ((SpSopr.cOtpEd == SpOtpEd.cOtpEd)) = tsOk)
+        {
+          oSoprTara.InsertTara (SpSopr.cOtpEd, SpSopr.NRec, SpSopr.cSopr, SpSopr.KolFact, comp(0));
+          bInsTara := TRUE;
+        }
+
+      KatSopr.Summa  := KatSopr.Summa  + SpSopr.Price  * SpSopr.KolOpl;
+      KatSopr.SumVal := KatSopr.SumVal + SpSopr.VPrice * SpSopr.KolOpl;
+    } // _LOOP pick
+
+    KatSopr.Summa  := FSRoundRub(KatSopr.Summa);
+    KatSopr.SumVal := FSRoundVal(KatSopr.SumVal);
+
+    Update_Current_KatSopr;
+
+    RereadRecord(#KatSopr);
+
+    // пересчет номеров (группировка тары в спецификации)
+    if (bInsTara)
+      oSoprTara.ChangeNppSopr (KatSopr.NRec);
+
+    StopVisual('', 0);
+    RereadRecord(#SpSopr);
+  }
+
+  DoneMCInfo;
+  SelectField(#SpSopr.KolFact);
+}
+
+//********************************************************************************
+
+Procedure GetMCUSLKat;
+{
+  IsGetMCUSLKat;
+}
+
+//********************************************************************************
+
+#end //_GMCKAT_VPP
+#end //_GMCKAT_VPP1
+#undef _GMCKAT_VPP1

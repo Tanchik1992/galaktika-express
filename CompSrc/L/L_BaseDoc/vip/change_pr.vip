@@ -1,0 +1,340 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - документы-основания
+// Реализация группового пересчета цен в спецификации ДО
+//******************************************************************************
+
+#doc
+Групповой пересчет цен в спецификации ДО
+#end
+Interface change_pr 'Выберите МЦ для отвязки' (, hcSellLocMDOOtvyazMC, sci1EnInsTree) DoAccept, EscClose, Cyan;
+  Show at (15, 4, 95, 17);
+
+//------------------------------------------------------------------------------
+Table STRUCT tbchange_pr
+(
+  NRec     :  comp
+, Pick     :  word
+, npp      :  word
+, cSpStep  :  comp
+, cMcUsl   :  comp
+, cOtpEd   :  comp
+, cOwner   :  comp
+)
+With Index
+(
+  tbchange_pr00 = npp,
+  tbchange_pr01 = cOwner,
+  tbchange_pr02 = NRec,
+  tbchange_pr03 = Pick
+);
+
+//------------------------------------------------------------------------------
+Create view
+Var
+//------------------------------------------------------------------------------
+  ptbchange_pr
+, cSD
+                : comp;
+//------------------------------------------------------------------------------
+  ChgPrice
+                : double;
+//------------------------------------------------------------------------------
+  ReclcPrice
+                : word;
+//------------------------------------------------------------------------------
+
+As select
+//------------------------------------------------------------------------------
+  if ((tbchange_pr.Pick = 0), '', '√')
+    (FieldName = picked)
+//------------------------------------------------------------------------------
+, tbchange_pr.*
+
+From
+  SpOtpEd
+, tbchange_pr
+, tbchange_pr add_tbchange_pr
+, tbchange_pr add1_tbchange_pr
+, KatMC
+
+Where
+((
+     cSD                 ==  SpStep.cStepDoc
+AND  word(1)             ==  SpStep.PrMC
+AND  ptbchange_pr        ==  tbchange_pr.cOwner
+AND  tbchange_pr.NRec    ==  add_tbchange_pr.cOwner
+AND  tbchange_pr.cMcUsl  ==  KatMC.NRec
+))
+;
+
+//******************************************************************************
+
+Parameters
+  cSD
+;
+
+//******************************************************************************
+
+Window DeltaPrice 'Цену уменьшить на' DoAccept, EscClose, Cyan;
+  Show at (25, 5, 60, 10)
+
+Screen scrDeltaPrice (, , sci1Esc)
+
+Fields
+  ChgPrice ('Уменьшить цену на'): [prSignsInKol], NoProtect;
+
+Buttons
+  cmOk, Default, , 'Продолжить', , sci1Esc;
+<<
+
+     .@@@@@@@@@@@@@@@@@@@@@@@@
+         <.~П~родолжить.>
+>>
+end;
+
+HandleEvent
+
+cmOk:
+  PutCommand(cmDefault);
+
+end;
+end;
+
+//******************************************************************************
+
+Procedure Choice_SpStep;
+{
+  ResetBounds(#tbchange_pr)
+  StartNewVisual(vtNumericVisual, 0, 'Закачка спецификации...', 1);
+
+  MTClear(#tbchange_pr, mfNormal);    // вместо delete all
+
+  _LOOP SpStep
+    {
+      if (not NextVisual)
+        {
+          StopVisual('', 0);
+          Exit;
+        }
+
+      tbchange_pr.NRec     := SpStep.NRec;
+      tbchange_pr.npp      := SpStep.npp;
+      tbchange_pr.cSpStep  := SpStep.NRec;
+      tbchange_pr.cMcUsl   := SpStep.cMcUsl;
+      tbchange_pr.cOtpEd   := SpStep.cOtpEd
+      tbchange_pr.cOwner   := if (SpStep.cOwner = SpStep.NRec, comp(0), SpStep.cOwner);
+      insert current tbchange_pr;
+    }
+
+  StopVisual('', 0);
+  SetBounds(#tbchange_pr)
+  if (GetFirst tbchange_pr = tsOk){};
+}
+
+//******************************************************************************
+
+Tree brChoice;
+  Show at (, , , 9);
+  Table  tbchange_pr;
+
+Fields
+    {Font = {Color = if (cOwner = comp(0), ColorGray, if(picked = '√', ColorMark, 0)) }};
+//------------------------------------------------------------------------------
+  picked      #3'√'               : [1] , NoAutoSize, Skip;
+//------------------------------------------------------------------------------
+  KatMC.Name  #3'Наименование'    : [34] , Protect;
+//------------------------------------------------------------------------------
+end; // Browse
+
+//******************************************************************************
+
+Screen scr1
+  Show at (, 10, , );
+
+Buttons
+  cmValue1, , , 'Удалить с пересчетом цен';
+  cmValue2, , , 'Удалить без пересчета цен';
+  cmCancel, , , 'Отмена';
+
+<<
+ <.Удалить ~с~ пересчетом цен.><.Удалить ~б~ез пересчета цен.><.~О~тмена.>
+>>
+end; // Screen
+
+//******************************************************************************
+
+HandleEvent // Interface
+cmInit:
+  {
+    Choice_SpStep;
+    PutCommand(cmShowAll);
+  }
+
+cmValue1:
+  {
+    ReclcPrice := 1;
+    if (RunWindowModal(DeltaPrice) <> cmDefault)
+      Exit
+    else
+      PutCommand(cmDefault);
+  }
+
+cmValue2:
+  {
+    ReclcPrice := 0;
+    PutCommand(cmDefault);
+  }
+
+cmMarkUnMark:
+  if (tbchange_pr.cOwner <> comp(0))
+    {
+     set tbchange_pr.Pick := if (tbchange_pr.Pick = 0, 1, 0);
+     if (update current tbchange_pr = tsOk)
+       { }
+
+     #ifdef ATL51
+     RedrawCurrentAndGo (GetCurrentFormat, TRUE);
+     #else
+     if (GetNext tbchange_pr = tsOk)
+       CallToNeighbours(cmPosDown, #tbchange_pr);
+
+     RedrawPanel(#tbchange_pr);
+     #end
+    }
+
+cmSelectall:
+  if (tbchange_pr.cOwner <> comp(0))
+    {
+      StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm,
+                 'Помечаю матценности...', RecordsInTable(#tbchange_pr));
+      PushPos(#tbchange_pr);
+      ResetBounds(#tbchange_pr);
+
+      var _CGROUPMC: comp;   _CGROUPMC := KatMC.CGROUPMC;
+
+      _LOOP tbchange_pr
+         if (not NextVisual)
+            Break;
+         else
+           {
+             if ((_CGROUPMC <> KatMC.CGROUPMC) OR (cOwner = 0))
+               continue;
+             tbchange_pr.Pick := 1;
+             if (update current tbchange_pr = tsOk)
+               { }
+           }
+
+      SetBounds(#tbchange_pr)
+      PopPos(#tbchange_pr);
+      RereadRecord;
+      StopVisual('', 0);
+    }
+
+cmUnSelectall:
+  if (tbchange_pr.cOwner <> comp(0))
+    {
+      StartNewVisual(vtIndicatorVisual, vfTimer+vfBreak+vfConfirm,
+                 'Снимаю пометку...'#13#3, RecordsInTable(#tbchange_pr));
+      PushPos(#tbchange_pr);
+      ResetBounds(#tbchange_pr);
+
+      var _CGROUPMC: comp;   _CGROUPMC := KatMC.CGROUPMC;
+
+      _LOOP tbchange_pr  where ((word(1) == tbchange_pr.Pick)) ordered by index tbchange_pr03
+         if (not NextVisual)
+           Break;
+         else
+           {
+             tbchange_pr.Pick := 0;
+             if (update current tbchange_pr = tsOk){};
+           }
+
+      SetBounds(#tbchange_pr)
+      PopPos(#tbchange_pr);
+      RereadRecord;
+      StopVisual('', 0);
+    }
+
+cmDefault:
+   {
+    PushPos(#SpStep);
+    ResetBounds(#SpStep)
+
+    _LOOP tbchange_pr where ((word(1) == tbchange_pr.Pick)) ordered by index tbchange_pr03
+       {
+         if (ReclcPrice = 1)
+           if (GetFirst SpStep where ((tbchange_pr.cOwner == SpStep.NRec)) = tsOk)
+             {
+               set SpStep.Price := SpStep.Price - ChgPrice;
+               update current SpStep;
+             }
+
+         if (GetFirst SpStep where ((tbchange_pr.cSpStep == SpStep.NRec)) = tsOk)
+           delete current SpStep;
+       }
+
+    PopPos(#SpStep);
+    SetBounds(#SpStep)
+
+    var _npp: word;       _npp := 1;
+
+    _LOOP SpStep
+      {
+        set SpStep.npp := _npp;
+        update current SpStep;
+        _npp := _npp + 1;
+      }
+   }
+
+cmTreeTop:
+  ptbchange_pr := 0;
+
+cmTreeUp:
+  ptbchange_pr := tbchange_pr.cOwner;
+
+cmTreeDown:
+  ptbchange_pr := tbchange_pr.NRec;
+
+cmTreeNodeType:
+  if (GetFirst add1_tbchange_pr where ((tbchange_pr.NRec == add1_tbchange_pr.cOwner)) <> tsOk)
+    TreeSetNodeType(brChoice, 2);
+
+cmTreeNeedOwner:
+  TreeJumpToRecord(brChoice, tbchange_pr.cOwner);
+
+cmShowAll: // Раскрыть все ветки
+  {
+    var sav_NRec: comp;   sav_NRec := tbchange_pr.NRec;
+
+    if (TreeGetFirst(brChoice))
+      do
+        TreeOpenNode(brChoice);
+      While TreeGetNext(brChoice);
+
+    TreeJumpToRecord (brChoice, sav_NRec);
+    RescanPanel(#tbchange_pr);
+  }
+
+cmHideAll: // Свернуть все ветки
+  {
+    var sav_NRec: comp;
+
+    While (tbchange_pr.cOwner <> 0)
+      TreeJumpToRecord (brChoice, tbchange_pr.cOwner);
+
+    sav_NRec := tbchange_pr.NRec;
+
+    if (TreeGetFirst(brChoice))
+    do
+      TreeCloseNode(brChoice);
+    While TreeGetNext(brChoice);
+
+    TreeJumpToRecord (brChoice, sav_NRec);
+    RescanPanel(#tbchange_pr);
+  }
+
+end // hanldle Interface
+End.
+
+//******************************************************************************

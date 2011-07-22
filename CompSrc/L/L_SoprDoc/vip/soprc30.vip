@@ -1,0 +1,246 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - _
+// _
+//********************************************************************************
+
+#doc
+Назначение:
+   Выбор приходных, расходных накладных
+
+Параметры:
+  pNrec - ссылка на накладную
+#end
+
+//******************************************************************************
+
+Interface GetKatSopr101_201 ''(, ,) doAccept, EscClose, Cyan;
+  Show at (, , ,31);
+Create view
+var
+
+  pNRec : comp;     //pNRec - Автоустановка на накладную
+  TypeSopr : word;
+  s_SimvRub : string;
+  begdate,enddate:date;
+  isFilter:boolean;
+  FltTypeSopr : word;
+(
+  Valut, Sum, SumNakl, prord
+)
+as Select
+  if (KatSopr.cVal = 0, if (s_SimvRub = '','руб.',s_SimvRub),KlVal.SimvolV),
+  if (KatSopr.cVal = 0, KatSopr.Summa, KatSopr.SumVal),
+  LPad((String(Sum) + ' ' + Valut),20),
+  if (longint(KatSopr.dOpr) = 0,'-','+'),
+  KatSopr.*,
+  KatOrg.Name,
+  klVal.SimvolV
+from
+  KatSopr,
+  KatOrg,
+  KlVal
+where
+((
+  TypeSopr          == KatSopr.VidSopr   and
+  KatSopr.cOrgBase  == KatOrg.NRec       and
+  KatSopr.cValut    == KlVal.NRec
+))
+ order by KatSopr.VidSopr, KatSopr.dSopr, KatSopr.NSopr
+
+ bounds MainBound  = TypeSopr == KatSopr.VidSopr
+                     ordered by KatSopr.VidSopr, KatSopr.dSopr, KatSopr.NSopr
+ bounds dMainBound_1 = begdate <<= KatSopr.dSopr(NoIndex)
+ bounds dMainBound_2 = enddate >>= KatSopr.dSopr(NoIndex)
+
+ condition No_SN_KatSopr = (word(1) <> KatSopr.wADoc) //сторнируюшая
+;
+
+Parameters
+  pNrec ;
+
+
+var GlbRzlt_WndFlt_MainNkl : longint;
+Window WndFlt_MainNkl '' EscClose;
+Show at (4,4,80,12);
+Panel PnlFlt_MainNkl noTableNavigation;
+  Screen ScrFlt_MainNkl (,,sci13Esc) fields
+  FltTypeSopr('Тип документа') : [List 101 'Приходные накладные(Управление снабжением)',
+                                       201 'Расходные накладные(Управление сбытом)',
+                                       521 'Накладные на отпуск (Давальческое сырье)',
+                                       522 'Накладные на прием ГП(Давальческое сырье)',
+                                       523 'Накладные на возврат сырья(Давальческое сырье)',
+                                       551 'Накладные на отпуск для ремонта(Управление ремонтами)',
+                                       552 'Накладные на возврат(Управление ремонтами)'], Protect;
+Buttons
+  cmOk,Default,,'Продолжить';
+  cmCancel,,,'Выход';
+  <<
+
+ `Тип документа` .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+
+      <. ~П~родолжить .>               <. ~О~тмена .>
+  >>
+  end; // screen ScrFlt_MainNkl
+end; // panel PnlFlt_MainNkl
+
+
+HandleEvent
+ cmOK :
+  {
+   GlbRzlt_WndFlt_MainNkl := cmDefault;
+   CloseWindow(WndFlt_MainNkl);
+  }
+ cmCancel :
+  {
+   GlbRzlt_WndFlt_MainNkl := cmCancel;
+  }
+end; // handleevent window WndFlt_MainNkl
+end; // window WndFlt_MainNkl
+
+
+Function GetTilteInterface : string;
+{var sRzlt : string;
+
+ sRzlt := '';
+ case (TypeSopr) of
+   101:  sRzlt := 'Приходные накладные (Управление снабжением).';
+   201:  sRzlt := 'Накладные на отпуск (Управление сбытом).';
+   521:  sRzlt := 'Накладные на отпуск (Давальческое сырье)';
+   522:  sRzlt := 'Накладные на прием ГП(Давальческое сырье)';
+   523:  sRzlt := 'Накладные на возврат сырья(Давальческое сырье)';
+   551:  sRzlt := 'Накладные на отпуск для ремонта (Управление ремонтами)';
+   552:  sRzlt := 'Накладные на возврат(Управление ремонтами)';
+ end;
+ GetTilteInterface := sRzlt;
+} // function GetTilteInterface
+
+Procedure ResetSoprFlt_Date;
+{
+ if (BoundActive(tbdMainBound_1))  SubBounds(tbdMainBound_1);
+ if (BoundActive(tbdMainBound_2))  SubBounds(tbdMainBound_2);
+} // procedure ResetSoprFlt_Date
+
+Procedure SetSoprFlt(prTypeSopr : word; prStartDate : date; prEndDate : date);
+{
+ if ( (prEndDate <> ZeroDate) and (prStartDate > prEndDate) )
+     Message('Начальная дата фильтра больше конечной. Фильтр не изменен...', Information);
+ else
+    {
+     ResetSoprFlt_Date();
+     begdate  := prStartDate;
+     enddate  := prEndDate  ;
+     TypeSopr := prTypeSopr ;
+     if (not BoundActive(tbMainBound)) AddBounds(tbMainBound);
+     if ( (begdate <> ZeroDate) and (not BoundActive(tbdMainBound_1)) ) AddBounds(tbdMainBound_1);
+     if ( (enddate <> ZeroDate) and (not BoundActive(tbdMainBound_2)) ) AddBounds(tbdMainBound_2);
+    }
+}
+
+
+Panel pnSelect
+  table KatSopr
+Browse brSelectNakl ('Для выбора накладной нажмите <ENTER>',,sci14EnEsc);
+fields
+  KatSopr.dSopr 'Дата'       : [10,'DD/MM/YYYY'], protect,NoDel,NoAutoSize,Centered;
+  KatSopr.Descr 'Дескр.'     : [ 5], protect, NoDel,NoAutoSize;
+  KatSopr.NSopr 'Номер'      : [10], protect, Nodel,NoAutoSize;
+  KatOrg.Name   'Поставщик'  : [28], protect,Nodel;
+  SumNakl       'Сумма'      : [20], protect,Nodel,NoAutoSize,right;
+  PrOrd         'О'          : [ 1], skip,NoAutoSize,Centered;
+end; // browse
+end; // panel
+
+HandleEvent
+
+cmInit :
+  {var aBegDate, aEndDate : date;
+
+    if getfirst KatSopr where ((pNrec == KatSopr.nRec))=tsOK
+      TypeSopr:=katSopr.VidSopr;
+    else
+      {
+        If not readmydsk(TypeSopr,'_TypeSopr101_201_',false)
+         TypeSopr:=101;
+        If getlast KatSopr<>tsOK{};
+      }
+    aBegDate := ZeroDate;
+    aEndDate := ZeroDate;
+    SetSoprFlt(TypeSopr, abegdate, aenddate);
+    PushCondition(tcNo_SN_KatSopr);
+    SetTitle(GetTilteInterface());
+    s_SimvRub := sGetTune('NDE.SimvRub');
+  }
+
+cmNal:
+  {
+   FltTypeSopr := TypeSopr;
+   GlbRzlt_WndFlt_MainNkl := cmCancel;
+   RunWindowModal(WndFlt_MainNkl);
+   if (GlbRzlt_WndFlt_MainNkl <> cmCancel)
+     {
+      SetSoprFlt(FltTypeSopr, begdate, enddate);
+     }
+   SaveMyDSK(FltTypeSopr,'_TypeSopr101_201_');
+   SetTitle(GetTilteInterface());
+//пир 102.48319  rescanpanel(#KatSopr);
+   rereadrecord(#KatSopr);
+  }
+
+cmHotKeys :
+  PutHotCommand(RunMenu('mnuGetKatSopr101_201'));
+
+cmFilterSave:
+  {var aBegDate, aEndDate: date;
+
+   ReadMyDsk(aBEGdate,'aBEGdate_101_201',false);
+   ReadMyDsk(aENDdate,'aENDdate_101_201',false);
+   if (RunDialog(GetInterval,abegdate,aenddate) <> cmCancel)
+     {
+      if ( (aenddate <> ZeroDate) and (abegdate > aenddate) )
+           Message('Начальная дата фильтра больше конечной. Фильтр не изменен...', Information);
+      else
+          {
+           SetSoprFlt(TypeSopr, abegdate, aenddate);
+           isFilter:=true;
+          }
+     }
+   else
+      {
+       if (isFilter)
+         if (Message('Снять установленный фильтр?', YesNo) = cmYes)
+            ResetSoprFlt_Date();
+      }
+   SaveMyDSK(abegdate,'aBEGdate_101_201');
+   SaveMyDSK(aenddate,'aENDdate_101_201');
+
+   SetTitle(GetTilteInterface());
+///пир 102.48319  rescanpanel(#KatSopr);
+   rereadrecord(#KatSopr);
+  }
+cmDefault:
+  pNRec:=KatSopr.NRec;
+
+cmEdit:
+  case TypeSopr of
+   101 : RunInterface('SoprDocB', word(101), KatSopr.Nrec);
+   201 : RunInterface('SoprDoc' , word(201), KatSopr.Nrec);
+   521 : RunInterface('SoprDsIn',  TypeSopr, KatSopr.Nrec);
+   522
+ , 523 : RunInterface('SoprDsOut', TypeSopr, KatSopr.Nrec);
+  end;
+
+cmProtectedInput:
+  stop;
+
+end; // handleevent interface
+End.
+
+
+mnuGetKatSopr101_201 Menu
+{
+-'Установка фильтра', cmFilterSave, 'Установка фильтра', hcctxSoprFilterSave, 'Alt-B', kbAltb, sci1Esc;
+-'Тип отображаемых документов',cmNal,'Тип отображаемых документов',,'Alt-F',kbAltf,sci1Esc;
+}
+

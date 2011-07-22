@@ -1,0 +1,126 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║                     (c) 1994,98 корпорация ГАЛАКТИКА                      ║
+!║ Проект        : ГАЛАКТИКА                                                 ║
+!║ Система       : Оперативный контур                                        ║
+!║ Версия        : 5.70                                                      ║
+!║ Назначение    : Просмотр НЗ по договору                                   ║
+!║ Ответственный : Лебедев Сергей Владимирович                               ║
+!║ Параметры     : есть                                                      ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#doc
+Просмотр наряд-заказов по договору из интерфейса пакетного формирования
+#end
+Interface ViewNZbyDog 'Наряд-заказы по договору' EscClose, cyan;
+Show at (,1,,13);
+create view
+var
+    DogNRec: comp;
+    wasMade, error_: boolean;
+(
+    nZakazPrior,
+    nZakazTypeShort
+)
+as select
+  if ( nZakaz.Prior = 0,'нормальный',
+   if ( nZakaz.Prior = 1, 'высокий',
+     if ( nZakaz.Prior = 2, 'низкий','!некорр!')
+     )),
+
+  if ( nZakaz.TypeDoc = 0, 'О',
+   if ( nZakaz.TypeDoc = 1, 'Г',
+    if ( nZakaz.TypeDoc = 2, 'Д','Н')
+     ))
+from
+  NZakaz,
+  synonym Dogovor AppDogovor,
+  KatNotes,
+  KatSopr
+where
+((
+  NZakaz.cDogovor    == Dogovor.nRec     and
+  NZakaz.cAppDogovor == AppDogovor.nRec  and
+  NZakaz.cCalPlan    == CalPlan.nRec     and
+  NZakaz.cNote       == KatNotes.NRec    and
+  NZakaz.nRec        == KatSopr.cNZakaz
+))
+Bounds NZonDog    DogNRec == NZakaz.cDogovor
+
+Bounds NZonAppDog DogNRec == NZakaz.cAppDogovor
+;
+Parameters DogNRec;//
+
+//-----------------------------------------------------------------
+//Panel panel0 show at (,,,)
+Browse browse0 (' ',hcNZbyDog, sci14Esc) show at (,,,7);
+Table NZakaz;
+Fields
+  nZakaz.Descr 'Дескр.' ('Дескриптор(идентификатор) пользователя.',,) : [12], protect;
+  nZakaz.NoDoc 'Номер'  ('Номер наряд заказа.',,) : [6], protect;
+  nZakaz.dDoc  ' От...' ('Дата оформления наряд-заказа.',,) : [10,'DD/MM/YYYY'], protect;
+  nZakaz.dBeg  ' с...'   ('Дата начала действия наряд-заказа.',,) : [10,'DD/MM/YYYY'], protect;
+  nZakaz.dEnd  ' по...'   ('Дата окончания действия наряд-заказа.',,) : [10,'DD/MM/YYYY'], protect;
+  KatNotes.sName ' Статус' ('Статус документа.',,) : [10], protect;
+  nZakazPrior  'Приоритет' ('Приоритет исполнения наряд-заказа.',,) : [10], protect;
+  //nZakazTypeShort 'Т' ('Тип документа',,) : [1], protect;
+  if (isValid(#KatSopr),'+',' ')
+               'Н' ('Наличие накладных связанных с наряд-заказом',,) : [1], protect;
+end; // browse
+HandleEvent //panel0
+end; // he panel 0
+
+screen sc1 show at (,8,,)
+Table NZakaz
+Fields
+ Dogovor.NoDoc +' от '+ string(Dogovor.dDoc)       : skip;
+ AppDogovor.NoDoc +' от '+ string(AppDogovor.dDoc) : skip;
+ CalPlan.NoDoc                                   : skip;
+<<
+ Договор    .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Соглашение .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+ Пункт плана.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end; // screen
+
+
+HandleEvent // interface
+cmInit:
+ {
+   if (GetFirst Dogovor where (( DogNRec == Dogovor.nRec )) = tsOK)
+   {
+     if (Dogovor.cDogovor <> 0)
+       PushBounds(tbNZonAppDog)
+     else
+       PushBounds(tbNZonDog);
+   }
+   if GetFirst NZakaz <> tsOk
+     { message(''#3'Нет наряд-заказов, сформированных по договору');
+       abort; exit; }
+   if GetFirst Dogovor = tsOk
+     SetTitle('Наряд-заказы по договору № '+Dogovor.NoDoc+' от '+string(Dogovor.dDoc));
+
+ }
+cmDefault:
+  {
+  }
+cmEdit:
+  { if not UpdateTable exit;
+    PutCommand(cmEdit);
+    RunInterface(NZakaz, comp(0), NZakaz.nRec);
+    RereadRecord;
+    if (RecordExists NZakaz <> tsOK)
+    {
+      message(''#3'Нет наряд-заказов, сформированных по распоряжению', Information);
+      CloseInterface(cmCancel);
+    }
+    //PutCommand(cmCancel);
+  }
+//cmHotKeys:
+// { PutHotCommand(RunMenu('ActPereo_HotKeys')); }
+//cmFilterSave: //SetSoprFlt;
+//cmManagerID : //SetDescriptor;
+//cmAccording : { if UpdateTable
+//                  {
+//                    RereadRecord; }//              }
+end; // handleEvent interface
+End.

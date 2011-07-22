@@ -1,0 +1,1529 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика
+// Налоговый регистр  по учету материальных расходов
+//******************************************************************************
+
+#include EditDoc.vih
+#include xlReport.Vih
+
+Interface SoprNalReg 'Налоговый регистр по учету материальных расходов' (,hci_nakl_Uchet_MRasxod,) EscClose, Cyan;
+  Show At (,,150,30)
+
+Const
+  NReport    = 69;
+  wDescr     = 59;
+  wMC        = 7;
+  wUsl       = 12;
+  wGroupMC   = 2;
+  wGroupUsl  = 5;
+  mnDescr    = 'UserTuneDescr';
+  mnMC       = 'SoprNalReg_MC';
+  mnUsl      = 'SoprNalReg_Usl';
+  mnGroupMC  = 'SoprNalReg_GroupMC';
+  mnGroupUsl = 'SoprNalReg_GroupUsl';
+  ndGroup    = 0;
+  ndMC       = 1;
+  ndNakl     = 2;
+  ndPlat     = 3;
+end;
+
+//------------------------------------------------------------------------------
+Table STRUCT MemSopr "документы"
+(
+  NRec        : tNrec
+, cKatSopr    : tNrec      "Ссылка на сопр.документ"
+, Descr       : string[20] "Дескриптор"
+, dSopr       : date       "Дата создания"
+, nSopr       : string[40] "Номер накладной"
+, dOpr        : date       "Дата оприходования"
+, cOrgBase    : tNrec      "Ссылка на контрагента"
+, VidSopr     : word       "Вид документа"
+)
+with index
+(
+  MemSopr00 = NRec (Surrogate, Unique)
+, MemSopr01 = dSopr + nSopr
+, MemSopr02 = cKatSopr
+, MemSopr03 = cOrgBase
+);
+
+//------------------------------------------------------------------------------
+Table STRUCT MemSpSopr "спецификация"
+(
+  NRec        : comp
+, cMC         : tNrec      "Ссылка на матценность"
+, PrMC        : word       "Признак матценности"
+, Name        : tName      "название матценности"
+, BarKod      : String[30] "Бар код"
+, ExtName     : tName      "название матценности"
+, cMemSopr    : tNrec      "Ссылка на сопр.документ"
+, cMemSpSopr  : tNrec      "Ссылка на позицию сопр.документа"
+, cEd         : tNRec      "Ссылка на единицу измерения"
+, NameEd      : tName      "название учетной единицы"
+, Kol         : Double     "Количество"
+, Price       : Double     "Цена без налогов, оприходовано"
+, Summa       : Double     "Стоимость без налогов, оприходовано"
+, NDS         : Double     "Сумма НДС, оприходовано"
+, SummaNDS    : Double     "Стоимость с налогами, оприходовано"
+, Kol_ONP     : Double     "Кол-во, опл.по накл.не из отч.периода"
+, Summa_ONP   : Double     "Стоим.БН, опл.по накл.не из отч.периода"
+, NDS_ONP     : Double     "Сумма НДС, опл.по накл.не из отч.периода"
+, SummaNDS_ONP: Double     "Стоим.СН, опл.по накл.не из отч.периода"
+, PlNoDoc     : String[20] "Номер платежного документа"
+, PlDateOpl   : Date       "Дата оплаты"
+, dOpr        : date       "Дата оприходования"
+, PlKol       : Double     "Количество оплаченное"
+, PlPrice     : Double     "Цена оплаченная без налогов"
+, PlSumma     : Double     "Стоимость оплаченная без налогов"
+, PlNDS       : Double     "Сумма НДС оплаченный"
+, PlSummaNDS  : Double     "Стоимость оплаченная с налогами"
+, wItog       : word       "Признак записи"
+, wValid      : word       "Признак валидности"
+)
+with index
+(
+  MemSpSopr00 = NRec (Surrogate, Unique)
+, MemSpSopr01 = wItog + PrMC + Name + dOpr
+, MemSpSopr02 = cMemSpSopr + wItog + PrMC + Name + dOpr
+, MemSpSopr03 = cMemSpSopr + wItog + PlDateOpl + PrMC + Name
+, MemSpSopr04 = cMemSopr
+);
+
+//******************************************************************************
+Var
+  dBegDate : Date;  // начальная дата периода
+  dEndDate : Date;  // конечная дата периода
+  dBegDOpr : Date;  // начальная дата фильтра по дате оприходования
+  dEndDOpr : Date;  // конечная дата фильтра по дате оприходования
+  CurNode  : comp;
+  Cena_Pr, Cena_PrR, Cena_PrV : word; // к-во после запятой в ценах
+  Kol_Pr   : word;  // к-во после запятой в количестве
+  s_SimvRub: string;// символ НДЕ
+  wFilter  : word;  // Установленные фильтры
+  NumPick  : word;  // Число выбранных
+  wTypeSopr: word;  // Вид сопр.документа
+  cNalNDS  : comp;  // Налог НДС
+  wNalogs  : word;  // Вывод налогов
+  wDocs    : word;  // Обработка документов
+  wMCUsl   : word;  // обработка МЦ/услуг
+  wPlat    : word;  // включать платежи в отчет
+  AllSumma   , AllNDS   , AllSummaNDS   ,
+  AllPlSumma , AllPlNDS , AllPlSummaNDS ,
+  AllOprSumma, AllOprNDS, AllOprSummaNDS: double;//итоговые суммы
+  sRepName, sXLTFileName, sXLSFileName: string;// для работы с шаблонами
+  pXLRep   : XlRepSetup;    // для работы с шаблонами
+  pXL      : XLSRepBuilder; // для работы с шаблонами
+
+  MarkDescr   : longint; sMarkDescr   : string;// фильтр по дескриптору
+  MarkMC      : longint; sMarkMC      : string;// фильтр по матценности
+  MarkUsl     : longint; sMarkUsl     : string;// фильтр по услуге
+  MarkGroupMC : longint; sMarkGroupMC : string;// фильтр по группе матценностей
+  MarkGroupUsl: longint; sMarkGroupUsl: string;// фильтр по группе услуг
+//******************************************************************************
+
+#include EditDoc.var
+
+Create View
+As Select
+//------------------------------------------------------------------------------
+  GetMarkerCount(MarkDescr)
+        (FieldName = fCountMarkDescr)
+//------------------------------------------------------------------------------
+, GetMarkerCount(MarkMC)
+        (FieldName = fCountMarkMC)
+//------------------------------------------------------------------------------
+, GetMarkerCount(MarkUsl)
+        (FieldName = fCountMarkUsl)
+//------------------------------------------------------------------------------
+, GetMarkerCount(MarkGroupMC)
+        (FieldName = fCountMarkGroupMC)
+//------------------------------------------------------------------------------
+, GetMarkerCount(MarkGroupUsl)
+        (FieldName = fCountMarkGroupUsl)
+//------------------------------------------------------------------------------
+, *
+
+From
+  KatSopr
+, SpSopr
+, SpSopHoz
+, SoprHoz
+, KatMC
+, KatMC KatMCF
+, KatUsl
+, KatUsl KatUslF
+, X$Users
+, KatEd
+, KatEd KatEdUsl
+, KatOtpEd
+, GroupMC
+, GroupMC GroupMCF
+, GroupUsl
+, GroupUsl GroupUslF
+, MemSopr
+, MemSpSopr
+, MemSpSopr MemSpSopr2
+, MemSopr SoprTree
+, MemSpSopr SpSoprTreePl (MemSpSopr03)
+, MemSpSopr SpSoprTree (MemSpSopr02)
+, MemSpSopr SpSoprNode
+, MemSpSopr SpSoprMC
+, MemSpSopr SpSoprGroupMC
+, Pick
+, PickRep
+, UserDeskRep
+
+where
+((
+       SpSopr.NRec          ==  SpSopHoz.cSpSopr
+  AND  SpSopHoz.cSoprHoz    ==  SoprHoz.NRec
+
+  AND  KatSopr.cOrgBase     ==  KatOrg.NRec
+  AND  SpSopr.cMcUsl        ==  KatMC.NRec
+  AND  SpSopr.cMcUsl        ==  KatUsl.NRec
+  AND  SpSopr.cOtpEd        ==  KatOtpEd.NRec
+
+  AND  KatMC.cEd            ==  KatEd.NRec
+  AND  KatMC.cGroupMC       ==  GroupMC.NRec
+
+  AND  KatUsl.cEd           ==  KatEdUsl.NRec
+  AND  KatUsl.cGroupUsl     ==  GroupUsl.NRec
+
+  AND  CurNode              ==  SpSoprTree.cMemSpSopr
+  AND  word(ndNakl)        >>=  SpSoprTree.wItog
+
+  AND  SpSoprTree.cMemSopr  ==  SoprTree.NRec
+
+  AND  UserName             ==  UserDeskRep.OwnName
+  AND  NReport              ==  UserDeskRep.nRep
+
+  AND  MemSpSopr.cMemSpSopr  ==  SpSoprNode.NRec
+  AND  SpSoprNode.cMemSpSopr ==  SpSoprMC.NRec
+  AND  SpSoprMC.cMemSpSopr   ==  SpSoprGroupMC.NRec
+))
+
+Bounds   AllSopr    =  wTypeSopr        ==  KatSopr.VidSopr  AND
+                       Date(1,1,1900)  <<=  KatSopr.dOpr
+
+Bounds   SoprDOpr   =  wTypeSopr        ==  KatSopr.VidSopr  AND
+                       dBegDOpr        <<=  KatSopr.dOpr     AND
+                       dEndDOpr        >>=  KatSopr.dOpr
+
+Bounds   NalNDS     =  SpSopr.NRec      ==  SpDocNal.cSpDoc  AND
+                       KatSopr.VidSopr  ==  SpDocNal.TipDoc  AND
+                       cNalNDS          ==  SpDocNal.cNalog
+
+Bounds   AllNal     =  SpSopr.NRec      ==  SpDocNal.cSpDoc  AND
+                       KatSopr.VidSopr  ==  SpDocNal.TipDoc
+
+Bounds   AllMCUsl   =  KatSopr.NRec     ==  SpSopr.cSopr
+
+Bounds   AllMC      =  KatSopr.NRec     ==  SpSopr.cSopr AND
+                       word(1)          ==  SpSopr.PrMc
+
+Bounds   AllUsl     =  KatSopr.NRec     ==  SpSopr.cSopr AND
+                       word(2)         <<=  SpSopr.PrMc
+
+Bounds   PlatDate   =  SpSoprTree.NRec  ==  SpSoprTreePl.cMemSpSopr  AND
+                       word(ndPlat)     ==  SpSoprTreePl.wItog       AND
+                       dBegDate        <<=  SpSoprTreePl.PlDateOpl   AND
+                       dEndDate        >>=  SpSoprTreePl.PlDateOpl
+
+Bounds   AllPlat    =  SpSoprTree.NRec  ==  SpSoprTreePl.cMemSpSopr  AND
+                       word(ndPlat)     ==  SpSoprTreePl.wItog
+;
+
+//******************************************************************************
+#include SoprGen2.vpp
+#include PMarker.vpp
+
+//------------------------------------------------------------------------------
+//вставка позиции
+Function InsertMemSpSopr(tItog: word; tMemSpSopr: comp; tPrice, tSumma, tNDS, tSumNDS: double; tExtName: string): comp;
+var
+  isPlat: boolean;
+  isNakl: boolean;
+{
+  // учитывать платежи
+  if (tItog = ndPlat)
+  {
+    isPlat := (((wPlat AND 2) = 2) AND (dBegDate <= KatSopr.dOpr ) AND (dEndDate >= KatSopr.dOpr )) OR
+              (((wPlat AND 1) = 1) AND (dBegDate <= SoprHoz.DatOb) AND (dEndDate >= SoprHoz.DatOb));
+
+    if (NOT isPlat)
+    {
+      InsertMemSpSopr := 0;
+      EXIT;
+    }
+  }
+  else
+    isPlat := FALSE;
+
+  var isNakl: boolean;
+  // учитывать позиции
+  isNakl := (KatSopr.dOpr >= dBegDate) AND (KatSopr.dOpr <= dEndDate)
+
+  ClearBuffer(#MemSpSopr);
+  MemSpSopr.cMemSopr   := MemSopr.NRec;
+  MemSpSopr.cMemSpSopr := tMemSpSopr;
+  MemSpSopr.cMC        := SpSopr.cMcUsl;
+  MemSpSopr.PrMC       := SpSopr.PrMC;
+  MemSpSopr.dOpr       := KatSopr.dOpr;
+  MemSpSopr.ExtName    := tExtName;
+
+  if (tItog <> ndMC)
+    MemSpSopr.Name := tExtName
+  else
+    if (MemSpSopr.PrMC = 1)
+    {
+      MemSpSopr.Name   := KatMC.Name
+      MemSpSopr.BarKod := KatMC.BarKod
+    }
+    else
+    {
+      MemSpSopr.Name   := KatUsl.Name;
+      MemSpSopr.BarKod := KatUsl.Kod;
+    }
+
+  MemSpSopr.cEd    := if (MemSpSopr.PrMC = 1, KatMC.cEd, KatUsl.cEd);
+  MemSpSopr.NameEd := if (MemSpSopr.PrMC = 1, KatEd.Name, KatEdUsl.Name);
+
+  if (isNakl)
+  {
+    MemSpSopr.Kol      := SpSopr.KolOpl;
+    MemSpSopr.Price    := tPrice;
+    MemSpSopr.Summa    := tSumma;
+    MemSpSopr.NDS      := tNDS;
+    MemSpSopr.SummaNDS := tSumNDS;
+  }
+  else
+    if (tItog = ndNakl)
+    {
+      MemSpSopr.Kol      := SpSopr.KolOpl;
+      MemSpSopr.Price    := tPrice;
+      MemSpSopr.Summa    := tSumma;
+      MemSpSopr.NDS      := tNDS;
+      MemSpSopr.SummaNDS := tSumNDS;
+      MemSpSopr.wValid := 1;
+    }
+
+  MemSpSopr.wItog := tItog;
+
+  // платежи
+  if (isPlat)
+  {
+    MemSpSopr.PlNoDoc    := SoprHoz.NoDoc;
+    MemSpSopr.PlDateOpl  := SoprHoz.DatOb;
+    MemSpSopr.PlKol      := SpSopHoz.KolVo;
+
+    var tKoefPl: double;
+    tKoefPl := MemSpSopr.PlKol / SpSopr.KolOpl;
+
+    MemSpSopr.PlPrice    := tPrice;
+    MemSpSopr.PlSumma    := tSumma  * tKoefPl;
+    MemSpSopr.PlNDS      := tNDS    * tKoefPl;
+    MemSpSopr.PlSummaNDS := tSumNDS * tKoefPl;
+
+  }
+
+  Insert Current MemSpSopr;
+
+  // подсчет итогов по платежам
+  if (isPlat)
+    if (GetFirst SpSoprNode = tsOk)
+    {
+      SpSoprNode.PlPrice    := tPrice;
+      SpSoprNode.PlKol      := SpSoprNode.PlKol      + MemSpSopr.PlKol;
+      SpSoprNode.PlSumma    := SpSoprNode.PlSumma    + MemSpSopr.PlSumma;
+      SpSoprNode.PlNDS      := SpSoprNode.PlNDS      + MemSpSopr.PlNDS;
+      SpSoprNode.PlSummaNDS := SpSoprNode.PlSummaNDS + MemSpSopr.PlSummaNDS;
+      Update Current SpSoprNode;
+
+      if (GetFirst SpSoprMC = tsOk)
+      {
+        SpSoprMC.PlPrice    := tPrice;
+        SpSoprMC.PlKol      := SpSoprMC.PlKol      + MemSpSopr.PlKol;
+        SpSoprMC.PlSumma    := SpSoprMC.PlSumma    + MemSpSopr.PlSumma;
+        SpSoprMC.PlNDS      := SpSoprMC.PlNDS      + MemSpSopr.PlNDS;
+        SpSoprMC.PlSummaNDS := SpSoprMC.PlSummaNDS + MemSpSopr.PlSummaNDS;
+
+        // если накладная не из отчетного периода - то прибавить оплату
+        if (NOT isNakl)
+        {
+          SpSoprMC.Kol_ONP      := SpSoprMC.Kol_ONP      + MemSpSopr.PlKol;
+          SpSoprMC.Summa_ONP    := SpSoprMC.Summa_ONP    + MemSpSopr.PlSumma;
+          SpSoprMC.NDS_ONP      := SpSoprMC.NDS_ONP      + MemSpSopr.PlNDS;
+          SpSoprMC.SummaNDS_ONP := SpSoprMC.SummaNDS_ONP + MemSpSopr.PlSummaNDS;
+        }
+
+        Update Current SpSoprMC;
+
+        if (GetFirst SpSoprGroupMC = tsOk)
+        {
+          SpSoprGroupMC.PlPrice    := tPrice;
+          SpSoprGroupMC.PlKol      := SpSoprGroupMC.PlKol      + MemSpSopr.PlKol;
+          SpSoprGroupMC.PlSumma    := SpSoprGroupMC.PlSumma    + MemSpSopr.PlSumma;
+          SpSoprGroupMC.PlNDS      := SpSoprGroupMC.PlNDS      + MemSpSopr.PlNDS;
+          SpSoprGroupMC.PlSummaNDS := SpSoprGroupMC.PlSummaNDS + MemSpSopr.PlSummaNDS;
+
+          // если накладная не из отчетного периода - то прибавить оплату
+          if (NOT isNakl)
+          {
+            SpSoprGroupMC.Kol_ONP      := SpSoprGroupMC.Kol_ONP      + MemSpSopr.PlKol;
+            SpSoprGroupMC.Summa_ONP    := SpSoprGroupMC.Summa_ONP    + MemSpSopr.PlSumma;
+            SpSoprGroupMC.NDS_ONP      := SpSoprGroupMC.NDS_ONP      + MemSpSopr.PlNDS;
+            SpSoprGroupMC.SummaNDS_ONP := SpSoprGroupMC.SummaNDS_ONP + MemSpSopr.PlSummaNDS;
+          }
+
+          Update Current SpSoprGroupMC;
+        }
+
+      }
+
+      AllPlSumma    := AllPlSumma    + MemSpSopr.PlSumma;
+      AllPlNDS      := AllPlNDS      + MemSpSopr.PlNDS;
+      AllPlSummaNDS := AllPlSummaNDS + MemSpSopr.PlSummaNDS;
+
+      // если накладная не из отчетного периода - то прибавить оплату
+      if (NOT isNakl)
+      {
+        AllSumma    := AllSumma    + MemSpSopr.PlSumma;
+        AllNDS      := AllNDS      + MemSpSopr.PlNDS;
+        AllSummaNDS := AllSummaNDS + MemSpSopr.PlSummaNDS;
+      }
+    }
+
+  InsertMemSpSopr := MemSpSopr.NRec;
+}
+
+//------------------------------------------------------------------------------
+// формирование таблицы в памяти
+Procedure MakeMemTbl(pVidSopr: word);
+var
+  iCount : longint;
+  sTitle : string;
+  tRec   : comp;
+  tNameMC: string;
+  tNameGr: string;
+{
+  wTypeSopr := pVidSopr;
+
+  case pVidSopr of
+    101: sTitle := 'Обработка приходных накладных';
+    108: sTitle := 'Обработка накладных на прием молочного сырья';
+    111: sTitle := 'Обработка актов на прием услуг';
+  else
+    sTitle := 'Обработка сопроводительных документов';
+  end;
+
+  iCount := 0;
+
+  _LOOP KatSopr
+    Inc(iCount);
+
+  StartNewVisual(vtIndicatorVisual, vfTimer + vfBreak, sTitle, iCount);
+
+  _LOOP KatSopr
+  {
+    if (NOT NextVisual)
+      Break;
+
+    // проверка дескриптора
+    if ((wFilter AND 2) = 2)
+      if (fCountMarkDescr > 0)
+        if (Pos('[' + KatSopr.Descr + ']', sMarkDescr) = 0)
+          Continue;
+
+    var isNakl: boolean;
+    // учитывать позиции
+    isNakl := (KatSopr.dOpr >= dBegDate) AND (KatSopr.dOpr <= dEndDate);
+
+    if ((wPlat AND 1) = 1)
+    {
+      var isPlat: boolean;
+      isPlat := FALSE;
+
+      // поиск платежей
+      _LOOP SpSopr
+      {
+        if (isPlat)
+          Break;
+
+        _LOOP SpSopHoz
+        {
+          isPlat := (dBegDate <= SoprHoz.DatOb) AND (dEndDate >= SoprHoz.DatOb);
+
+          if (isPlat)
+            Break;
+        }
+      }
+
+      if (NOT isPlat) AND (NOT isNakl)
+        Continue;
+    }
+
+    ClearBuffer(#MemSopr);
+    MemSopr.cKatSopr := KatSopr.NRec;
+    MemSopr.dSopr    := KatSopr.dSopr;
+    MemSopr.nSopr    := KatSopr.nSopr;
+    MemSopr.dSopr    := KatSopr.dSopr;
+    MemSopr.dOpr     := KatSopr.dOpr;
+    MemSopr.cOrgBase := KatSopr.cOrgBase;
+    MemSopr.Descr    := KatSopr.Descr;
+    MemSopr.VidSopr  := KatSopr.VidSopr;
+
+    Insert Current MemSopr;
+
+    _LOOP SpSopr
+    {
+      // проверка матценности
+      if (SpSopr.PrMC = 1)
+        if ((wFilter AND 4) = 4)
+          if (fCountMarkMC > 0)
+            if (NOT SearchMarker(MarkMC, SpSopr.cMCUsl, 0))
+              Continue;
+
+      // проверка услуги
+      if (SpSopr.PrMC > 1)
+        if ((wFilter AND 8) = 8)
+          if (fCountMarkUsl > 0)
+            if (NOT SearchMarker(MarkUsl, SpSopr.cMCUsl, 0))
+              Continue;
+
+      // проверка группы матценности
+      if (SpSopr.PrMC = 1)
+        if ((wFilter AND 16) = 16)
+          if (fCountMarkGroupMC > 0)
+            if (NOT SearchMarker(MarkGroupMC, KatMC.cGroupMC, 0))
+              Continue;
+
+      // проверка группы услуг
+      if (SpSopr.PrMC > 1)
+        if ((wFilter AND 32) = 32)
+          if (fCountMarkGroupUsl > 0)
+            if (NOT SearchMarker(MarkGroupUsl, KatUsl.cGroupUsl, 0))
+              Continue;
+
+      tNameMC := if (SpSopr.PrMC = 1, KatMC.Name, KatUsl.Name);
+
+      var tPrice : double;
+      var tSumma : double;
+      var tNDS   : double;
+      var tSumNDS: double;
+
+      tSumma  := SpSopr.Price * SpSopr.KolOpl - if (KatSopr.VhodNal = 1, SpSopr.SumNDS, 0);
+      tPrice  := tSumma / SpSopr.KolOpl;
+      tNDS    := 0;
+
+      _LOOP SpDocNal
+        tNDS := tNDS + SpDocNal.Summa;
+
+      tSumNDS := tSumma + tNDS;
+
+      if (isNakl)
+      {
+        AllSumma    := AllSumma    + tSumma;
+        AllNDS      := AllNDS      + tNDS;
+        AllSummaNDS := AllSummaNDS + tSumNDS;
+        AllOprSumma    := AllOprSumma    + tSumma;
+        AllOprNDS      := AllOprNDS      + tNDS;
+        AllOprSummaNDS := AllOprSummaNDS + tSumNDS;
+      }
+
+      // вставка группы
+      if (SpSopr.PrMC = 1)
+      {
+        if (GetFirst GroupMC = tsOk)
+          tNameGr := GroupMC.Name
+        else
+          tNameGr := '<Не определена>';
+      }
+      else
+        if (GetFirst GroupUsl = tsOk)
+          tNameGr := GroupUsl.Name
+        else
+          tNameGr := '<Не определена>';
+
+      // итоги по группе
+      if (GetFirst MemSpSopr2 where (( word(ndGroup) ==  MemSpSopr2.wItog AND
+                                       SpSopr.PrMC   ==  MemSpSopr2.PrMC  AND
+                                       tNameGr       ==  MemSpSopr2.Name )) = tsOk)
+      {
+        if (isNakl)
+        {
+          MemSpSopr2.Kol      := MemSpSopr2.Kol      + SpSopr.KolOpl;
+          MemSpSopr2.Summa    := MemSpSopr2.Summa    + tSumma;
+          MemSpSopr2.Price    := MemSpSopr2.Summa    / MemSpSopr.Kol;
+          MemSpSopr2.NDS      := MemSpSopr2.NDS      + tNDS;
+          MemSpSopr2.SummaNDS := MemSpSopr2.SummaNDS + tSumNDS;
+          Update Current MemSpSopr2;
+        }
+
+        tRec := MemSpSopr2.NRec;
+      }
+      else
+        tRec := InsertMemSpSopr(ndGroup, 0, tPrice, tSumma, tNDS, tSumNDS, tNameGr);
+
+      // вставка МЦ/услуги
+      if (GetFirst MemSpSopr where (( word(ndMC)   ==  MemSpSopr.wItog AND
+                                      SpSopr.PrMC  ==  MemSpSopr.PrMC  AND
+                                      tNameMC      ==  MemSpSopr.Name )) = tsOk)
+      {
+        if (isNakl)
+        {
+          MemSpSopr.Kol      := MemSpSopr.Kol      + SpSopr.KolOpl;
+          MemSpSopr.Summa    := MemSpSopr.Summa    + tSumma;
+          MemSpSopr.Price    := MemSpSopr.Summa    / MemSpSopr.Kol;
+          MemSpSopr.NDS      := MemSpSopr.NDS      + tNDS;
+          MemSpSopr.SummaNDS := MemSpSopr.SummaNDS + tSumNDS;
+          Update Current MemSpSopr;
+        }
+
+        tRec := MemSpSopr.NRec;
+      }
+      else
+        tRec := InsertMemSpSopr(ndMC, tRec, tPrice, tSumma, tNDS, tSumNDS, tNameMc);
+
+      tRec := InsertMemSpSopr(ndNakl, tRec, tPrice, tSumma, tNDS, tSumNDS, KatOrg.Name);
+
+      // вставка распределения
+      if (wPlat <> 0)
+        _LOOP SpSopHoz
+          InsertMemSpSopr(ndPlat, tRec, tPrice, tSumma, tNDS, tSumNDS, tNameMc);
+    }
+  }
+
+  StopVisual('',0);
+}
+
+//------------------------------------------------------------------------------
+// строка выбранных элементов
+Function TruncString(sName: string; wLength: word): string;
+{
+  if (Length(sName) > wLength)
+  {
+    sName := Substr(sName, 1, wLength - 2);
+    sName := sName + '..';
+  }
+
+  TruncString := '[' + sName + '] ';
+}
+
+//------------------------------------------------------------------------------
+// выбранные элементы по маркеру
+Function GetNameElem(iMarker: longint; wField: word): string;
+var
+  i, iCount: longint;
+  tRec: comp;
+  sResult: string;
+{
+  sResult := '';
+
+  case wField of
+    wDescr: {
+      iCount := GetMarkerCount(iMarker);
+
+      if (iCount = 0)
+        sResult  := 'по всем дескрипторам';
+
+      for (i := 0; i < iCount; Inc(i))
+      {
+        GetMarker(iMarker, i, tRec);
+
+        if (GetFirst X$Users where (( tRec == X$Users.Atl_NRec )) = tsOk)
+          sResult := sResult + TruncString(sGetTuneEx('User.Descr', UserOfficeFilial(x$users.atl_nrec),
+                                                                    X$Users.atl_NRec), 7);
+      }
+    }
+
+    wMC: {
+      iCount := GetMarkerCount(iMarker);
+
+      if (iCount = 0)
+        sResult  := 'по всем матценностям';
+
+      for (i := 0; i < iCount; Inc(i))
+      {
+        GetMarker(iMarker, i, tRec);
+
+        if (GetFirst KatMCF where (( tRec == KatMCF.NRec )) = tsOk)
+          sResult := sResult + TruncString(KatMCF.Name, 14);
+      }
+    }
+
+    wUsl: {
+      iCount := GetMarkerCount(iMarker);
+
+      if (iCount = 0)
+        sResult  := 'по всем услугам';
+
+      for (i := 0; i < iCount; Inc(i))
+      {
+        GetMarker(iMarker, i, tRec);
+
+        if (GetFirst KatUslF where (( tRec == KatUslF.NRec )) = tsOk)
+          sResult := sResult + TruncString(KatUslF.Name, 14);
+      }
+    }
+
+    wGroupMC: {
+      iCount := GetMarkerCount(iMarker);
+
+      if (iCount = 0)
+        sResult  := 'по всем группам матценностей';
+
+      for (i := 0; i < iCount; Inc(i))
+      {
+        GetMarker(iMarker, i, tRec);
+
+        if (GetFirst GroupMCF where (( tRec == GroupMCF.NRec )) = tsOk)
+          sResult := sResult + TruncString(GroupMCF.Name, 14);
+      }
+    }
+
+    wGroupUsl: {
+      iCount := GetMarkerCount(iMarker);
+
+      if (iCount = 0)
+        sResult  := 'по всем группам услуг';
+
+      for (i := 0; i < iCount; Inc(i))
+      {
+        GetMarker(iMarker, i, tRec);
+
+        if (GetFirst GroupUslF where (( tRec == GroupUslF.NRec )) = tsOk)
+          sResult := sResult + TruncString(GroupUslF.Name, 14);
+      }
+    }
+  end;
+
+  GetNameElem := sResult;
+}
+
+//------------------------------------------------------------------------------
+// инициализация маркеров
+Procedure InitMarkers;
+{
+  MarkDescr    := InitMarker(mnDescr   , 8, 100, 10, FALSE);
+  MarkMC       := InitMarker(mnMC      , 8, 100, 10, FALSE);
+  MarkUsl      := InitMarker(mnUsl     , 8, 100, 10, FALSE);
+  MarkGroupMC  := InitMarker(mnGroupMC , 8, 100, 10, FALSE);
+  MarkGroupUsl := InitMarker(mnGroupUsl, 8, 100, 10, FALSE);
+}
+
+//------------------------------------------------------------------------------
+// Очистка маркеров
+Procedure ClearMarkers;
+{
+  ClearMarker(MarkDescr);
+  ClearMarker(MarkMC);
+  ClearMarker(MarkUsl);
+  ClearMarker(MarkGroupMC);
+  ClearMarker(MarkGroupUsl);
+}
+
+//------------------------------------------------------------------------------
+// деинициализация маркеров
+Procedure DoneMarkers;
+{
+  DoneMarker(MarkDescr   , mnDescr);
+  DoneMarker(MarkMC      , mnMC);
+  DoneMarker(MarkUsl     , mnUsl);
+  DoneMarker(MarkGroupMC , mnGroupMC);
+  DoneMarker(MarkGroupUsl, mnGroupUsl);
+}
+
+//------------------------------------------------------------------------------
+// Сохранение маркеров во временную таблицу
+Procedure Markers2PickRep;
+{
+  DelPickRep(wDescr);
+  DelPickRep(wMC);
+  DelPickRep(wUsl);
+  DelPickRep(wGroupMC);
+  DelPickRep(wGroupUsl);
+
+  Marker2PickRepEx(mnDescr   , wDescr   , 0);
+  Marker2PickRepEx(mnMC      , wMC      , 0);
+  Marker2PickRepEx(mnUsl     , wUsl     , 0);
+  Marker2PickRepEx(mnGroupMC , wGroupMC , 0);
+  Marker2PickRepEx(mnGroupUsl, wGroupUsl, 0);
+}
+
+//------------------------------------------------------------------------------
+// Восстановление маркеров из временной таблицы
+Procedure PickRep2Markers;
+{
+  PickRep2Marker(mnDescr   , wDescr   , 0);
+  PickRep2Marker(mnMC      , wMC      , 0);
+  PickRep2Marker(mnUsl     , wUsl     , 0);
+  PickRep2Marker(mnGroupMC , wGroupMC , 0);
+  PickRep2Marker(mnGroupUsl, wGroupUsl, 0);
+}
+
+//------------------------------------------------------------------------------
+// Выбранные элементы маркеров
+Procedure GetNameElems;
+{
+  sMarkDescr    := GetNameElem(MarkDescr   , wDescr   );
+  sMarkMC       := GetNameElem(MarkMC      , wMC      );
+  sMarkUsl      := GetNameElem(MarkUsl     , wUsl     );
+  sMarkGroupMC  := GetNameElem(MarkGroupMC , wGroupMC );
+  sMarkGroupUsl := GetNameElem(MarkGroupUsl, wGroupUsl);
+}
+
+//------------------------------------------------------------------------------
+// Проверка маски фильтра
+Procedure CheckFilterMask;
+{
+  if ((wFilter AND 1) = 1)
+  {
+    SetFieldOption (#dBegDOpr, ofSelectable)
+    SetFieldOption (#dEndDOpr, ofSelectable)
+  }
+  else
+  {
+    ClearFieldOption (#dBegDOpr, ofSelectable);
+    ClearFieldOption (#dEndDOpr, ofSelectable);
+  }
+
+  if ((wFilter AND 2) = 2)
+    SetFieldOption (#sMarkDescr, ofSelectable)
+  else
+    ClearFieldOption (#sMarkDescr, ofSelectable);
+
+  if ((wFilter AND 4) = 4)
+    SetFieldOption (#sMarkMC, ofSelectable)
+  else
+    ClearFieldOption (#sMarkMC, ofSelectable);
+
+  if ((wFilter AND 8) = 8)
+    SetFieldOption (#sMarkUsl, ofSelectable)
+  else
+    ClearFieldOption (#sMarkUsl, ofSelectable);
+
+  if ((wFilter AND 16) = 16)
+    SetFieldOption (#sMarkGroupMC, ofSelectable)
+  else
+    ClearFieldOption (#sMarkGroupMC, ofSelectable);
+
+  if ((wFilter AND 32) = 32)
+    SetFieldOption (#sMarkGroupUsl, ofSelectable)
+  else
+    ClearFieldOption (#sMarkGroupUsl, ofSelectable);
+}
+
+//------------------------------------------------------------------------------
+// проверка маски платежа
+Procedure CheckPlatMask;
+{
+  if ((wPlat AND 1) = 1)
+  {
+    ClusterDisabledField(#wFilter, 0)
+
+    if ((wFilter AND 1) = 1)
+    {
+      SetFieldOption (#dBegDOpr, ofSelectable)
+      SetFieldOption (#dEndDOpr, ofSelectable)
+    }
+  }
+  else
+  {
+    set dBegDOpr := dBegDate;
+    set dEndDOpr := dEndDate;
+    wFilter := wFilter OR 1;
+    ClusterDisabledField(#wFilter, 1);
+    ClearFieldOption (#dBegDOpr, ofSelectable);
+    ClearFieldOption (#dEndDOpr, ofSelectable);
+  }
+}
+
+//******************************************************************************
+Panel panReport;
+  Table SpSoprTree;
+
+Tree trReport (, , sci14EscTree);
+  Show At (,,,18)
+Fields {Font = {Bold = SpSoprTree.wItog < ndNakl;
+                Color = if (SpSoprTree.wValid = 1, ColorGray, 0);}};
+  SpSoprTree.ExtName     #3'Наименование'          ('Наименование МЦ/Услуги, контрагента')     : [20], Protect;
+  if (SpSoprTree.PrMC = 1, 'Т', 'У') #3''          ('Признак МЦ/Услуги')                       :  [1], Protect;
+  SoprTree.Descr      #3'Дескр.'                   ('Дескриптор пользователя')                 : [4], Protect;
+  if (SoprTree.VidSopr = 101, 'ПН',
+    if (SoprTree.VidSopr = 108, 'НПМ', 'АКТ'))
+                      #3''    ('ПН - приходная накладная, АКТ - акт на прием услуг'):  [3], Protect;
+  SoprTree.nSopr      #3'Номер'                    ('Номер накладной/акта')                    : [8], Protect;
+  SoprTree.dOpr       #3'Дата',#3'оприходования'   ('Дата оприходования, исполнения (в акте)') : [10, 'DD/MM/YYYY'], Protect;
+  SpSoprTree.Kol      #3'Количество'               ('Количество по позиции')                   : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect;
+  SpSoprTree.NameEd   #3'УчЕд'                     ('Наименование учетной единицы измерения')  : [10], Protect;
+  SpSoprTree.Price    #3'Цена',#3'без налогов'     ('Цена без налогов по позиции в НДЕ')       : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTree.Summa    #3'Стоимость',#3'без налогов'('Стоимость без налогов по позиции в НДЕ')  : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTree.NDS      #3'Сумма',#3'НДС'            ('Сумма налога НДС по позиции')             : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTree.SummaNDS #3'Стоимость',#3'с НДС'      ('Стоимость с налогом НДС по позиции')      : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  s_SimvRub           #3'НДЕ'                      ('Символ НДЕ')                              : [4], Protect;
+End;
+//------------------------------------------------------------------------------
+Screen scrReport (, , sci1Esc);
+  Show At (,19,,24)
+Bevel b1 {  1, 0,  34, 6, bsLowered, bsFrame};
+Bevel b2 { 34, 0,  67, 6, bsLowered, bsFrame};
+Bevel b3 { 67, 0, 102, 6, bsLowered, bsFrame};
+Bevel b4 {102, 0, 137, 6, bsLowered, bsFrame};
+Fields
+  SpSoprTree.PlKol                            ('Количество оплаченное')                         : [prSignsInKol, '\3p[|-]36`666`666`666`666.888']   , Protect;
+  SpSoprTree.Kol - SpSoprTree.PlKol
+  + SpSoprTree.Kol_ONP                        ('Количество неоплаченное')                       : [prSignsInKol, '\3p[|-]36`666`666`666`666.888']   , Protect;
+  SpSoprTree.PlSumma                          ('Оплаченная стоимость без налогов в НДЕ')        : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTree.Summa - SpSoprTree.PlSumma
+  + SpSoprTree.Summa_ONP                      ('Неоплаченная стоимость без налогов в НДЕ')      : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  AllPlSumma                                  ('Общая оплаченная стоимость без налогов в НДЕ')  : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect, {Font = {Bold = TRUE}};
+  AllSumma - AllPlSumma                       ('Общая неоплаченная стоимость без налогов в НДЕ'): [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect, {Font = {Bold = TRUE}};
+  SpSoprTree.PlNDS                            ('Оплаченная сумма налога НДС')                   : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTree.NDS - SpSoprTree.PlNDS
+  + SpSoprTree.NDS_ONP                        ('Неоплаченная сумма налога НДС')                 : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  AllPlNDS                                    ('Общая оплаченная сумма налога НДС')             : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect, {Font = {Bold = TRUE}};
+  AllNDS - AllPlNDS                           ('Общая неоплаченная сумма налога НДС')           : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect, {Font = {Bold = TRUE}};
+  SpSoprTree.PlSummaNDS                       ('Оплаченная стоимость с налогом НДС')            : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTree.SummaNDS - SpSoprTree.PlSummaNDS
+  + SpSoprTree.SummaNDS_ONP                   ('Неоплаченная стоимость с налогом НДС')          : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  AllPlSummaNDS                               ('Общая оплаченная стоимость с налогом НДС')      : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect, {Font = {Bold = TRUE}};
+  AllSummaNDS - AllPlSummaNDS                 ('Общая неоплаченная стоимость с налогом НДС')    : [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect, {Font = {Bold = TRUE}};
+
+<<
+   Итого оплачено                   Итого не оплачено                ВСЕГО ОПЛАЧЕНО                     ВСЕГО НЕ ОПЛАЧЕНО
+ `Количество`       .@@@@@@@@@@@@ `Количество`       .@@@@@@@@@@@@
+ `Стоимость без НДС`.@@@@@@@@@@@@ `Стоимость без НДС`.@@@@@@@@@@@@ `Стоимость без НДС`.@@@@@@@@@@@@@@ `Стоимость без НДС`.@@@@@@@@@@@@@@
+ `Сумма НДС`        .@@@@@@@@@@@@ `Сумма НДС`        .@@@@@@@@@@@@ `Сумма НДС`        .@@@@@@@@@@@@@@ `Сумма НДС`        .@@@@@@@@@@@@@@
+ `Стоимость с НДС`  .@@@@@@@@@@@@ `Стоимость с НДС`  .@@@@@@@@@@@@ `Стоимость с НДС`  .@@@@@@@@@@@@@@ `Стоимость с НДС`  .@@@@@@@@@@@@@@
+>>
+end;
+//------------------------------------------------------------------------------
+
+HandleEvent
+cmTreeTop:
+  CurNode := 0;
+
+cmTreeUp:
+  CurNode := SpSoprTree.cMemSpSopr;
+
+cmTreeDown:
+  CurNode := SpSoprTree.NRec;
+
+cmTreeNodeType:
+  if (SpSoprTree.wItog = ndNakl)
+    TreeSetNodeType(trReport, 2);
+End;
+End;//panel
+
+//******************************************************************************
+// Запись числа (ноль вместо пустого текста)
+Procedure XLS_SetTblNumberFldValue(fName: string; dValue: double);
+{
+  if (dValue = 0)
+    pXL.SetTblStringFldValue(fName, '')
+  else
+    pXL.SetTblNumberFldValue(fName, dValue);
+}
+
+//******************************************************************************
+// печать отчета
+Procedure PrintDocument;
+{
+  sRepName := 'L_SoprDoc\SoprNalReg';
+
+  if (NOT ReadMyDsk(sXLTFileName, sRepName, TRUE))
+    sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + sRepName + '.xlt';
+
+  if (NOT pXLRep.CheckParam(0, sRepName, sXLTFileName))
+    RunInterface('XlRepSetup', 1, sRepName, sXLTFileName);
+
+  StartNewVisual(vtRotateVisual, vfTimer, Chr(3) + 'Формирование отчета...', 1);
+
+!  sXLSFileName := pXL.CreateXLT(sXLTFileName, True);
+  sXLSFileName := pXL.CreateReport(sXLTFileName, True);
+
+  pXL.CreateVar(sXLSFileName);
+  pXL.SetStringVar('CFH', CommonFormHeader);
+  pXL.SetStringVar('CurDate', DateToStr(Cur_Date, 'DD.MM.YYYY'));
+  pXL.SetStringVar('BegDate', DateToStr(dBegDate, 'DD.MM.YYYY'));
+  pXL.SetStringVar('EndDate', DateToStr(dEndDate, 'DD.MM.YYYY'));
+  pXL.SetNumberVar('AllSumma'      , AllOprSumma);
+  pXL.SetNumberVar('AllNDS'        , AllOprNDS);
+  pXL.SetNumberVar('AllSummaNDS'   , AllOprSummaNDS);
+  pXL.SetNumberVar('AllOprSumma'   , AllSumma    - AllPlSumma);
+  pXL.SetNumberVar('AllOprNDS'     , AllNDS      - AllPlNDS);
+  pXL.SetNumberVar('AllOprSummaNDS', AllSummaNDS - AllPlSummaNDS);
+  pXL.SetNumberVar('AllPlSumma'    , AllPlSumma);
+  pXL.SetNumberVar('AllPlNDS'      , AllPlNDS);
+  pXL.SetNumberVar('AllPlSummaNDS' , AllPlSummaNDS);
+  pXL.PublishVar;
+
+  pXL.CreateTbls(sXLSFileName);
+  pXL.CreateTbl('NalReg');
+  // оприходовано
+  pXL.CreateTblFld('KodMC');
+  pXL.CreateTblFld('NameMC');
+  pXL.CreateTblFld('OrgName');
+  pXL.CreateTblFld('NSopr');
+  pXL.CreateTblFld('DOpr');
+  pXL.CreateTblFld('Kol');
+  pXL.CreateTblFld('UthEd');
+  pXL.CreateTblFld('Price');
+  pXL.CreateTblFld('Summa');
+  pXL.CreateTblFld('NDS');
+  pXL.CreateTblFld('SumNds');
+  // оплачено
+  pXL.CreateTblFld('DOpl');
+  pXL.CreateTblFld('NPlPor');
+  pXL.CreateTblFld('KolPl');
+  pXL.CreateTblFld('UthEdpl');
+  pXL.CreateTblFld('SummaPl');
+  pXL.CreateTblFld('NDSPl');
+  pXL.CreateTblFld('SumNdsPl');
+  // разница
+  pXL.CreateTblFld('IKol');
+  pXL.CreateTblFld('ISumma');
+
+  TreePushPos(trReport);
+
+  if (TreeGetFirstEx(trReport))
+    do
+    {
+      pXL.ClearTblBuffer;
+      // оприходовано
+      if (SpSoprTree.wItog = ndNakl)
+      {
+        pXL.SetTblStringFldValue('KodMC'   , '');
+        pXL.SetTblStringFldValue('NameMC'  , '');
+        pXL.SetTblStringFldValue('OrgName' , SpSoprTree.ExtName);
+        pXL.SetTblStringFldValue('NSopr'   , SoprTree.nSopr);
+        pXL.SetTblStringFldValue('DOpr'    , if (SoprTree.dOpr = Date(0,0,0), '', DateToStr(SoprTree.dOpr, 'DD/MM/YYYY')));
+        XLS_SetTblNumberFldValue('Kol'     , if (SpSoprTree.wValid = 1, 0, SpSoprTree.Kol));
+        pXL.SetTblStringFldValue('UthEd'   , SpSoprTree.NameEd);
+        XLS_SetTblNumberFldValue('Price'   , if (SpSoprTree.wValid = 1, 0, SpSoprTree.Price));
+      }
+      else
+      {
+        pXL.SetTblStringFldValue('KodMC'   , if (SpSoprTree.wItog = ndGroup, SpSoprTree.Name, ''));
+        pXL.SetTblStringFldValue('NameMC'  , if (SpSoprTree.wItog = ndMC, SpSoprTree.Name, ''));
+        pXL.SetTblStringFldValue('OrgName' , '');
+        pXL.SetTblStringFldValue('NSopr'   , '');
+        pXL.SetTblStringFldValue('DOpr'    , '');
+        XLS_SetTblNumberFldValue('Kol'     , 0);
+        pXL.SetTblStringFldValue('UthEd'   , '');
+        XLS_SetTblNumberFldValue('Price'   , 0);
+      }
+
+      XLS_SetTblNumberFldValue('Summa'   , if (SpSoprTree.wValid = 1, 0, SpSoprTree.Summa));
+      XLS_SetTblNumberFldValue('NDS'     , if (SpSoprTree.wValid = 1, 0, SpSoprTree.NDS));
+      XLS_SetTblNumberFldValue('SumNds'  , if (SpSoprTree.wValid = 1, 0, SpSoprTree.SummaNDS));
+      // оплачено
+      pXL.SetTblStringFldValue('DOpl'    , '');
+      pXL.SetTblStringFldValue('NPlPor'  , '');
+
+      if (SpSoprTree.wItog = ndNakl)
+      {
+        XLS_SetTblNumberFldValue('KolPl'   , SpSoprTree.PlKol);
+        pXL.SetTblStringFldValue('UthEdpl' , SpSoprTree.NameEd);
+      }
+      else
+      {
+        XLS_SetTblNumberFldValue('KolPl'   , 0);
+        pXL.SetTblStringFldValue('UthEdpl' , '');
+      }
+
+      XLS_SetTblNumberFldValue('SummaPl' , SpSoprTree.PlSumma);
+      XLS_SetTblNumberFldValue('NDSPl'   , SpSoprTree.PlNDS);
+      XLS_SetTblNumberFldValue('SumNdsPl', SpSoprTree.PlSummaNDS);
+      // разница
+      XLS_SetTblNumberFldValue('IKol'    , if (SpSoprTree.wValid = 1 OR SpSoprTree.Kol = 0, 0,
+                                               SpSoprTree.Kol - SpSoprTree.PlKol));
+      XLS_SetTblNumberFldValue('ISumma'  , if (SpSoprTree.wValid = 1 OR SpSoprTree.Kol = 0, 0,
+                                               SpSoprTree.SummaNDS - SpSoprTree.PlSummaNDS));
+
+      pXL.InsTblRow;
+
+      // оплата
+      _LOOP SpSoprTreePl
+      {
+        pXL.SetTblStringFldValue('KodMC'   , '');
+        pXL.SetTblStringFldValue('NameMC'  , '');
+        pXL.SetTblStringFldValue('OrgName' , '');
+        pXL.SetTblStringFldValue('NSopr'   , '');
+        pXL.SetTblStringFldValue('DOpr'    , '');
+        XLS_SetTblNumberFldValue('Kol'     , 0);
+        pXL.SetTblStringFldValue('UthEd'   , '');
+        XLS_SetTblNumberFldValue('Price'   , 0);
+        XLS_SetTblNumberFldValue('Summa'   , 0);
+        XLS_SetTblNumberFldValue('NDS'     , 0);
+        XLS_SetTblNumberFldValue('SumNds'  , 0);
+        // оплачено
+        pXL.SetTblStringFldValue('DOpl'    , if (SpSoprTreePl.PlDateOpl = Date(0,0,0), '', DateToStr(SpSoprTreePl.PlDateOpl, 'DD/MM/YYYY')));
+        pXL.SetTblStringFldValue('NPlPor'  , SpSoprTreePl.PlNoDoc);
+        XLS_SetTblNumberFldValue('KolPl'   , SpSoprTreePl.PlKol);
+        pXL.SetTblStringFldValue('UthEdpl' , SpSoprTreePl.NameEd);
+        XLS_SetTblNumberFldValue('SummaPl' , SpSoprTreePl.PlSumma);
+        XLS_SetTblNumberFldValue('NDSPl'   , SpSoprTreePl.PlNDS);
+        XLS_SetTblNumberFldValue('SumNdsPl', SpSoprTreePl.PlSummaNDS);
+        // разница
+        XLS_SetTblNumberFldValue('IKol'    , 0);
+        XLS_SetTblNumberFldValue('ISumma'  , 0);
+
+        pXL.InsTblRow;
+      }
+    }
+    while TreeGetNextEx(trReport) AND NextVisual;
+
+  TreePopPos(trReport);
+
+  pXL.PublishTbl('NalReg');
+  pXL.LoadReport(sXLSFileName);
+
+  StopVisual('', 0);
+
+  pXL.DisConnectExcel;
+
+  ReScanPanel(#SpSoprTree);
+  ReReadRecord(#SpSoprTree);
+}
+
+//******************************************************************************
+Panel panReport2;
+  Table SpSoprTreePl;
+
+Browse brReport (, , sci1Esc);
+  Show At (,25,,)
+Fields
+  SpSoprTreePl.PlNoDoc    #3'Номер ПП'                 ('Номер платежного поручения')              : [8], Protect;
+  SpSoprTreePl.PlDateOpl  #3'Дата',#3'оплаты'          ('Дата оплаты платежного поручения')        : [10, 'DD/MM/YYYY'], Protect;
+  SpSoprTreePl.PlKol      #3'Количество'               ('Количество оплаченное')                   : [12], [prSignsInKol, '\3p[|-]36`666`666`666`666.888'], Protect;
+  SpSoprTreePl.NameEd     #3'УчЕд'                     ('Наименование учетной единицы измерения')  : [10], Protect;
+  SpSoprTreePl.PlPrice    #3'Цена',#3'без налогов'     ('Цена без налогов в НДЕ')                  : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTreePl.PlSumma    #3'Стоимость',#3'без налогов'('Оплаченная стоимость без налогов в НДЕ')  : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTreePl.PlNDS      #3'Сумма',#3'НДС'            ('Оплаченная сумма налога НДС')             : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  SpSoprTreePl.PlSummaNDS #3'Стоимость',#3'с НДС'      ('Оплаченная стоимость с налогом НДС')      : [17], [brForSopr_Price, '\2p[|-]36`666`666`666`666.88'], Protect;
+  s_SimvRub               #3'НДЕ'                      ('Символ НДЕ')                              : [4], Protect;
+End;
+
+HandleEvent
+End;
+End;//panel
+
+//******************************************************************************
+Window winParam 'Параметры отчета' EscClose, doAccept;
+  Show At (,,113,14)
+
+Screen scrParams (,,sci1EnEsc);
+Table KatSopr;
+  Bevel b3 { 0, 4, 112, 12, bsLowered, bsFrame};
+Fields
+  dBegDate     ('Начальная дата фильтра'): NoProtect;
+  dEndDate     ('Конечная дата фильтра') : NoProtect;
+  wDocs        ('Обработка документов'      ,,sci13Esc): [LIST 'все документы', 'только накладные', 'только акты'], Protect;
+  wMcUsl       ('Включение в отчет МЦ/Услуг',,sci13Esc): [LIST 'МЦ и услуги', 'только МЦ', 'только услуги'], Protect;
+  wPlat        ('Включать платежи в отчет'  ,,sci13Esc): NoProtect;
+  wNalogs      ('Включать налоги в отчет'   ,,sci13Esc): [LIST 'все налоги', 'только НДС'], Protect;
+  wFilter      ('Установленные фильтры') : NoProtect;
+  dBegDOpr     ('Начальная дата оприходования(исполнения)'): NoProtect;
+  dEndDOpr     ('Конечная дата оприходования(исполнения)') : NoProtect;
+  fCountMarkDescr   : Skip, {Font = {Bold = TRUE}};
+  sMarkDescr   ('Множественный фильтр по дескрипторам        ',,sci13Esc): Protect;
+  fCountMarkMC      : Skip, {Font = {Bold = TRUE}};
+  sMarkMC      ('Множественный фильтр по матценностям        ',,sci13Esc): Protect;
+  fCountMarkUsl     : Skip, {Font = {Bold = TRUE}};
+  sMarkUsl     ('Множественный фильтр по услугам             ',,sci13Esc): Protect;
+  fCountMarkGroupMC : Skip, {Font = {Bold = TRUE}};
+  sMarkGroupMC ('Множественный фильтр по группам матценностей',,sci13Esc): Protect;
+  fCountMarkGroupUsl: Skip, {Font = {Bold = TRUE}};
+  sMarkGroupUsl('Множественный фильтр по группам услуг       ',,sci13Esc): Protect;
+Buttons
+  cmOk,    ,,'Продолжить' ,,sci1Esc;
+  cmCancel,,,'Применить'  ,,sci1Esc;
+<<
+  Период:`с`.@@@@@@@@@@ `по`.@@@@@@@@@@
+ `Обработка документов`.@@@@@@@@@@@@@@@@@@@@    Включать платежи
+ `Обработка МЦ/Услуг`  .@@@@@@@@@@@@@@@@@@@@    [.] за отчетный период`
+ `Включать налоги`     .@@@@@@@@@@@@@@@@@@@@    [.] по документам отчетного периода`
+Фильтры по документам
+  [.] дате оприходования` `c` .@@@@@@@@@@@ `по` .@@@@@@@@@@@ (для поиска платежей)
+  [.] дескрипторам`        .@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] матценностям`        .@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] услугам     `        .@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группам матценностей`.@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  [.] группам услуг`       .@@.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+                <.      Продолжить      .>                          <.       Отменить       .>
+>>
+end;
+
+Handleevent
+cmInit:
+{
+  if (NOT ReadMyDsk (dBegDate, 'SoprNakReg_dBegDate', FALSE))
+    dBegDate := Date(01, Month(Cur_Date), Year(Cur_Date));
+
+  if (NOT ReadMyDsk (dEndDate, 'SoprNakReg_dEndDate', FALSE))
+    dEndDate := Date(Last_day(Cur_Date), Month(Cur_Date), Year(Cur_Date));
+
+  if (NOT ReadMyDsk (dBegDOpr, 'SoprNakReg_dBegDOpr', FALSE))
+    dBegDOpr := Date(01, Month(Cur_Date), Year(Cur_Date));
+
+  if (NOT ReadMyDsk (dEndDOpr, 'SoprNakReg_dEndDOpr', FALSE))
+    dEndDOpr := Date(Last_day(Cur_Date), Month(Cur_Date), Year(Cur_Date));
+
+  if (NOT ReadMyDsk (wFilter, 'SoprNakReg_wFilter', FALSE))
+    wFilter := 0;
+
+  if (NOT ReadMyDsk (wNalogs, 'SoprNakReg_wNalogs', FALSE))
+    wNalogs := 0;
+
+  if (NOT ReadMyDsk (wPlat, 'SoprNakReg_wPlat', FALSE))
+    wPlat := 3;
+
+  if (NOT ReadMyDsk (wDocs  , 'SoprNakReg_wDocs'  , FALSE))
+    wDocs := 0;
+
+  if (NOT ReadMyDsk (wMCUsl , 'SoprNakReg_wMCUsl' , FALSE))
+    wMCUsl := 0;
+
+  // установка значений из маркеров
+  DoneMarkers;
+  PickRep2Markers;
+  InitMarkers;
+  GetNameElems;
+  CheckFilterMask;
+  CheckPlatMask;
+}
+
+cmOk:
+{
+  PutCommand(cmDefault);
+}
+
+cmDefault:
+{
+  SaveMyDsk (dBegDate, 'SoprNakReg_dBegDate');
+  SaveMyDsk (dEndDate, 'SoprNakReg_dEndDate');
+  SaveMyDsk (dBegDOpr, 'SoprNakReg_dBegDOpr');
+  SaveMyDsk (dEndDOpr, 'SoprNakReg_dEndDOpr');
+  SaveMyDsk (wFilter , 'SoprNakReg_wFilter' );
+  SaveMyDsk (wNalogs , 'SoprNakReg_wNalogs' );
+  SaveMyDsk (wPlat   , 'SoprNakReg_wPlat'   );
+  SaveMyDsk (wDocs   , 'SoprNakReg_wDocs'   );
+  SaveMyDsk (wMCUsl  , 'SoprNakReg_wMCUsl'  );
+
+  // сохранение выбранных элементов во временные таблицы
+  DoneMarkers;
+  Markers2PickRep;
+  InitMarkers;
+
+  AllSumma    := 0; AllNDS    := 0; AllSummaNDS    := 0;
+  AllPlSumma  := 0; AllPlNDS  := 0; AllPlSummaNDS  := 0;
+  AllOprSumma := 0; AllOprNDS := 0; AllOprSummaNDS := 0;
+
+  // формирование регистра
+  Delete All MemSopr;
+  Delete All MemSpSopr;
+
+  ResetBounds(#KatSopr);
+  ResetBounds(#SpSopr);
+  ResetBounds(#SpDocNal);
+  ResetBounds(#SpSoprTreePl);
+
+  // ограничения по датам
+  if ((wFilter AND 1) = 1)
+    PushBounds(tbSoprDOpr)
+  else
+    PushBounds(tbAllSopr);
+
+  // ограничения по платежам
+  if ((wPlat AND 2) = 2)
+    PushBounds(tbAllPlat)
+  else
+    PushBounds(tbPlatDate);
+
+  // ограничения на налоги
+  if (wNalogs = 0)
+    PushBounds(tbAllNal)
+  else
+    PushBounds(tbNalNDS);
+
+  // ограничения на МЦ/Услуги
+  case wMCUsl of
+    0: PushBounds(tbAllMCUsl);
+    1: PushBounds(tbAllMC);
+    2: PushBounds(tbAllUsl);
+  end;
+
+  // обработка документов
+  if (wDocs <> 2)
+    MakeMemTbl(101);
+
+  if (wDocs <> 2)
+    MakeMemTbl(108);
+
+  if (wDocs <> 1)
+    MakeMemTbl(111);
+
+  CurNode := 0;
+
+  ReReadRecord(#SpSoprTree);
+
+  SetTitle('Налоговый регистр по учету материальных расходов. Период с '
+            + DateToStr(dBegDate, 'DD/MM/YYYY') + ' по ' + DateToStr(dEndDate, 'DD/MM/YYYY гг.'));
+}
+
+end;
+end;//window
+
+Panel pnKatSopr;
+  Table KatSopr;
+
+Handleevent
+
+cmCheckField:
+{
+  case CurField of
+    #wFilter:
+    {
+      CheckFilterMask;
+    }
+
+    #wPlat:
+    {
+      CheckPlatMask;
+    }
+
+    #dBegDate:
+    {
+      if (dBegDate = 0)
+        dBegDate := Cur_Date;
+
+      if (dBegDate > dEndDate)
+        set dEndDate := dBegDate;
+
+      CheckPlatMask;
+    }
+
+    #dEndDate:
+    {
+      if (dEndDate = 0)
+        dEndDate := Cur_Date;
+
+      if (dBegDate > dEndDate)
+        set dBegDate := dEndDate;
+
+      CheckPlatMask;
+    }
+
+    #dBegDOpr:
+    {
+      if (dBegDOpr = 0)
+        dBegDOpr := Cur_Date;
+
+      if (dBegDOpr > dEndDOpr)
+        set dEndDOpr := dBegDOpr;
+    }
+
+    #dEndDOpr:
+    {
+      if (dEndDOpr = 0)
+        dEndDOpr := Cur_Date;
+
+      if (dBegDOpr > dEndDOpr)
+        set dBegDOpr := dEndDOpr;
+    }
+
+  end;
+}
+
+cmPick:
+{
+  case CurField of
+    #sMarkDescr:
+    {
+      DoneMarker(MarkDescr, mnDescr);
+
+      if ( RunInterface('GetSomeDescr', TRUE) = cmDefault )
+      {
+        MarkDescr      := InitMarker(mnDescr, 8, 100, 10, FALSE);
+        set sMarkDescr := GetNameElem(MarkDescr, wDescr);
+      }
+    }
+
+    #sMarkMC:
+      {
+        Delete Pick where (( wMC == Pick.wList));
+        CopyMarkerInPick(mnMC, wMC, 0);
+        DoneMarker(MarkMC, mnMC);
+
+        if ( RunInterface('GetSomeMC', Comp(-12347)) <> cmCancel )
+        {
+          CopyPickInMarker(wMC, mnMC);
+          MarkMC := InitMarker(mnMC, 8, 100, 10, FALSE);
+          set sMarkMC := GetNameElem(MarkMC, wMC);
+        }
+      }
+
+    #sMarkUsl:
+      {
+        Delete Pick where (( wUsl == Pick.wList));
+        CopyMarkerInPick(mnUsl, wUsl, 0);
+        DoneMarker(MarkUsl, mnUsl);
+
+        if ( RunInterface('GetSomeUsl', Comp(-12347)) <> cmCancel )
+        {
+          CopyPickInMarker(wUsl, mnUsl);
+          MarkUsl := InitMarker(mnUsl, 8, 100, 10, FALSE);
+          set sMarkUsl := GetNameElem(MarkUsl, wUsl);
+        }
+      }
+
+    #sMarkGroupMC:
+      {
+        Delete Pick where (( wGroupMC == Pick.wList));
+        CopyMarkerInPick(mnGroupMC, wGroupMC, 0);
+        DoneMarker(MarkGroupMC, mnGroupMC);
+
+        if ( RunInterface('GetGrMCS', comp(0), '', TRUE) <> cmCancel )
+        {
+          CopyPickInMarker(wGroupMC, mnGroupMC);
+          MarkGroupMC := InitMarker(mnGroupMC, 8, 100, 10, FALSE);
+          set sMarkGroupMC := GetNameElem(MarkGroupMC, wGroupMC);
+        }
+      }
+
+    #sMarkGroupUsl:
+      {
+        Delete Pick where (( Word(5) == Pick.wList));
+        CopyMarkerInPick(mnGroupUsl, wGroupUsl, 0);
+        DoneMarker(MarkGroupUsl, mnGroupUsl);
+
+        if ( RunInterface('GetGrUslS', comp(0), '', TRUE) <> cmCancel )
+        {
+          CopyPickInMarker(wGroupUsl, mnGroupUsl);
+          MarkGroupUsl := InitMarker(mnGroupUsl, 8, 100, 10, FALSE);
+          set sMarkGroupUsl := GetNameElem(MarkGroupUsl, wGroupUsl);
+        }
+      }
+  end;
+}
+
+cmDelOnProtect:
+{
+  case CurField of
+    #sMarkDescr:
+    {
+      set sMarkDescr := 'по всем дескрипторам';
+      ClearMarker(MarkDescr);
+    }
+
+    #sMarkMC:
+    {
+      set sMarkMC := 'по всем матценностям';
+      ClearMarker(MarkMC);
+    }
+
+    #sMarkUsl:
+    {
+      set sMarkUsl := 'по всем услугам';
+      ClearMarker(MarkUsl);
+    }
+
+    #sMarkGroupMC:
+    {
+      set sMarkGroupMC := 'по всем группам матценностей';
+      ClearMarker(MarkGroupMC);
+    }
+
+    #sMarkGroupUsl:
+    {
+      set sMarkGroupUsl := 'по всем группам услуг';
+      ClearMarker(MarkGroupUsl);
+    }
+
+  end;
+}
+
+end;
+end;//panel
+
+//******************************************************************************
+Handleevent
+cmInit:
+{
+  InitMarkers;
+
+  // Форамат отображения
+  SetRoundFormat(101);
+  Cena_Pr    := GetPrecisionGroup('brForSopr_RVPrice');
+  Cena_PrR   := GetPrecisionGroup('brForSopr_Price');
+  Cena_PrV   := GetPrecisionGroup('brForSopr_VPrice');
+  Kol_Pr     := GetDlinaDrob_forKol;
+  s_SimvRub  := sGetTune ('NDE.SimvRub');
+  s_SimvRub  := if (s_SimvRub = '', 'руб', s_SimvRub);
+  cNalNDS    := coGetTune('Nalog.cNalogNDS');
+
+  if (GetFirst UserDeskRep <> tsOk)
+  {
+    UserDeskRep.OwnName := UserName;
+    UserDeskRep.nRep    := NReport;
+    Insert Current UserDeskRep;
+  }
+
+  if (RunWindowModal(winParam) = cmCancel)
+  {
+    ClearMarkers;
+    DoneMarkers;
+    Abort;
+    Exit;
+  }
+}
+
+cmManagerID:
+{
+  RunWindowModal(winParam);
+  CurNode := 0;
+  ReReadRecord(#SpSoprTree);
+  TreeGetFirst(trReport);
+  RescanPanel(trReport);
+}
+
+cmEdit:
+  iEditDoc.RunEditHozDoc(coKatSopr, SoprTree.VidSopr, SoprTree.VidSopr, SoprTree.cKatSopr);
+
+cmHotkeys:
+{
+  PutHotCommand(RunMenu('mnuSoprNalReg'))
+}
+
+cmDone:
+{
+  ClearMarkers;
+  DoneMarkers;
+}
+
+cmPrintDoc:
+{
+  PrintDocument;
+}
+
+cmValue1:
+{
+  if (NOT ReadMyDsk(sXLTFileName, sRepName, TRUE))
+    sXLTFileName := TranslatePath('%ClientStartPath%') + 'XLS\' + sRepName + '.xlt';
+
+  RunInterface('XlRepSetup', 1, sRepName, sXLTFileName);
+}
+
+end;
+End.
+
+mnuSoprNalReg Menu
+{
+-'Печать документа', cmPrintDoc, 'Печать документа',hci_nakl_Uchet_MRasxod,'Ctrl+P',kbAltM,sci1Esc;
+-'Переформирование регистра', cmManagerID, 'Переформирование регистра',hci_nakl_Uchet_MRasxod,'Alt+M',kbAltM,sci1Esc;
+-'Сопроводительный документ', cmEdit, 'Редактирование сопроводительного документа',hci_nakl_Uchet_MRasxod,'',,sci1Esc;
+-'Настройка XLT-шаблона', cmValue1, 'Настройка XLT-шаблона',hci_nakl_Uchet_MRasxod,'',,sci1Esc;
+}

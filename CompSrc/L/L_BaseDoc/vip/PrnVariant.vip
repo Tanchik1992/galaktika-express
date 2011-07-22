@@ -1,0 +1,218 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 8.1 - логистика
+// Интерфейс вариантов наименований для МЦ/услуг
+//******************************************************************************
+//╔══════════════════════════════════════════════════════════════════════════════╗
+//║ Назначение    : Использование вариантов наименования МЦ/Услуг                ║
+//║ Параметры     : 1-й  pBaseDoc  - ссылка на ДО                                ║
+//╚══════════════════════════════════════════════════════════════════════════════╝
+
+#include ExtAttrClass.vih
+#include VarNameMCU.vih
+
+#doc
+Назначение:
+  Использование вариантов наименования МЦ/Услуг
+
+Параметры:
+  pBaseDoc  - ссылка на ДО
+#end
+Interface PrnVariant 'Укажите варианты наименований для МЦ/услуг' doAccept, EscClose, Cyan;
+  Show At (10,,70,20)
+
+Table STRUCT TmpVarSpStep
+(
+  cRec     : tNrec      "SpStep.nRec",
+  NPP      : word       "SpStep.NPP (для сортировки)"
+)
+with index
+(
+  TmpVarSpStep01 = NPP
+);
+
+
+Const
+  strVariantName = 'ВАРИАНТ НАИМЕНОВАНИЯ';
+end;
+
+Create View
+Var
+  pBaseDoc    : comp;   // ссылка на ДО
+
+  piExAttr    : iExtAttr;
+  Title       : string;
+
+As select
+//------------------------------------------------------------------------------
+  if (SpStepTmp.PrMC = 1, 'Т', 'У')
+    ( FieldName = PrMcUsl )
+//------------------------------------------------------------------------------
+, if (SpStepTmp.PrMC = 1, KatMc.Name, KatUsl.Name)
+    ( FieldName = NameMcUsl )
+//------------------------------------------------------------------------------
+, piExAttr.sGetAttr (coSpStep, SpStepTmp.NRec, strVariantName)
+    ( FieldName = VariantName )
+//------------------------------------------------------------------------------
+, *
+
+from
+  SpStep
+, SpStep SpStepTmp
+, SpStep SpStep1
+, KatOrg
+, KatMC
+, KatUsl
+, BaseDoc
+, StepDoc
+, CatalPSD
+, TmpVarSpStep
+
+where
+((
+       SpStepTmp.cMcUsl  ==  KatMC.NRec
+  AND  SpStepTmp.cMcUsl  ==  KatUsl.NRec
+
+  AND  pBaseDoc          ==  BaseDoc.NRec
+  AND  pBaseDoc          ==  StepDoc.cBaseDoc
+  AND  StepDoc.nRec      ==  SpStep.cStepDoc
+
+  AND  BaseDoc.cOrg      ==  KatOrg.NRec
+
+  AND  TmpVarSpStep.cRec ==  SpStepTmp.nRec
+
+))
+;
+
+Parameters
+  pBaseDoc
+;
+
+// выбор записей по которым имеются варианты наименования
+Function FillTmpSpStep: boolean;
+var
+  isNeedInsert: boolean;
+{
+  FillTmpSpStep := FALSE;
+
+  Delete All TmpVarSpStep;
+
+  _Loop SpStep
+  {
+    isNeedInsert := FALSE;
+
+    if (SpStep.PrMC = 1)
+    {
+      // поиск хотя бы одного значения варианта для МЦ
+      if GetFirst FastFirstRow CatalPSD where (( cgi_VarNameKat_KatMC == CatalPSD.vidCatal  AND
+                                                 SpStep.cMcUsl        == CatalPSD.cRec )) = tsOk
+        isNeedInsert := TRUE;
+    }
+    else
+    {
+      // поиск хотя бы одного значения варианта для услуги
+      if GetFirst FastFirstRow CatalPSD where (( cgi_VarNameKat_KatUsl == CatalPSD.vidCatal  AND
+                                                 SpStep.cMcUsl         == CatalPSD.cRec )) = tsOk
+        isNeedInsert := TRUE;
+    }
+
+    // вставка записи
+    if (isNeedInsert)
+    {
+      ClearBuffer(#TmpVarSpStep);
+      TmpVarSpStep.cRec := SpStep.NRec;
+      TmpVarSpStep.NPP  := SpStep.NPP;
+      Insert Current TmpVarSpStep;
+
+      FillTmpSpStep := TRUE;
+    }
+  }
+}
+
+Screen scrPrnVariatMcUsl
+  Show At (,,,4);
+Table BaseDoc;
+Fields
+  Title         : Skip, {Font = {Bold = true}};
+  BaseDoc.NoDoc : Skip, {Font = {Bold = true}};
+  BaseDoc.dDoc  : ['DD/MM/YYYY'], Skip, {Font = {Bold = true}};
+  BaseDoc.Descr : Skip, {Font = {Bold = true}};
+  KatOrg.Name   : Skip, {Font = {Bold = true}};
+<<
+  .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  № .@@@@@@@@@@@@ от .@@@@@@@@@  создал .@@@@@@@@@@@@@
+  Контрагент.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+>>
+end;
+
+Panel pnPrnVariatMcUsl
+Table TmpVarSpStep
+
+Browse brPrnVariatMcUsl
+  Show At (,5,,)
+Fields
+  TmpVarSpStep.NPP  '№' ('Номер по порядку'  ,,sci1Esc):  [3], Protect, NoDel;
+  PrMcUsl           'Т/У' ('Признак МЦ/услуги' ,,sci1Esc):  [3], Protect, NoDel;
+  NameMcUsl         'Наименование' ('Название МЦ/Услуги',,sci1Esc): [25], Protect, NoDel;
+  VariantName       'Вариант наименования' ('Вариант наименования МЦ/Услуги',,sci13Esc): [25], Protect;
+end;
+
+Handleevent
+cmPick:
+{
+  case CurField of
+    #VariantName:
+    {
+      var tRec: comp;
+      tRec := comp(0);
+
+      if (SpStep1.PrMc = 1)
+        RunInterface(GetVariatMcUsl, SpStepTmp.cMcUsl, cgi_VarNameKat_MC, cgi_VarNameKat_KatMC, tRec);
+      else
+        RunInterface(GetVariatMcUsl, SpStepTmp.cMcUsl, cgi_VarNameKat_Usl, cgi_VarNameKat_KatUsl, tRec);
+
+      // запись выбранного значения варианта во внешний атрибут к спецификации
+      if ( GetFirst CatalPSD where (( tRec == CatalPSD.NRec )) = tsOk )
+        piExAttr.sSetAttr(coSpStep, TmpVarSpStep.cRec, strVariantName, CatalPSD.Prim);
+
+      ReReadRecord(#TmpVarSpStep);
+    }
+  end;
+}
+
+cmDelOnProtect:
+{
+  case CurField of
+    #VariantName:
+    {
+      piExAttr.DeleteValue(coSpStep, TmpVarSpStep.cRec, strVariantName);
+      ReReadRecord(#TmpVarSpStep);
+    }
+  end;
+}
+
+end;
+end; // panel
+
+Handleevent
+cmInit:
+{
+  // внешний атрибут для варианта наименования
+  if ( piExAttr.AttrId(coSpStep, strVariantName) = 0 )
+    piExAttr.CreateAttr(coSpStep, strVariantName, word(0));
+
+  case BaseDoc.VidDoc of
+    101 : Title := 'Основание на закупку';
+    201 : Title := 'Основание на продажу';
+    102 : Title := 'Прием на консигнацию';
+    202 : Title := 'Отпуск на консигнацию';
+    111 : Title := 'Основание на предоплату закупок';
+    211 : Title := 'Основание на предоплату продаж';
+  end;
+
+  if (NOT FillTmpSpStep)
+    Abort;
+}
+
+end;
+end.

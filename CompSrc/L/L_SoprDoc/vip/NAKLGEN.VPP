@@ -1,0 +1,156 @@
+!╔════════════════════════════════════╗
+!║ Общие процедуры для накладных с МЦ ║
+!╚════════════════════════════════════╝
+
+#include mkord.vpp
+
+// Получение информации о наличии МЦ
+Procedure GetNalMC;
+var
+  SaldKol, Kol, KolRash : double;
+  aDate                : Date;
+  aMC                  : Comp;
+  KatOtpEdName : string;
+{
+  if not( (CurTable=#SpSopr) and (SpSopr.cMCUSL <> 0) and (SpSopr.PrMC = 1) )
+    Exit;
+
+  KatOtpEdName:= if( isValid(#KatOtpEd), KatOtpEd.Name,
+                     if( GetFirst KatEd where ((KatMC.cEd == KatEd.nRec))= tsOk,
+                         KatEd.name, 'уч.единица не найдена')
+                   );
+
+  if (KatSopr.TipSopr = 1)
+   // Накладная приходная
+    {
+      InitMCinfo(KatSopr.dSopr);
+      SaldKol := NalT(KatSopr.dSopr, SpSopr.cMCUSL, 0, 0, 0);
+      DoneMCinfo;
+      // подсчет наличия МЦ в розничной торговле
+      aDate := KatSopr.dSopr;
+      aMC   := SpSopr.cMCUSL;
+      Kol := 0;
+      _LOOP KatPodr where ((Word(2) == KatPodr.Sklad))
+        _LOOP rzKutPrih where((aMC ==  rzKutPrih.cMC   and
+                               KatPodr.NRec ==  rzKutPrih.cPodr and
+                                      aDate >>= rzKutPrih.dDoc))
+          {
+            Kol := Kol + rzKutPrih.Kol;    // количество в приходе
+            _LOOP rzKutRash where((rzKutPrih.NRec ==  rzKutRash.cRzPrih and
+                                                   aDate >>= rzKutRash.dDoc ))
+              {
+                KolRash := fEdIzm.GetKoefOtpEd(rzKutRash.cOtpEd) * rzKutRash.Kol;
+                Kol := Kol - KolRash;
+              }
+          }
+      SaldKol := SaldKol + Kol;
+
+      SaldKol := SaldKol / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+      Message(''#3'Наличие "'+KatMC.Name+'" на предприятии на дату выписки документа: '+
+              DoubleToStr(SaldKol,'\4P[|-]3666666666666666.8888')+' ('+KatOtpEdName+')', Information);
+    }
+  else
+   // Накладная расходная
+    {
+      //сальдовый получаем:
+      InitMCinfo(KatSopr.dSopr);
+      SaldKol := NalT( KatSopr.dSopr, SpSopr.cMCUSL,
+                        if( KatSopr.cPodrFrom<>0, KatSopr.cPodrFrom, -1),
+                        if( KatSopr.cMOLFrom <>0, KatSopr.cMOLFrom , -1),
+                        if( SpSopr.cParty    <>0, SpSopr.cParty    , -1) );
+      DoneMCinfo;
+
+      //тек.ост. и резервы получаем:
+      if GetFirst TekSaldo where (( SpSopr.cMCUsl     == TekSaldo.cMC and
+                                    KatSopr.cPodrFrom == TekSaldo.cPodr  and
+                                    KatSopr.cMolFrom  == TekSaldo.cMol and
+                                    SpSopr.cParty     == TekSaldo.cParty)) <>tsOk
+        TekSaldo.kol := 0;
+
+      var resrv: double;
+      case wGetTune('Reserv.PrSchSklad') of
+       0: resrv:= if( GetFirst TekMC where ((SpSopr.cMCUsl == TekMC.cMC)) =tsOk, TekMC.reserve, 0);
+       1: resrv:= if( GetFirst SklOst where (( SpSopr.cMCUsl == SklOst.cMC and
+                         KatSopr.cPodrFrom == SklOst.cPodr)) =tsOk, SklOst.Res, 0);
+       2: resrv:= TekSaldo.res;
+       else resrv:=0;
+      end;//case
+
+      SaldKol      := SaldKol      / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+      TekSaldo.kol := TekSaldo.kol / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+      resrv        := resrv        / fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd);
+
+      var resMeth: string;
+      case wGetTune('Reserv.PrSchSklad') of
+       0: resMeth:='Резерв (по предприятию) : ';
+       1: resMeth:='Резерв (по складу) : ';
+       2: resMeth:='Резерв (по разрезу) : ';
+       else resMeth:='';
+      end;//case
+
+      Message(''#13'"'+KatMC.Name+'"  ('+KatOtpEdName+')'#13+
+              ''#13'Сальд.остаток (в разрезе на дату документа) : ' + DoubleToStr(SaldKol,'\4P[|-]3666666666666666.8888') +
+              ''#13'Тек. наличие (по разрезу) : ' + DoubleToStr(TekSaldo.kol,'\4P[|-]3666666666666666.8888') +
+              ''#13+ resMeth  + DoubleToStr(resrv,'\4P[|-]3666666666666666.8888') + ''#13
+              , Information);
+    } // Накладная расходная
+}
+
+// Получение краткой справки по накладной
+procedure ViewSprTov;
+var SumSt, SumM , SumV : double;
+var OutFlag : boolean;
+{
+  if (not (isValid(#SpSopr)))
+    Exit;
+  StartNewVisual(vtNumericVisual,vfTimer + vfBreak + vfConfirm,
+                 'Формирование справки по документу: ',1);
+  PushPos(#SpSopr);
+  ResetBounds(#SpSopr);
+  SumV :=0; SumM := 0; SumSt := 0;
+  OutFlag := False;
+  SprForm.Write(KatSopr.NRec);
+  _LOOP SpSopr where ((KatSopr.NRec == SpSopr.cSopr and 1 == SpSopr.PrMc))
+    {
+      SprForm.Write(KatMC.NRec);
+      SprForm.Write(KatMC.Name);
+      OutFlag := (not SprForm.Error) or (NextVisual);
+      if (not OutFlag)
+        Break;
+      SprForm.Write(KatMc.BarKod);
+      SprForm.Write(OtpEd);
+      SprForm.Write(SpSopr.KolFact);
+      SprForm.Write(SpSopr.KolFact  * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) * KatMc.Massa);
+      SprForm.Write(SpSopr.KolFact  * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) * KatMc.Volume);
+      SumM := SumM + SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) * KatMc.Massa;
+      SumV := SumV + SpSopr.KolFact * fEdIzm.GetKoefOtpEd(SpSopr.cOtpEd) * KatMc.Volume;
+      SprForm.Write(Valut);
+      SprForm.Write(if (KatSopr.cVal=0,SpSopr.Price,SpSopr.VPrice));
+      SprForm.Write((if (KatSopr.cVal=0,SpSopr.Price,SpSopr.VPrice)) * SpSopr.KolFact);
+      SumSt := SumSt + (if (KatSopr.cVal = 0,SpSopr.Price,SpSopr.VPrice)) * SpSopr.KolFact;
+    }
+  SetBounds(#SpSopr);
+  PopPos(#SpSopr);
+  StopVisual('',vfSilent);
+  if not OutFlag
+    Sprform.AbortForm;
+  else
+    {
+      SprForm.PutEvent(feBreak);
+      Sprform.Write(SumSt);  SprForm.Write(SumM); SprForm.Write(SumV);
+      Sprform.ShowFile('Справка по документу № '+ KatSopr.NSopr);
+    }
+}
+
+function isCanBeModified : boolean;
+{
+  if (GetFirst FastFirstRow SklOrder where ((KatSopr.NRec == SklOrder.cSopr)) <> tsOk)
+    isCanBeModified := true;
+  else
+    {
+      Message(''#3'Накладная не может быть модифицирована, '+
+                 'т.к. по ней уже имеются складские ордера...',CancelButton);
+      isCanBeModified := false;
+    }
+}

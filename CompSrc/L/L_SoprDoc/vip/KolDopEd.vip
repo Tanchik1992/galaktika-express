@@ -1,0 +1,564 @@
+//********************************************************************************
+//                                                        (c) корпорация Галактика
+// Галактика 7.12 - логистика
+// Заполнение значений ДЕИ в номенклатурных документах
+//
+//********************************************************************************
+
+#include oDEI.vih      //Функции доп.ед.изм. (iKatDopEd)
+
+//******************************************************************************
+
+#doc
+Назначение:
+  Заполнение значений ДЕИ в номенклатурных документах
+
+Параметры:
+  coTable   - код таблицы спецификации
+  cRec      - ссылка на спецификацию
+  wTipKol   - тип количества
+  sTitle    - заголовок интерфейса по шаблону: "Ввод количества ..."
+  cMCUsl    - NRec МЦ/услуги
+  PrMC      - 1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+  Price     - цена за 1-у отпускную единицу
+  forPrice  - кол-во знаков после запятой в цене
+  forSumma  - кол-во знаков после запятой в стоимости
+  cVal      - валюта переданной цены
+  cOtpEd    - ссылка на отпускную единицу измерения
+  fKol      - количество в отпускных единицах (возвращаемый параметр)
+  lParam    -  1 - автосоздавать ДЕИ, даже если не стоит настройка AutoDEI
+               0 - во всех остальных случаях
+  pTiDk     - тип документа системный
+#end
+
+//******************************************************************************
+
+Interface KolDopEd (, hcKOU_DOCWDEIKol, sci1Esc) AlwaysReturn, CacheAble;
+
+  Show at (2,12,78,28);
+
+Create view KolDopEd
+
+Var
+  coTable    // код таблицы спецификации
+, wTipKol    // тип количества
+, PrMC       // 1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+, forPrice
+, forSumma
+, pTiDk      // тип документа системный
+             : word;
+
+  cRec       // ссылка на спецификацию
+, cMCUsl     // NRec МЦ/услуги
+, cVal       // валюта переданной цены
+, cOtpEd     // ссылка на отпускную единицу измерения
+             : comp;
+
+  sTitle     // заголовок интерфейса по шаблону: "Ввод количества ..."
+, s_SystDate
+             : string;
+
+  Price      // цена за 1-у отпускную единицу
+, fKol       // количество в отпускных единицах (возвращаемый параметр)
+, SummaTov
+, kolPrev1, kolPrev2, kolPrev3 //333
+             : double;
+
+  lParam     // битовая маска передаваемых параметров
+             : longint;
+
+  UseDEI
+, AutoDEI
+             : boolean;
+
+As select
+  // 1
+  if (  PrMC=1,  '          МЦ' // наименование label
+   , if (PrMC=2, '      Услуга'
+   , if (PrMC=3, '   Группа МЦ'
+   , if (PrMC=4, 'Группа услуг'
+   ,             '         ???' ))))
+                                                      ( FieldName = sSelectLabel )
+
+  // 2
+, if (  PrMC=1,  KatMC.Name     // наименование
+   , if (PrMC=2, KatUsl.Name
+   , if (PrMC=3, GroupMC.Name
+   , if (PrMC=4, GroupUsl.Name
+   ,             '???' ))))
+                                                      ( FieldName = sSelectName )
+  // 3
+, if (cVal = 0
+   , if(s_SystDate <> '', s_SystDate, 'руб.')
+   , KlVal.SimVolV
+     )
+                                                      ( FieldName = sValut )
+
+  // 4
+, if (isValid(tnShbusl), 'расчетная', 'нерасчетная')
+                                                      ( FieldName = CalcEd )
+
+, fKol / if (isValid(tnKatOtpEd), KatOtpEd.Koef, 1)
+                                                      ( FieldName = fKolUth )
+
+From
+  SpDopEd   (SpDopEd04) // wTable + cRec + wTipKol + Npp
+, KatMC
+, KatUsl
+, GroupMC
+, GroupUsl
+, KlVal
+, KatOtpEd
+, KatDopEd
+, KatEd
+, Shbusl
+, Synonym Shbusl Shbusl_back
+
+Where
+((
+    coTable               ==  SpDopEd.wTable
+and cRec                  ==  SpDopEd.cRec
+and wTipKol               ==  SpDopEd.wTipKol
+and cMCUsl                ==  KatMC.nRec
+and cMCUsl                ==  KatUsl.nRec
+and cMCUsl                ==  GroupMC.nRec
+and cMCUsl                ==  GroupUsl.nRec
+
+and cVal                  ==  KlVal.nRec
+and cOtpEd                ==  KatOtpEd.nRec
+and SpDopEd.cDopEd        ==  KatDopEd.nRec
+and KatDopEd.Formula      ==  Shbusl.nRec
+and KatDopEd.BackFormula  ==  Shbusl_back.nRec
+and KatMC.cEd             ==  KatEd.nRec
+))
+;
+
+Parameters
+  coTable   // код таблицы спецификации
+, cRec      // ссылка на спецификацию
+, wTipKol   // тип количества
+, sTitle    // заголовок интерфейса по шаблону: "Ввод количества ..."
+, cMCUsl    // NRec МЦ/услуги
+, PrMC      // 1- МЦ, 2 - услуга, 3 - группа МЦ, 4 - группа услуг
+, Price     // цена за 1-у отпускную единицу
+, forPrice  // кол-во знаков после запятой в цене
+, forSumma  // кол-во знаков после запятой в стоимости
+, cVal      // валюта переданной цены
+, cOtpEd    // ссылка на отпускную единицу измерения
+, fKol      // количество в отпускных единицах (возвращаемый параметр)
+, lParam    // 1-й бит:
+            //   1 - автосоздавать ДЕИ, даже если не стоит настройка AutoDEI
+            //   0 - во всех остальных случаях
+, pTiDk     // тип документа системный
+;
+
+//Form errr('BadBarOT.OUT','ERRR') with novisual;
+
+Var
+  piKatDopEd : iKatDEI;
+
+//Procedure ChangeAllDopKol;
+//  {
+//  Var Stat : word;
+//  Var newKol : double;
+//  PushPos(#SpDopEd);
+//  for (Stat := GetFirst SpDopEd;
+//       Stat  = tsOk;
+//       Stat := GetNext SpDopEd)
+//    {
+//    if (isValid(tnShbusl))
+//      {
+//      newKol := piKatDopEd.CalcValue(KatDopEd.Formula, fKol);
+//      if (SpDopEd.Kol <> newKol)
+//        {
+//        SpDopEd.Kol := newKol;
+//        Update current SpDopEd;
+//        }
+//      }
+//    }
+//  PopPos(#SpDopEd);
+//  RescanPanel(#SpDopEd);
+//  }
+
+//------------------------------------------------------------------------------
+#include saldoDEI.vpp  //333
+
+Screen Scr1;
+  Show at(,,, 4);
+  Table SpDopEd;
+
+Fields
+  sSelectLabel   : Skip;
+  sSelectName    : Skip,  {Font = {Bold = true}};
+//  Price        : [,'[|-]366`666`666`666`666.99999999'],[brForPrice], Skip;
+  Price          : [brForPrice], Skip;
+  sValut         : Skip;
+//  'Количество' : Skip;
+  fKol           ('Количество в единице измерения МЦ документа',,sci1Esc) : [prSignsInKol], NoProtect;
+  KatOtpEd.ABBR  : Skip;
+//  SummaTov     : [,'[|-]366`666`666`666`666.99999999'],[brForSumma], Skip;
+  SummaTov       : [brForSumma], Skip;
+  sValut         : Skip;
+  fKolUth        ('Количество в учетной единице измерения МЦ документа',,sci1Esc) : [prSignsInKol], Skip;
+  KatEd.Name     : Skip;
+<<
+
+ .@@@@@@@@@@@ .@@@@@@@@@@@@@@@@@@@@@@@@@@@ `Цена`.@@@@@@@@@@@@@@@@ .@@@@@@
+ `Количество` .@@@@@@@@@@@@ .@@@@@@@  `Стоимость`.@@@@@@@@@@@@@@@@ .@@@@@@
+ `Количество в учетной единице` .@@@@@@@@@@@@ .@@@@@@@
+>>
+end; // screen
+
+Browse br1 (,,sci1Esc);
+  Show at(,5);
+  Table SpDopEd;
+
+Fields
+  SpDopEd.Npp   ' №'
+                : [2], Skip, {Font = {Bold = (SpDopEd.Npp = 1)}};
+  KatDopEd.Name ''#3'Наименование ДЕИ' ('Наименование дополнительной единицы измерения'    )
+                : [30], Skip, {Font = {Bold = (SpDopEd.Npp = 1)}};
+  CalcEd        ''#3'Тип ДЕИ'
+                : [11], Skip, {Font = {Bold = (SpDopEd.Npp = 1)}};
+  SpDopEd.Kol   ''#3'Количество'
+                : [12], [prSignsInKol], NoProtect, {Font = {Bold = (SpDopEd.Npp = 1)}};
+  SpDopEd.Price 'Цена единицы'
+                : [14], [brForPrice], NoProtect, {Font = {Bold = (SpDopEd.Npp = 1)}};
+end; // Browse
+
+//==============================================================================
+
+Panel p1;
+  Table SpDopEd;
+
+HandleEvent
+
+cmCheckField :
+{
+  Case CurField of
+
+    #fKol :
+      {
+        piKatDopEd.SetDefaultDopEd( coTable     // _wTable: word;     // код таблицы спецификации
+                                  , cRec        // _cRec: comp;       // ссылка на запись спецификации
+                                  , wTipKol     // _wTipKol: word;    // тип количества
+                                  , cMCUsl      // _cMCUsl: comp;     // ссылка на МЦ/Услугу
+                                  , PrMC        // _PrMC: word;       // признак МЦ/Услуга
+                                  , double(-1)  // _OldKol: double;   // старое количество в отпускных единицах
+                                  , fKol        // _Kol: double;      // новое количество в отпускных единицах
+                                  , if ((lParam and 1) <> 0,1,0)      // lParam:longint // параметры
+                                  , pTiDk
+                                  );
+        RescanPanel(tnSpdopED);
+      }
+
+    #SpDopEd.Kol :
+      if ( IsValid(tnShbusl_back) )
+        {
+          Var OldKol  : double;
+          Var tmpComp : comp;
+
+          tmpComp := SpDopEd.nRec;
+          OldKol  := fKol;
+
+          set fKol := piKatDopEd.CalcValue( coSpDopED
+                                          , SpDopED.nRec
+                                          , KatDopEd.BackFormula
+                                          , word(4)
+                                          , SpDopEd.Kol
+                                          );
+          UpdateTable;
+
+          if ( OldKol <> fKol )
+            {
+              PushPos(tnSpDopEd);
+
+              if ( GetFirst SpDopEd = tsOk )
+                {
+                  do
+                    if ( SpDopEd.nRec <> tmpComp )
+                      {
+                        SpDopEd.Kol := piKatDopEd.CalcValue( coSpDopED
+                                                           , SpDopED.nRec
+                                                           , KatDopEd.Formula
+                                                           , word(3)
+                                                           , fKol
+                                                           );
+
+                        if ( Update current SpDopEd = tsOk ) {}
+                      }
+                  while ( GetNext SpDopEd = tsOk );
+                }
+
+              PopPos(tnSpDopEd);
+              RereadRecord(tnSpDopEd);
+              RescanPanel(tnSpdopED);
+            }
+        }
+
+  end;
+
+  set SummaTov := Price * fKol;
+}
+
+cmUpdateRecord :
+  Update current SpDopEd;
+
+end; // HandleEvent
+
+end; // Panel
+
+//******************************************************************************
+#include ukrdeitmp.vpp
+//******************************************************************************
+
+HandleEvent
+
+cmInit :
+{
+  if ( cMCUsl = comp(0) )
+    {
+      Message(''#3'Не указана МЦ/услуга...', CancelButton);
+      Abort;
+      Exit;
+    }
+
+  s_SystDate := sGetTune('NDE.SimvRub');
+
+//  GetVipInterface(piKatDopEd);
+
+  AutoDEI := DopEd_Auto2(pTiDK);
+
+  if ( AutoDEI or ((lParam and 1) <> 0) )
+    // Функция формирования ДЕИ в спецификации документов по количеству
+    // в отпускных единицах. Если записи существуют, то проводится пересчет
+    // с новым количеством. Возвращает 0, если операция прошла успешно,
+    // не 0 - иначе
+
+  if ( piKatDopEd.SetDefaultDopEd( coTable   // _wTable: word;     // код таблицы спецификации
+                                 , cRec      // _cRec: comp;       // ссылка на запись спецификации
+                                 , wTipKol   // _wTipKol: word;    // тип количества
+                                 , cMCUsl    // _cMCUsl: comp;     // ссылка на МЦ/Услугу
+                                 , PrMC      // _PrMC: word;       // признак МЦ/Услуга
+                                 , fKol      // _OldKol: double;   // старое количество в отпускных единицах
+                                 , fKol      // _Kol: double;      // новое количество в отпускных единицах
+                                 , if ((lParam and 1) <> 0,1,0)    // lParam:longint // параметры
+                                 , pTiDk
+                                 ) <> tsOk )
+    {
+      Message('Некорректное заполнение ДЕИ для данной спецификации!', CancelButton + Warning);
+//      FreeVipInterface(piKatDopEd);
+      Abort;
+      Exit;
+    }
+
+  //333
+  kolPrev1:= 0;   kolPrev2:= 0;  kolPrev3:= 0;
+  if coTable = coSpOrder
+    {
+      // создаем ДЕИ для ордера если их нет - для ручного ввода
+      if GetFirst SpDopEd <> tsOk
+        _LOOP SpDopEd where ((coKatMC  ==  SpDopEd.wTable and
+                              cMCUsl   ==  SpDopEd.cRec   and
+                                    0  ==  SpDopEd.wTipKol )) // для МЦ = 0
+          { // копируем из ДЕИ МЦ
+            SpDopEd.wTable := coSpOrder;
+            SpDopEd.cRec   := cRec;
+            SpDopEd.wTipKol:= 1;
+            SpDopEd.nRec   := 0;
+            insert current SpDopEd;
+          }//_L
+
+      //-----------
+      _LOOP SpDopEd
+        {
+          if SpDopEd.npp > 3
+            continue;
+
+          case SpDopEd.npp of
+           1: kolPrev1:= SpDopEd.kol;
+           2: kolPrev2:= SpDopEd.kol;
+           3: kolPrev3:= SpDopEd.kol;
+          end;//c
+
+        }//_L
+    }
+
+  if ( GetFirst SpDopEd <> tsOk )
+    {
+      ClearFieldOption(#KatDopEd.Name, ofSelectable);
+      ClearFieldOption(#SpDopEd.Kol  , ofSelectable);
+      ClearFieldOption(#SpDopEd.Price, ofSelectable);
+    }
+  else
+    {
+      SetFieldOption(#KatDopEd.Name, ofSelectable);
+      SetFieldOption(#SpDopEd.Kol  , ofSelectable);
+      SetFieldOption(#SpDopEd.Price, ofSelectable);
+    }
+
+  ClearFieldState(#SpDopEd.Price, sfVisible); // пока это поле решили вообще не показывать
+
+  SummaTov := Price * fKol;
+  SetPrecisionGroup('brForPrice', forPrice);
+  SetPrecisionGroup('brForSumma', forSumma);
+
+  SetTitle(sTitle);
+  SelectField(#fKol);
+}
+
+cmCancel :
+{
+  Abort;
+  CloseInterface(cmDefault);
+}
+
+cmClose :
+{
+  Abort;
+  CloseInterface(cmDefault);
+}
+
+cmDone :
+{
+
+  if ( not UpdateTable )
+    Abort;
+
+  if coTable = coSpOrder //333
+    Update_SaldoDEI(cRec, FALSE, kolPrev1, kolPrev2, kolPrev3); // модификация остатков ДЕИ
+//  FreeVipInterface(piKatDopEd);
+}
+
+//cmHotKeys :
+//  PutHotCommand(RunMenu('AttrClass_HotKeys'));
+
+cmHotKeys :
+{
+  SetCommandEnabled(cmValue17, (CurField <> #fKol) and IsValid(tnShbusl));
+  SetCommandEnabled(cmValue18, (CurField <> #fKol) and IsValid(tnShbusl));
+  SetCommandEnabled(cmValue19, (CurField <> #fKol) and IsValid(tnShbusl));
+  SetCommandEnabled(cmValue20, (CurField <> #fKol) and IsValid(tnShbusl));
+
+  PutHotCommand(RunMenu('mnuKolDopEd'));
+}
+
+cmValue20 :
+{ //отчет  прямая формула
+  Var tmpValue1 : double;
+  Var tmpValue2 : double;
+
+  SaveMyDsk(fKol, '&arg1');
+  SaveMyDsk(fKolUth, '&arg2');
+
+  RunInterface( 'GETPAR', 2, word(coSpDopED), SpDopED.nRec
+              , KatDoped.Formula, tmpValue1, tmpValue2, word(3));
+}
+
+cmValue19 : //интерфейс изменения параметров   прямая формула
+{
+  Var tmpValue1 : double;
+  Var tmpValue2 : double;
+
+  SaveMyDsk(fKol, '&arg1');
+  SaveMyDsk(fKolUth, '&arg2');
+
+  if ( RunInterface( 'GETPAR', 1, word(coSpDopED), SpDopED.nRec
+                   , KatDoped.Formula, tmpValue1, tmpValue2, word(3)) <> cmCancel )
+    {
+      piKatDopEd.SetDefaultDopEd( coTable      // код таблицы спецификации
+                                , cRec         // ссылка на запись спецификации
+                                , wTipKol      // тип количества
+                                , cMCUsl       // ссылка на МЦ/Услугу
+                                , PrMC         // признак МЦ/Услуга
+                                , double(-1)   // старое количество в отпускных единицах
+                                , fKol         // новое количество в отпускных единицах
+                                , if ((lParam and 1) <> 0,1,0)    // lParam:longint // параметры
+                                , pTiDk
+                                );
+      RereadRecord(tnSpDopEd);
+    }
+
+  RescanPanel(tnSpdopED);
+}
+
+cmValue18 : //отчет  для обратной формулы
+{
+  Var tmpValue1 : double;
+  Var tmpValue2 : double;
+
+  SaveMyDsk(SpDopEd.Kol, '&arg1');
+  SaveMyDsk(fKolUth    , '&arg2');
+
+  RunInterface( 'GETPAR', 2, word(coSpDopED), SpDopED.nRec
+              , KatDoped.BackFormula, tmpValue1, tmpValue2, word(4));
+}
+
+cmValue17 : //интерфейс изменения параметров  для обратной формулы
+{
+  Var tmpValue1 : double;
+  Var tmpValue2 : double;
+
+  SaveMyDsk(SpDopEd.Kol, '&arg1');
+  SaveMyDsk(fKolUth    , '&arg2');
+
+  if ( RunInterface( 'GETPAR', 1, word(coSpDopED), SpDopED.nRec
+                   , KatDoped.BackFormula, tmpValue1, tmpValue2, word(4)) <> cmCancel )
+    if ( IsValid(tnShbusl_back) )
+      {
+        Var OldKol  : double;
+        Var tmpComp : comp;
+
+        tmpComp      := SpDopEd.nRec;
+        set fKol     := piKatDopEd.CalcValue( coSpDopED
+                                            , SpDopED.nRec
+                                            , KatDopEd.BackFormula
+                                            , word(4)
+                                            , SpDopEd.Kol
+                                            );
+        set SummaTov := Price * fKol;
+        UpdateTable;
+
+        if ( OldKol <> fKol )
+          {
+            PushPos(tnSpDopEd);
+
+            if ( GetFirst SpDopEd = tsOk )
+              {
+                do
+                  if ( SpDopEd.nRec <> tmpComp )
+                    {
+                      SpDopEd.Kol := piKatDopEd.CalcValue( coSpDopED
+                                                         , SpDopED.nRec
+                                                         , KatDopEd.Formula
+                                                         , word(3)
+                                                         , fKol
+                                                         );
+
+                      if ( Update current SpDopEd = tsOk ) {}
+                    }
+                while ( GetNext SpDopEd = tsOk )
+              }
+
+            PopPos(tnSpDopEd);
+            RereadRecord(tnSpDopEd);
+            RescanPanel(tnSpdopED);
+          }
+      }
+}
+
+end; // HandleEvent
+
+end. // Interface
+
+#doc
+Локальное меню интерфейса <link Interface L_SOPRDOC::KOLDOPED>L_SOPRDOC::KOLDOPED - Заполнение значений ДЕИ в номенклатурных документах</link>
+#end
+mnuKolDopEd Menu
+{
+- 'Отчет "прямая" формула',cmValue20,'Отчет: протокол расчета по "прямой" формуле',hcKOU_DOCWDEIKol,'',,sci1Esc;
+- 'Параметры расчета',cmValue19,'Просмотр/редактирование параметров для "прямой" формулы',hcKOU_DOCWDEIKol,'',,sci1Esc;
+-----------;
+- 'Отчет "обратная" формула',cmValue18,'Отчет: протокол расчета по "обратной" формуле',hcKOU_DOCWDEIKol,'',,sci1Esc;
+- 'Параметры расчета',cmValue17,'Просмотр/редактирование параметров для "обратной" формулы',hcKOU_DOCWDEIKol,'',,sci1Esc;
+}

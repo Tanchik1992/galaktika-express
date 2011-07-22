@@ -1,0 +1,284 @@
+//******************************************************************************
+//                                                      (c) корпорация Галактика
+// Галактика 7.12 - Логистика - ДО
+// процедуры формирования повагонных ДО для vschet.vip, vschetb.vip
+//******************************************************************************
+
+Function SpStepCellVal(wField: word): boolean;  //TRUE, если было изменение SpStep
+var
+  cCellVal  : comp;
+  cNaimCell: string;
+  lCikl     : boolean;
+{
+  SpStepCellVal := FALSE;
+
+  if not IsValid(#SpStep)
+    Exit;
+
+  case wField of
+  //------------
+    1:                  //  установить в спецификации един.подвижного состава
+       if ( SpStep.PrMC = 1 ) AND IsValid(#KatMC) AND (BaseDoc.TypeDoc = 1)
+         if ( IsValid(#BDMoveCell) )
+           {
+             PushPos(#TTNCellVal);
+             cCellVal  := 0;
+             lCikl     := TRUE;
+             cNaimCell := BDMoveCell.Name;
+
+             if ( GetFirst TTNCellVal
+                          where ((SpStep.cMCUsl == TTNCellVal.cMC AND
+                                  word(0) == TTNCellVal.PrMC AND
+                                  BaseDoc.cCellVal == TTNCellVal.cMoveCell)) = tsOk )
+               cCellVal := BaseDoc.cCellVal;
+             else
+               {
+                 Message('Для единицы подвижного состава "'+cNaimCell+'"'#13+
+                          'необходимо ввести коэффициент по МЦ: "'+KatMC.Name+'"', OkButton);
+
+                 DO
+                   {
+                     ClearBuffer(#TTNCellVal);
+                     TTNCellVal.cMC := SpStep.cMCUsl;
+                     TTNCellVal.cMoveCell := BaseDoc.cCellVal;
+                     if ( Insert current TTNCellVal = tsOk )
+                       do
+                         {
+                           cCellVal := BaseDoc.cCellVal;
+                           RunInterface( GetCellVal, SpStep.cMCUSL, cCellVal
+                                        , word(0), word(0)
+                                       );
+                           if ( cCellVal = BaseDoc.cCellVal )
+                             lCikl := FALSE
+                           else
+                             Message ('Необходимо выбрать единицу подвижного состава: "'+cNaimCell+'"', OkButton);
+                         }
+                       While ( lCikl )
+                   }
+                 While ( lCikl )
+               }
+
+             PopPos(#TTNCellVal);
+
+             SpStep.cCellVal   := cCellVal;
+             SpStep.NVagon     := BaseDoc.NVagon;
+             SpStep.cNMoveCell := BaseDoc.cNMoveCell;
+             SpStep.cTransp    := BaseDoc.cTransp;
+             if (UpDate current SpStep = tsOk)
+               if (SpStep.cNMoveCell <> comp(0))
+                 {
+                   if oDOfuns.VagFun_ConnectSpStep(SpStep.cNMoveCell, SpStep.NRec, BaseDoc.cGrPol)
+                     SpStepCellVal := TRUE;
+                   // Привязка удостоверения качества к ДО
+                    PushPos(#Vagon);
+                    ResetBounds(#Vagon);
+                    if (GetFirst Vagon where ((SpStep.cNMoveCell == Vagon.NRec)) = tsOk)
+                      {
+                        Vagon.cOrg := BaseDoc.cOrg;
+                        Vagon.cSpStep := SpStep.NRec;
+                        update current Vagon;
+                      }
+
+                    SetBounds(#Vagon);
+                    PopPos(#Vagon);
+                 }
+           }
+  //------------
+    2:
+      {                //  установить в спецификации номер един.подвижного состава
+        SpStep.NVagon     := BaseDoc.NVagon;
+        SpStep.cCellVal   := BaseDoc.cCellVal;
+        SpStep.cNMoveCell := BaseDoc.cNMoveCell;
+        SpStep.cTransp    := BaseDoc.cTransp;
+        if (UpDate current SpStep = tsOk)
+          if (SpStep.cNMoveCell <> comp(0))
+            {
+              if oDOfuns.VagFun_ConnectSpStep(SpStep.cNMoveCell, SpStep.NRec, BaseDoc.cGrPol)
+                SpStepCellVal := TRUE;
+              // Привязка удостоверения качества к ДО
+              PushPos(#Vagon);
+              ResetBounds(#Vagon);
+              if (GetFirst Vagon where ((SpStep.cNMoveCell == Vagon.NRec)) = tsOk)
+                {
+                  Vagon.cOrg := BaseDoc.cOrg;
+                  Vagon.cSpStep := SpStep.NRec;
+                  update current Vagon;
+                }
+
+              SetBounds(#Vagon);
+              PopPos(#Vagon);
+            }
+      }
+  //------------
+    3:
+      {                //  удалить в спецификации един.подвижного состава
+        SpStep.cCellVal   := 0;
+        SpStep.cNMoveCell := 0;
+        SpStep.nVagon     := '';
+        SpStep.cTransp    := 0;
+
+        if (UpDate current SpStep = tsOk)
+          {
+            oDOfuns.VagFun_DisConnectSpStep(SpStep.NRec);
+            PushPos(#Vagon);
+            ResetBounds(#Vagon);
+            if (GetFirst Vagon where ((SpStep.cNMoveCell == Vagon.NRec)) = tsOk)
+              {
+                Vagon.cOrg := 0;
+                Vagon.cSpStep := 0;
+                update current Vagon;
+              }
+
+            SetBounds(#Vagon);
+            PopPos(#Vagon);
+          }
+       }
+  //------------
+  end;
+}
+
+
+//******************************************************************************
+
+Procedure AllSpStepCellVal(wField: word);
+{
+  if not IsValid(#SpStep)
+    Exit;
+
+  var NeedRecalc: boolean;  NeedRecalc := FALSE;
+
+  PushPos(#StepDoc);
+  PushPos(#SpStep);
+
+  _LOOP StepDoc where((BaseDoc.NRec == StepDoc.cBaseDoc))
+    _LOOP SpStep where((StepDoc.NRec == SpStep.cStepDoc))
+      NeedRecalc := NeedRecalc OR SpStepCellVal(wField);
+
+ // необходимо выполнить перерасчет сумм, т.к.
+ // может меняться количество после вызова oDOfuns.VagFun_ConnectSpStep
+  if NeedRecalc
+    GetTotalSkid(false);
+
+  PopPos(#StepDoc);
+  PopPos(#SpStep);
+
+  RescanPanel(#SpStep);
+  RereadRecord(#TTNMoveCell);
+}
+
+
+//******************************************************************************
+
+Procedure BDTypeDoc(var OldTypeDoc: word);
+{
+  var lCikl      : boolean;  lCikl      := TRUE;
+  var OldCellVal : comp;     OldCellVal := 0;
+  var OldTransp  : comp;     OldTransp  := 0;
+  var OldVagon   : string;   OldVagon   := '';
+
+  if ( BaseDoc.Status > 2 )
+    {
+      set BaseDoc.TypeDoc := OldTypeDoc;
+      Message('Тип можно изменить только для статусов "Оформляемый" либо "Исполняемый"!');
+      OldTypeDoc := BaseDoc.TypeDoc;
+      RedrawPanel(#BaseDoc);
+      Exit;
+    }
+
+  if (BaseDoc.TypeDoc = 1)
+    {
+      if ( IsValid(tnSpStep) )
+        {
+          lCikl := TRUE;
+          PushPos(#StepDoc);
+          PushPos(#SpStep);
+
+          if (GetFirst StepDoc where((BaseDoc.NRec == StepDoc.cBaseDoc)) = tsOk)
+            if (GetFirst SpStep where((StepDoc.NRec == SpStep.cStepDoc)) = tsOk)
+              {
+                OldCellVal := if ( IsValid(tnTTNMoveCell), TTNMoveCell.NRec, 0);
+                OldVagon   := SpStep.NVagon;
+                OldTransp  := SpStep.cTransp;
+
+                _LOOP StepDoc where((BaseDoc.NRec == StepDoc.cBaseDoc))
+                  if lCikl
+                   _LOOP SpStep where((StepDoc.NRec == SpStep.cStepDoc))
+                     {
+                       if ( IsValid(tnTTNMoveCell) )
+                         {
+                           if ( OldCellVal <> TTNMoveCell.NRec )
+                             {
+                               set BaseDoc.TypeDoc := OldTypeDoc;
+                               lCikl := FALSE;
+                               Message('ИЗМЕНИТЬ ТИП НЕЛЬЗЯ !'#13+
+                                       'В расширенной информации по позициям спецификации'#13+
+                                       'указаны разные единицы подвижного состава !');
+                             }
+                         }
+                       else
+                         if ( OldCellVal<>0 )
+                           {
+                             set BaseDoc.TypeDoc := OldTypeDoc;
+                             lCikl := FALSE;
+                             Message('ИЗМЕНИТЬ ТИП НЕЛЬЗЯ !'#13+
+                                     'В расширенной информации по позициям спецификации'#13+
+                                     'указаны разные единицы подвижного состава !');
+                           }
+
+                       if ( lCikl )
+                         if ( OldVagon<>SpStep.NVagon )
+                           {
+                             set BaseDoc.TypeDoc := OldTypeDoc;
+                             lCikl := FALSE;
+                             Message('ИЗМЕНИТЬ ТИП НЕЛЬЗЯ !'#13+
+                                     'В расширенной информации по позициям спецификации'#13+
+                                     'указаны разные номера единиц подвижного состава !');
+                           }
+
+                       if not lCikl
+                         Break;
+                     }
+              }
+          PopPos(#StepDoc);
+          PopPos(#SpStep);
+        }
+
+      if lCikl
+        {
+          set BaseDoc.cCellVal := OldCellVal;
+          set BaseDoc.NVagon := OldVagon;
+          set BaseDoc.cTransp := OldTransp;
+          SetFieldVisible(#BDMoveCell.Name, TRUE);
+          SetFieldVisible(#BaseDoc.NVagon , TRUE);
+          SetFieldSelectable(#TTNMoveCell.Name, FALSE);
+          SetFieldSelectable(#SpStep.NVagon   , FALSE)
+        }
+    }
+  else
+    {
+      BaseDoc.cCellVal := 0;
+      set BaseDoc.NVagon := '';
+      set BaseDoc.cTransp := 0;
+      SetFieldVisible(#BDMoveCell.Name, FALSE);
+      SetFieldVisible(#BaseDoc.NVagon , FALSE);
+      SetFieldSelectable(#TTNMoveCell.Name, TRUE);
+      SetFieldSelectable(#SpStep.NVagon   , TRUE);
+    }
+
+  OldTypeDoc := BaseDoc.TypeDoc;
+  RedrawPanel(#BaseDoc);
+}
+
+
+//******************************************************************************
+
+Procedure BDSetFieldCellVal;
+{
+  SetFieldSelectable(#BDMoveCell.Name, (BaseDoc.Status <= 2) );
+  SetFieldSelectable(#BaseDoc.NVagon,  (BaseDoc.Status <= 2) );
+
+  SetFieldVisible(#BDMoveCell.Name, (BaseDoc.TypeDoc = 1) );
+  SetFieldVisible(#BaseDoc.NVagon,  (BaseDoc.TypeDoc = 1) );
+}
+
+//-----------------------------------------------------------------------

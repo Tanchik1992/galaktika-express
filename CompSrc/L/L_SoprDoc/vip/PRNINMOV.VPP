@@ -1,0 +1,1096 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : Печать накладной на внутреннее перемещение                ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+
+#ifdef _MOVENAKL_
+procedure WriteSumValue(ValR: double; ValV: double; koefValue: double; boNeedRound: boolean);
+{
+  if (boNeedRound)
+    {
+    PrMovNak.Write(if (KatSopr.cVal = 0,FSRoundRub(ValR*koefValue),FSRoundVal(ValV * koefValue)), Cena_Pr);
+      PrMovNak.Write(FSRoundRub(ValR * koefValue), Cena_PrR);
+      PrMovNak.Write(FSRoundVal(ValV * koefValue), Cena_PrV);
+    }
+  else
+    {
+      PrMovNak.Write(if (KatSopr.cVal = 0, ValR, ValV) * koefValue, Cena_Pr)
+      PrMovNak.Write(ValR * koefValue, Cena_PrR);
+      PrMovNak.Write(ValV * koefValue, Cena_PrV);
+    }
+}
+#end
+
+procedure WriteExtAttr;
+var KolAttr : word;
+var AttrTyp : byte;
+{
+  kolattr := 5;
+  if (pNRec <> 0)
+    _LOOP AttrVal where ((pNRec == AttrVal.wTable and SavedDoc == AttrVal.cRec))
+      {
+        AttrTyp := 0;
+        if (getfirst FastFirstRow attrnam
+            where ((AttrVal.cAttrNam == attrnam.nrec)) = tsOk)
+        AttrTyp := AttrNam.AttrType;
+        case AttrTyp of
+          0 : PrMovNak.Write(AttrVal.vString);
+          1 : PrMovNak.Write(AttrVal.vDouble,2);
+          2 : PrMovNak.Write(AttrVal.vDate);
+          3 : PrMovNak.Write(AttrVal.vTime);
+         else PrMovNak.Write(AttrVal.vString);
+        end;
+        KolAttr := KolAttr - 1;
+        if KolAttr = 0
+          break;
+      }
+  if KolAttr > 0
+    PrMovNak.SkipFormat(KolAttr);
+}
+
+
+procedure PrintDocument;
+var
+  NomPp : longint;
+  SumP_, VSumP_, KoefP_ : double;
+  bRecOrd : boolean;
+  SaveComp : comp;
+  pg_flag: word;
+  Marker_flag: boolean;
+  MarkerCount2, i2: longint; // счетчики записей в маркере
+  pickrec2       : comp;
+  PrNDSinCena : boolean;
+{
+!****************************************************************************
+#ifdef _MOVENAKL_
+var
+  AKolF, AKolU, KoefP : double;
+  AStNak, AStNac, AStVal : double;
+  AStNakBN, AStNacBN, AStValBN : double;
+  AStNakSN, AStNacSN, AStValSN : double;
+  ANam : longint;
+  sNDS, sSpN,sNSel, sNDSv,sNSelV, sSpNv,
+  aNds,aNDSv, aSpN, aSpNv,aNSel,aNSelV : double;
+  nPrice, nVPrice,bnPrice, bnVPrice, snPrice, snVPrice: double;
+  SumNalR, SumNalV: double;
+  iNalog,iNpp: word;
+  iNalR, iNalV: double;
+  ProcNDS, ProcSpN, ProcSel : double;
+#end
+!****************************************************************************
+  Marker_flag:=false;
+  pg_flag:=0;
+  MarkerCount2:=GetMarkerCount(MarkerNZ);
+  if (MarkerCount2<>0)
+    if ( RunDialog('PrintBaseDocParams',pg_flag) = cmCancel )
+      exit;
+
+  PrMovNak.SetGroup('Vnut');  //Maks
+  if PrMovNak.Error
+    {
+      PrMovNak.AbortForm;
+      Exit;
+    }
+
+  PushPos(#KatSopr) ;
+
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+                 'Формирование накладной для печати...', 1);
+
+  if (MarkerCount2=0)
+    {
+      Marker_flag:=true;
+      pickrec2 := KatSopr.NRec;
+      MarkerCount2:=1;
+    }
+
+  FOR ( i2:=0; i2<MarkerCount2; i2:=i2+1 )
+    {
+      if (not Marker_flag)
+        GetMarker(MarkerNZ,i2,pickrec2);
+      if (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) = tsOk )
+        {
+          PushPos(#KatSopr);
+          if ( (CurTable <> #KatSopr)
+#ifdef NAKMnf
+               and (CurTable <> #KatSoprSelect)
+#endif
+             )
+           {
+              StopVisual('',0);
+              PrMovNak.putevent(feBreak);
+              PrMovNak.AbortForm;
+              Exit;
+           }
+
+          if (not isValid(#SpSopr))
+            If MarkerCount2 > 1
+               Continue ;
+
+          PrMovNak.Write(KatSopr.Nrec);
+          PrMovNak.Write(KatSopr.NSopr);
+
+          if (PrMovNak.Error)
+            {
+              StopVisual('',0);
+              PrMovNak.putevent(feBreak);
+              PrMovNak.AbortForm;
+              Exit;
+            }
+
+          PrMovNak.Write(KatSopr.Descr);
+          PrMovNak.Write(PrintNumber(KatSopr.Descr,KatSopr.NSopr));
+
+          if (GetFirst KatOrg where ((coGetTune('MyOrg') == KatOrg.NRec)) = tsOk)
+           {
+             PrMovNak.Write(KatOrg.Name);
+             PrMovNak.Write(KatOrg.UNN);
+             PrMovNak.Write(KatOrg.OKPO);
+             PrMovNak.Write(KatOrg.OKDP);
+           }
+          else
+            PrMovNak.SkipFormat(4);
+
+          PrMovNak.Write(KatSopr.dSopr);
+          PrMovNak.Write(day(KatSopr.dSopr));
+          PrMovNak.Write(datetostr(KatSopr.dSopr,'mon'));
+          PrMovNak.Write(datetostr(KatSopr.dSopr,'YY'));
+          PrMovNak.Write(KatSopr.Name);
+
+          var PodrStr : string;
+          var cPodr  : comp;
+
+          PodrStr := '';
+          cPodr := KatPodr.cPodr;
+          while (cPodr <> 0)
+          {
+            if (GetFirst KatPodr1 where (( cpodr == KatPodr1.nRec)) = tsOk)
+            {
+              cPodr := KatPodr1.cPodr;
+              PodrStr := KatPodr1.Name + '/' + PodrStr;
+            }
+          }
+
+          PodrStr := PodrStr + KatPodr.Name;
+
+          PrMovNak.Write(PodrStr);
+          PrMovNak.Write(KatPodr.Name);
+
+          PodrStr := '';
+          cPodr := ToPodr.cPodr;
+          while (cPodr <> 0)
+          {
+            if (GetFirst KatPodr1 where (( cpodr == KatPodr1.nRec)) = tsOk)
+            {
+              cPodr := KatPodr1.cPodr;
+              PodrStr := KatPodr1.Name + '/' + PodrStr;
+            }
+          }
+
+          PodrStr := PodrStr + ToPodr.Name;
+          PrMovNak.Write(PodrStr);
+          PrMovNak.Write(ToPodr.Name);
+          PrMovNak.Write(KatNazna.Name);
+          PrMovNak.Write(Persons.FIO);  // ДовЛицо
+          PrMovNak.Write(KatMol.Name);  // МОЛ_Откуда
+          PrMovNak.Write(ToMol.Name);   // МОЛ_Куда
+          PrMovNak.Write(if(KatMol.Name <> '', get_Mol_Post(KatMol.NRec), '')); // МОЛ_Откуда должность
+          PrMovNak.Write(if(ToMol.Name <> '', get_Mol_Post(ToMol.NRec), ''));  // МОЛ_Куда  должность
+
+          PrMovNak.Write(KatOrgMy.Name);
+          PrMovNak.Write(KatOrgMy.UNN);
+          PrMovNak.Write(KatOrgMy.OKPO);
+          PrMovNak.Write(KatOrgMy.Addr);
+          PrMovNak.Write(KatBankMy.Name);
+          PrMovNak.Write(KatBankMy.Schet1);
+          PrMovNak.Write(KatBankMy.MFO1);
+
+          PrMovNak.Write(KatOrgF.Name);
+          PrMovNak.Write(KatOrgF.UNN);
+          PrMovNak.Write(KatOrgF.OKPO);
+          PrMovNak.Write(KatOrgF.Addr);
+          PrMovNak.Write(KatBankF.Name);
+          PrMovNak.Write(KatBankF.Schet1);
+          PrMovNak.Write(KatBankF.MFO1);
+
+          PrMovNak.Write(KatOrgT.Name);
+          PrMovNak.Write(KatOrgT.UNN);
+          PrMovNak.Write(KatOrgT.OKPO);
+          PrMovNak.Write(KatOrgT.Addr);
+          PrMovNak.Write(KatBankT.Name);
+          PrMovNak.Write(KatBankT.Schet1);
+          PrMovNak.Write(KatBankT.MFO1);
+
+ //-- Товарно-транспортная информация
+          RunInterface ('PrnTTInfo', PrMovNak.Handle, coKatSopr, KatSopr.NRec);
+
+          PushPos(#SpSopr); NomPP := 0; SumP_ := 0; VSumP_ := 0;
+          bRecOrd := (GetFirst SklOrder where ((KatSopr.NRec == SklOrder.cSopr)) = tsOk);
+
+          PrNDSinCena :=False;  //НДС не входит в цену
+
+          PrMovNak.Write(PrNDSinCena);  //НДС_в_цене
+
+          NomPP :=0;
+          _LOOP SpSopr where ((KatSopr.nRec == SpSopr.cSopr and
+                               word(1)      == SpSopr.PrMC ))
+            {  NomPP := NomPP + 1;
+               if not NextVisual
+               {
+                 StopVisual('',0);
+                 PopPos(#SpSopr);
+                 PrMovNak.putevent(feBreak);
+                 PrMovNak.AbortForm;
+                 Exit;
+               }
+            }
+
+          PrMovNak.Write(NomPP);  //число позиций в спецификации накладной
+
+          NomPP :=0;
+          _LOOP SpSopr where ((KatSopr.nRec == SpSopr.cSopr and
+                               word(1)      == SpSopr.PrMC ))
+            {
+#ifdef _MOVENAKL_
+              ANam := 0;     AkolF := 0;    AKolU := 0;
+              AStNak := 0;   AStNac := 0;   AStVal := 0;
+              AStNakBN := 0; AStNacBN := 0; AStValBN := 0;
+              AStNakSN := 0; AStNacSN := 0; AStValSN := 0;
+              aNds := 0; aNDSv := 0; aSpN := 0; aSpNv := 0; aNSel := 0; aNSelv := 0;
+#end
+              NomPP := NomPP + 1;
+              PrMovNak.Write(SpSopr.Nrec);
+              PrMovNak.Write(NomPP);
+              PrMovNak.Write(KatMc.BarKod);
+              PrMovNak.Write(KatMC.Name);
+              PrMovNak.Write(KatMC.TNVED);
+              PrMovNak.Write(KatMC.Massa);
+              PrMovNak.Write(KatMC.Massa+KatMC.mTara);//Maks
+              PrMovNak.Write(KatMC.Volume);
+              PrMovNak.Write(KatMC.SizeX);
+              PrMovNak.Write(KatMC.SizeY);
+              PrMovNak.Write(KatMC.SizeZ);
+
+              if (GetFirst KlResHr where ((KatMC.cResHr == KlResHr.NRec)) = tsOk)
+                PrMovNak.Write(KlResHr.Name)
+              else
+                PrMovNak.SkipFormat(1);
+
+              if (katMC.cGroupMC = 0)
+                PrMovNak.SkipFormat(2)
+              else
+                if (GetFirst GroupMC where ((KatMC.cGroupMC == GroupMC.NRec)) = tsOk)
+                  {
+                    PrMovNak.Write(GroupMC.Kod);
+                    PrMovNak.Write(GroupMC.Name);
+                  }
+                else
+                  PrMovNak.SkipFormat(2);
+
+              Var koef : double;    koef := 1;
+              var piExAttr: iExtAttr; //ссылка на объектый интерфейс по вн.атрибутам lf_
+              var KOD_OKEI: string;
+
+              KOD_OKEI := '';
+
+              if (SpSopr.cOtpEd <> 0)
+                {
+                  PRMovNak.Write(KatOtpEd.Name);
+
+                  if (GetFirst KatEd where ((KatMC.cEd == KatEd.NRec)) = tsOk)
+                    {
+                      PrMovNak.Write(KatEd.Name);
+
+                      KOD_OKEI := piExAttr.sGetAttr(coKatEd, KatEd.NRec, 'Код');
+                    }
+                  else
+                    PrMovNak.SkipFormat(1);
+
+                  if (KatOtpEd.koef <> 0)
+                    koef := KatOtpEd.koef;
+
+                  PrMovNak.Write(koef);
+                }
+              else
+                if (GetFirst KatEd where ((KatMC.cEd == KatEd.NRec)) = tsOk)
+                  {
+                    PrMovNak.Write(KatEd.Name);
+                    PrMovNak.Write(KatEd.Name);
+                    PrMovNak.Write(1.0,2);
+
+                    KOD_OKEI := piExAttr.sGetAttr(coKatEd, KatEd.NRec, 'Код');
+                  }
+                else
+                  {
+                    PrMovNak.SkipFormat(2);
+                    PrMovNak.Write(1.0,2);
+                  }
+
+              PrMovNak.Write( KOD_OKEI ); // ED_OKEI
+              PrMovNak.Write(KatParty.Name);
+              PrMovNak.Write(SpSopr.Kol);
+              PrMovNak.Write(SpSopr.KolFact);
+              PrMovNak.Write(SpSopr.rPrice, Cena_PrR);
+              PrMovNak.Write(SpSopr.rVPrice, Cena_PrV);
+              PrMovNak.Write(KlVal.SimvolV);
+              PrMovNak.Write(spSopr.Price * SpSopr.KolFact, Cena_PrR);
+              PrMovNak.Write(SpSopr.VPrice * Spsopr.KolFact, Cena_PrV);
+              PrMovNak.Write(KlVal.SimvolV);
+
+              KoefP_ := if (KatOtpEd.koef = 0.0,double(1.0),KatOtpEd.koef);
+
+    //------------------------- налоги НДС -------------------------------------
+              if PrNDSinCena  //налог входит в цену
+               CountBasePrice(KatSopr.nRec, SpSopr.nRec, SpSopr.VidSopr, KatMC.cGrNal, 0,
+                              SpSopr.KolFact, KatMC.cEd, KatSopr.dSopr,
+                              0, 1, SpSopr.Price * SpSopr.KolFact, 0, 0);
+              else            //нет
+               CountNalogPrice(KatSopr.nRec, SpSopr.nRec, SpSopr.VidSopr, KatMC.cGrNal, 0,
+                               SpSopr.KolFact, KatMC.cEd, KatSopr.dSopr,
+                               0, 1, SpSopr.Price * SpSopr.KolFact, 0, 0);
+
+              if GetFirst SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc and
+                                           SpSopr.nRec     == SpDocNal.cSpDoc and
+                                           coGetTune('Nalog.cNalogNDS') == SpDocNal.cNalog
+                                         )) = tsOk
+               {
+                 PrMovNak.Write(SpDocNal.Nalog);  //cтавка налога НДС
+                 PrMovNak.Write(SpDocNal.Summa / koef);  //cумма налога НДС (входящего)
+               }
+              else
+                PrMovNak.SkipFormat(2);
+
+              Delete noVisual SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc and
+                                               SpSopr.nRec     == SpDocNal.cSpDoc));
+
+    //--- Учетные цены --------------------------
+              if (bRecOrd)
+                {
+                  if (GetFirst SpOrder where ((SklOrder.NRec == SpOrder.cSklOrder and
+                        SpSopr.cMCUSL == SpOrder.cMC and SpSopr.cParty == SpOrder.cParty)) = tsOk)
+                    {
+                      PrMovNak.Write(SpOrder.srPrice * KoefP_, Cena_PrR);
+                      PrMovNak.Write(SpOrder.VPrice * KoefP_, Cena_PrV);
+                    }
+                  else
+                    {
+                      PrMovNak.Write(0, Cena_PrR);
+                      PrMovNak.Write(0, Cena_PrV);
+                    }
+                }
+              else
+                {
+                  PrMovNak.Write(0, Cena_PrR);
+                  PrMovNak.Write(0, Cena_PrV);
+                }
+
+    //оптовая_надбавка
+              PrMovNak.Write(0);
+
+              SumP_ := SumP_ + SpSopr.Price * SpSopr.KolFact;
+              VSumP_ := VSumP_ + SpSopr.VPrice * SpSopr.KolFact;
+
+              if (not NextVisual)
+                {
+                  StopVisual('',0); PopPos(#SpSopr);
+
+                  PrMovNak.putevent(feBreak);
+                  PrMovNak.AbortForm;
+                  Exit;
+                }
+ //---аттрибуты по спецификации---------------
+              SaveComp := SavedDoc;
+              SavedDoc := SpSopr.NRec;
+              pNRec    := coSpSopr;
+
+              WriteExtAttr;
+
+              SavedDoc := KatMC.NRec;
+              pNRec    := coKAtMC;
+
+              WriteExtAttr;
+
+              SavedDoc := SaveComp;
+!****************************************************************************
+#ifdef _MOVENAKL_
+              ANam := ANam + 1;
+              AKolF := AKolF + SpSopr.KolFact;
+              if (isValid(#KatOtpEd)) KoefP := KatOtpEd.koef else KoefP := 1;
+              AKolU := AKolU + SpSopr.KolFact * KoefP;
+
+              AStNac  := AStNac + (SpSopr.Price * SpSopr.KolFact);
+              AStVal  := AStVal + (SpSopr.VPrice * SpSopr.KolFact);
+              nPrice  := SpSopr.Price; nVPrice  := SpSopr.VPrice;
+              bnPrice := SpSopr.Price; bnVPrice := SpSopr.VPrice;
+              sNDS    := 0; sNDSv := 0; sSpN := 0; sSpNv := 0; sNSel := 0; sNSelv := 0;
+              ProcNDS := 0; ProcSel:=0; ProcSpN := 0;
+
+              ResetBounds(#SpDocNal);
+              iNalog := 0;  iNalR := 0; iNalV := 0;
+
+              _LOOP SpDocNal SpDocNal where ((SpSopr.NRec == SpDocNal.cSpDoc and
+                                            KatSopr.VidSopr == spDocNal.TipDoc))
+                                            ordered by index SpDocNal02
+                {
+ // Вывод налогов с группировкой по порядку их печати
+                  iNpp := if (SpdocNal.Npp <= 7,SpDocNal.Npp,7);
+                  if (iNpp > 0) if (iNalog = iNpp)
+                    {
+                      iNalR := iNalR + SpDocNal.Summa;
+                      iNalV := iNalV + SpDocNal.SumVal;
+                    }
+                  else
+                    {
+                      PrMovNak.Write(iNalR, Cena_PrR);
+                      PrMovNak.Write(iNalV, Cena_PrV);
+                      iNalR := SpDocNal.Summa;
+                      iNalV := SpDocNal.SumVal;
+                      PrMovNak.SkipFormat((iNpp-(iNalog+1))* 2);
+                      iNalog := iNpp;
+                    }
+                   //-- НДС
+                  if (SpDocNal.cNalog = coGetTune('Nalog.cNalogNDS')) // НДС
+                    {
+                      sNDS := sNDS + SpDocNal.Summa;
+                      sNDSV := sNDSV + SpDocNal.SumVal;
+                      ProcNDS :=  SpDocNal.Nalog;
+                    }
+                   //-- акциз
+                  if (SpDocNal.cNalog = coGetTune('Nalog.cNalogAkcis')) // НДС
+                     {
+                       sSpN := sSpn + SpDocNal.Summa;
+                       sSpNV := sSpnV + SpDocNal.SumVal;
+                       ProcSpN :=  SpDocNal.Nalog;
+                     }
+                   //-- налог с продаж
+                  if (SpDocNal.cNalog = coGetTune('Nalog.cNalogProd'))
+                     {
+                       sNSel  := sNSel  + SpDocNal.Summa;
+                       sNSelV := sNSelV + SpDocNal.SumVal;
+                       ProcSel :=  SpDocNal.Nalog;
+                     }
+                } // _LOOP
+
+
+              if (iNalog < 7)
+                {
+                  if(not PrintFr)
+                  PrMovNak.Write(iNalR, Cena_PrR);
+                  PrMovNak.Write(iNalV, Cena_PrV);
+                  PrMovNak.SkipFormat((7-(iNalog+1))*2);
+                }
+              SetBounds(#SpDocNal);
+              if (SpSopr.KolFact = 0)
+                {
+                  sNDS  := 0; sNDSV  := 0;
+                  sSpn  := 0; sSpNV  := 0;
+                  sNSel := 0; sNSelV := 0;
+                }
+              else
+                {
+                  if (KatSopr.VhodNal = 1)
+                    {
+                      bnPrice := SpSopr.Price - (SpSopr.SumNDS / SpSopr.KolFact);
+                      bnVPrice := SpSopr.VPrice - (SpSopr.SumVNDS / SpSopr.KolFact);
+                    }
+                  else
+                    {
+                      nPrice := SpSopr.Price + (SpSopr.SumNDS / SpSopr.KolFact);
+                      nVPrice := SpSopr.VPrice + (SpSopr.SumVNDS / SpSopr.KolFact);
+                    }
+                  SNds   := sNDS   / SpSopr.KolFact;
+                  sNDSV  := sNDSV  / SpSopr.KolFact;
+                  sSpN   := sSpN   / SpSopr.KolFact;
+                  sSpNV  := sSpNV  / SpSopr.KolFact;
+                  sNSel  := sNSel  / SpSopr.KolFact;
+                  sNSelV := sNSelV / SpSopr.KolFact;
+                }
+
+              PrMovNak.Write(if (KatSopr.cVal = 0, bnPrice, bnVPrice), Cena_Pr);
+              PrMovNak.Write(bnPrice, Cena_PrR);
+              PrMovNak.Write(bnVPrice, Cena_PrV);
+              PrMovNak.Write(if (KatSopr.cVal = 0, bnPrice, bnVPrice) / koefp, Cena_Pr);
+              PrMovNak.Write(bnPrice / koefp, Cena_PrR);
+              PrMovNak.Write(bnVPrice / koefp, Cena_PrV);
+              PrMovNak.Write(if (KatSopr.cVal = 0, nPrice, nVPrice), Cena_Pr);
+              PrMovNak.Write(nPrice, Cena_PrR);
+              PrMovNak.Write(nVPrice, Cena_PrV);
+              PrMovNak.Write(if (KatSopr.cVal = 0, nPrice, nVPrice) / koefp, Cena_Pr);
+              PrMovNak.Write(nPrice / koefp, Cena_PrR);
+              PrMovNak.Write(nVPrice / koefp, Cena_PrV);
+              PrMovNak.Write(ProcNds);
+
+              if (KatSopr.cVal = 0)
+                {
+                  PrMovNak.Write(sNDS, Cena_PrR);
+                  PrMovNak.Write(sSpN, Cena_PrR);
+                  PrMovNak.Write(sNSel, Cena_PrR);
+                  PrMovNak.Write(sSpN+sNDS+sNSel, Cena_PrR);
+                }
+              else
+                {
+                  PrMovNak.Write(sNDSv, Cena_PrV);
+                  PrMovNak.Write(sSpNv, Cena_PrV);
+                  PrMovNak.Write(sNSelV, Cena_PrV);
+                  PrMovNak.Write(sSpNv+sNDSv+sNSelV, Cena_PrV);
+                }
+
+              PrMovNak.Write(sNDS, Cena_PrR);
+              PrMovNak.Write(sSpN, Cena_PrR);
+              PrMovNak.Write(sNSel, Cena_PrR);
+              PrMovNak.Write(sSpN+sNDS+sNSel, Cena_PrR);
+              PrMovNak.Write(sNDSv, Cena_PrV);
+              PrMovNak.Write(sSpNv, Cena_PrV);
+              PrMovNak.Write(sNSelV, Cena_PrV);
+              PrMovNak.Write(sSpNv+sNDSv+sNSelV, Cena_PrV);
+
+              if (KatSopr.cVal = 0)
+                {
+                  PrMovNak.Write(FSRoundRub(bnPrice * SpSopr.KolFact), Cena_PrR);
+                  AStNakBN := AStNakBN + FSRoundRub(bnPrice * SpSopr.KolFact);
+                }
+              else
+                {
+                  PrMovNak.Write(FSRoundVal(bnVPrice * SpSopr.KolFact), Cena_PrV);
+                  AStNakBN := AStNakBN + FSRoundVal(bnVPrice * SpSopr.KolFact);
+                }
+
+              PrMovNak.Write(FSRoundRub(bnPrice * SpSopr.KolFact), Cena_PrR);
+              PrMovNak.Write(FSRoundVal(bnVPrice * SpSopr.KolFact) Cena_PrV);
+
+              AStNacBN := AStNacBN + FSRoundRub(bnPrice * SpSopr.KolFact);
+              AStValBN := AStValBN + FSRoundVal(bnVPrice * SpSopr.KolFact);
+
+              if (KatSopr.cVal = 0)
+                {
+                  PrMovNak.Write(FSRoundRub(nPrice * SpSopr.KolFact), Cena_PrR);
+                  AStNakSN := AStNakSN + FSRoundRub(nPrice * SpSopr.KolFact);
+                }
+              else
+                {
+                  PrMovNak.Write(FSRoundVal(nVPrice * SpSopr.KolFact), Cena_PrV);
+                  AStNakSN := AStNakSN + FSRoundVal(nVPrice * SpSopr.KolFact);
+                }
+
+              PrMovNak.Write(FSRoundRub(nPrice * SpSopr.KolFact), Cena_PrR);
+
+              AStNacSN := AStNacSN + FSRoundRub(nPrice * SpSopr.KolFact);
+
+              PrMovNak.Write(FSRoundVal(nVPrice * SpSopr.KolFact), Cena_PrV);
+              AStValSN := AStValSN + FSRoundVal(nVPrice * SpSopr.KolFact);
+
+              if (KatSopr.cVal = 0)
+                {
+                  PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sNDS), Cena_PrR);
+                  PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sSpN), Cena_PrR);
+                  PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sNSel), Cena_PrR);
+                  PrMovNak.Write(FSRoundRub(SpSopr.KolFact * (sNDS +sSpN+sNSel)), Cena_PrR);
+                }
+              else
+                {
+                  PrMovNak.Write(FSRoundVal(SpSopr.KolFact * sNDSv), Cena_PrV);
+                  PrMovNak.Write(FSRoundVal(SpSopr.KolFact * sSpNv), Cena_PrV);
+                  PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sNSelV), Cena_PrV);
+                  PrMovNak.Write(FSRoundVal(SpSopr.KolFact * (sNDSv +sSpNv+sNSelV)), Cena_PrV);
+                }
+
+              PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sNDS), Cena_PrR);
+              PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sSpN), Cena_PrR);
+              PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sNSel), Cena_PrR);
+              PrMovNak.Write(FSRoundRub(SpSopr.KolFact * (sNDS +sSpN+sNSel)), Cena_PrR);
+              PrMovNak.Write(FSRoundVal(SpSopr.KolFact * sNDSv), Cena_PrV);
+              PrMovNak.Write(FSRoundVal(SpSopr.KolFact * sSpNv), Cena_PrV);
+              PrMovNak.Write(FSRoundRub(SpSopr.KolFact * sNSelV), Cena_PrV);
+              PrMovNak.Write(FSRoundVal(SpSopr.KolFact * (sNDSv +sSpNv+sNSelV)), Cena_PrV);
+
+              aNDS  := aNDS + FSRoundRub(sNDS * SpSopr.KolFact);
+              aSpN  := aSpN + FSRoundRub(sSpN * SpSopr.KolFact);
+              aNSel := aNSel + FSRoundRub(sNSel * SpSopr.KolFact);
+              aNDSv  := aNDSv + FSRoundVal(sNDSv * SpSopr.KolFact);
+              aSpNv  := aSpNv + FSRoundVal(sSpNv * SpSopr.KolFact);
+              aNSelV := aNSelV + FSRoundVal(sNSelV * SpSopr.KolFact);
+              if (KatSopr.cVal <> 0)
+                {
+                  sNDS  := sNDSv;
+                  sSpN  := sSpNv;
+                  sNSel := sNSelv;
+                  bnPrice := bnVPrice;
+                }
+              if (bnPrice <> 0)
+                {
+                  PrMovNak.Write(ProcNDS,2);
+                  PrMovNak.Write(ProcSpN,2);
+                  PrMovNak.Write(ProcSel,2);
+                  PrMovNak.Write((sNDS + sSpN + sNSel) / bnPrice * 100,2);
+                }
+              else
+                {
+                  PrMovNak.Write(ProcNDS,2);
+                  PrMovNak.Write(ProcSpN,2);
+                  PrMovNak.Write(ProcSel,2);
+                  PrMovNak.SkipFormat(1);
+                }
+
+#end
+            } //LOOP SpSopr
+
+          PopPos(#SpSopr);
+
+          PrMovNak.PutEvent(feBreak);
+
+          PrMovNak.Write(SumP_, Cena_PrR);  PrMovNak.Write(VSumP_, Cena_PrV);
+          PrMovNak.Write(KlVal.SimvolV);
+          PrMovNak.Write(Nompp);  PrMovNak.Write(KatMol.Name); PrMovNak.Write(ToMol.Name);
+          PrMovNak.Write(KatSopr.nDover);//НОМЕР ДОВЕРЕННОСТИ
+          PrMovNak.Write(KatSopr.dDover);// ДАТА
+          PrMovNak.Write(KatSopr.sDover); //- доверенное лицо
+
+ //-- Товарно-транспортная информация для спецификации
+          RunInterface ('PrnTTInfo', PrMovNak.Handle, coSpSopr, SpSopr.NRec);
+
+          PrMovNak.SkipFormat(8);// СпТТН_Жд
+
+          if (pg_flag <> 0 ) and (i2 < MarkerCount2-1)
+            PrMovNak.write(' ');
+          else
+            PrMovNak.SkipFormat(1);
+
+          PopPos(#KatSopr);
+          Marker_flag:=false;
+        }
+    } // FOR i2
+
+  StopVisual('',vfSilent);
+
+  PrMovNak.putevent(feBreak);
+
+  if (Nompp <> 0)
+    PrMovNak.ShowFile('')
+  else
+    PrMovNak.AbortForm;
+
+  PopPos(#KatSopr) ;
+  ReScanPanel(#KatSopr) ;
+}
+
+#ifdef _SOPINMOV_ 
+DataStream NaklInMov
+(
+  [CFH] CommonFormHeader;
+
+  table FRHead
+  (
+    [NomDoc       ] FRHead.NomDoc; 
+    [Descr        ] FRHead.Descr; 
+    [NomDescr     ] FRHead.NomDescr; 
+    [OrgName      ] FRHead.OrgName; 
+    [OrgUNN       ] FRHead.OrgUNN; 
+    [OrgOKPO      ] FRHead.OrgOKPO;
+    [OrgOKDP      ] FRHead.OrgOKDP; 
+    [Data         ] FRHead.Data;
+    [Prim         ] FRHead.Prim;
+    [PodrFrom     ] FRHead.PodrFrom; 
+    [PodrFromIer  ] FRHead.PodrFromIer;
+    [PodrTo       ] FRHead.PodrTo; 
+    [PodrToIer    ] FRHead.PodrToIer;
+    [Nazn         ] FRHead.Nazn; 
+    [DovLico      ] FRHead.DovLico; 
+    [MOLFrom      ] FRHead.MOLFrom; 
+    [MOLTo        ] FRHead.MOLTo; 
+    [MOLFromDl    ] FRHead.MOLFromDl; 
+    [MOLToDl      ] FRHead.MOLToDl; 
+    [MyOrgName    ] FRHead.MyOrgName; 
+    [MyOrgUNN     ] FRHead.MyOrgUNN; 
+    [MyOrgOKPO    ] FRHead.MyOrgOKPO; 
+    [MyOrgAddr    ] FRHead.MyOrgAddr; 
+    [MyOrgBankName] FRHead.MyOrgBankName;
+    [MyOrgBankSch ] FRHead.MyOrgBankSch ;
+    [MyOrgBankMFO ] FRHead.MyOrgBankMFO;
+    [GrOtpName    ] FRHead.GrOtpName;
+    [GrOtpUNN     ] FRHead.GrOtpUNN;
+    [GrOtpOKPO    ] FRHead.GrOtpOKPO;
+    [GrOtpAddr    ] FRHead.GrOtpAddr;
+    [GrOtpBankName] FRHead.GrOtpBankName;
+    [GrOtpBankSch ] FRHead.GrOtpBankSch ;
+    [GrOtpBankMFO ] FRHead.GrOtpBankMFO;
+    [GrPolName    ] FRHead.GrPolName;
+    [GrPolUNN     ] FRHead.GrPolUNN;
+    [GrPolOKPO    ] FRHead.GrPolOKPO;
+    [GrPolAddr    ] FRHead.GrPolAddr;
+    [GrPolBankName] FRHead.GrPolBankName;
+    [GrPolBankSch ] FRHead.GrPolBankSch ;
+    [GrPolBankMFO ] FRHead.GrPolBankMFO;
+    [ItogKol      ] FRHead.ItogKol;
+    [ItogSum      ] FRHead.ItogSum;
+    [VItogSum     ] FRHead.VItogSum;
+    [ValSimv      ] FRHead.ValSimv;
+    [VsegoNom     ] FRHead.VsegoNom;
+    [NomDover     ] FRHead.NomDover;
+    [DataDover    ] FRHead.DataDover;
+    [DoverLico    ] FRHead.DoverLico;
+    [avtopredp]     FRHead.avtopredp;    
+    [automobile]    FRHead.automobile;   
+    [putlist]       FRHead.putlist;      
+    [otp_rztr_dolj] FRHead.otp_rztr_dolj;
+    [otp_rztr_fio]  FRHead.otp_rztr_fio; 
+    [otpustil_dolj] FRHead.otpustil_dolj;
+    [otpustil_fio]  FRHead.otpustil_fio; 
+    [voditel]       FRHead.voditel;      
+    [SchMain]       FRHead.SchMain;
+    [KodMain]       FRHead.KodMain;
+  );             
+                 
+  table FRData
+  (
+    [NomPP    ]  FRData.NomPP   ; 
+    [BarKod   ]  FRData.BarKod  ; 
+    [Name     ]  FRData.Name    ; 
+    [TNVED    ]  FRData.TNVED   ; 
+    [Mas      ]  FRData.Mas     ; 
+    [MasBrut  ]  FRData.MasBrut ; 
+    [Volume   ]  FRData.Volume  ;
+    [SizeX    ]  FRData.SizeX   ; 
+    [SizeY    ]  FRData.SizeY   ; 
+    [SizeZ    ]  FRData.SizeZ   ; 
+    [Resurs   ]  FRData.Resurs  ; 
+    [KodGr    ]  FRData.KodGr   ; 
+    [NameGr   ]  FRData.NameGr  ; 
+    [OtpEd    ]  FRData.OtpEd   ; 
+    [UchEd    ]  FRData.UchEd   ; 
+    [Koef     ]  FRData.Koef    ; 
+    [KodOKEI  ]  FRData.KodOKEI ; 
+    [Partia   ]  FRData.Partia  ; 
+    [Kol      ]  FRData.Kol     ; 
+    [KolFact  ]  FRData.KolFact ; 
+    [Price    ]  FRData.Price   ; 
+    [VPrice   ]  FRData.VPrice  ; 
+    [Simv     ]  FRData.Simv    ; 
+    [Sum      ]  FRData.Sum     ; 
+    [SumV     ]  FRData.SumV    ; 
+    [StavkaNDS]  FRData.StavkaNDS;
+    [SumNDS   ]  FRData.SumNDS   ;
+    [PriceUch ]  FRData.PriceUch ;
+    [VPriceUch]  FRData.VPriceUch;
+    [OptNadb  ]  FRData.OptNadb  ;
+  );
+
+)
+end;
+
+procedure PrintDocumentFr; 
+var
+  NomPp 
+, i2               // счетчики записей в маркере     
+, MarkerCount2 : longint;
+  SumP_     
+, VSumP_    
+, KoefP_       : double;
+  bRecOrd 
+, Marker_flag
+, PrNDSinCena  : boolean;
+  SaveComp 
+, pickrec2
+, HeadRec      : comp;
+  pg_flag      : word;
+{
+  Marker_flag := false;
+  pg_flag := 0;
+
+  MarkerCount2 := GetMarkerCount(MarkerNZ);
+
+  PushPos(#KatSopr) ;
+
+  StartNewVisual(vtRotateVisual, vfTimer+vfBreak+vfConfirm,
+                 'Формирование накладной для печати...', 1);
+
+  if (MarkerCount2 = 0)
+    {
+      Marker_flag  := true;
+      pickrec2     := KatSopr.NRec;
+      MarkerCount2 := 1;
+    }
+
+  FOR ( i2 := 0; i2 < MarkerCount2; i2 := i2 + 1 )
+    {
+      if (not Marker_flag)
+        GetMarker(MarkerNZ,i2,pickrec2);
+
+      if (GetFirst KatSopr where ((pickrec2 == KatSopr.NRec)) = tsOk )
+        {
+          PushPos(#KatSopr);
+
+          if (CurTable <> #KatSopr)
+           {
+              StopVisual('',0);
+              Exit;
+           }
+
+          if (not isValid(#SpSopr))
+            If MarkerCount2 > 1
+               Continue ;
+
+          ClearBuffer(#FrHead);
+          HeadRec := HeadRec + 1;
+          FrHead.nrec   := HeadRec;
+          FrHead.NomDoc := KatSopr.NSopr;
+
+          FrHead.Descr    := KatSopr.Descr;
+          FrHead.NomDescr := PrintNumber(KatSopr.Descr,KatSopr.NSopr);
+
+          if (GetFirst KatOrg where ((coGetTune('MyOrg') == KatOrg.NRec)) = tsOk)
+           {
+             FrHead.OrgName := KatOrg.Name;
+             FrHead.OrgUNN  := KatOrg.UNN ;
+             FrHead.OrgOKPO := KatOrg.OKPO;
+             FrHead.OrgOKDP := KatOrg.OKDP;
+           }
+
+          FrHead.Data      := KatSopr.dSopr;
+          FrHead.Prim      := KatSopr.Name;
+          var PodrStr : string;
+          var cPodr  : comp;
+
+          PodrStr := '';
+          cPodr := KatPodr.cPodr;
+          while (cPodr <> 0)
+          {
+            if (GetFirst KatPodr1 where (( cpodr == KatPodr1.nRec)) = tsOk)
+            {
+              cPodr := KatPodr1.cPodr;
+              PodrStr := KatPodr1.Name + '/' + PodrStr;
+            }
+          }
+
+          PodrStr := PodrStr + KatPodr.Name;
+
+         FrHead.PodrFromIer := PodrStr;
+          FrHead.PodrFrom  := KatPodr.Name;
+
+          PodrStr := '';
+          cPodr := ToPodr.cPodr;
+          while (cPodr <> 0)
+          {
+            if (GetFirst KatPodr1 where (( cpodr == KatPodr1.nRec)) = tsOk)
+            {
+              cPodr := KatPodr1.cPodr;
+              PodrStr := KatPodr1.Name + '/' + PodrStr;
+            }
+          }
+
+          PodrStr := PodrStr + ToPodr.Name;
+          FrHead.PodrToIer := PodrStr;
+          FrHead.PodrTo    := ToPodr.Name ;
+          FrHead.Nazn      := KatNazna.Name;
+          FrHead.DovLico   := Persons.FIO;  // ДовЛицо
+          FrHead.MOLFrom   := KatMol.Name;  // МОЛ_Откуда
+          FrHead.MOLTo     := ToMol.Name ;   // МОЛ_Куда
+          FrHead.MOLFromDl := get_Mol_Post(KatMol.NRec); // МОЛ_Откуда должность
+          FrHead.MOLToDl   := get_Mol_Post(ToMol.NRec);  // МОЛ_Куда  должность
+
+          FrHead.MyOrgName    := KatOrgMy.Name;
+          FrHead.MyOrgUNN     := KatOrgMy.UNN;
+          FrHead.MyOrgOKPO    := KatOrgMy.OKPO;
+          FrHead.MyOrgAddr    := KatOrgMy.Addr;
+          FrHead.MyOrgBankName:= KatBankMy.Name;
+          FrHead.MyOrgBankSch := KatBankMy.Schet1;
+          FrHead.MyOrgBankMFO := KatBankMy.MFO1;
+
+          FrHead.GrOtpName    := KatOrgF.Name;
+          FrHead.GrOtpUNN     := KatOrgF.UNN;
+          FrHead.GrOtpOKPO    := KatOrgF.OKPO;
+          FrHead.GrOtpAddr    := KatOrgF.Addr;
+          FrHead.GrOtpBankName:= KatBankF.Name;
+          FrHead.GrOtpBankSch := KatBankF.Schet1;
+          FrHead.GrOtpBankMFO := KatBankF.MFO1;
+
+          FrHead.GrPolName    := KatOrgT.Name;
+          FrHead.GrPolUNN     := KatOrgT.UNN;
+          FrHead.GrPolOKPO    := KatOrgT.OKPO;
+          FrHead.GrPolAddr    := KatOrgT.Addr;
+          FrHead.GrPolBankName:= KatBankT.Name;
+          FrHead.GrPolBankSch := KatBankT.Schet1;
+          FrHead.GrPolBankMFO := KatBankT.MFO1;
+          FrHead.ItogKOL      := 0;
+
+          PushPos(#SpSopr); 
+          NomPP  := 0; 
+          SumP_  := 0; 
+          VSumP_ := 0;
+          bRecOrd := (GetFirst SklOrder where ((KatSopr.NRec == SklOrder.cSopr)) = tsOk);
+          var piExAttr: iExtAttr; //ссылка на объектый интерфейс по вн.атрибутам lf_
+
+          PrNDSinCena := False;  //НДС не входит в цену
+
+          _LOOP SpSopr where ((KatSopr.nRec == SpSopr.cSopr and
+                               word(1)      == SpSopr.PrMC ))
+            {
+              NomPP  := NomPP + 1;
+              
+              ClearBuffer(#FrData); 
+              FrData.NomPP   := NomPP;
+              FrData.DataRec := HeadRec;
+
+              FrData.BarKod  := KatMc.BarKod;
+              FrData.Name    := KatMC.Name;
+              FrData.TNVED   := KatMC.TNVED;
+              FrData.Mas     := KatMC.Massa;
+              FrData.MasBrut := KatMC.Massa + KatMC.mTara;//Maks
+              FrData.Volume  := KatMC.Volume;
+              FrData.SizeX   := KatMC.SizeX;
+              FrData.SizeY   := KatMC.SizeY;
+              FrData.SizeZ   := KatMC.SizeZ;
+
+              if (GetFirst KlResHr where ((KatMC.cResHr == KlResHr.NRec)) = tsOk)
+                FrData.Resurs := KlResHr.Name;
+
+              if (katMC.cGroupMC <> 0)
+                if (GetFirst GroupMC where ((KatMC.cGroupMC == GroupMC.NRec)) = tsOk)
+                  {
+                    FrData.KodGr  := GroupMC.Kod;
+                    FrData.NameGr := GroupMC.Name;
+                  }
+
+              Var koef : double;    koef := 1;
+              var piExAttr: iExtAttr; //ссылка на объектый интерфейс по вн.атрибутам lf_
+              var KOD_OKEI: string;
+
+              KOD_OKEI := '';
+
+              if (SpSopr.cOtpEd <> 0)
+                {
+                  FrData.OtpEd := KatOtpEd.Name;
+
+                  if (GetFirst KatEd where ((KatMC.cEd == KatEd.NRec)) = tsOk)
+                    {
+                      FrData.UchEd := KatEd.Name;
+
+                      KOD_OKEI := piExAttr.sGetAttr(coKatEd, KatEd.NRec, 'Код');
+                    }
+
+                  if (KatOtpEd.koef <> 0)
+                    koef := KatOtpEd.koef;
+
+                  FrData.koef := koef;
+                }
+              else
+                if (GetFirst KatEd where ((KatMC.cEd == KatEd.NRec)) = tsOk)
+                  {
+                    FrData.OtpEd := KatEd.Name;
+                    FrData.UchEd := KatEd.Name;
+                    FrData.koef  := 1.0;
+
+                    KOD_OKEI := piExAttr.sGetAttr(coKatEd, KatEd.NRec, 'Код');
+                  }
+                else
+                  FrData.koef  := 1.0;  
+
+              FrData.KodOKEI := KOD_OKEI      ; // ED_OKEI
+              FrData.Partia  := KatParty.Name ;
+              FrData.Kol     := SpSopr.Kol    ;
+              FrData.KolFact := SpSopr.KolFact;
+              FrData.Price   := SpSopr.rPrice ;
+              FrData.VPrice  := SpSopr.rVPrice;
+              FrData.Simv    := KlVal.SimvolV ;
+              FrData.Sum     := spSopr.Price * SpSopr.KolFact ;
+              FrData.SumV    := SpSopr.VPrice * Spsopr.KolFact;
+
+              KoefP_ := if (KatOtpEd.koef = 0.0,double(1.0),KatOtpEd.koef);
+
+    //------------------------- налоги НДС -------------------------------------
+              if PrNDSinCena  //налог входит в цену
+                CountBasePrice(KatSopr.nRec, SpSopr.nRec, SpSopr.VidSopr, KatMC.cGrNal, 0,
+                              SpSopr.KolFact, KatMC.cEd, KatSopr.dSopr,
+                              0, 1, SpSopr.Price * SpSopr.KolFact, 0, 0);
+              else            //нет
+                CountNalogPrice(KatSopr.nRec, SpSopr.nRec, SpSopr.VidSopr, KatMC.cGrNal, 0,
+                               SpSopr.KolFact, KatMC.cEd, KatSopr.dSopr,
+                               0, 1, SpSopr.Price * SpSopr.KolFact, 0, 0);
+
+              if GetFirst SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc and
+                                           SpSopr.nRec     == SpDocNal.cSpDoc and
+                                           coGetTune('Nalog.cNalogNDS') == SpDocNal.cNalog
+                                         )) = tsOk
+               {
+                 FrData.StavkaNDS := SpDocNal.Nalog;  //cтавка налога НДС
+                 FrData.SumNDS    := SpDocNal.Summa / koef;  //cумма налога НДС (входящего)
+               }
+
+              Delete noVisual SpDocNal where ((KatSopr.VidSopr == SpDocNal.TipDoc and
+                                               SpSopr.nRec     == SpDocNal.cSpDoc));
+
+    //--- Учетные цены --------------------------
+              if (bRecOrd)
+                if (GetFirst SpOrder where ((SklOrder.NRec == SpOrder.cSklOrder and
+                      SpSopr.cMCUSL == SpOrder.cMC and SpSopr.cParty == SpOrder.cParty)) = tsOk)
+                  {
+                    FrData.PriceUch  := SpOrder.srPrice * KoefP_;
+                    FrData.VPriceUch := SpOrder.VPrice * KoefP_ ;
+                  }
+
+    //оптовая_надбавка
+              FrData.OptNadb := 0;
+
+              SumP_ := SumP_ + SpSopr.Price * SpSopr.KolFact;
+              VSumP_ := VSumP_ + SpSopr.VPrice * SpSopr.KolFact;
+
+              FrHead.ItogKOL  := FrHead.ItogKOL + SpSopr.KolFact;              
+
+              if (not NextVisual)
+                {
+                  StopVisual('',0); 
+                  PopPos(#SpSopr);
+                  Exit;
+                }
+
+              insert current FrData;
+            } //LOOP SpSopr
+
+          PopPos(#SpSopr);
+
+          FrHead.ItogSum      := SumP_ ;  
+          FrHead.VItogSum     := VSumP_;
+          FrHead.ValSimv      := KlVal.SimvolV;
+          FrHead.VsegoNom     := Nompp;  
+          FrHead.NomDover     := KatSopr.nDover; // НОМЕР ДОВЕРЕННОСТИ
+          FrHead.DataDover    := KatSopr.dDover; // ДАТА
+          FrHead.DoverLico    := KatSopr.sDover; // доверенное лицо
+          FRHead.avtopredp    := piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'НАИМЕНОВАНИЕ АВТОПРЕДПРИЯТИЯ');                                           
+          FRHead.automobile   := piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'АВТОМОБИЛЬ') + ' ' + piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'ПРИЦЕП1');
+          FRHead.putlist      := TTNDoc.sPList;
+          FRHead.otp_rztr_dolj:= piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'ОТПУСК РАЗРЕШИЛ ДОЛЖНОСТЬ');                                              
+          FRHead.otp_rztr_fio := piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'ОТПУСК РАЗРЕШИЛ');                                                        
+          FRHead.otpustil_dolj:= piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'СДАЛ ОТПРАВИТЕЛЬ ДОЛЖНОСТЬ');                                             
+          FRHead.otpustil_fio := piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'СДАЛ ОТПРАВИТЕЛЬ');                                                       
+          FRHead.voditel      := piExAttr.sGetAttr (coTTNDoc, TTNDoc.NRec, 'ВОДИТЕЛЬ');                                                               
+
+          var SchMain, KodMain :String;
+          SchMain := '';
+          KodMain := '';
+          RunInterface('iPrnShowSchet26', KatSopr.nRec, '', SchMain, '', '', '', KodMain);
+          FRHead.SchMain := SchMain;
+          FRHead.KodMain := KodMain;
+
+
+
+          insert current FrHead;
+
+          PopPos(#KatSopr);
+          Marker_flag:=false;
+        }
+    } // FOR i2
+
+  StopVisual('', vfSilent);
+
+  RunFReportbyGroup(NaklInMov, 'StandartNakl');
+  ResetBounds(#FrHead);
+  Delete all FrHead;
+  setBounds(#FrHead);
+
+  ResetBounds(#FrData);
+  Delete all FrData;
+  setBounds(#FrData);     
+
+  PopPos(#KatSopr) ;
+  ReScanPanel(#KatSopr) ;
+}
+
+#end

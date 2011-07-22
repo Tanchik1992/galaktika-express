@@ -1,0 +1,68 @@
+!╔═══════════════════════════════════════════════════════════════════════════╗
+!║ Назначение    : HandleEvent из soprdocb.vip                               ║
+!╚═══════════════════════════════════════════════════════════════════════════╝
+#include SOPRC13.VPP
+cmOpenSearch:
+  {
+   QuickChoiceCalculate;
+  }
+
+cmHotKeys :
+  PutHotCommand(RunMenu('SoprUslSpSoprExt_HotKeys'));
+
+cmSetGrNal :
+  {
+    if not isValid (#SpSopUsl)
+      {
+        message(''#3'Не указана МЦ/услуга...',CancelButton);
+        abort;
+        Exit;
+      }
+    If (KatSopr.cStepDoc<>0 and SpSopr.cSpStep<>0 and  boGetTune('Doc.iNalogsFromSpStep'))
+      {
+        message('Для внесения несоответствия между налогами документа и ДО '#13#3'необходимо переключить настройку: Налоги сопроводительных документов рассчитывать по ДО=нет');
+        Exit;
+      }
+
+    if not OtkatToOldState(true,word(0))
+      Exit;
+
+    var tGrNal: comp;
+    if (RunInterface(GetGrNal,tGrNal, word(0)) <> cmCancel)
+      {
+        If KatSopr.cStepDoc <> 0
+          if (Message(''#3'Вы согласны внести несоответствие'#13#3+
+                        'между налогами накладной и ДО?',YesNo) <> cmYes)
+            Exit;
+
+        if not OtkatToOldState(true,word(0))
+          Exit;
+
+        Delete NoVisual SpDocNalSopUsl
+           where ((SpSopUsl.NRec == SpDocNalSopUsl.cSpDoc and
+                        TypeSopr == SpDocNalSopUsl.TipDoc));
+
+        SpSopUsl.ManualTax := 0;
+        update current SpSopUsl;
+
+        RunInterface(iRecalcSpSopUslNalogs,SpSopUsl.NRec,tGrNal,0,KatSopr.buffer,
+                                             SpSopUsl.SumNDS,SpSopUsl.SumVNDS);
+
+        if GetFirst SpDocNalSopUsl where ((SpSopUsl.NRec == SpDocNalSopUsl.cSpDoc AND
+                                             TypeSopr    == SpDocNalSopUsl.TipDoc)) <> tsOK
+          set SpSopUsl.ManualTax := 1;//pir 101.30737
+
+        CheckSumma(false);
+      }
+  }
+
+cmAttrib :
+  RunWindowModal(SpSopUslNalogs);
+
+#ifdef __MTR_TO_SPEC__
+cmIerarchy :
+{
+  if (IsValid(#SpSopUsl))
+    RunInterface('EditMtr2Spec', if(not OtkatToOldState(false, word(0)), 1, 0), 0, word(coSpSopr), SpSopUsl.nRec);
+}
+#end
